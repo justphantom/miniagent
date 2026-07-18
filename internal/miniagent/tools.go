@@ -92,10 +92,16 @@ func resolveToolPath(workspaceRoot, p string, unrestricted bool) (string, error)
 
 // openNoFollow is OS-specific. Defined in tool_file_*.go.
 
+// object 构造 JSON Schema 的 object 描述。required 为空时省略键：JSON Schema
+// 规范规定省略 required 等同空数组，所有合规后端都接受；而把 nil slice 写进
+// map 会被序列化成 "required":null，触发严格后端（如 OpenAI）的 400。
 func object(props map[string]any, required ...string) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"type":       "object",
 		"properties": props,
-		"required":   required,
 	}
+	if len(required) > 0 {
+		out["required"] = required
+	}
+	return out
 }
