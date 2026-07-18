@@ -17,9 +17,13 @@ func setPGid(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
-// killPGid kills every process in pgid. Fallback to direct PID kill on
-// platforms where the group call fails.
-func killPGid(pgid int) {
+// killProcessGroup kills every process in the child's process group.
+// Falls back to direct PID kill if the group call fails.
+func killProcessGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	pgid := cmd.Process.Pid
 	if e := syscall.Kill(-pgid, syscall.SIGKILL); e != nil {
 		_ = syscall.Kill(pgid, syscall.SIGKILL)
 	}

@@ -9,8 +9,13 @@ import (
 	"log/slog"
 )
 
+// 单轮对话的 LLM 调用上限：防止模型陷入工具循环烧 token，按典型工具链
+// （读→改→测→答）所需步骤数 + 适度余量设定。
 const maxIterations = 20
-const maxToolResultInHistory = 2000 // 每条 tool 结果进入历史的字符上限
+
+// 单条 tool 结果进入历史的字符上限：超长输出会稀释上下文预算，2k 字符
+// 既能保留工具结果的可读信息，又不至于挤占 LLM 的输入窗口。
+const maxToolResultInHistory = 2000
 
 func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args string) (res ToolResult) {
 	defer func() {

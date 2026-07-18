@@ -1,3 +1,7 @@
+// wire.go 是 OpenAI Chat Completions schema 的序列化层。
+// chatMessage / chatToolCall 与 types.go 的 Message / ToolCall 字段刻意重复：
+// 上层 domain 类型不绑死特定厂商的 JSON 形状（嵌套 function 对象、snake_case
+// 字段名），新增字段时需同步两处并保持与 OpenAI API 字段顺序、命名一致。
 package miniagent
 
 import (

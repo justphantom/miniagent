@@ -106,14 +106,12 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 		_ = pw.Close()
 		return "", err
 	}
-	// 整组清理：超时/正常退出都杀整个进程组，避免 sh 派生的孙进程残留。
-	pgid := cmd.Process.Pid
 	// exec 不会主动关闭 io.PipeWriter；ctx 超时后主进程已被 CommandContext
 	// 杀掉，但 pw 仍开着，io.Copy 会永久阻塞。这里监听 ctx，一旦 done 就关闭
 	// pw 并 kill 整组，让 io.Copy 解除阻塞。
 	go func() {
 		<-ctx.Done()
-		killPGid(pgid)
+		killProcessGroup(cmd)
 		_ = pw.Close()
 	}()
 	waitErr := make(chan error, 1)
@@ -126,7 +124,7 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	_, _ = io.Copy(&out, limited)
 	err := <-waitErr
 	// 兜底：正常退出后也整组清理一次，防后台 & 残留。
-	killPGid(pgid)
+	killProcessGroup(cmd)
 	return truncate(out.String(), maxShellOutputChars, "…"), err
 }
 

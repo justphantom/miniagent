@@ -11,6 +11,9 @@ import (
 	"log/slog"
 )
 
+// 历史裁剪的 token 预算：按 4k 上下文模型的 60% 预留给历史，剩余留给系统
+// 提示、用户本轮输入与输出。搭配 estimateTokens 的保守估算，避免实际请求
+// 撞到模型上下文窗口上限。
 const maxHistoryTokens = 6000
 
 // History persists per-chat conversation as jsonl session files.
