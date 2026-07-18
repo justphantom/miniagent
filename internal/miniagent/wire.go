@@ -63,7 +63,8 @@ func buildChatBody(req Request) ([]byte, error) {
 func parseChatResponse(raw []byte) (Response, error) {
 	var cr struct {
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Role      string         `json:"role"`
 				Content   string         `json:"content"`
 				ToolCalls []chatToolCall `json:"tool_calls"`
@@ -82,8 +83,9 @@ func parseChatResponse(raw []byte) (Response, error) {
 	}
 	ch := cr.Choices[0]
 	out := Response{
-		Text:  ch.Message.Content,
-		Usage: Usage{InputTokens: cr.Usage.PromptTokens, OutputTokens: cr.Usage.CompletionTokens},
+		Text:         ch.Message.Content,
+		Usage:        Usage{InputTokens: cr.Usage.PromptTokens, OutputTokens: cr.Usage.CompletionTokens},
+		FinishReason: ch.FinishReason,
 	}
 	for _, tc := range ch.Message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Fn.Name, Args: tc.Fn.Args})

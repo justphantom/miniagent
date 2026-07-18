@@ -167,6 +167,7 @@ func isPrivateV6(ip net.IP) bool {
 // webfetchClient 强制注入 SSRF 防护。自定义 RoundTripper（非 *http.Transport）
 // 无法挂 DialContext，会静默绕过 SSRF 拦截，因此回退到默认 Transport：宁可
 // 丢失用户自定义 RT，也不允许私网访问被放过。
+// Timeout 同步兜底：用户传的 client 若无 Timeout，挂死的连接会拖垮整个 agent。
 func webfetchClient(src *http.Client) *http.Client {
 	if src == nil {
 		return webfetchDefaultClient()
@@ -181,6 +182,9 @@ func webfetchClient(src *http.Client) *http.Client {
 		c.Transport = tr
 	default:
 		c.Transport = &http.Transport{DialContext: safeDialContext}
+	}
+	if c.Timeout <= 0 {
+		c.Timeout = webfetchTimeout
 	}
 	c.CheckRedirect = webfetchRedirectPolicy()
 	return &c

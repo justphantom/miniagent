@@ -214,3 +214,29 @@ func TestReadFile_CyclicSymlinkRejected(t *testing.T) {
 		t.Fatal("expected error for cyclic symlink")
 	}
 }
+
+// 已取消的 ctx 应让文件工具立即返回，不进入 IO。
+func TestFileTools_RespectCancelledCtx(t *testing.T) {
+	dir := writeTemp(t, "x.txt", "hello")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, tool := range map[string]Tool{
+		"read_file":  ReadFileTool(dir, false),
+		"write_file": WriteFileTool(dir, false),
+		"edit_file":  EditFileTool(dir, false),
+	} {
+		args := `{"path":"x.txt"}`
+		if name == "write_file" {
+			args = `{"path":"x.txt","content":"y"}`
+		} else if name == "edit_file" {
+			args = `{"path":"x.txt","old_string":"h","new_string":"H"}`
+		}
+		res := tool.Call(ctx, args)
+		if !res.IsError {
+			t.Errorf("%s: expected error on cancelled ctx", name)
+		}
+		if !strings.Contains(res.Output, "已取消") {
+			t.Errorf("%s: error = %q", name, res.Output)
+		}
+	}
+}

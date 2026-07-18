@@ -79,7 +79,7 @@ func runListSessions(stateDir, chatID string) {
 	fmt.Println(string(b))
 }
 
-func runShowCurrent(stateDir, chatID, defaultModel string) {
+func runShowCurrent(stateDir, chatID string) {
 	if stateDir == "" {
 		fmt.Fprintln(os.Stderr, "miniagent: --state-dir is required for --show-current")
 		os.Exit(1)

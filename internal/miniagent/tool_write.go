@@ -26,7 +26,10 @@ func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
 			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workspace_root 或绝对路径"},
 			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},
 		}, "path", "content"),
-		Call: func(_ context.Context, args string) ToolResult {
+		Call: func(ctx context.Context, args string) ToolResult {
+			if err := ctx.Err(); err != nil {
+				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+			}
 			var a writefileArgs
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}

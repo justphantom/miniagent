@@ -112,6 +112,17 @@ func TestParseChatResponse_ToolCalls(t *testing.T) {
 	}
 }
 
+func TestParseChatResponse_FinishReason(t *testing.T) {
+	raw := []byte(`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"partial..."}}],"usage":{}}`)
+	resp, err := parseChatResponse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q", resp.FinishReason)
+	}
+}
+
 func TestRetryableStatus(t *testing.T) {
 	for _, code := range []int{429, 500, 502, 503, 504} {
 		if !retryableStatus(code) {
@@ -130,6 +141,58 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 	if parseRetryAfter([]byte(`{}`)) != 0 {
 		t.Error("expected 0")
+	}
+}
+
+func TestParseRetryAfterHeader(t *testing.T) {
+	if got := parseRetryAfterHeader("3"); got != 3*time.Second {
+		t.Errorf("numeric seconds: got %v", got)
+	}
+	if got := parseRetryAfterHeader(""); got != 0 {
+		t.Errorf("empty: got %v", got)
+	}
+	if got := parseRetryAfterHeader("0"); got != 0 {
+		t.Errorf("zero: got %v", got)
+	}
+	// HTTP-date：未来 2 小时。
+	future := time.Now().Add(2 * time.Hour).UTC().Format(http.TimeFormat)
+	got := parseRetryAfterHeader(future)
+	if got < 1*time.Hour || got > 3*time.Hour {
+		t.Errorf("http-date: got %v", got)
+	}
+	// 过去的日期应返回 0。
+	past := time.Now().Add(-1 * time.Hour).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfterHeader(past); got != 0 {
+		t.Errorf("past date: got %v", got)
+	}
+}
+
+// Retry-After 头应被采纳为退避时长。
+func TestHTTPClient_Do_RespectsRetryAfterHeader(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	start := time.Now()
+	_, err := c.Do(context.Background(), Request{})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2", calls)
+	}
+	if elapsed < 900*time.Millisecond {
+		t.Errorf("Retry-After=1 not honored: elapsed=%v", elapsed)
 	}
 }
 

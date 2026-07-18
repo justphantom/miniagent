@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -78,6 +79,37 @@ func TestShell_NonZeroExitIsError(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "退出码") {
 		t.Errorf("Output = %q", res.Output)
+	}
+}
+
+// 超时后整组清理：sh 的孙进程不应残留。
+// 跗 short 模式跳过：测试需等 shellTimeout(60s) 触发，耗时过长。
+func TestShell_KillsGrandchildOnTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires shellTimeout to elapse")
+	}
+	if _, err := exec.LookPath("pgrep"); err != nil {
+		t.Skip("pgrep not available")
+	}
+	marker := "miniagent_uniq_sleep_marker_9f3k2"
+	t.Cleanup(func() {
+		_ = exec.Command("pkill", "-9", "-f", marker).Run()
+	})
+	s := ShellTool(t.TempDir(), false, nil)
+	// exec -a 让 sleep 进程名带 marker，pgrep -f 才能精确匹配。
+	start := time.Now()
+	res := s.Call(context.Background(), `{"command":"exec -a `+marker+` sleep 600"}`)
+	elapsed := time.Since(start)
+	if !res.IsError {
+		t.Error("expected timeout error")
+	}
+	if elapsed > 75*time.Second {
+		t.Errorf("timeout not enforced: elapsed=%v", elapsed)
+	}
+	time.Sleep(time.Second)
+	out, err := exec.Command("pgrep", "-f", marker).Output()
+	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		t.Errorf("grandchild still alive after kill: %s", out)
 	}
 }
 
@@ -258,5 +290,24 @@ func TestWebFetch_TransportRTKeepsSSRF(t *testing.T) {
 	}
 	if tr.DialContext == nil {
 		t.Error("DialContext not injected")
+	}
+}
+
+// 用户传的 client 无 Timeout 时必须兜底，避免挂死。
+func TestWebFetch_ClientMissingTimeoutFallback(t *testing.T) {
+	src := &http.Client{Transport: &http.Transport{}}
+	got := webfetchClient(src)
+	if got.Timeout != webfetchTimeout {
+		t.Errorf("Timeout = %v, want %v", got.Timeout, webfetchTimeout)
+	}
+}
+
+// 用户显式设了 Timeout，应被保留不被覆盖。
+func TestWebFetch_ClientKeepsUserTimeout(t *testing.T) {
+	custom := 99 * time.Second
+	src := &http.Client{Transport: &http.Transport{}, Timeout: custom}
+	got := webfetchClient(src)
+	if got.Timeout != custom {
+		t.Errorf("Timeout = %v, want user's %v", got.Timeout, custom)
 	}
 }

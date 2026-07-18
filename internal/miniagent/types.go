@@ -35,9 +35,10 @@ type ToolSpec struct {
 
 // Response is what the LLM returned for one Request.
 type Response struct {
-	Text      string
-	ToolCalls []ToolCall
-	Usage     Usage
+	Text         string
+	ToolCalls    []ToolCall
+	Usage        Usage
+	FinishReason string // stop|length|tool_calls|content_filter|null；非 stop 表示回答被截断/过滤
 }
 
 // Usage is the token accounting for one call.

@@ -29,7 +29,10 @@ func memorySetTool(store *FactStore, chatID string) Tool {
 			"value": map[string]any{"type": "string", "description": "事实内容，保持简洁。"},
 			"scope": map[string]any{"type": "string", "enum": []string{"chat", "project", "global"}, "description": "可见范围：chat=当前会话，project=同工作目录项目共享，global=所有会话。默认 chat。"},
 		}, "key", "value"),
-		Call: func(_ context.Context, args string) ToolResult {
+		Call: func(ctx context.Context, args string) ToolResult {
+			if err := ctx.Err(); err != nil {
+				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+			}
 			var p struct {
 				Key   string `json:"key"`
 				Value string `json:"value"`
@@ -58,7 +61,10 @@ func memoryGetTool(store *FactStore, chatID string) Tool {
 			"key":   map[string]any{"type": "string", "description": "要读取的事实 key。"},
 			"scope": map[string]any{"type": "string", "enum": []string{"chat", "project", "global"}, "description": "查找范围，默认 chat。"},
 		}, "key"),
-		Call: func(_ context.Context, args string) ToolResult {
+		Call: func(ctx context.Context, args string) ToolResult {
+			if err := ctx.Err(); err != nil {
+				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+			}
 			var p struct {
 				Key   string `json:"key"`
 				Scope string `json:"scope"`
@@ -87,7 +93,10 @@ func memoryListTool(store *FactStore, chatID string) Tool {
 			"prefix": map[string]any{"type": "string", "description": "可选的 key 前缀，例如 user. 只显示用户相关事实。"},
 			"scope":  map[string]any{"type": "string", "enum": []string{"chat", "project", "global"}, "description": "查找范围，默认 chat。"},
 		}),
-		Call: func(_ context.Context, args string) ToolResult {
+		Call: func(ctx context.Context, args string) ToolResult {
+			if err := ctx.Err(); err != nil {
+				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+			}
 			var p struct {
 				Prefix string `json:"prefix"`
 				Scope  string `json:"scope"`
@@ -123,7 +132,10 @@ func memoryDeleteTool(store *FactStore, chatID string) Tool {
 			"key":   map[string]any{"type": "string", "description": "要删除的事实 key。"},
 			"scope": map[string]any{"type": "string", "enum": []string{"chat", "project", "global"}, "description": "范围，默认 chat。"},
 		}, "key"),
-		Call: func(_ context.Context, args string) ToolResult {
+		Call: func(ctx context.Context, args string) ToolResult {
+			if err := ctx.Err(); err != nil {
+				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+			}
 			var p struct {
 				Key   string `json:"key"`
 				Scope string `json:"scope"`

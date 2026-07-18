@@ -60,7 +60,7 @@ func main() {
 		return
 	}
 	if *showCurrent {
-		runShowCurrent(*stateDir, *chatID, *model)
+		runShowCurrent(*stateDir, *chatID)
 		return
 	}
 	if *useSession != "" {

@@ -78,7 +78,12 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
 		if logger != nil {
-			logger.Info("llm call done", "prompt_id", promptID, "step", step, "duration_ms", callDur.Milliseconds(), "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls))
+			logger.Info("llm call done", "prompt_id", promptID, "step", step, "duration_ms", callDur.Milliseconds(), "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
+		}
+		// finish_reason 非 stop/tool_calls 表示回答被 max_tokens 或内容过滤截断，
+		// 最终文本是不完整的，调用方应感知。这里仅告警不改返回结构，避免破坏现有契约。
+		if logger != nil && resp.FinishReason != "" && resp.FinishReason != "stop" && resp.FinishReason != "tool_calls" {
+			logger.Warn("llm response truncated", "prompt_id", promptID, "step", step, "finish_reason", resp.FinishReason)
 		}
 
 		if len(resp.ToolCalls) == 0 {

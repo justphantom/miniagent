@@ -1,6 +1,7 @@
 package miniagent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,45 @@ func TestHistory_KeepsToolPairingWhenTrimming(t *testing.T) {
 	}
 	if toolCallID != toolMsgID {
 		t.Errorf("pairing broken: %q vs %q", toolCallID, toolMsgID)
+	}
+}
+
+// trim 触发时（多 turn + 大文本）必须保证：每个保留的 tool 消息都能在
+// 保留段内找到配对的 assistant(tool_calls)。OpenAI 等后端要求 tool 消息
+// 前必须有对应 tool_call，否则整批请求被拒。
+func TestTrimMessages_PreservesToolPairingAcrossTurns(t *testing.T) {
+	big := strings.Repeat("x", 3000)
+	var msgs []Message
+	// 5 turn，每 turn 都有 tool_call，确保触发多轮 drop。
+	for i := 1; i <= 5; i++ {
+		msgs = append(msgs,
+			Message{Role: "user", Content: big},
+			Message{Role: "assistant", ToolCalls: []ToolCall{{ID: fmt.Sprintf("c%d", i), Name: "t", Args: big}}},
+			Message{Role: "tool", ToolCallID: fmt.Sprintf("c%d", i), Content: big},
+			Message{Role: "assistant", Content: big},
+		)
+	}
+	trimmed := trimMessages(msgs, maxHistoryTokens)
+	if len(trimmed) >= len(msgs) {
+		t.Skipf("trim did not trigger, len=%d", len(trimmed))
+	}
+	// 校验：每个 tool 消息的 ToolCallID 在 trimmed 段内能找到 assistant 配对。
+	assistantCalls := map[string]bool{}
+	for _, m := range trimmed {
+		for _, tc := range m.ToolCalls {
+			assistantCalls[tc.ID] = true
+		}
+	}
+	for _, m := range trimmed {
+		if m.Role == "tool" {
+			if !assistantCalls[m.ToolCallID] {
+				t.Errorf("orphan tool message: tool_call_id=%q has no preceding assistant tool_call in trimmed slice", m.ToolCallID)
+			}
+		}
+	}
+	// trimmed 开头不应是 tool 或带 ToolCallID 的消息（OpenAI 会拒）。
+	if len(trimmed) > 0 && trimmed[0].Role == "tool" {
+		t.Errorf("trimmed slice starts with orphan tool: %+v", trimmed[0])
 	}
 }
 

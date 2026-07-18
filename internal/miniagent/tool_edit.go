@@ -27,7 +27,10 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 			"old_string": map[string]any{"type": "string", "description": "要被替换的原文（必须与文件中的内容精确匹配，含缩进和换行）"},
 			"new_string": map[string]any{"type": "string", "description": "替换后的新文本"},
 		}, "path", "old_string", "new_string"),
-		Call: func(_ context.Context, args string) ToolResult {
+		Call: func(ctx context.Context, args string) ToolResult {
+			if err := ctx.Err(); err != nil {
+				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+			}
 			var a editfileArgs
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
@@ -52,7 +55,7 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err == nil && info.Size() > maxEditFileBytes {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
 			}
-			f, err := openToolFile(full, os.O_RDONLY, 0)
+			f, err := openNoFollow(full, os.O_RDONLY, 0)
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 			}

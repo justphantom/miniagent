@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,7 +61,7 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		raw, status, err := c.doOnce(ctx, client, u.String(), body)
+		raw, status, raHeader, err := c.doOnce(ctx, client, u.String(), body)
 		if err == nil && status == http.StatusOK {
 			if c.Logger != nil {
 				c.Logger.Debug("http response", "status", status, "bytes", len(raw), "attempt", attempt)
@@ -76,6 +77,11 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 			return Response{}, lastErr
 		}
 		delay := retryDelays[attempt]
+		// Retry-After 优先：HTTP 头是标准做法，body 里的 retry_after 是部分厂商扩展。
+		// 取 header 与 body 的较大值，保守退避。
+		if ra := raHeader; ra > delay {
+			delay = ra
+		}
 		if ra := parseRetryAfter(raw); ra > delay {
 			delay = ra
 		}
@@ -91,10 +97,10 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 	}
 }
 
-func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string, body []byte) (raw []byte, status int, err error) {
+func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string, body []byte) (raw []byte, status int, retryAfter time.Duration, err error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, fmt.Errorf("build request: %w", err)
+		return nil, 0, 0, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -103,18 +109,18 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer resp.Body.Close()
 	// 多读 1 字节判定是否超限：恰好 1MiB 不应误报截断。
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if rerr != nil {
-		return raw, resp.StatusCode, fmt.Errorf("read response: %w", rerr)
+		return raw, resp.StatusCode, 0, fmt.Errorf("read response: %w", rerr)
 	}
 	if len(raw) > 1<<20 {
-		return raw[:1<<20], resp.StatusCode, fmt.Errorf("response exceeded 1 MiB limit and was truncated")
+		return raw[:1<<20], resp.StatusCode, 0, fmt.Errorf("response exceeded 1 MiB limit and was truncated")
 	}
-	return raw, resp.StatusCode, nil
+	return raw, resp.StatusCode, parseRetryAfterHeader(resp.Header.Get("Retry-After")), nil
 }
 
 // ListModels calls GET {BaseURL}/v1/models and returns the model ids.
@@ -166,6 +172,26 @@ func parseRetryAfter(body []byte) time.Duration {
 	}
 	if json.Unmarshal(body, &v) == nil && v.Error.RetryAfter > 0 {
 		return time.Duration(v.Error.RetryAfter * float64(time.Second))
+	}
+	return 0
+}
+
+// parseRetryAfterHeader 解析标准 HTTP Retry-After 头：可能是秒数或 HTTP-date。
+// 参考 RFC 7231 §7.1.3。
+func parseRetryAfterHeader(val string) time.Duration {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0
+	}
+	// 纯数字 = 秒。
+	if n, err := strconv.Atoi(val); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	// HTTP-date 格式。
+	if t, err := http.ParseTime(val); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
 	}
 	return 0
 }

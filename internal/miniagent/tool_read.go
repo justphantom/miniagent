@@ -30,7 +30,10 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 			"offset": map[string]any{"type": "integer", "description": "起始行号（1-based），默认 1（从头开始）"},
 			"limit":  map[string]any{"type": "integer", "description": "最多返回的行数，默认全部"},
 		}, "path"),
-		Call: func(_ context.Context, args string) ToolResult {
+		Call: func(ctx context.Context, args string) ToolResult {
+			if err := ctx.Err(); err != nil {
+				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+			}
 			var a readfileArgs
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
@@ -57,7 +60,7 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if info.Size() > maxReadFileBytes {
 				return ToolResult{Output: truncate(readFileLimited(full), maxReadFileChars, "…")}
 			}
-			f, err := openToolFile(full, os.O_RDONLY, 0)
+			f, err := openNoFollow(full, os.O_RDONLY, 0)
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 			}
@@ -76,7 +79,7 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 }
 
 func readFileLimited(path string) string {
-	f, err := openToolFile(path, os.O_RDONLY, 0)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return fmt.Sprintf("读取 %q 失败：%v", path, err)
 	}

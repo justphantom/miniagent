@@ -90,12 +90,6 @@ func resolveToolPath(workspaceRoot, p string, unrestricted bool) (string, error)
 	return resolveUnderRoot(root, p)
 }
 
-// openToolFile opens a file that has already been resolved under workspaceRoot.
-// It refuses to follow symlinks to prevent TOCTOU escapes.
-func openToolFile(path string, flag int, perm os.FileMode) (*os.File, error) {
-	return openNoFollow(path, flag, perm)
-}
-
 // openNoFollow is OS-specific. Defined in tool_file_*.go.
 
 func object(props map[string]any, required ...string) map[string]any {
