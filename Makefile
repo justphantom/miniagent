@@ -1,4 +1,4 @@
-.PHONY: build test fmt clean
+.PHONY: build test fmt clean deploy
 
 build:
 	mkdir -p bin
@@ -12,3 +12,6 @@ fmt:
 
 clean:
 	rm -rf bin/
+
+deploy: build
+	sudo mv bin/miniagent /usr/local/bin/miniagent
