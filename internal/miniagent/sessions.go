@@ -215,54 +215,6 @@ func (h *History) curPathFor(chatID string) string {
 	return filepath.Join(h.dir, sanitizeChatID(chatID)+".cur")
 }
 
-// Model returns the per-chat pinned model id, or "" when none is set.
-func (h *History) Model(chatID string) string {
-	if h == nil {
-		return ""
-	}
-	b, err := os.ReadFile(h.modelPath(chatID))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// Directory returns the per-chat pinned working directory, or "" when none is set.
-func (h *History) Directory(chatID string) string {
-	if h == nil {
-		return ""
-	}
-	b, err := os.ReadFile(h.dirPath(chatID))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// Permission returns the per-chat pinned permission mode, or "" when none is set.
-func (h *History) Permission(chatID string) string {
-	if h == nil {
-		return ""
-	}
-	b, err := os.ReadFile(h.permPath(chatID))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-func (h *History) modelPath(chatID string) string {
-	return filepath.Join(h.dir, sanitizeChatID(chatID)+".model")
-}
-
-func (h *History) dirPath(chatID string) string {
-	return filepath.Join(h.dir, sanitizeChatID(chatID)+".dir")
-}
-
-func (h *History) permPath(chatID string) string {
-	return filepath.Join(h.dir, sanitizeChatID(chatID)+".perm")
-}
-
 func sanitizeChatID(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))

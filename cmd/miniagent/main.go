@@ -132,10 +132,21 @@ func main() {
 
 	var history *miniagent.History
 	var facts *miniagent.FactStore
+	var meta *miniagent.MetaStore
 	if *stateDir != "" && *chatID != "" {
 		history = miniagent.NewHistory(*stateDir, logger)
 		facts = miniagent.NewFactStore(*stateDir, logger)
+		meta = miniagent.NewMetaStore(*stateDir)
 		tools = append(tools, miniagent.MemoryTools(facts, *chatID)...)
+		if err := meta.SetModel(*chatID, *model); err != nil {
+			logger.Warn("meta: set model failed", "error", err)
+		}
+		if err := meta.SetDirectory(*chatID, *workdir); err != nil {
+			logger.Warn("meta: set directory failed", "error", err)
+		}
+		if err := meta.SetPermission(*chatID, *permission); err != nil {
+			logger.Warn("meta: set permission failed", "error", err)
+		}
 	}
 	hist := history.Load(*chatID)
 
@@ -231,7 +242,16 @@ func runListSessions(stateDir, chatID string) {
 }
 
 func runShowCurrent(stateDir, chatID, defaultModel string) {
-	h := mustHistory(stateDir, chatID, "show-current")
+	if stateDir == "" {
+		fmt.Fprintln(os.Stderr, "miniagent: --state-dir is required for --show-current")
+		os.Exit(1)
+	}
+	if chatID == "" {
+		fmt.Fprintln(os.Stderr, "miniagent: --chat-id is required for --show-current")
+		os.Exit(1)
+	}
+	h := miniagent.NewHistory(stateDir, nil)
+	meta := miniagent.NewMetaStore(stateDir)
 	info := struct {
 		ChatID     string `json:"chat_id"`
 		SessionID  string `json:"session_id"`
@@ -241,9 +261,9 @@ func runShowCurrent(stateDir, chatID, defaultModel string) {
 	}{
 		ChatID:     chatID,
 		SessionID:  h.Current(chatID),
-		Model:      h.Model(chatID),
-		Directory:  h.Directory(chatID),
-		Permission: h.Permission(chatID),
+		Model:      meta.Model(chatID),
+		Directory:  meta.Directory(chatID),
+		Permission: meta.Permission(chatID),
 	}
 	b, _ := json.MarshalIndent(info, "", "  ")
 	fmt.Println(string(b))
