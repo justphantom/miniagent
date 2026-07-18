@@ -1,8 +1,10 @@
 .PHONY: build test fmt clean deploy
 
+COMMIT := $(shell git describe --always --dirty)
+
 build:
 	mkdir -p bin
-	go build -o bin/miniagent ./cmd/miniagent
+	go build -ldflags "-X main.version=$(COMMIT)" -o bin/miniagent ./cmd/miniagent
 
 test:
 	go test -race ./...
