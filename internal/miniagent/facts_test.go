@@ -81,13 +81,3 @@ func TestParseFactScope(t *testing.T) {
 		t.Error("unknown should default to chat")
 	}
 }
-
-func TestFormatFacts(t *testing.T) {
-	out := formatFacts([]Fact{{Key: "k", Value: "v"}})
-	if out == "" || !contains(out, "- k: v") {
-		t.Errorf("out = %q", out)
-	}
-	if formatFacts(nil) != "" {
-		t.Error("expected empty")
-	}
-}

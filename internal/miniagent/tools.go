@@ -2,12 +2,14 @@ package miniagent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
 
 // resolveUnderRoot cleans p and ensures the result stays under root, both on
-// the string level and on the filesystem level (EvalSymlinks on the parent dir).
+// the string level and on the filesystem level (EvalSymlinks on the parent dir
+// and on the final path if it exists).
 func resolveUnderRoot(root, p string) (string, error) {
 	clean := filepath.Clean(p)
 	var full string
@@ -24,6 +26,16 @@ func resolveUnderRoot(root, p string) (string, error) {
 		return full, nil
 	}
 	real := filepath.Join(realParent, filepath.Base(full))
+	if info, err := os.Lstat(real); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		linkTarget, err := os.Readlink(real)
+		if err != nil {
+			return "", fmt.Errorf("路径 %q 符号链接解析失败：%v", p, err)
+		}
+		if !filepath.IsAbs(linkTarget) {
+			linkTarget = filepath.Join(realParent, linkTarget)
+		}
+		real = filepath.Clean(linkTarget)
+	}
 	if err := checkUnderRoot(root, real, p); err != nil {
 		return "", err
 	}

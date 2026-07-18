@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -66,13 +68,58 @@ func WebFetchTool(httpClient *http.Client) Tool {
 }
 
 func isHTTPURL(u string) bool {
-	low := strings.ToLower(u)
-	return strings.HasPrefix(low, "http://") || strings.HasPrefix(low, "https://")
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
+}
+
+func isPublicHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	h := strings.ToLower(host)
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return false
+	}
+	ip := net.ParseIP(h)
+	if ip != nil {
+		return isPublicIP(ip)
+	}
+	addrs, err := net.LookupHost(h)
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil || !isPublicIP(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+func isPublicIP(ip net.IP) bool {
+	return !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
+		!ip.IsPrivate() && !ip.IsMulticast() && !ip.IsUnspecified()
 }
 
 func webfetchDefaultClient() *http.Client {
 	return &http.Client{
 		Timeout: webfetchTimeout,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, _, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, fmt.Errorf("webfetch: invalid address %q", addr)
+				}
+				if !isPublicHost(host) {
+					return nil, fmt.Errorf("webfetch: private address refused: %s", host)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, addr)
+			},
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxWebFetchRedirects {
 				return fmt.Errorf("webfetch: stopped after %d redirects", maxWebFetchRedirects)

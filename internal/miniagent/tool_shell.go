@@ -17,6 +17,10 @@ const shellTimeout = 60 * time.Second
 var defaultBlockedPatterns = []string{
 	"rm -rf",
 	"rm -fr",
+	"rm -r -f",
+	"rm -f -r",
+	"rm -r /",
+	"rm -R ",
 	"mkfs",
 	"dd if=",
 	"shutdown",

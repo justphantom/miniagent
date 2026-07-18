@@ -160,5 +160,5 @@ func TestNewSessionID(t *testing.T) {
 	}
 }
 
-func mkdir(p string) error { return os.MkdirAll(p, 0o755) }
+func mkdir(p string) error              { return os.MkdirAll(p, 0o755) }
 func writeFile(p, content string) error { return os.WriteFile(p, []byte(content), 0o644) }

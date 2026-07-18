@@ -37,7 +37,11 @@ func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("创建父目录失败：%v", err)}
 			}
-			if err := os.WriteFile(full, []byte(a.Content), 0o644); err != nil {
+			mode := os.FileMode(0o644)
+			if info, err := os.Stat(full); err == nil {
+				mode = info.Mode().Perm()
+			}
+			if err := os.WriteFile(full, []byte(a.Content), mode); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
 			}
 			return ToolResult{Output: fmt.Sprintf("已写入 %d 字节到 %s", len(a.Content), a.Path)}

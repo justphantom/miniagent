@@ -89,6 +89,9 @@ func (h *History) Append(chatID string, msgs []Message) {
 	for _, m := range msgs {
 		b, err := json.Marshal(m)
 		if err != nil {
+			if h.logger != nil {
+				h.logger.Warn("history: skip unmarshalable message", "error", err)
+			}
 			continue
 		}
 		_, _ = w.Write(b)

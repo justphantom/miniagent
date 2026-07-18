@@ -22,9 +22,9 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 		Name:        "read_file",
 		Description: "读取 workspace_root 内的文本文件内容。支持 offset/limit 按行范围读取，输出带行号标注。path 可以是绝对路径或相对 workspace_root 的路径。",
 		Parameters: object(map[string]any{
-			"path": map[string]any{"type": "string", "description": "要读取的文件路径，相对 workspace_root 或绝对路径"},
+			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workspace_root 或绝对路径"},
 			"offset": map[string]any{"type": "integer", "description": "起始行号（1-based），默认 1（从头开始）"},
-			"limit": map[string]any{"type": "integer", "description": "最多返回的行数，默认全部"},
+			"limit":  map[string]any{"type": "integer", "description": "最多返回的行数，默认全部"},
 		}, "path"),
 		Call: func(_ context.Context, args string) ToolResult {
 			var a readfileArgs

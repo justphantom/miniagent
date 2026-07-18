@@ -193,16 +193,3 @@ func (s *FactStore) Delete(scope FactScope, chatID, key string) error {
 	delete(facts, key)
 	return s.save(scope, chatID, facts)
 }
-
-// formatFacts renders a slice of facts as a short bullet list for the system prompt.
-func formatFacts(facts []Fact) string {
-	if len(facts) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("\n\n以下是与当前对话相关的已知事实（由用户或之前的对话沉淀）：\n")
-	for _, f := range facts {
-		fmt.Fprintf(&sb, "- %s: %s\n", f.Key, f.Value)
-	}
-	return sb.String()
-}

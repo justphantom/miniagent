@@ -56,7 +56,11 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中出现 %d 次。请提供更多上下文（扩大 old_string 范围）使其唯一匹配。", a.Path, count)}
 			}
 			updated := strings.Replace(content, a.OldString, a.NewString, 1)
-			if err := os.WriteFile(full, []byte(updated), 0o644); err != nil {
+			mode := os.FileMode(0o644)
+			if info, err := os.Stat(full); err == nil {
+				mode = info.Mode().Perm()
+			}
+			if err := os.WriteFile(full, []byte(updated), mode); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
 			}
 			return ToolResult{Output: fmt.Sprintf("已替换 %q 中的 1 处文本（%d → %d 字节）", a.Path, len(content), len(updated))}

@@ -108,7 +108,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 			msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: truncateToolResult(tres.Output)})
 		}
 	}
-	return Result{Usage: total, Steps: maxIterations}, errors.New("miniagent: max iterations exceeded")
+	return Result{Usage: total, Steps: maxIterations, History: msgs[len(history):]}, errors.New("miniagent: max iterations exceeded")
 }
 
 func truncateToolResult(s string) string {

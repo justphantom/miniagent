@@ -71,8 +71,12 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 			return Response{}, lastErr
 		}
 		delay := retryDelays[attempt]
-		if ra := parseRetryAfter(raw); ra > 0 && ra < delay {
+		if ra := parseRetryAfter(raw); ra > delay {
 			delay = ra
+		}
+		const maxRetryDelay = 60 * time.Second
+		if delay > maxRetryDelay {
+			delay = maxRetryDelay
 		}
 		select {
 		case <-time.After(delay):

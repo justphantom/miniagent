@@ -160,10 +160,40 @@ func TestEditFile_MultipleMatchesFails(t *testing.T) {
 	}
 }
 
-func TestEditFile_EscapeRejected(t *testing.T) {
+func TestWriteFile_SymlinkEscapeRejected(t *testing.T) {
 	dir := t.TempDir()
-	res := EditFileTool(dir, false).Call(context.Background(), `{"path":"../../../etc/passwd","old_string":"x","new_string":"y"}`)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("ORIGINAL"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "target.txt"), filepath.Join(dir, "link")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	res := WriteFileTool(dir, false).Call(context.Background(), `{"path":"link","content":"pwned"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
+	}
+	got, _ := os.ReadFile(filepath.Join(outside, "target.txt"))
+	if string(got) != "ORIGINAL" {
+		t.Errorf("outside file was modified: %q", got)
+	}
+}
+
+func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("hello world"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "target.txt"), filepath.Join(dir, "link")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	res := EditFileTool(dir, false).Call(context.Background(), `{"path":"link","old_string":"hello","new_string":"hi"}`)
+	if !res.IsError {
+		t.Fatal("expected error")
+	}
+	got, _ := os.ReadFile(filepath.Join(outside, "target.txt"))
+	if string(got) != "hello world" {
+		t.Errorf("outside file was modified: %q", got)
 	}
 }

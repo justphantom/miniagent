@@ -89,13 +89,21 @@ func TestShell_EmptyWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestShell_BlockedPatternSpacedFlags(t *testing.T) {
+	s := ShellTool(t.TempDir(), false, nil)
+	res := s.Call(context.Background(), `{"command":"rm -r -f /tmp/x"}`)
+	if !res.IsError {
+		t.Fatal("expected error")
+	}
+}
+
 func TestWebFetch_ParsesHTML(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<html><head><title>T</title><style>x{}</style></head><body><p>hello <b>world</b></p><script>alert(1)</script></body></html>`))
 	}))
 	defer srv.Close()
-	res := WebFetchTool(nil).Call(context.Background(), `{"url":"`+srv.URL+`"}`)
+	res := WebFetchTool(&http.Client{}).Call(context.Background(), `{"url":"`+srv.URL+`"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -121,7 +129,7 @@ func TestWebFetch_Non2xxIsError(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
-	res := WebFetchTool(nil).Call(context.Background(), `{"url":"`+srv.URL+`"}`)
+	res := WebFetchTool(&http.Client{}).Call(context.Background(), `{"url":"`+srv.URL+`"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
@@ -136,7 +144,7 @@ func TestWebFetch_PlainTextReturned(t *testing.T) {
 		_, _ = w.Write([]byte("plain body"))
 	}))
 	defer srv.Close()
-	res := WebFetchTool(nil).Call(context.Background(), `{"url":"`+srv.URL+`"}`)
+	res := WebFetchTool(&http.Client{}).Call(context.Background(), `{"url":"`+srv.URL+`"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -151,5 +159,23 @@ func TestWebFetch_ConnectionError(t *testing.T) {
 	res := WebFetchTool(&http.Client{Timeout: 2 * time.Second}).Call(context.Background(), `{"url":"`+srv.URL+`"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
+	}
+}
+
+func TestWebFetch_SSRFBlocksLocalhost(t *testing.T) {
+	for _, u := range []string{"http://localhost:8080/x", "http://127.0.0.1:8080/x", "http://[::1]:8080/x"} {
+		res := WebFetchTool(nil).Call(context.Background(), `{"url":"`+u+`"}`)
+		if !res.IsError {
+			t.Errorf("expected error for %q", u)
+		}
+	}
+}
+
+func TestWebFetch_SSRFBlocksPrivateIP(t *testing.T) {
+	for _, u := range []string{"http://192.168.1.1/x", "http://10.0.0.1/x", "http://172.16.0.1/x"} {
+		res := WebFetchTool(nil).Call(context.Background(), `{"url":"`+u+`"}`)
+		if !res.IsError {
+			t.Errorf("expected error for %q", u)
+		}
 	}
 }
