@@ -23,6 +23,12 @@ func resolveUnderRoot(root, p string) (string, error) {
 	}
 	realParent, err := filepath.EvalSymlinks(filepath.Dir(full))
 	if err != nil {
+		// 父目录不存在（写新文件场景，调用方稍后会 MkdirAll）允许通过，
+		// 仅靠上面的字符串层 checkUnderRoot 兜底；其余失败（权限/循环链接等）
+		// 视为可疑，直接拒绝以避免静默绕过符号链接逃逸检查。
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("路径 %q 父目录解析失败：%v", p, err)
+		}
 		return full, nil
 	}
 	real := filepath.Join(realParent, filepath.Base(full))

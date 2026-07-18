@@ -106,12 +106,13 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// 多读 1 字节判定是否超限：恰好 1MiB 不应误报截断。
+	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if rerr != nil {
 		return raw, resp.StatusCode, fmt.Errorf("read response: %w", rerr)
 	}
-	if len(raw) >= 1<<20 {
-		return raw, resp.StatusCode, fmt.Errorf("response exceeded 1 MiB limit and was truncated")
+	if len(raw) > 1<<20 {
+		return raw[:1<<20], resp.StatusCode, fmt.Errorf("response exceeded 1 MiB limit and was truncated")
 	}
 	return raw, resp.StatusCode, nil
 }

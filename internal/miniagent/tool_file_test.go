@@ -197,3 +197,20 @@ func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 		t.Errorf("outside file was modified: %q", got)
 	}
 }
+
+// EvalSymlinks 失败（循环链接）必须返回 error，不能静默放行。
+func TestReadFile_CyclicSymlinkRejected(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	res := ReadFileTool(dir, false).Call(context.Background(), `{"path":"a"}`)
+	if !res.IsError {
+		t.Fatal("expected error for cyclic symlink")
+	}
+}

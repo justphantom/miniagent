@@ -86,6 +86,9 @@ type Result struct {
 	Usage   Usage
 	Steps   int
 	History []Message
+	// Incomplete 为 true 表示因达到 maxIterations 上限而终止，
+	// 此刻没有最终 Text，但 Usage 与 History 仍应被消费以避免 token 浪费。
+	Incomplete bool
 }
 
 // LoopConfig carries the per-turn LLM parameters.
@@ -95,8 +98,4 @@ type LoopConfig struct {
 	MemoryContext string
 	MaxTokens     int
 	Tools         []Tool
-}
-
-func spec(name, desc string, params map[string]any) ToolSpec {
-	return ToolSpec{Name: name, Description: desc, Parameters: params}
 }

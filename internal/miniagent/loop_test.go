@@ -222,3 +222,30 @@ func TestRun_CancelledCtx(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestRun_MaxIterationsReturnsIncompleteResult(t *testing.T) {
+	// 工具调用永不停：每次都返回 tool_calls，触发 maxIterations 上限。
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	responses := make([]string, maxIterations+2)
+	for i := range responses {
+		responses[i] = toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"})
+	}
+	tr := &fakeTransport{responses: responses}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("expected nil error on max iterations, got %v", err)
+	}
+	if !res.Incomplete {
+		t.Error("expected Incomplete=true")
+	}
+	if res.Steps != maxIterations {
+		t.Errorf("Steps = %d, want %d", res.Steps, maxIterations)
+	}
+	if len(res.History) == 0 {
+		t.Error("expected non-empty history to preserve burned tokens")
+	}
+	if res.Usage.InputTokens == 0 {
+		t.Error("expected non-zero usage accounting")
+	}
+}

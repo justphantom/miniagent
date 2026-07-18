@@ -20,7 +20,8 @@ type streamEvent struct {
 	OutputTokens int    `json:"output_tokens,omitempty"`
 	Steps        int    `json:"steps,omitempty"`
 
-	Message string `json:"message,omitempty"`
+	Incomplete bool   `json:"incomplete,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 
 // StreamEmitFunc returns an EmitFunc that writes Signal events as NDJSON.
@@ -43,6 +44,7 @@ func EmitResult(w io.Writer, result Result, model string) error {
 		InputTokens:  result.Usage.InputTokens,
 		OutputTokens: result.Usage.OutputTokens,
 		Steps:        result.Steps,
+		Incomplete:   result.Incomplete,
 	})
 }
 

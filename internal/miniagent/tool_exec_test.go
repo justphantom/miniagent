@@ -2,6 +2,8 @@ package miniagent
 
 import (
 	"context"
+	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,6 +89,31 @@ func TestShell_EmptyWorkspaceRoot(t *testing.T) {
 	}
 }
 
+// 用户传空 JSON 数组必须回落默认黑名单，不能静默放开破坏性命令。
+func TestShell_EmptyBlockedPatternsFallsBack(t *testing.T) {
+	s := ShellTool(t.TempDir(), false, []string{})
+	res := s.Call(context.Background(), `{"command":"rm -rf /tmp/x"}`)
+	if !res.IsError {
+		t.Fatal("expected rm -rf to be blocked even with empty blockedPatterns")
+	}
+	if !strings.Contains(res.Output, "黑名单") {
+		t.Errorf("error = %q", res.Output)
+	}
+}
+
+// free 模式 + 空 workdir：cmd.Dir="" 由 exec 解释为进程 cwd，不应被
+// ensureWorkspaceDir 拒绝（受限模式才需要工作目录约束）。
+func TestShell_FreeModeEmptyWorkdir(t *testing.T) {
+	s := ShellTool("", true, nil)
+	res := s.Call(context.Background(), `{"command":"echo ok-free"}`)
+	if res.IsError {
+		t.Fatalf("free mode should not require workdir: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "ok-free") {
+		t.Errorf("Output = %q", res.Output)
+	}
+}
+
 func TestShell_BlockedPatternSpacedFlags(t *testing.T) {
 	s := ShellTool(t.TempDir(), false, nil)
 	res := s.Call(context.Background(), `{"command":"rm -r -f /tmp/x"}`)
@@ -163,3 +190,51 @@ func TestSafeDialContext_AllowsPublicIP(t *testing.T) {
 	}
 }
 
+// IPv6 封装段可作 SSRF 跳板，必须拒绝。
+func TestIsPublicIP_BlocksIPv6Tunnels(t *testing.T) {
+	cases := map[string]bool{
+		"2002:7f00::1":         false, // 6to4 封装 127.0.0.1
+		"2001::ce49:7f00:1":    false, // Teredo
+		"64:ff9b::7f00:1":      false, // NAT64 WK
+		"::1":                  false, // loopback
+		"fe80::1":              false, // link-local
+		"fc00::1":              false, // ULA
+		"2606:4700:4700::1111": true,  // Cloudflare 公网
+	}
+	for ipStr, want := range cases {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			t.Errorf("ParseIP(%q) failed", ipStr)
+			continue
+		}
+		if got := isPublicIP(ip); got != want {
+			t.Errorf("isPublicIP(%s) = %v, want %v", ipStr, got, want)
+		}
+	}
+}
+
+// 自定义非 *http.Transport 的 RoundTripper 必须回退到带 SSRF 防护的默认 Transport。
+func TestWebFetch_NonTransportRTFallsBack(t *testing.T) {
+	bypass := &fakeTransport{}
+	c := &http.Client{Transport: bypass}
+	got := webfetchClient(c)
+	tr, ok := got.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport after fallback, got %T", got.Transport)
+	}
+	if tr.DialContext == nil {
+		t.Error("DialContext not injected; SSRF bypass possible")
+	}
+}
+
+func TestWebFetch_TransportRTKeepsSSRF(t *testing.T) {
+	src := &http.Client{Transport: &http.Transport{}}
+	got := webfetchClient(src)
+	tr, ok := got.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", got.Transport)
+	}
+	if tr.DialContext == nil {
+		t.Error("DialContext not injected")
+	}
+}

@@ -75,8 +75,12 @@ func ShellTool(workspaceRoot string, unrestricted bool, blockedPatterns []string
 			defer cancel()
 			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command)
 			cmd.Dir = workspaceRoot
-			if err := ensureWorkspaceDir(cmd.Dir); err != nil {
-				return ToolResult{IsError: true, Output: err.Error()}
+			// unrestricted 模式下 cmd.Dir 可能为空（继承进程 cwd），由 exec 自行处理；
+			// 受限模式必须保证 workspace_root 可访问。
+			if !unrestricted {
+				if err := ensureWorkspaceDir(cmd.Dir); err != nil {
+					return ToolResult{IsError: true, Output: err.Error()}
+				}
 			}
 			cmd.Env = envWhitelist()
 			body, err := runShellLimited(runCtx, cmd)
@@ -132,10 +136,15 @@ func ensureWorkspaceDir(dir string) error {
 	return nil
 }
 
+// validateShellCommand 是辅助过滤层，不是安全边界：黑名单本质可被绕过
+// （rm --recursive、$()、find -delete 等），真正的隔离依赖 workspace_root
+// 与 unrestricted=false 的路径约束。
 func validateShellCommand(command string, blockedPatterns []string) string {
 	folded := strings.ToLower(command)
+	// len==0 而非 nil：用户传空 JSON 数组 [] 时也应回落默认值，
+	// 否则会静默放开全部破坏性命令。
 	patterns := blockedPatterns
-	if patterns == nil {
+	if len(patterns) == 0 {
 		patterns = defaultBlockedPatterns
 	}
 	for _, p := range patterns {

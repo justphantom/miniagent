@@ -1,6 +1,7 @@
 package miniagent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -129,6 +130,46 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 	if parseRetryAfter([]byte(`{}`)) != 0 {
 		t.Error("expected 0")
+	}
+}
+
+// 恰好 1MiB 的合法响应不应被误判为截断（off-by-one 回归）。
+func TestHTTPClient_Do_ExactOneMiBNotTruncated(t *testing.T) {
+	const size = 1 << 20
+	prefix := `{"choices":[{"message":{"content":"`
+	suffix := `"}}],"usage":{}}`
+	pad := size - len(prefix) - len(suffix)
+	if pad < 0 {
+		t.Skipf("size too small for wrap")
+	}
+	final := append([]byte(prefix), bytes.Repeat([]byte{'a'}, pad)...)
+	final = append(final, suffix...)
+	if len(final) != size {
+		t.Fatalf("payload size = %d, want %d", len(final), size)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(final)
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.Do(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+}
+
+// 超过 1MiB 必须报错并截断到 1MiB。
+func TestHTTPClient_Do_OverOneMiBTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(strings.Repeat("a", (1<<20)+100)))
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.Do(context.Background(), Request{})
+	if err == nil {
+		t.Fatal("expected truncation error")
 	}
 }
 

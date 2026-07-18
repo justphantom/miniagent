@@ -197,6 +197,9 @@ func main() {
 	if err := history.Append(*chatID, result.History); err != nil {
 		logger.Warn("history: append failed", "error", err)
 	}
+	if result.Incomplete {
+		logger.Warn("loop: hit max iterations; usage/history emitted but no final text", "steps", result.Steps)
+	}
 	if err := miniagent.EmitResult(os.Stdout, result, *model); err != nil {
 		logger.Warn("emit result failed", "error", err)
 		os.Exit(1)
