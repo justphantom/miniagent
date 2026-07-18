@@ -82,12 +82,15 @@ type EmitFunc func(sig Signal) error
 
 // Result is what loop.Run returns.
 type Result struct {
-	Text    string
-	Usage   Usage
-	Steps   int
-	History []Message
+	Text  string
+	Usage Usage
+	Steps int
+	// NewMessages 是本轮 Run 期间新增到对话历史的消息（含 assistant 工具调用、
+	// tool 结果、最终 assistant 文本），供持久化层 append。命名 NewMessages
+	// 而非 History，是为了避免被误读为"全量历史"。
+	NewMessages []Message
 	// Incomplete 为 true 表示因达到 maxIterations 上限而终止，
-	// 此刻没有最终 Text，但 Usage 与 History 仍应被消费以避免 token 浪费。
+	// 此刻没有最终 Text，但 Usage 与 NewMessages 仍应被消费以避免 token 浪费。
 	Incomplete bool
 }
 

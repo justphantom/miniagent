@@ -60,10 +60,10 @@ func (h *History) NewSession(chatID string) (string, error) {
 	if h == nil {
 		return "", errors.New("miniagent: memory disabled")
 	}
-	now := time.Now()
-	sid := newSessionID(now)
+	ts := now()
+	sid := newSessionID(ts)
 	if sid == h.current(chatID) {
-		sid = fmt.Sprintf("%s-%d", sid, now.Nanosecond())
+		sid = fmt.Sprintf("%s-%d", sid, ts.Nanosecond())
 	}
 	if err := os.MkdirAll(h.dir, 0o755); err != nil {
 		return "", err

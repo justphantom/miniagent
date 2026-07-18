@@ -296,6 +296,31 @@ func htmlToText(body []byte) string {
 			continue
 		}
 		if b == '<' {
+			// 拦截 HTML 注释与 CDATA：直接找到对应结束标记，避免其中的 >
+			// 提前关闭 tag 解析（畸形 HTML 可能导致异常或泄漏注释内容）。
+			if rest := body[i:]; bytes.HasPrefix(rest, []byte("<!--")) {
+				if end := bytes.Index(body[i+4:], []byte("-->")); end >= 0 {
+					i += 4 + end + 2
+					continue
+				}
+				i = len(body) - 1
+				continue
+			}
+			if rest := body[i:]; bytes.HasPrefix(rest, []byte("<![CDATA[")) {
+				start := i + 9
+				if end := bytes.Index(body[start:], []byte("]]>")); end >= 0 {
+					if skipDepth == 0 {
+						text.Write(body[start : start+end])
+					}
+					i = start + end + 2
+					continue
+				}
+				if skipDepth == 0 {
+					text.Write(body[start:])
+				}
+				i = len(body) - 1
+				continue
+			}
 			flushText()
 			inTag = true
 			continue

@@ -12,7 +12,7 @@ import (
 const maxIterations = 20
 const maxToolResultInHistory = 2000 // 每条 tool 结果进入历史的字符上限
 
-func safeCall(logger *slog.Logger, tool Tool, name, args string, ctx context.Context) (res ToolResult) {
+func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args string) (res ToolResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			if logger != nil {
@@ -83,7 +83,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 
 		if len(resp.ToolCalls) == 0 {
 			msgs = append(msgs, Message{Role: "assistant", Content: resp.Text})
-			return Result{Text: resp.Text, Usage: total, Steps: step, History: msgs[len(history):]}, nil
+			return Result{Text: resp.Text, Usage: total, Steps: step, NewMessages: msgs[len(history):]}, nil
 		}
 
 		calls := make([]ToolCall, len(resp.ToolCalls))
@@ -103,7 +103,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 			if !ok {
 				tres = ToolResult{IsError: true, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
 			} else {
-				tres = safeCall(logger, tool, tc.Name, tc.Args, ctx)
+				tres = safeCall(ctx, logger, tool, tc.Name, tc.Args)
 			}
 			if logger != nil {
 				logger.Info("tool executed", "prompt_id", promptID, "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
@@ -116,7 +116,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 	}
 	// 达到迭代上限时返回 nil error + Incomplete=true，让上层仍能消费
 	// 已累积的 Usage/History，避免烧掉的 token 全部丢弃。
-	return Result{Usage: total, Steps: maxIterations, History: msgs[len(history):], Incomplete: true}, nil
+	return Result{Usage: total, Steps: maxIterations, NewMessages: msgs[len(history):], Incomplete: true}, nil
 }
 
 func truncateToolResult(s string) string {

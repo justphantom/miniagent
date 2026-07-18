@@ -150,6 +150,28 @@ func TestWebFetch_ParsesHTML(t *testing.T) {
 	}
 }
 
+func TestWebFetch_StripsCommentsAndCDATA(t *testing.T) {
+	// 注释里含 >：旧实现会提前关闭 tag，泄漏后续内容。
+	body := []byte(`<p>a <!-- x > y & <z> --> b</p><p>c <![CDATA[<raw>]]> d</p>`)
+	got := htmlToText(body)
+	if strings.Contains(got, "x > y") || strings.Contains(got, "<z>") {
+		t.Errorf("comment leaked: %q", got)
+	}
+	if !strings.Contains(got, "<raw>") {
+		t.Errorf("CDATA content lost: %q", got)
+	}
+	if !strings.Contains(got, "a") || !strings.Contains(got, "b") || !strings.Contains(got, "c") || !strings.Contains(got, "d") {
+		t.Errorf("text body dropped: %q", got)
+	}
+}
+
+func TestWebFetch_UnterminatedCommentEOF(t *testing.T) {
+	got := htmlToText([]byte(`<p>ok</p><!-- never closed`))
+	if !strings.Contains(got, "ok") {
+		t.Errorf("body lost: %q", got)
+	}
+}
+
 func TestWebFetch_Non2xxIsError(t *testing.T) {
 	// 本地地址现在被 SSRF 拦截；验证拒绝行为即可。
 	res := WebFetchTool(nil).Call(context.Background(), `{"url":"http://127.0.0.1:8080/x"}`)

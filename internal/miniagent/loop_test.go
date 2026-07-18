@@ -118,11 +118,11 @@ func TestRun_UnknownToolYieldsErrorResult(t *testing.T) {
 	if res.Steps != 2 {
 		t.Errorf("Steps = %d", res.Steps)
 	}
-	if len(res.History) < 3 {
-		t.Fatalf("history too short: %+v", res.History)
+	if len(res.NewMessages) < 3 {
+		t.Fatalf("history too short: %+v", res.NewMessages)
 	}
-	if !strings.Contains(res.History[2].Content, "未知工具") {
-		t.Errorf("history[2] = %q", res.History[2].Content)
+	if !strings.Contains(res.NewMessages[2].Content, "未知工具") {
+		t.Errorf("history[2] = %q", res.NewMessages[2].Content)
 	}
 }
 
@@ -171,7 +171,7 @@ func TestRun_EmptyToolCallIDSynthesized(t *testing.T) {
 		t.Errorf("Text = %q", res.Text)
 	}
 	var assistantID, toolMsgID string
-	for _, m := range res.History {
+	for _, m := range res.NewMessages {
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 			assistantID = m.ToolCalls[0].ID
 		}
@@ -242,7 +242,7 @@ func TestRun_MaxIterationsReturnsIncompleteResult(t *testing.T) {
 	if res.Steps != maxIterations {
 		t.Errorf("Steps = %d, want %d", res.Steps, maxIterations)
 	}
-	if len(res.History) == 0 {
+	if len(res.NewMessages) == 0 {
 		t.Error("expected non-empty history to preserve burned tokens")
 	}
 	if res.Usage.InputTokens == 0 {
