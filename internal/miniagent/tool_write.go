@@ -47,6 +47,14 @@ func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("创建父目录失败：%v", err)}
 			}
+			// MkdirAll 之后再走一次解析：此前父目录可能不存在导致 EvalSymlinks
+			// 走 NotExist 分支，依赖字符串层兜底。此刻目录已落盘，可对最终路径
+			// 做文件系统层校验，关闭"先检查后创建"窗口下的符号链接逃逸。
+			finalPath, err := resolveToolPath(workspaceRoot, a.Path, unrestricted)
+			if err != nil {
+				return ToolResult{IsError: true, Output: err.Error()}
+			}
+			full = finalPath
 			mode := os.FileMode(0o644)
 			if info, err := os.Lstat(full); err == nil {
 				mode = info.Mode().Perm()

@@ -149,18 +149,23 @@ func truncateLastContents(msgs []Message, budget int) []Message {
 	return msgs
 }
 
+// estimateTokens 估算消息列表的 token 数。用 len/3 而非更常见的 len/4：
+// 中文字符 UTF-8 占 3 字节，按 1-2 token/字 计费，/3 是中英混排场景下偏保守
+// 的下界。最后整体放大 1.2（safetyMargin），让裁剪更早触发，降低实际请求
+// 超出模型上下文窗口的风险。
 func estimateTokens(msgs []Message) int {
 	const perMessageOverhead = 4
+	const safetyMargin = 6 / 5 // 1.2
 	total := 0
 	for i := range msgs {
 		total += perMessageOverhead
-		total += (len(msgs[i].Content) + 3) / 4
+		total += (len(msgs[i].Content) + 2) / 3
 		for _, tc := range msgs[i].ToolCalls {
-			total += (len(tc.Args) + 3) / 4
+			total += (len(tc.Args) + 2) / 3
 		}
-		total += (len(msgs[i].ToolCallID) + 3) / 4
+		total += (len(msgs[i].ToolCallID) + 2) / 3
 	}
-	return total
+	return total * safetyMargin
 }
 
 func hasMultipleTurns(msgs []Message) bool {

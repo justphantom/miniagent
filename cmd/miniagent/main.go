@@ -98,7 +98,6 @@ func main() {
 		Logger:  logger,
 	}
 
-	unrestricted := *permission == "free"
 	var blockedPats []string
 	if *blockedPat != "" {
 		if err := json.Unmarshal([]byte(*blockedPat), &blockedPats); err != nil {
@@ -107,61 +106,17 @@ func main() {
 		}
 	}
 
-	var tools []miniagent.Tool
-	switch *permission {
-	case "plan":
-		if *workdir != "" {
-			tools = append(tools, miniagent.ReadFileTool(*workdir, unrestricted))
-		} else {
-			fmt.Fprintln(os.Stderr, "miniagent: --workdir is empty, read_file not registered (plan mode needs a workspace)")
-		}
-		tools = append(tools, miniagent.WebFetchTool(nil))
-	default:
-		if *workdir != "" || unrestricted {
-			tools = append(tools,
-				miniagent.ReadFileTool(*workdir, unrestricted),
-				miniagent.WriteFileTool(*workdir, unrestricted),
-				miniagent.EditFileTool(*workdir, unrestricted),
-				miniagent.ShellTool(*workdir, unrestricted, blockedPats),
-			)
-		} else {
-			fmt.Fprintln(os.Stderr, "miniagent: --workdir is empty AND permission is not free; read_file/write_file/shell/edit_file not registered")
-		}
-		tools = append(tools, miniagent.WebFetchTool(nil))
-	}
+	tools := buildTools(toolConfig{
+		permission:      *permission,
+		workdir:         *workdir,
+		blockedPatterns: blockedPats,
+	})
 
-	var history *miniagent.History
-	var facts *miniagent.FactStore
-	var meta *miniagent.MetaStore
-	if *stateDir != "" && *chatID != "" {
-		var err error
-		history, err = miniagent.NewHistory(*stateDir, logger)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
-			os.Exit(1)
-		}
-		facts, err = miniagent.NewFactStore(*stateDir, logger)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: init memory: %v\n", err)
-			os.Exit(1)
-		}
-		meta, err = miniagent.NewMetaStore(*stateDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
-			os.Exit(1)
-		}
-		tools = append(tools, miniagent.MemoryTools(facts, *chatID)...)
-		if err := meta.SetModel(*chatID, *model); err != nil {
-			logger.Warn("meta: set model failed", "error", err)
-		}
-		if err := meta.SetDirectory(*chatID, *workdir); err != nil {
-			logger.Warn("meta: set directory failed", "error", err)
-		}
-		if err := meta.SetPermission(*chatID, *permission); err != nil {
-			logger.Warn("meta: set permission failed", "error", err)
-		}
+	st := initStores(*stateDir, *chatID, *model, *workdir, *permission, logger)
+	if st.facts != nil {
+		tools = append(tools, miniagent.MemoryTools(st.facts, *chatID)...)
 	}
-	hist := history.Load(*chatID)
+	hist := st.history.Load(*chatID)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -169,8 +124,8 @@ func main() {
 	emit := miniagent.StreamEmitFunc(os.Stdout, *verbose)
 
 	memoryContext := ""
-	if facts != nil {
-		chatFacts, err := facts.List(miniagent.ScopeChat, *chatID, "")
+	if st.facts != nil {
+		chatFacts, err := st.facts.List(miniagent.ScopeChat, *chatID, "")
 		if err != nil {
 			logger.Warn("memory: list failed", "error", err)
 		} else if len(chatFacts) > 0 {
@@ -193,7 +148,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := history.Append(*chatID, result.NewMessages); err != nil {
+	if err := st.history.Append(*chatID, result.NewMessages); err != nil {
 		logger.Warn("history: append failed", "error", err)
 	}
 	if result.Incomplete {

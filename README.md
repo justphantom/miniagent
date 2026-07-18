@@ -68,6 +68,8 @@ make test       # go test -race ./...
 | `free` | 与 default 相同的工具集，但 `unrestricted=true`：路径无约束，shell 无黑名单。`-workdir` 为空时仍注册，shell 继承进程 cwd |
 | 其他值 | 等同 `default`（`unrestricted` 仅在严格等于 `free` 时为 true） |
 
+> **关于 `free` 模式的边界**：`free` 仅解除路径边界与 shell 黑名单，**不**解除超时（shell 仍 60s、webfetch 仍 30s）、输出截断（shell/webfetch 仍 20000 字符上限）、环境变量白名单（子进程仍只继承白名单内的环境变量）、SSRF 防护（webfetch 仍拦截私网/IPv6 隧道）。如需完全不受限的 shell，请在操作系统层（容器/cgroup/快照）做隔离。
+
 `-state-dir` 与 `-chat-id` 同时非空时，额外注册 4 个 `memory_*` 工具，并把当前 model/dir/permission 写入 meta 存储。
 
 ## NDJSON 输出结构

@@ -200,5 +200,35 @@ func TestNewSessionID(t *testing.T) {
 	}
 }
 
+// estimateTokens 对中文应给出比 len/4 更保守（更大）的估算。
+func TestEstimateTokens_ChineseConservative(t *testing.T) {
+	// 30 个中文字 = 90 字节 UTF-8。
+	chinese := strings.Repeat("中", 30)
+	msgs := []Message{{Role: "user", Content: chinese}}
+	got := estimateTokens(msgs)
+	// len/4 = 22；len/3 ≈ 30；×1.2 ≈ 36。应明显大于 len/4 估算。
+	if got < 30 {
+		t.Errorf("chinese estimate too low: got %d (len/4 would be %d)", got, (len(chinese)+3)/4)
+	}
+}
+
+// 纯 ASCII 应保持合理量级（不爆炸放大）。
+func TestEstimateTokens_ASCIIReasonable(t *testing.T) {
+	ascii := strings.Repeat("a", 120)
+	msgs := []Message{{Role: "user", Content: ascii}}
+	got := estimateTokens(msgs)
+	// len/3 = 40；×1.2 = 48。期望在 [40, 60] 区间。
+	if got < 40 || got > 60 {
+		t.Errorf("ascii estimate = %d, want 40..60", got)
+	}
+}
+
+// 空消息列表返回 0。
+func TestEstimateTokens_Empty(t *testing.T) {
+	if got := estimateTokens(nil); got != 0 {
+		t.Errorf("empty = %d, want 0", got)
+	}
+}
+
 func mkdir(p string) error              { return os.MkdirAll(p, 0o755) }
 func writeFile(p, content string) error { return os.WriteFile(p, []byte(content), 0o644) }

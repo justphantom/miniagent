@@ -179,6 +179,25 @@ func TestWriteFile_SymlinkEscapeRejected(t *testing.T) {
 	}
 }
 
+// 父目录是符号链接指向外部：第一次 resolveUnderRoot 因父目录存在会被
+// EvalSymlinks 解析并拦截；该测试同时覆盖 MkdirAll 后的二次校验路径。
+func TestWriteFile_SymlinkParentDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	// workspace 内的 subd 是指向外部目录的符号链接。
+	if err := os.Symlink(outside, filepath.Join(dir, "subd")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	res := WriteFileTool(dir, false).Call(context.Background(), `{"path":"subd/evil.txt","content":"pwned"}`)
+	if !res.IsError {
+		t.Fatal("expected error for symlinked parent dir")
+	}
+	// 外部目录不应被写入。
+	if _, err := os.Stat(filepath.Join(outside, "evil.txt")); err == nil {
+		t.Errorf("outside file was created via symlink parent")
+	}
+}
+
 func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()

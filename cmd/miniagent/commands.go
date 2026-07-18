@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -131,4 +132,81 @@ func runDelSession(stateDir, chatID, sid string) {
 		os.Exit(1)
 	}
 	fmt.Printf("deleted session %s\n", sid)
+}
+
+// toolConfig 是 buildTools 的入参，把 main 的 flag 解析结果集中传递，
+// 避免函数签名挂一长串 *string。
+type toolConfig struct {
+	permission      string
+	workdir         string
+	blockedPatterns []string
+}
+
+// buildTools 按权限模式装配工具集。空 workdir 与模式的组合会打印 stderr
+// 告警但仍返回已注册的工具（与历史行为一致）。
+func buildTools(cfg toolConfig) []miniagent.Tool {
+	unrestricted := cfg.permission == "free"
+	var tools []miniagent.Tool
+	switch cfg.permission {
+	case "plan":
+		if cfg.workdir != "" {
+			tools = append(tools, miniagent.ReadFileTool(cfg.workdir, unrestricted))
+		} else {
+			fmt.Fprintln(os.Stderr, "miniagent: --workdir is empty, read_file not registered (plan mode needs a workspace)")
+		}
+		tools = append(tools, miniagent.WebFetchTool(nil))
+	default:
+		if cfg.workdir != "" || unrestricted {
+			tools = append(tools,
+				miniagent.ReadFileTool(cfg.workdir, unrestricted),
+				miniagent.WriteFileTool(cfg.workdir, unrestricted),
+				miniagent.EditFileTool(cfg.workdir, unrestricted),
+				miniagent.ShellTool(cfg.workdir, unrestricted, cfg.blockedPatterns),
+			)
+		} else {
+			fmt.Fprintln(os.Stderr, "miniagent: --workdir is empty AND permission is not free; read_file/write_file/shell/edit_file not registered")
+		}
+		tools = append(tools, miniagent.WebFetchTool(nil))
+	}
+	return tools
+}
+
+// stores 聚合一次 turn 需要的三个持久化句柄。
+type stores struct {
+	history *miniagent.History
+	facts   *miniagent.FactStore
+	meta    *miniagent.MetaStore
+}
+
+// initStores 在 stateDir+chatID 都非空时打开三个 store，并把 model/dir/permission
+// 写入 meta；返回的 stores 字段任一可能为 nil（无状态模式）。
+func initStores(stateDir, chatID, model, workdir, permission string, logger *slog.Logger) stores {
+	if stateDir == "" || chatID == "" {
+		return stores{}
+	}
+	history, err := miniagent.NewHistory(stateDir, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
+		os.Exit(1)
+	}
+	facts, err := miniagent.NewFactStore(stateDir, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init memory: %v\n", err)
+		os.Exit(1)
+	}
+	meta, err := miniagent.NewMetaStore(stateDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
+		os.Exit(1)
+	}
+	if err := meta.SetModel(chatID, model); err != nil {
+		logger.Warn("meta: set model failed", "error", err)
+	}
+	if err := meta.SetDirectory(chatID, workdir); err != nil {
+		logger.Warn("meta: set directory failed", "error", err)
+	}
+	if err := meta.SetPermission(chatID, permission); err != nil {
+		logger.Warn("meta: set permission failed", "error", err)
+	}
+	return stores{history: history, facts: facts, meta: meta}
 }
