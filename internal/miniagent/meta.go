@@ -40,7 +40,7 @@ func (m *MetaStore) write(chatID, name, value string) error {
 	if m == nil {
 		return nil
 	}
-	if err := os.MkdirAll(m.dir, 0o755); err != nil {
+	if err := os.MkdirAll(m.dir, 0o750); err != nil {
 		return err
 	}
 	path := m.path(chatID, name)

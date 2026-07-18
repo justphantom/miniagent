@@ -37,7 +37,7 @@ func TestHistory_TrimDropsOldTurns(t *testing.T) {
 	dir := t.TempDir()
 	h, _ := NewHistory(dir, nil)
 	big := strings.Repeat("a", 3000)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = h.Append("chat1", []Message{{Role: "user", Content: big}, {Role: "assistant", Content: big}})
 	}
 	loaded := h.Load("chat1")
@@ -240,10 +240,10 @@ func TestHistory_ConcurrentAppendSafe(t *testing.T) {
 	const perWriter = 20
 	var wg sync.WaitGroup
 	wg.Add(writers)
-	for w := 0; w < writers; w++ {
+	for w := range writers {
 		go func(prefix int) {
 			defer wg.Done()
-			for i := 0; i < perWriter; i++ {
+			for i := range perWriter {
 				if err := h.Append("chat1", []Message{
 					{Role: "user", Content: fmt.Sprintf("u-%d-%d", prefix, i)},
 					{Role: "assistant", Content: fmt.Sprintf("a-%d-%d", prefix, i)},
@@ -262,5 +262,5 @@ func TestHistory_ConcurrentAppendSafe(t *testing.T) {
 	}
 }
 
-func mkdir(p string) error              { return os.MkdirAll(p, 0o755) }
-func writeFile(p, content string) error { return os.WriteFile(p, []byte(content), 0o644) }
+func mkdir(p string) error              { return os.MkdirAll(p, 0o750) }
+func writeFile(p, content string) error { return os.WriteFile(p, []byte(content), 0o600) }

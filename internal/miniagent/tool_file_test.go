@@ -95,7 +95,7 @@ func TestWriteFile_CreatesNew(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
+	got, _ := os.ReadFile(filepath.Join(dir, "a.txt")) //nolint:gosec // G304: 测试 fixture 路径
 	if string(got) != "hello" {
 		t.Errorf("content = %q", got)
 	}
@@ -138,7 +138,7 @@ func TestEditFile_UniqueReplacement(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "e.txt"))
+	got, _ := os.ReadFile(filepath.Join(dir, "e.txt")) //nolint:gosec // G304: 测试 fixture 路径
 	if string(got) != "hi world" {
 		t.Errorf("content = %q", got)
 	}
@@ -153,8 +153,8 @@ func TestEditFile_ZeroMatchesFails(t *testing.T) {
 }
 
 func TestEditFile_MultipleMatchesFails(t *testing.T) {
-	dir := writeTemp(t, "e.txt", "ab ab ab")
-	res := EditFileTool(dir, false).Call(context.Background(), `{"path":"e.txt","old_string":"ab","new_string":"x"}`)
+	dir := writeTemp(t, "e.txt", "xx yy xx")
+	res := EditFileTool(dir, false).Call(context.Background(), `{"path":"e.txt","old_string":"xx","new_string":"z"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
@@ -173,7 +173,7 @@ func TestWriteFile_SymlinkEscapeRejected(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
-	got, _ := os.ReadFile(filepath.Join(outside, "target.txt"))
+	got, _ := os.ReadFile(filepath.Join(outside, "target.txt")) //nolint:gosec // G304: 测试 fixture 路径
 	if string(got) != "ORIGINAL" {
 		t.Errorf("outside file was modified: %q", got)
 	}
@@ -211,7 +211,7 @@ func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
-	got, _ := os.ReadFile(filepath.Join(outside, "target.txt"))
+	got, _ := os.ReadFile(filepath.Join(outside, "target.txt")) //nolint:gosec // G304: 测试 fixture 路径
 	if string(got) != "hello world" {
 		t.Errorf("outside file was modified: %q", got)
 	}

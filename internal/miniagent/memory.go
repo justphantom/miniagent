@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -44,7 +45,7 @@ func (h *History) Load(chatID string) []Message {
 	if path == "" {
 		return nil
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: path 由内部 sessionPath 派生，chatID 已 sanitize
 	if err != nil {
 		return nil
 	}
@@ -89,10 +90,10 @@ func (h *History) Append(chatID string, msgs []Message) error {
 		}
 		path = h.sessionPath(chatID, sid)
 	}
-	if err := os.MkdirAll(h.dir, 0o755); err != nil {
+	if err := os.MkdirAll(h.dir, 0o750); err != nil {
 		return fmt.Errorf("history: mkdir failed: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: path 由内部 sessionPath 派生
 	if err != nil {
 		return fmt.Errorf("history: open failed: %w", err)
 	}
@@ -140,7 +141,7 @@ func trimMessages(msgs []Message, budget int) []Message {
 func truncateLastContents(msgs []Message, budget int) []Message {
 	for estimateTokens(msgs) > budget {
 		truncated := false
-		for i := len(msgs) - 1; i >= 0; i-- {
+		for i := range slices.Backward(msgs) {
 			if msgs[i].Role == "user" {
 				continue
 			}
@@ -167,13 +168,13 @@ func estimateTokens(msgs []Message) int {
 	const perMessageOverhead = 4
 	const safetyMargin = 6 / 5 // 1.2
 	total := 0
-	for i := range msgs {
+	for _, m := range msgs {
 		total += perMessageOverhead
-		total += (len(msgs[i].Content) + 2) / 3
-		for _, tc := range msgs[i].ToolCalls {
+		total += (len(m.Content) + 2) / 3
+		for _, tc := range m.ToolCalls {
 			total += (len(tc.Args) + 2) / 3
 		}
-		total += (len(msgs[i].ToolCallID) + 2) / 3
+		total += (len(m.ToolCallID) + 2) / 3
 	}
 	return total * safetyMargin
 }

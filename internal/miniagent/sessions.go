@@ -69,7 +69,7 @@ func (h *History) NewSession(chatID string) (string, error) {
 	if sid == h.current(chatID) {
 		sid = fmt.Sprintf("%s-%d", sid, ts.Nanosecond())
 	}
-	if err := os.MkdirAll(h.dir, 0o755); err != nil {
+	if err := os.MkdirAll(h.dir, 0o750); err != nil {
 		return "", err
 	}
 	f, err := os.OpenFile(h.sessionPath(chatID, sid), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -187,7 +187,7 @@ func (h *History) current(chatID string) string {
 }
 
 func (h *History) writeCur(chatID, sid string) error {
-	if err := os.MkdirAll(h.dir, 0o755); err != nil {
+	if err := os.MkdirAll(h.dir, 0o750); err != nil {
 		return err
 	}
 	target := h.curPathFor(chatID)

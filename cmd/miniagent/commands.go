@@ -65,7 +65,7 @@ func runListModels(apiKey, baseURL string) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal models: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(out))
+	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出到 stdout 是工具职责
 }
 
 func mustHistory(stateDir, chatID, action string) *miniagent.History {
@@ -107,7 +107,7 @@ func runListSessions(stateDir, chatID string) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal sessions: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(b))
+	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出到 stdout 是工具职责
 }
 
 func runShowCurrent(stateDir, chatID string) {
@@ -147,7 +147,7 @@ func runShowCurrent(stateDir, chatID string) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal current: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(b))
+	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出到 stdout 是工具职责
 }
 
 func runUseSession(stateDir, chatID, sid string) {
@@ -156,7 +156,7 @@ func runUseSession(stateDir, chatID, sid string) {
 		fmt.Fprintf(os.Stderr, "miniagent: use session: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("switched to session %s\n", sid)
+	fmt.Printf("switched to session %s\n", sid) //nolint:forbidigo // CLI 输出
 }
 
 func runDelSession(stateDir, chatID, sid string) {
@@ -165,7 +165,7 @@ func runDelSession(stateDir, chatID, sid string) {
 		fmt.Fprintf(os.Stderr, "miniagent: delete session: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("deleted session %s\n", sid)
+	fmt.Printf("deleted session %s\n", sid) //nolint:forbidigo // CLI 输出
 }
 
 // toolConfig 是 buildTools 的入参，把 main 的 flag 解析结果集中传递，

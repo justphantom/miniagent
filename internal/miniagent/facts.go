@@ -76,7 +76,7 @@ func (s *FactStore) load(scope FactScope, chatID string) (map[string]Fact, error
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path 由内部 stateDir/chatID 派生，且 FactStore 仅在内部调用
 	if err != nil {
 		if os.IsNotExist(err) {
 			return map[string]Fact{}, nil
@@ -101,7 +101,7 @@ func (s *FactStore) save(scope FactScope, chatID string, facts map[string]Fact) 
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.dir, 0o750); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(s.dir, ".memory-*.tmp")
