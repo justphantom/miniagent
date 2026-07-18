@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -227,6 +228,37 @@ func TestEstimateTokens_ASCIIReasonable(t *testing.T) {
 func TestEstimateTokens_Empty(t *testing.T) {
 	if got := estimateTokens(nil); got != 0 {
 		t.Errorf("empty = %d, want 0", got)
+	}
+}
+
+// 多 goroutine 并发 Append 同一 chatID 不应损坏 jsonl 文件：
+// 每条 Message 序列化为一行，最终 load 回来行数应等于写入总数。
+func TestHistory_ConcurrentAppendSafe(t *testing.T) {
+	dir := t.TempDir()
+	h, _ := NewHistory(dir, nil)
+	const writers = 8
+	const perWriter = 20
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for w := 0; w < writers; w++ {
+		go func(prefix int) {
+			defer wg.Done()
+			for i := 0; i < perWriter; i++ {
+				if err := h.Append("chat1", []Message{
+					{Role: "user", Content: fmt.Sprintf("u-%d-%d", prefix, i)},
+					{Role: "assistant", Content: fmt.Sprintf("a-%d-%d", prefix, i)},
+				}); err != nil {
+					t.Errorf("append: %v", err)
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	loaded := h.Load("chat1")
+	// Load 会 trim，但写入总数远小于 maxHistoryTokens，应全部保留。
+	want := writers * perWriter * 2
+	if len(loaded) != want {
+		t.Errorf("loaded = %d lines, want %d (concurrent append corrupted jsonl?)", len(loaded), want)
 	}
 }
 

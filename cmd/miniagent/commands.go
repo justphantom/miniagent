@@ -13,14 +13,36 @@ import (
 )
 
 // formatFactsForCLI renders chat-scope facts as an appended system-prompt block.
+// 双上限：条数与字符。事实累积过多时截断并标注，避免 system prompt 膨胀
+// 挤占模型上下文（该路径不受 maxHistoryTokens 裁剪约束）。
+const (
+	maxMemoryContextItems = 30
+	maxMemoryContextChars = 2000
+)
+
 func formatFactsForCLI(facts []miniagent.Fact) string {
 	if len(facts) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	sb.WriteString("\n\n以下是与当前对话相关的已知事实（由用户或之前的对话沉淀）：\n")
+	shown := 0
+	truncated := false
 	for _, f := range facts {
-		fmt.Fprintf(&sb, "- %s: %s\n", f.Key, f.Value)
+		line := fmt.Sprintf("- %s: %s\n", f.Key, f.Value)
+		if sb.Len()+len(line) > maxMemoryContextChars {
+			truncated = true
+			break
+		}
+		sb.WriteString(line)
+		shown++
+		if shown >= maxMemoryContextItems {
+			truncated = true
+			break
+		}
+	}
+	if truncated {
+		fmt.Fprintf(&sb, "（共 %d 条，已显示前 %d 条）\n", len(facts), shown)
 	}
 	return sb.String()
 }

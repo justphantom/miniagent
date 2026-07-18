@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"log/slog"
 )
@@ -17,9 +18,13 @@ import (
 const maxHistoryTokens = 6000
 
 // History persists per-chat conversation as jsonl session files.
+// mu 保护 Append 与 writeCur 之间的复合操作，避免同进程内多 goroutine
+// 并发追加同一 chatID 时 bufio 多次 write 交错产生畸形行。
+// 注意：跨进程并发仍需调用方用文件锁或调度保证，mutex 无法跨进程。
 type History struct {
 	dir    string
 	logger *slog.Logger
+	mu     sync.Mutex
 }
 
 // NewHistory builds a History rooted at {stateDir}/miniagent/history.
@@ -74,6 +79,8 @@ func (h *History) Append(chatID string, msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	_, path := h.resolve(chatID)
 	if path == "" {
 		sid := newSessionID(now())

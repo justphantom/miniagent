@@ -98,6 +98,43 @@ func TestHTTPClient_ListModels(t *testing.T) {
 	}
 }
 
+// ListModels 应对 5xx 重试，与 Do 行为对齐。
+func TestHTTPClient_ListModels_RetriesTransient(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"a"}]}`)
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2", calls)
+	}
+}
+
+// 超大 body 应被截断报错，不撑爆内存。
+func TestHTTPClient_ListModels_RejectsOversizedBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(bytes.Repeat([]byte("a"), maxModelsBodyBytes+1024))
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected oversize error")
+	}
+}
+
 func TestParseChatResponse_ToolCalls(t *testing.T) {
 	raw := []byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
 	resp, err := parseChatResponse(raw)

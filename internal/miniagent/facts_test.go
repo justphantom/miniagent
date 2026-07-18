@@ -1,6 +1,8 @@
 package miniagent
 
 import (
+	"context"
+	"strings"
 	"testing"
 )
 
@@ -79,5 +81,42 @@ func TestParseFactScope(t *testing.T) {
 	}
 	if ParseFactScope("unknown") != ScopeChat {
 		t.Error("unknown should default to chat")
+	}
+}
+
+// formatSource 为空时不应输出后缀，避免 value 后出现孤立空括号。
+func TestFormatSource_Empty(t *testing.T) {
+	if got := formatSource(""); got != "" {
+		t.Errorf("empty source = %q, want empty", got)
+	}
+}
+
+// formatSource 非空时应给出可读后缀。
+func TestFormatSource_NonEmpty(t *testing.T) {
+	got := formatSource("memory_set")
+	if !strings.Contains(got, "memory_set") || !strings.HasPrefix(got, " (来源:") {
+		t.Errorf("formatSource = %q", got)
+	}
+}
+
+// memory_get 工具输出应包含 Source（非空时）。
+func TestMemoryGet_ShowsSource(t *testing.T) {
+	store, _ := NewFactStore(t.TempDir(), nil)
+	if err := store.Set(ScopeChat, "c1", "k", "v", "memory_set"); err != nil {
+		t.Fatal(err)
+	}
+	res := memoryGetTool(store, "c1").Call(context.Background(), `{"key":"k"}`)
+	if !strings.Contains(res.Output, "来源: memory_set") {
+		t.Errorf("expected Source in output, got %q", res.Output)
+	}
+}
+
+// memory_list 工具输出应包含 Source（非空时）。
+func TestMemoryList_ShowsSource(t *testing.T) {
+	store, _ := NewFactStore(t.TempDir(), nil)
+	store.Set(ScopeChat, "c1", "k", "v", "memory_set")
+	res := memoryListTool(store, "c1").Call(context.Background(), `{}`)
+	if !strings.Contains(res.Output, "来源: memory_set") {
+		t.Errorf("expected Source in output, got %q", res.Output)
 	}
 }

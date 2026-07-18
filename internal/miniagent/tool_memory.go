@@ -80,7 +80,7 @@ func memoryGetTool(store *FactStore, chatID string) Tool {
 			if !ok {
 				return ToolResult{Output: fmt.Sprintf("未找到 [%s] %s", scope, p.Key)}
 			}
-			return ToolResult{Output: fmt.Sprintf("[%s] %s: %s (更新于 %s)", scope, f.Key, f.Value, f.UpdatedAt.Format("2006-01-02 15:04"))}
+			return ToolResult{Output: fmt.Sprintf("[%s] %s: %s%s (更新于 %s)", scope, f.Key, f.Value, formatSource(f.Source), f.UpdatedAt.Format("2006-01-02 15:04"))}
 		},
 	}
 }
@@ -117,7 +117,7 @@ func memoryListTool(store *FactStore, chatID string) Tool {
 			var sb strings.Builder
 			fmt.Fprintf(&sb, "[%s] 共 %d 条记忆：\n", scope, len(facts))
 			for _, f := range facts {
-				fmt.Fprintf(&sb, "- %s: %s\n", f.Key, f.Value)
+				fmt.Fprintf(&sb, "- %s: %s%s\n", f.Key, f.Value, formatSource(f.Source))
 			}
 			return ToolResult{Output: sb.String()}
 		},
@@ -150,4 +150,13 @@ func memoryDeleteTool(store *FactStore, chatID string) Tool {
 			return ToolResult{Output: fmt.Sprintf("已删除 [%s] %s", scope, p.Key)}
 		},
 	}
+}
+
+// formatSource 把 Source 字段格式化为可读后缀；为空则返回空字符串，
+// 保持 value 紧凑。来源让消费方（人/LLM）能判断事实的可信度与写入路径。
+func formatSource(source string) string {
+	if source == "" {
+		return ""
+	}
+	return " (来源: " + source + ")"
 }

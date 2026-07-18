@@ -124,6 +124,10 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string
 }
 
 // ListModels calls GET {BaseURL}/v1/models and returns the model ids.
+// ListModels calls GET {BaseURL}/v1/models and returns the model ids.
+// 与 Do 共用重试策略与 body 上限，避免异常端点返回超大 body 拖垮内存。
+const maxModelsBodyBytes = 4 << 20 // 4 MiB
+
 func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
 	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
 	if err != nil || base.Scheme == "" || base.Host == "" {
@@ -133,35 +137,65 @@ func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	u := base.JoinPath("/v1/models")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	u := base.JoinPath("/v1/models").String()
+
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		raw, status, err := c.doGetOnce(ctx, client, u)
+		if err == nil && status == http.StatusOK {
+			var v struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return nil, fmt.Errorf("parse models: %w", err)
+			}
+			out := make([]string, 0, len(v.Data))
+			for _, m := range v.Data {
+				if m.ID != "" {
+					out = append(out, m.ID)
+				}
+			}
+			return out, nil
+		}
+		if err != nil {
+			lastErr = fmt.Errorf("list models: %w", err)
+		} else {
+			lastErr = fmt.Errorf("list models: %d", status)
+		}
+		if err != nil || !retryableStatus(status) || attempt >= len(retryDelays) {
+			return nil, lastErr
+		}
+		delay := retryDelays[attempt]
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// doGetOnce 是 ListModels 的单次 GET，返回原始 body 用于复用 parseRetryAfter。
+func (c *HTTPClient) doGetOnce(ctx context.Context, client *http.Client, url string) (raw []byte, status int, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("list models: %w", err)
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("list models: %d", resp.StatusCode)
+	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxModelsBodyBytes+1))
+	if rerr != nil {
+		return raw, resp.StatusCode, fmt.Errorf("read response: %w", rerr)
 	}
-	var v struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	if len(raw) > maxModelsBodyBytes {
+		return raw[:maxModelsBodyBytes], resp.StatusCode, fmt.Errorf("models response exceeded %d bytes", maxModelsBodyBytes)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-		return nil, fmt.Errorf("parse models: %w", err)
-	}
-	out := make([]string, 0, len(v.Data))
-	for _, m := range v.Data {
-		if m.ID != "" {
-			out = append(out, m.ID)
-		}
-	}
-	return out, nil
+	return raw, resp.StatusCode, nil
 }
 
 func parseRetryAfter(body []byte) time.Duration {

@@ -60,6 +60,8 @@ func (h *History) NewSession(chatID string) (string, error) {
 	if h == nil {
 		return "", errors.New("miniagent: memory disabled")
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	ts := now()
 	sid := newSessionID(ts)
 	if sid == h.current(chatID) {
@@ -121,6 +123,8 @@ func (h *History) UseSession(chatID, sid string) error {
 	if !validSessionID(sid) {
 		return fmt.Errorf("miniagent: invalid session id %q", sid)
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if !h.sessionExists(chatID, sid) {
 		return fmt.Errorf("miniagent: session %s not found", sid)
 	}
@@ -132,6 +136,8 @@ func (h *History) DeleteSession(chatID, sid string) error {
 	if h == nil {
 		return errors.New("miniagent: memory disabled")
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if sid == "" {
 		h.resolve(chatID)
 		if sid = h.current(chatID); sid == "" {

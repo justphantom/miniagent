@@ -25,6 +25,12 @@ type streamEvent struct {
 }
 
 // StreamEmitFunc returns an EmitFunc that writes Signal events as NDJSON.
+//
+// 错误契约：返回的 error 会沿 emitSignal → Run 一路上抛到调用方。这意味着
+// 当下游 io.Writer 不可写（如 stdout 管道被消费者提前关闭）时，Run 会立刻
+// 终止返回该 error，而非继续后续 LLM 调用浪费 token。调用方应区分：
+//   - error 包含 "broken pipe" / "file already closed" → 消费者断开，非 LLM 故障
+//   - 其他 error → 来自 LLM 调用或 ctx 取消
 func StreamEmitFunc(w io.Writer, verbose bool) EmitFunc {
 	enc := json.NewEncoder(w)
 	return func(sig Signal) error {

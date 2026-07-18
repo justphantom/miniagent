@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
@@ -106,4 +107,68 @@ func toolNames(tools []miniagent.Tool) []string {
 		out[i] = t.Name
 	}
 	return out
+}
+
+// 条数超过上限时应截断并标注总数，避免 system prompt 膨胀。
+func TestFormatFactsForCLI_TruncatesByItemCount(t *testing.T) {
+	facts := make([]miniagent.Fact, maxMemoryContextItems+10)
+	for i := range facts {
+		facts[i] = miniagent.Fact{Key: "k" + itoa(i), Value: "v"}
+	}
+	got := formatFactsForCLI(facts)
+	if !strings.Contains(got, "已显示前") {
+		t.Errorf("expected truncation marker, got:\n%s", got)
+	}
+}
+
+// 总字符超过上限时也应截断。
+func TestFormatFactsForCLI_TruncatesByCharLimit(t *testing.T) {
+	big := strings.Repeat("x", maxMemoryContextChars)
+	facts := []miniagent.Fact{
+		{Key: "k1", Value: big},
+		{Key: "k2", Value: big},
+	}
+	got := formatFactsForCLI(facts)
+	if !strings.Contains(got, "已显示前") {
+		t.Errorf("expected char-limit truncation, got length=%d", len(got))
+	}
+}
+
+// 少量事实正常输出，无截断标注。
+func TestFormatFactsForCLI_NoTruncationWhenSmall(t *testing.T) {
+	facts := []miniagent.Fact{{Key: "user.lang", Value: "zh"}}
+	got := formatFactsForCLI(facts)
+	if strings.Contains(got, "已显示前") {
+		t.Errorf("unexpected truncation: %s", got)
+	}
+	if !strings.Contains(got, "user.lang: zh") {
+		t.Errorf("missing fact content: %s", got)
+	}
+}
+
+// 空列表返回空字符串。
+func TestFormatFactsForCLI_Empty(t *testing.T) {
+	if got := formatFactsForCLI(nil); got != "" {
+		t.Errorf("empty = %q, want empty", got)
+	}
+}
+
+// itoa 是避免引入 strconv 的本地实现（仅测试用）。
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	if neg {
+		b = append([]byte{'-'}, b...)
+	}
+	return string(b)
 }
