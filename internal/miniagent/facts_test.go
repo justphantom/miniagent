@@ -33,9 +33,9 @@ func TestFactStore_GetMissing(t *testing.T) {
 
 func TestFactStore_List(t *testing.T) {
 	s, _ := NewFactStore(t.TempDir(), nil)
-	s.Set(ScopeChat, "chat1", "user.lang", "zh", "")
-	s.Set(ScopeChat, "chat1", "user.name", "a", "")
-	s.Set(ScopeChat, "chat1", "project.x", "y", "")
+	_ = s.Set(ScopeChat, "chat1", "user.lang", "zh", "")
+	_ = s.Set(ScopeChat, "chat1", "user.name", "a", "")
+	_ = s.Set(ScopeChat, "chat1", "project.x", "y", "")
 	facts, err := s.List(ScopeChat, "chat1", "user.")
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -50,7 +50,7 @@ func TestFactStore_List(t *testing.T) {
 
 func TestFactStore_Delete(t *testing.T) {
 	s, _ := NewFactStore(t.TempDir(), nil)
-	s.Set(ScopeChat, "chat1", "k", "v", "")
+	_ = s.Set(ScopeChat, "chat1", "k", "v", "")
 	if err := s.Delete(ScopeChat, "chat1", "k"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -63,8 +63,8 @@ func TestFactStore_Delete(t *testing.T) {
 func TestFactStore_ScopesIsolated(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewFactStore(dir, nil)
-	s.Set(ScopeChat, "chat1", "k", "chat-v", "")
-	s.Set(ScopeGlobal, "chat1", "k", "global-v", "")
+	_ = s.Set(ScopeChat, "chat1", "k", "chat-v", "")
+	_ = s.Set(ScopeGlobal, "chat1", "k", "global-v", "")
 	f, _, _ := s.Get(ScopeChat, "chat1", "k")
 	if f.Value != "chat-v" {
 		t.Errorf("chat value = %q", f.Value)
@@ -114,7 +114,7 @@ func TestMemoryGet_ShowsSource(t *testing.T) {
 // memory_list 工具输出应包含 Source（非空时）。
 func TestMemoryList_ShowsSource(t *testing.T) {
 	store, _ := NewFactStore(t.TempDir(), nil)
-	store.Set(ScopeChat, "c1", "k", "v", "memory_set")
+	_ = store.Set(ScopeChat, "c1", "k", "v", "memory_set")
 	res := memoryListTool(store, "c1").Call(context.Background(), `{}`)
 	if !strings.Contains(res.Output, "来源: memory_set") {
 		t.Errorf("expected Source in output, got %q", res.Output)

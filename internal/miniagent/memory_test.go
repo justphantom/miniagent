@@ -13,7 +13,7 @@ import (
 func TestHistory_AppendAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	h, _ := NewHistory(dir, nil)
-	h.Append("chat1", []Message{
+	_ = h.Append("chat1", []Message{
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
 	})
@@ -38,7 +38,7 @@ func TestHistory_TrimDropsOldTurns(t *testing.T) {
 	h, _ := NewHistory(dir, nil)
 	big := strings.Repeat("a", 3000)
 	for i := 0; i < 5; i++ {
-		h.Append("chat1", []Message{{Role: "user", Content: big}, {Role: "assistant", Content: big}})
+		_ = h.Append("chat1", []Message{{Role: "user", Content: big}, {Role: "assistant", Content: big}})
 	}
 	loaded := h.Load("chat1")
 	users := 0
@@ -55,7 +55,7 @@ func TestHistory_TrimDropsOldTurns(t *testing.T) {
 func TestHistory_KeepsToolPairingWhenTrimming(t *testing.T) {
 	dir := t.TempDir()
 	h, _ := NewHistory(dir, nil)
-	h.Append("chat1", []Message{
+	_ = h.Append("chat1", []Message{
 		{Role: "user", Content: "q"},
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "x", Args: "{}"}}},
 		{Role: "tool", ToolCallID: "c1", Content: "r"},
@@ -119,7 +119,7 @@ func TestTrimMessages_PreservesToolPairingAcrossTurns(t *testing.T) {
 func TestHistory_ListSessions(t *testing.T) {
 	dir := t.TempDir()
 	h, _ := NewHistory(dir, nil)
-	h.Append("chat1", []Message{{Role: "user", Content: "x"}})
+	_ = h.Append("chat1", []Message{{Role: "user", Content: "x"}})
 	sessions, err := h.ListSessions("chat1")
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
@@ -135,7 +135,7 @@ func TestHistory_ListSessions(t *testing.T) {
 func TestHistory_UseSession(t *testing.T) {
 	dir := t.TempDir()
 	h, _ := NewHistory(dir, nil)
-	h.Append("chat1", []Message{{Role: "user", Content: "x"}})
+	_ = h.Append("chat1", []Message{{Role: "user", Content: "x"}})
 	sid, err := h.NewSession("chat1")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -151,7 +151,7 @@ func TestHistory_UseSession(t *testing.T) {
 func TestHistory_DeleteSession(t *testing.T) {
 	dir := t.TempDir()
 	h, _ := NewHistory(dir, nil)
-	h.Append("chat1", []Message{{Role: "user", Content: "x"}})
+	_ = h.Append("chat1", []Message{{Role: "user", Content: "x"}})
 	sid := h.Current("chat1")
 	if err := h.DeleteSession("chat1", sid); err != nil {
 		t.Fatalf("DeleteSession: %v", err)

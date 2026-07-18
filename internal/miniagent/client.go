@@ -111,7 +111,7 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string
 		}
 		return nil, 0, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// 多读 1 字节判定是否超限：恰好 1MiB 不应误报截断。
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if rerr != nil {
@@ -187,7 +187,7 @@ func (c *HTTPClient) doGetOnce(ctx context.Context, client *http.Client, url str
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxModelsBodyBytes+1))
 	if rerr != nil {
 		return raw, resp.StatusCode, fmt.Errorf("read response: %w", rerr)

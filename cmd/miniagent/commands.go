@@ -60,7 +60,11 @@ func runListModels(apiKey, baseURL string) {
 		fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
 		os.Exit(1)
 	}
-	out, _ := json.Marshal(models)
+	out, err := json.Marshal(models)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: marshal models: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println(string(out))
 }
 
@@ -98,7 +102,11 @@ func runListSessions(stateDir, chatID string) {
 	for _, s := range sessions {
 		out = append(out, sessionOut{ID: s.ID, Current: s.Current, Bytes: s.Bytes, ModTime: s.ModTime.Format("2006-01-02 15:04:05")})
 	}
-	b, _ := json.MarshalIndent(out, "", "  ")
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: marshal sessions: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println(string(b))
 }
 
@@ -134,7 +142,11 @@ func runShowCurrent(stateDir, chatID string) {
 		Directory:  meta.Directory(chatID),
 		Permission: meta.Permission(chatID),
 	}
-	b, _ := json.MarshalIndent(info, "", "  ")
+	b, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: marshal current: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println(string(b))
 }
 

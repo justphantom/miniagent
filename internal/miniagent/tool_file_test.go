@@ -245,9 +245,10 @@ func TestFileTools_RespectCancelledCtx(t *testing.T) {
 		"edit_file":  EditFileTool(dir, false),
 	} {
 		args := `{"path":"x.txt"}`
-		if name == "write_file" {
+		switch name {
+		case "write_file":
 			args = `{"path":"x.txt","content":"y"}`
-		} else if name == "edit_file" {
+		case "edit_file":
 			args = `{"path":"x.txt","old_string":"h","new_string":"H"}`
 		}
 		res := tool.Call(ctx, args)

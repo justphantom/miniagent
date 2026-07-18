@@ -27,25 +27,25 @@ func resolveUnderRoot(root, p string) (string, error) {
 		// 仅靠上面的字符串层 checkUnderRoot 兜底；其余失败（权限/循环链接等）
 		// 视为可疑，直接拒绝以避免静默绕过符号链接逃逸检查。
 		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("路径 %q 父目录解析失败：%v", p, err)
+			return "", fmt.Errorf("路径 %q 父目录解析失败：%w", p, err)
 		}
 		return full, nil
 	}
-	real := filepath.Join(realParent, filepath.Base(full))
-	if info, err := os.Lstat(real); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		linkTarget, err := os.Readlink(real)
+	realPath := filepath.Join(realParent, filepath.Base(full))
+	if info, err := os.Lstat(realPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		linkTarget, err := os.Readlink(realPath)
 		if err != nil {
-			return "", fmt.Errorf("路径 %q 符号链接解析失败：%v", p, err)
+			return "", fmt.Errorf("路径 %q 符号链接解析失败：%w", p, err)
 		}
 		if !filepath.IsAbs(linkTarget) {
 			linkTarget = filepath.Join(realParent, linkTarget)
 		}
-		real = filepath.Clean(linkTarget)
+		realPath = filepath.Clean(linkTarget)
 	}
-	if err := checkUnderRoot(root, real, p); err != nil {
+	if err := checkUnderRoot(root, realPath, p); err != nil {
 		return "", err
 	}
-	return real, nil
+	return realPath, nil
 }
 
 func checkUnderRoot(root, full, original string) error {
@@ -85,7 +85,7 @@ func resolveToolPath(workspaceRoot, p string, unrestricted bool) (string, error)
 	}
 	root, err := filepath.Abs(workspaceRoot)
 	if err != nil {
-		return "", fmt.Errorf("解析 workspace_root 失败：%v", err)
+		return "", fmt.Errorf("解析 workspace_root 失败：%w", err)
 	}
 	return resolveUnderRoot(root, p)
 }

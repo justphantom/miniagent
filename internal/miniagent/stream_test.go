@@ -10,8 +10,12 @@ import (
 func TestStreamEmitFunc_ToolUseAlways(t *testing.T) {
 	var buf bytes.Buffer
 	emit := StreamEmitFunc(&buf, false)
-	emit(Signal{Kind: SignalToolUse, Name: "read_file", Input: `{"path":"a"}`})
-	emit(Signal{Kind: SignalToolResult, Name: "read_file", Output: "x"})
+	if err := emit(Signal{Kind: SignalToolUse, Name: "read_file", Input: `{"path":"a"}`}); err != nil {
+		t.Fatalf("emit tool_use: %v", err)
+	}
+	if err := emit(Signal{Kind: SignalToolResult, Name: "read_file", Output: "x"}); err != nil {
+		t.Fatalf("emit tool_result: %v", err)
+	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("lines = %d", len(lines))
@@ -28,14 +32,20 @@ func TestStreamEmitFunc_ToolUseAlways(t *testing.T) {
 func TestStreamEmitFunc_VerboseIncludesResult(t *testing.T) {
 	var buf bytes.Buffer
 	emit := StreamEmitFunc(&buf, true)
-	emit(Signal{Kind: SignalToolUse, Name: "x", Input: "{}"})
-	emit(Signal{Kind: SignalToolResult, Name: "x", Output: "y", IsError: true})
+	if err := emit(Signal{Kind: SignalToolUse, Name: "x", Input: "{}"}); err != nil {
+		t.Fatalf("emit tool_use: %v", err)
+	}
+	if err := emit(Signal{Kind: SignalToolResult, Name: "x", Output: "y", IsError: true}); err != nil {
+		t.Fatalf("emit tool_result: %v", err)
+	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d", len(lines))
 	}
 	var ev streamEvent
-	json.Unmarshal([]byte(lines[1]), &ev)
+	if err := json.Unmarshal([]byte(lines[1]), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if ev.Type != "tool_result" || !ev.IsError {
 		t.Errorf("event = %+v", ev)
 	}
@@ -43,7 +53,9 @@ func TestStreamEmitFunc_VerboseIncludesResult(t *testing.T) {
 
 func TestEmitResult(t *testing.T) {
 	var buf bytes.Buffer
-	EmitResult(&buf, Result{Text: "hi", Usage: Usage{InputTokens: 1, OutputTokens: 2}, Steps: 3}, "m")
+	if err := EmitResult(&buf, Result{Text: "hi", Usage: Usage{InputTokens: 1, OutputTokens: 2}, Steps: 3}, "m"); err != nil {
+		t.Fatalf("EmitResult: %v", err)
+	}
 	var ev streamEvent
 	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -55,7 +67,9 @@ func TestEmitResult(t *testing.T) {
 
 func TestEmitError(t *testing.T) {
 	var buf bytes.Buffer
-	EmitError(&buf, "boom")
+	if err := EmitError(&buf, "boom"); err != nil {
+		t.Fatalf("EmitError: %v", err)
+	}
 	var ev streamEvent
 	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)

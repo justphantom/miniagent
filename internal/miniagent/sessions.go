@@ -24,27 +24,29 @@ func newSessionID(now time.Time) string {
 
 func now() time.Time { return time.Now() }
 
-func (h *History) resolve(chatID string) (sid, path string) {
+// resolve 返回当前 session 的 jsonl 路径；无 session 时返回 ""。
+// legacy 迁移路径下会顺带把旧文件 rename 到新命名 + 写 .cur 指针。
+func (h *History) resolve(chatID string) string {
 	if sid := h.current(chatID); sid != "" {
-		return sid, h.sessionPath(chatID, sid)
+		return h.sessionPath(chatID, sid)
 	}
 	legacy := h.legacyPath(chatID)
 	st, err := os.Stat(legacy)
 	if err != nil {
-		return "", ""
+		return ""
 	}
-	sid = "legacy-" + st.ModTime().Format("20060102-150405")
-	path = h.sessionPath(chatID, sid)
+	sid := "legacy-" + st.ModTime().Format("20060102-150405")
+	path := h.sessionPath(chatID, sid)
 	if err := os.Rename(legacy, path); err != nil {
 		if h.logger != nil {
 			h.logger.Warn("history: legacy migrate rename failed", "error", err)
 		}
-		return "", legacy
+		return legacy
 	}
 	if err := h.writeCur(chatID, sid); err != nil && h.logger != nil {
 		h.logger.Warn("history: legacy migrate pointer failed", "error", err)
 	}
-	return sid, path
+	return path
 }
 
 // Current returns the active session id, or "" when none / memory disabled.

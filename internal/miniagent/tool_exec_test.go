@@ -93,7 +93,9 @@ func TestShell_KillsGrandchildOnTimeout(t *testing.T) {
 	}
 	marker := "miniagent_uniq_sleep_marker_9f3k2"
 	t.Cleanup(func() {
-		_ = exec.Command("pkill", "-9", "-f", marker).Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "pkill", "-9", "-f", marker).Run()
 	})
 	s := ShellTool(t.TempDir(), false, nil)
 	// exec -a 让 sleep 进程名带 marker，pgrep -f 才能精确匹配。
@@ -107,7 +109,9 @@ func TestShell_KillsGrandchildOnTimeout(t *testing.T) {
 		t.Errorf("timeout not enforced: elapsed=%v", elapsed)
 	}
 	time.Sleep(time.Second)
-	out, err := exec.Command("pgrep", "-f", marker).Output()
+	pgrepCtx, pgrepCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pgrepCancel()
+	out, err := exec.CommandContext(pgrepCtx, "pgrep", "-f", marker).Output()
 	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		t.Errorf("grandchild still alive after kill: %s", out)
 	}

@@ -40,7 +40,7 @@ func (h *History) Load(chatID string) []Message {
 	if h == nil {
 		return nil
 	}
-	_, path := h.resolve(chatID)
+	path := h.resolve(chatID)
 	if path == "" {
 		return nil
 	}
@@ -48,7 +48,7 @@ func (h *History) Load(chatID string) []Message {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var msgs []Message
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -81,7 +81,7 @@ func (h *History) Append(chatID string, msgs []Message) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, path := h.resolve(chatID)
+	path := h.resolve(chatID)
 	if path == "" {
 		sid := newSessionID(now())
 		if err := h.writeCur(chatID, sid); err != nil {
@@ -96,7 +96,7 @@ func (h *History) Append(chatID string, msgs []Message) error {
 	if err != nil {
 		return fmt.Errorf("history: open failed: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w := bufio.NewWriter(f)
 	for _, m := range msgs {
 		b, err := json.Marshal(m)

@@ -17,7 +17,7 @@ func TestHTTPClient_Do_ReturnsResponse(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer sk-test" {
 			t.Errorf("missing auth header")
 		}
-		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`))
 	}))
 	defer srv.Close()
 
@@ -42,7 +42,7 @@ func TestHTTPClient_Do_RetriesTransient(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
 	}))
 	defer srv.Close()
 
@@ -84,7 +84,7 @@ func TestHTTPClient_Do_EmptyAPIKey(t *testing.T) {
 
 func TestHTTPClient_ListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"a"},{"id":"b"}]}`)
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"a"},{"id":"b"}]}`)
 	}))
 	defer srv.Close()
 
@@ -107,7 +107,7 @@ func TestHTTPClient_ListModels_RetriesTransient(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		fmt.Fprint(w, `{"data":[{"id":"a"}]}`)
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"a"}]}`)
 	}))
 	defer srv.Close()
 
@@ -124,7 +124,7 @@ func TestHTTPClient_ListModels_RetriesTransient(t *testing.T) {
 // 超大 body 应被截断报错，不撑爆内存。
 func TestHTTPClient_ListModels_RejectsOversizedBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(bytes.Repeat([]byte("a"), maxModelsBodyBytes+1024))
+		_, _ = w.Write(bytes.Repeat([]byte("a"), maxModelsBodyBytes+1024))
 	}))
 	defer srv.Close()
 
@@ -214,7 +214,7 @@ func TestHTTPClient_Do_RespectsRetryAfterHeader(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
 	}))
 	defer srv.Close()
 
@@ -248,7 +248,7 @@ func TestHTTPClient_Do_ExactOneMiBNotTruncated(t *testing.T) {
 		t.Fatalf("payload size = %d, want %d", len(final), size)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(final)
+		_, _ = w.Write(final)
 	}))
 	defer srv.Close()
 
@@ -262,7 +262,7 @@ func TestHTTPClient_Do_ExactOneMiBNotTruncated(t *testing.T) {
 // 超过 1MiB 必须报错并截断到 1MiB。
 func TestHTTPClient_Do_OverOneMiBTruncated(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(strings.Repeat("a", (1<<20)+100)))
+		_, _ = w.Write([]byte(strings.Repeat("a", (1<<20)+100)))
 	}))
 	defer srv.Close()
 

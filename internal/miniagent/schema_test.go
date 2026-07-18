@@ -36,9 +36,14 @@ func TestObject_OmitsRequiredWhenNone(t *testing.T) {
 // object() 传 required 时应输出非空字符串数组。
 func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 	schema := object(map[string]any{"path": map[string]any{"type": "string"}}, "path")
-	b, _ := json.Marshal(schema)
+	b, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
 	var got map[string]any
-	json.Unmarshal(b, &got)
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	req, ok := got["required"].([]any)
 	if !ok {
 		t.Fatalf("required not an array: %T", got["required"])

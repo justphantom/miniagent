@@ -64,7 +64,7 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
@@ -83,7 +83,7 @@ func readFileLimited(path string) string {
 	if err != nil {
 		return fmt.Sprintf("读取 %q 失败：%v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
 	if err != nil {
 		return fmt.Sprintf("读取 %q 失败：%v", path, err)
@@ -96,10 +96,7 @@ func formatLines(content string, offset, limit int) string {
 		limit = maxLineLimit
 	}
 	lines := strings.Split(content, "\n")
-	start := offset
-	if start < 1 {
-		start = 1
-	}
+	start := max(offset, 1)
 	end := len(lines)
 	if limit > 0 && start+limit-1 < end {
 		end = start + limit - 1

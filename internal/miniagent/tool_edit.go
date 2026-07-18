@@ -59,7 +59,7 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			data, err := io.ReadAll(f)
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}

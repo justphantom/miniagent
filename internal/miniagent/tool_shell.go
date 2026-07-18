@@ -134,11 +134,11 @@ func ensureWorkspaceDir(dir string) error {
 	}
 	root, err := filepath.Abs(dir)
 	if err != nil {
-		return fmt.Errorf("解析 workspace_root 失败：%v", err)
+		return fmt.Errorf("解析 workspace_root 失败：%w", err)
 	}
 	info, err := os.Stat(root)
 	if err != nil {
-		return fmt.Errorf("workspace_root %q 不可访问：%v", dir, err)
+		return fmt.Errorf("workspace_root %q 不可访问：%w", dir, err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("workspace_root %q 不是目录", dir)

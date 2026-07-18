@@ -48,7 +48,7 @@ func WebFetchTool(httpClient *http.Client) Tool {
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("抓取失败：%v", err)}
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取响应失败：%v", err)}
