@@ -67,15 +67,15 @@ func truncate(s string, n int, marker string) string {
 
 // resolveToolPath resolves a tool path under workspaceRoot or rejects it.
 func resolveToolPath(workspaceRoot, p string, unrestricted bool) (string, error) {
+	if workspaceRoot == "" {
+		return "", fmt.Errorf("未配置：workspace_root 为空")
+	}
 	if unrestricted {
 		full := p
-		if workspaceRoot != "" && !filepath.IsAbs(p) {
+		if !filepath.IsAbs(p) {
 			full = filepath.Join(workspaceRoot, p)
 		}
 		return full, nil
-	}
-	if workspaceRoot == "" {
-		return "", fmt.Errorf("未配置：workspace_root 为空")
 	}
 	root, err := filepath.Abs(workspaceRoot)
 	if err != nil {
@@ -83,6 +83,14 @@ func resolveToolPath(workspaceRoot, p string, unrestricted bool) (string, error)
 	}
 	return resolveUnderRoot(root, p)
 }
+
+// openToolFile opens a file that has already been resolved under workspaceRoot.
+// It refuses to follow symlinks to prevent TOCTOU escapes.
+func openToolFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	return openNoFollow(path, flag, perm)
+}
+
+// openNoFollow is OS-specific. Defined in tool_file_*.go.
 
 func object(props map[string]any, required ...string) map[string]any {
 	return map[string]any{

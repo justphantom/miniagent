@@ -5,7 +5,7 @@ import (
 )
 
 func TestFactStore_SetGet(t *testing.T) {
-	s := NewFactStore(t.TempDir(), nil)
+	s, _ := NewFactStore(t.TempDir(), nil)
 	if err := s.Set(ScopeChat, "chat1", "user.lang", "zh", "test"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestFactStore_SetGet(t *testing.T) {
 }
 
 func TestFactStore_GetMissing(t *testing.T) {
-	s := NewFactStore(t.TempDir(), nil)
+	s, _ := NewFactStore(t.TempDir(), nil)
 	_, ok, err := s.Get(ScopeChat, "chat1", "missing")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -30,7 +30,7 @@ func TestFactStore_GetMissing(t *testing.T) {
 }
 
 func TestFactStore_List(t *testing.T) {
-	s := NewFactStore(t.TempDir(), nil)
+	s, _ := NewFactStore(t.TempDir(), nil)
 	s.Set(ScopeChat, "chat1", "user.lang", "zh", "")
 	s.Set(ScopeChat, "chat1", "user.name", "a", "")
 	s.Set(ScopeChat, "chat1", "project.x", "y", "")
@@ -47,7 +47,7 @@ func TestFactStore_List(t *testing.T) {
 }
 
 func TestFactStore_Delete(t *testing.T) {
-	s := NewFactStore(t.TempDir(), nil)
+	s, _ := NewFactStore(t.TempDir(), nil)
 	s.Set(ScopeChat, "chat1", "k", "v", "")
 	if err := s.Delete(ScopeChat, "chat1", "k"); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -60,7 +60,7 @@ func TestFactStore_Delete(t *testing.T) {
 
 func TestFactStore_ScopesIsolated(t *testing.T) {
 	dir := t.TempDir()
-	s := NewFactStore(dir, nil)
+	s, _ := NewFactStore(dir, nil)
 	s.Set(ScopeChat, "chat1", "k", "chat-v", "")
 	s.Set(ScopeGlobal, "chat1", "k", "global-v", "")
 	f, _, _ := s.Get(ScopeChat, "chat1", "k")

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,6 +41,10 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 	if c.APIKey == "" {
 		return Response{}, fmt.Errorf("miniagent: api_key is empty")
 	}
+	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return Response{}, fmt.Errorf("miniagent: base_url %q is invalid", c.BaseURL)
+	}
 	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 120 * time.Second}
@@ -48,14 +53,14 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 	if err != nil {
 		return Response{}, fmt.Errorf("build request body: %w", err)
 	}
-	url := strings.TrimRight(c.BaseURL, "/") + "/v1/chat/completions"
+	u := base.JoinPath("/v1/chat/completions")
 	if c.Logger != nil {
-		c.Logger.Debug("http request", "url", url, "model", req.Model, "messages", len(req.Messages))
+		c.Logger.Debug("http request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
 	}
 
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		raw, status, err := c.doOnce(ctx, client, url, body)
+		raw, status, err := c.doOnce(ctx, client, u.String(), body)
 		if err == nil && status == http.StatusOK {
 			if c.Logger != nil {
 				c.Logger.Debug("http response", "status", status, "bytes", len(raw), "attempt", attempt)
@@ -105,17 +110,24 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string
 	if rerr != nil {
 		return raw, resp.StatusCode, fmt.Errorf("read response: %w", rerr)
 	}
+	if len(raw) >= 1<<20 {
+		return raw, resp.StatusCode, fmt.Errorf("response exceeded 1 MiB limit and was truncated")
+	}
 	return raw, resp.StatusCode, nil
 }
 
 // ListModels calls GET {BaseURL}/v1/models and returns the model ids.
 func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
+	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return nil, fmt.Errorf("miniagent: base_url %q is invalid", c.BaseURL)
+	}
 	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	url := strings.TrimRight(c.BaseURL, "/") + "/v1/models"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	u := base.JoinPath("/v1/models")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}

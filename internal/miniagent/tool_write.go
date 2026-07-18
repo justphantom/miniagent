@@ -1,12 +1,16 @@
 package miniagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
+
+const maxWriteFileBytes = 10 << 20
 
 type writefileArgs struct {
 	Path    string `json:"path"`
@@ -30,6 +34,9 @@ func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if a.Path == "" {
 				return ToolResult{IsError: true, Output: "参数缺失：path"}
 			}
+			if len(a.Content) > maxWriteFileBytes {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("content 超过最大限制 %d 字节", maxWriteFileBytes)}
+			}
 			full, err := resolveToolPath(workspaceRoot, a.Path, unrestricted)
 			if err != nil {
 				return ToolResult{IsError: true, Output: err.Error()}
@@ -38,13 +45,38 @@ func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("创建父目录失败：%v", err)}
 			}
 			mode := os.FileMode(0o644)
-			if info, err := os.Stat(full); err == nil {
+			if info, err := os.Lstat(full); err == nil {
 				mode = info.Mode().Perm()
 			}
-			if err := os.WriteFile(full, []byte(a.Content), mode); err != nil {
+			if err := writeFileAtomic(full, []byte(a.Content), mode); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
 			}
 			return ToolResult{Output: fmt.Sprintf("已写入 %d 字节到 %s", len(a.Content), a.Path)}
 		},
 	}
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".write-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if _, err := io.Copy(tmp, bytes.NewReader(data)); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

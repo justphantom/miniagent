@@ -10,7 +10,7 @@ import (
 
 func TestHistory_AppendAndLoad(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHistory(dir, nil)
+	h, _ := NewHistory(dir, nil)
 	h.Append("chat1", []Message{
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
@@ -25,7 +25,7 @@ func TestHistory_AppendAndLoad(t *testing.T) {
 }
 
 func TestHistory_Load_ReturnsNilForUnknownChat(t *testing.T) {
-	h := NewHistory(t.TempDir(), nil)
+	h, _ := NewHistory(t.TempDir(), nil)
 	if h.Load("unknown") != nil {
 		t.Error("expected nil")
 	}
@@ -33,7 +33,7 @@ func TestHistory_Load_ReturnsNilForUnknownChat(t *testing.T) {
 
 func TestHistory_TrimDropsOldTurns(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHistory(dir, nil)
+	h, _ := NewHistory(dir, nil)
 	big := strings.Repeat("a", 3000)
 	for i := 0; i < 5; i++ {
 		h.Append("chat1", []Message{{Role: "user", Content: big}, {Role: "assistant", Content: big}})
@@ -52,7 +52,7 @@ func TestHistory_TrimDropsOldTurns(t *testing.T) {
 
 func TestHistory_KeepsToolPairingWhenTrimming(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHistory(dir, nil)
+	h, _ := NewHistory(dir, nil)
 	h.Append("chat1", []Message{
 		{Role: "user", Content: "q"},
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "x", Args: "{}"}}},
@@ -77,7 +77,7 @@ func TestHistory_KeepsToolPairingWhenTrimming(t *testing.T) {
 
 func TestHistory_ListSessions(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHistory(dir, nil)
+	h, _ := NewHistory(dir, nil)
 	h.Append("chat1", []Message{{Role: "user", Content: "x"}})
 	sessions, err := h.ListSessions("chat1")
 	if err != nil {
@@ -93,7 +93,7 @@ func TestHistory_ListSessions(t *testing.T) {
 
 func TestHistory_UseSession(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHistory(dir, nil)
+	h, _ := NewHistory(dir, nil)
 	h.Append("chat1", []Message{{Role: "user", Content: "x"}})
 	sid, err := h.NewSession("chat1")
 	if err != nil {
@@ -109,7 +109,7 @@ func TestHistory_UseSession(t *testing.T) {
 
 func TestHistory_DeleteSession(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHistory(dir, nil)
+	h, _ := NewHistory(dir, nil)
 	h.Append("chat1", []Message{{Role: "user", Content: "x"}})
 	sid := h.Current("chat1")
 	if err := h.DeleteSession("chat1", sid); err != nil {
@@ -122,7 +122,7 @@ func TestHistory_DeleteSession(t *testing.T) {
 
 func TestHistory_LegacyMigration(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHistory(dir, nil)
+	h, _ := NewHistory(dir, nil)
 	legacy := filepath.Join(dir, "miniagent", "history", "chat1.jsonl")
 	if err := mkdir(filepath.Dir(legacy)); err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestSanitizeChatID(t *testing.T) {
 	if sanitizeChatID("a/b@c") != "a_b_c" {
 		t.Errorf("sanitize = %q", sanitizeChatID("a/b@c"))
 	}
-	if sanitizeChatID("") != "x" {
+	if sanitizeChatID("") != "" {
 		t.Errorf("empty sanitize = %q", sanitizeChatID(""))
 	}
 }

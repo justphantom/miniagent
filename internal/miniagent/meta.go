@@ -1,6 +1,7 @@
 package miniagent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +14,11 @@ type MetaStore struct {
 }
 
 // NewMetaStore builds a MetaStore rooted at {stateDir}/miniagent/meta.
-func NewMetaStore(stateDir string) *MetaStore {
-	return &MetaStore{dir: filepath.Join(stateDir, "miniagent", "meta")}
+func NewMetaStore(stateDir string) (*MetaStore, error) {
+	if strings.TrimSpace(stateDir) == "" {
+		return nil, fmt.Errorf("miniagent: stateDir is empty")
+	}
+	return &MetaStore{dir: filepath.Join(stateDir, "miniagent", "meta")}, nil
 }
 
 func (m *MetaStore) path(chatID, name string) string {
@@ -39,7 +43,27 @@ func (m *MetaStore) write(chatID, name, value string) error {
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(m.path(chatID, name), []byte(value), 0o644)
+	path := m.path(chatID, name)
+	tmp, err := os.CreateTemp(m.dir, ".meta-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if _, err := tmp.WriteString(value); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }
 
 // Model returns the per-chat pinned model id, or "" when none is set.

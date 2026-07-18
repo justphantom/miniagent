@@ -10,7 +10,7 @@ import (
 )
 
 const maxIterations = 20
-const maxToolResultInHistory = 500
+const maxToolResultInHistory = 2000 // 每条 tool 结果进入历史的字符上限
 
 func safeCall(logger *slog.Logger, tool Tool, name, args string, ctx context.Context) (res ToolResult) {
 	defer func() {
@@ -18,7 +18,7 @@ func safeCall(logger *slog.Logger, tool Tool, name, args string, ctx context.Con
 			if logger != nil {
 				logger.Error("tool panic recovered", "tool", name, "panic", r)
 			}
-			res = ToolResult{IsError: true, Output: fmt.Sprintf("工具 %q 内部错误（panic: %v）", name, r)}
+			res = ToolResult{IsError: true, Output: fmt.Sprintf("工具 %q 内部错误", name)}
 		}
 	}()
 	return tool.Call(ctx, args)
@@ -35,10 +35,11 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		toolSpecs = append(toolSpecs, ToolSpec{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
 		toolByName[t.Name] = t
 	}
-	emitSignal := func(sig Signal) {
+	emitSignal := func(sig Signal) error {
 		if emit != nil {
-			emit(sig)
+			return emit(sig)
 		}
+		return nil
 	}
 
 	userMsg := Message{Role: "user", Content: userPrompt}
@@ -51,6 +52,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1}, err
 		}
+		msgs = trimMessages(msgs, maxHistoryTokens)
 		if logger != nil {
 			logger.Debug("llm call start", "prompt_id", promptID, "step", step, "model", cfg.Model)
 		}
@@ -93,7 +95,9 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		}
 		msgs = append(msgs, Message{Role: "assistant", ToolCalls: calls})
 		for _, tc := range calls {
-			emitSignal(Signal{Kind: SignalToolUse, Name: tc.Name, Input: tc.Args})
+			if err := emitSignal(Signal{Kind: SignalToolUse, Name: tc.Name, Input: tc.Args}); err != nil {
+				return Result{Usage: total, Steps: step}, err
+			}
 			tool, ok := toolByName[tc.Name]
 			var tres ToolResult
 			if !ok {
@@ -104,7 +108,9 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 			if logger != nil {
 				logger.Info("tool executed", "prompt_id", promptID, "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
 			}
-			emitSignal(Signal{Kind: SignalToolResult, Name: tc.Name, Input: tc.Args, Output: tres.Output, IsError: tres.IsError})
+			if err := emitSignal(Signal{Kind: SignalToolResult, Name: tc.Name, Input: tc.Args, Output: tres.Output, IsError: tres.IsError}); err != nil {
+				return Result{Usage: total, Steps: step}, err
+			}
 			msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: truncateToolResult(tres.Output)})
 		}
 	}

@@ -1,9 +1,11 @@
 package miniagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 )
 
 const maxShellOutputChars = 20000
+const maxShellOutputBytes = maxShellOutputChars * 4
 const shellTimeout = 60 * time.Second
 
 var defaultBlockedPatterns = []string{
@@ -33,17 +36,20 @@ var defaultBlockedPatterns = []string{
 	"chown -R",
 }
 
-var secretEnvPrefixes = []string{
-	"MINIAGENT_",
-	"FEISHU_",
-	"IPC_",
+// allowedEnvVars 是 shell 子进程允许继承的环境变量白名单。
+var allowedEnvVars = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "SHELL": true,
+	"LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TERM": true,
+	"PWD": true, "OLDPWD": true, "TMPDIR": true, "TZ": true,
+	"EDITOR": true, "PAGER": true, "GOPATH": true, "GOROOT": true,
+	"CGO_ENABLED": true, "GOFLAGS": true, "GOOS": true, "GOARCH": true,
 }
 
 // ShellTool returns a shell tool bound to workspaceRoot.
 func ShellTool(workspaceRoot string, unrestricted bool, blockedPatterns []string) Tool {
 	return Tool{
 		Name:        "shell",
-		Description: "在 workspace_root 下执行一条 shell 命令（sh -c）。返回 stdout+stderr 合并输出。破坏性命令会被拒绝；命令最长运行 " + shellTimeout.String() + "。",
+		Description: "在 workspace_root 下执行一条 shell 命令（sh -c）。返回 stdout+stderr 合并输出。命令最长运行 " + shellTimeout.String() + "；输出超过 " + fmt.Sprintf("%d", maxShellOutputChars) + " 字符会被截断。",
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令，相对路径基于 workspace_root"},
 		}, "command"),
@@ -61,28 +67,19 @@ func ShellTool(workspaceRoot string, unrestricted bool, blockedPatterns []string
 				if strings.TrimSpace(workspaceRoot) == "" {
 					return ToolResult{IsError: true, Output: "shell 未配置：workspace_root 为空"}
 				}
-				patterns := blockedPatterns
-				if len(patterns) == 0 {
-					patterns = defaultBlockedPatterns
-				}
-				if msg := blockedShellReason(a.Command, patterns); msg != "" {
-					return ToolResult{IsError: true, Output: msg}
+				if reason := validateShellCommand(a.Command, blockedPatterns); reason != "" {
+					return ToolResult{IsError: true, Output: reason}
 				}
 			}
 			runCtx, cancel := context.WithTimeout(ctx, shellTimeout)
 			defer cancel()
 			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command)
-			if workspaceRoot != "" {
-				root, err := filepath.Abs(workspaceRoot)
-				if err == nil {
-					if _, statErr := os.Stat(root); statErr == nil {
-						cmd.Dir = root
-					}
-				}
+			cmd.Dir = workspaceRoot
+			if err := ensureWorkspaceDir(cmd.Dir); err != nil {
+				return ToolResult{IsError: true, Output: err.Error()}
 			}
-			cmd.Env = envWithoutSecrets()
-			out, err := cmd.CombinedOutput()
-			body := truncate(string(out), maxShellOutputChars, "…")
+			cmd.Env = envWhitelist()
+			body, err := runShellLimited(runCtx, cmd)
 			if err != nil {
 				if runCtx.Err() == context.DeadlineExceeded {
 					return ToolResult{IsError: true, Output: body + fmt.Sprintf("\n⏱ 命令超时（>%s），已终止。", shellTimeout)}
@@ -94,42 +91,81 @@ func ShellTool(workspaceRoot string, unrestricted bool, blockedPatterns []string
 	}
 }
 
-func blockedShellReason(command string, patterns []string) string {
+func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	if err := cmd.Start(); err != nil {
+		_ = pw.Close()
+		return "", err
+	}
+	waitErr := make(chan error, 1)
+	go func() {
+		waitErr <- cmd.Wait()
+		_ = pw.Close()
+	}()
+	var out bytes.Buffer
+	limited := io.LimitReader(pr, maxShellOutputBytes)
+	_, _ = io.Copy(&out, limited)
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	err := <-waitErr
+	return truncate(out.String(), maxShellOutputChars, "…"), err
+}
+
+func ensureWorkspaceDir(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("shell 未配置：workspace_root 为空")
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("解析 workspace_root 失败：%v", err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("workspace_root %q 不可访问：%v", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace_root %q 不是目录", dir)
+	}
+	return nil
+}
+
+func validateShellCommand(command string, blockedPatterns []string) string {
 	folded := strings.ToLower(command)
+	patterns := blockedPatterns
+	if patterns == nil {
+		patterns = defaultBlockedPatterns
+	}
 	for _, p := range patterns {
-		if strings.Contains(folded, strings.ToLower(p)) {
+		if p != "" && strings.Contains(folded, strings.ToLower(p)) {
 			return fmt.Sprintf("拒绝执行：命令匹配黑名单模式 %q（破坏性命令已被拦截）。", p)
+		}
+	}
+	// 拦截常见的命令注入/混淆模式，防止黑名单被绕过。
+	for _, d := range []string{
+		"| sh", "|sh", "| bash", "|bash", "| /bin/sh", "| /bin/bash",
+		"base64 -d |", "base64 --decode |", "base64 -d|", "base64 --decode|",
+		"source /dev/stdin", ". /dev/stdin",
+	} {
+		if strings.Contains(folded, d) {
+			return fmt.Sprintf("拒绝执行：命令包含危险模式 %q（可能被用于绕过黑名单）。", d)
 		}
 	}
 	return ""
 }
 
-func envWithoutSecrets() []string {
-	out := make([]string, 0, 64)
+func envWhitelist() []string {
+	out := make([]string, 0, len(allowedEnvVars))
 	for _, kv := range os.Environ() {
 		name, _, ok := strings.Cut(kv, "=")
-		if !ok || isSecretEnv(name) {
+		if !ok {
 			continue
 		}
-		out = append(out, kv)
-	}
-	return out
-}
-
-func isSecretEnv(name string) bool {
-	for _, p := range secretEnvPrefixes {
-		if strings.HasPrefix(name, p) {
-			return true
+		if allowedEnvVars[name] {
+			out = append(out, kv)
 		}
 	}
-	upper := strings.ToUpper(name)
-	switch {
-	case strings.HasSuffix(upper, "_SECRET"),
-		strings.HasSuffix(upper, "_KEY"),
-		strings.HasSuffix(upper, "_TOKEN"),
-		strings.HasSuffix(upper, "_PASSWORD"),
-		strings.HasSuffix(upper, "_API_KEY"):
-		return true
-	}
-	return false
+	return out
 }

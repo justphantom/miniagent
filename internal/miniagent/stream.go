@@ -26,17 +26,17 @@ type streamEvent struct {
 // StreamEmitFunc returns an EmitFunc that writes Signal events as NDJSON.
 func StreamEmitFunc(w io.Writer, verbose bool) EmitFunc {
 	enc := json.NewEncoder(w)
-	return func(sig Signal) {
+	return func(sig Signal) error {
 		if !verbose && sig.Kind != SignalToolUse {
-			return
+			return nil
 		}
-		_ = enc.Encode(signalToStreamEvent(sig))
+		return enc.Encode(signalToStreamEvent(sig))
 	}
 }
 
 // EmitResult writes the terminal result event to w.
-func EmitResult(w io.Writer, result Result, model string) {
-	_ = json.NewEncoder(w).Encode(streamEvent{
+func EmitResult(w io.Writer, result Result, model string) error {
+	return json.NewEncoder(w).Encode(streamEvent{
 		Type:         "result",
 		Text:         result.Text,
 		Model:        model,
@@ -47,8 +47,8 @@ func EmitResult(w io.Writer, result Result, model string) {
 }
 
 // EmitError writes the terminal error event to w.
-func EmitError(w io.Writer, msg string) {
-	_ = json.NewEncoder(w).Encode(streamEvent{Type: "error", Message: msg})
+func EmitError(w io.Writer, msg string) error {
+	return json.NewEncoder(w).Encode(streamEvent{Type: "error", Message: msg})
 }
 
 func signalToStreamEvent(sig Signal) streamEvent {

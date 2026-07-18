@@ -55,7 +55,7 @@ func toolResponse(calls ...ToolCall) string {
 
 func TestRun_TextOnlyReturnsImmediately(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("hello world")}}
-	llm := &HTTPClient{APIKey: "sk", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", System: "be brief"}, "p1", "hi", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -87,9 +87,9 @@ func TestRun_ReActToolThenText(t *testing.T) {
 		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var signals []Signal
-	emit := func(s Signal) { signals = append(signals, s) }
+	emit := func(s Signal) error { signals = append(signals, s); return nil }
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, emit, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -110,7 +110,7 @@ func TestRun_UnknownToolYieldsErrorResult(t *testing.T) {
 		toolResponse(ToolCall{ID: "c1", Name: "missing", Args: "{}"}),
 		textResponse("ok"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	res, err := Run(context.Background(), llm, LoopConfig{}, "p1", "x", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -135,9 +135,9 @@ func TestRun_ToolPanicRecovered(t *testing.T) {
 		toolResponse(ToolCall{ID: "c1", Name: "boom", Args: "{}"}),
 		textResponse("recovered"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var signals []Signal
-	emit := func(s Signal) { signals = append(signals, s) }
+	emit := func(s Signal) error { signals = append(signals, s); return nil }
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, emit, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -151,7 +151,7 @@ func TestRun_ToolPanicRecovered(t *testing.T) {
 			resultSig = s
 		}
 	}
-	if !resultSig.IsError || !strings.Contains(resultSig.Output, "panic") {
+	if !resultSig.IsError {
 		t.Errorf("tool_result = %+v", resultSig)
 	}
 }
@@ -162,7 +162,7 @@ func TestRun_EmptyToolCallIDSynthesized(t *testing.T) {
 		toolResponse(ToolCall{ID: "", Name: "echo", Args: ""}),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -184,9 +184,23 @@ func TestRun_EmptyToolCallIDSynthesized(t *testing.T) {
 	}
 }
 
+func TestRun_TrimLongHistory(t *testing.T) {
+	big := strings.Repeat("a", 3000)
+	history := []Message{{Role: "user", Content: big}, {Role: "assistant", Content: big}}
+	tr := &fakeTransport{responses: []string{textResponse("ok")}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	_, err := Run(context.Background(), llm, LoopConfig{Model: "m"}, "p1", "hi", history, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(tr.lastBody, "hi") {
+		t.Errorf("current prompt dropped: %s", tr.lastBody)
+	}
+}
+
 func TestRun_LLMErrorPropagates(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusServiceUnavailable}}
-	llm := &HTTPClient{APIKey: "sk", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	_, err := Run(context.Background(), llm, LoopConfig{}, "p1", "hi", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
@@ -202,7 +216,7 @@ func TestRun_NilClientErrors(t *testing.T) {
 func TestRun_CancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	llm := &HTTPClient{APIKey: "sk", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
 	_, err := Run(ctx, llm, LoopConfig{}, "p1", "hi", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error")

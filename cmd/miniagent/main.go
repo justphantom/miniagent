@@ -24,7 +24,6 @@ var version = "dev"
 func main() {
 	var (
 		model      = flag.String("model", "", "LLM model id (required for conversation)")
-		apiKey     = flag.String("api-key", os.Getenv("MINIAGENT_API_KEY"), "LLM API key (or $MINIAGENT_API_KEY)")
 		baseURL    = flag.String("base-url", os.Getenv("MINIAGENT_BASE_URL"), "LLM endpoint root, no /v1 suffix (or $MINIAGENT_BASE_URL)")
 		system     = flag.String("system", "你是一个简洁的助手，回答通常不超过 500 字。", "system prompt")
 		maxTokens  = flag.Int("max-tokens", 4096, "max output tokens")
@@ -44,6 +43,8 @@ func main() {
 	)
 	flag.Parse()
 
+	apiKey := os.Getenv("MINIAGENT_API_KEY")
+
 	if *showVer {
 		fmt.Printf("miniagent %s\n", version)
 		os.Exit(0)
@@ -52,7 +53,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	if *listModels {
-		runListModels(*apiKey, *baseURL)
+		runListModels(apiKey, *baseURL)
 		return
 	}
 	if *listSessions {
@@ -76,8 +77,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "miniagent: --model is required (or use a metadata flag like --list-models)")
 		os.Exit(1)
 	}
-	if *apiKey == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: --api-key is required (or set $MINIAGENT_API_KEY)")
+	if apiKey == "" {
+		fmt.Fprintln(os.Stderr, "miniagent: $MINIAGENT_API_KEY is required (or use a metadata flag like --list-models)")
 		os.Exit(1)
 	}
 
@@ -92,7 +93,7 @@ func main() {
 	}
 
 	llm := &miniagent.HTTPClient{
-		APIKey:  *apiKey,
+		APIKey:  apiKey,
 		BaseURL: *baseURL,
 		HTTP:    &http.Client{Timeout: 120 * time.Second},
 		Logger:  logger,
@@ -134,9 +135,22 @@ func main() {
 	var facts *miniagent.FactStore
 	var meta *miniagent.MetaStore
 	if *stateDir != "" && *chatID != "" {
-		history = miniagent.NewHistory(*stateDir, logger)
-		facts = miniagent.NewFactStore(*stateDir, logger)
-		meta = miniagent.NewMetaStore(*stateDir)
+		var err error
+		history, err = miniagent.NewHistory(*stateDir, logger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
+			os.Exit(1)
+		}
+		facts, err = miniagent.NewFactStore(*stateDir, logger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: init memory: %v\n", err)
+			os.Exit(1)
+		}
+		meta, err = miniagent.NewMetaStore(*stateDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
+			os.Exit(1)
+		}
 		tools = append(tools, miniagent.MemoryTools(facts, *chatID)...)
 		if err := meta.SetModel(*chatID, *model); err != nil {
 			logger.Warn("meta: set model failed", "error", err)
@@ -157,7 +171,10 @@ func main() {
 
 	memoryContext := ""
 	if facts != nil {
-		if chatFacts, _ := facts.List(miniagent.ScopeChat, *chatID, ""); len(chatFacts) > 0 {
+		chatFacts, err := facts.List(miniagent.ScopeChat, *chatID, "")
+		if err != nil {
+			logger.Warn("memory: list failed", "error", err)
+		} else if len(chatFacts) > 0 {
 			memoryContext = formatFactsForCLI(chatFacts)
 		}
 	}
@@ -171,12 +188,19 @@ func main() {
 	}, "cli", string(prompt), hist, emit, logger)
 
 	if err != nil {
-		miniagent.EmitError(os.Stdout, err.Error())
+		if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
+			logger.Warn("emit error failed", "error", eerr)
+		}
 		os.Exit(1)
 	}
 
-	history.Append(*chatID, result.History)
-	miniagent.EmitResult(os.Stdout, result, *model)
+	if err := history.Append(*chatID, result.History); err != nil {
+		logger.Warn("history: append failed", "error", err)
+	}
+	if err := miniagent.EmitResult(os.Stdout, result, *model); err != nil {
+		logger.Warn("emit result failed", "error", err)
+		os.Exit(1)
+	}
 }
 
 func formatFactsForCLI(facts []miniagent.Fact) string {
@@ -217,7 +241,12 @@ func mustHistory(stateDir, chatID, action string) *miniagent.History {
 		fmt.Fprintf(os.Stderr, "miniagent: --chat-id is required for --%s\n", action)
 		os.Exit(1)
 	}
-	return miniagent.NewHistory(stateDir, nil)
+	h, err := miniagent.NewHistory(stateDir, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
+		os.Exit(1)
+	}
+	return h
 }
 
 func runListSessions(stateDir, chatID string) {
@@ -250,8 +279,16 @@ func runShowCurrent(stateDir, chatID, defaultModel string) {
 		fmt.Fprintln(os.Stderr, "miniagent: --chat-id is required for --show-current")
 		os.Exit(1)
 	}
-	h := miniagent.NewHistory(stateDir, nil)
-	meta := miniagent.NewMetaStore(stateDir)
+	h, err := miniagent.NewHistory(stateDir, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
+		os.Exit(1)
+	}
+	meta, err := miniagent.NewMetaStore(stateDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
+		os.Exit(1)
+	}
 	info := struct {
 		ChatID     string `json:"chat_id"`
 		SessionID  string `json:"session_id"`

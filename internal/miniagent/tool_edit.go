@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
+
+const maxEditFileBytes = 10 << 20
 
 type editfileArgs struct {
 	Path      string `json:"path"`
@@ -42,7 +45,19 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err != nil {
 				return ToolResult{IsError: true, Output: err.Error()}
 			}
-			data, err := os.ReadFile(full)
+			info, err := os.Lstat(full)
+			if err == nil && info.Mode()&os.ModeSymlink != 0 {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是符号链接，拒绝编辑", a.Path)}
+			}
+			if err == nil && info.Size() > maxEditFileBytes {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
+			}
+			f, err := openToolFile(full, os.O_RDONLY, 0)
+			if err != nil {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+			}
+			defer f.Close()
+			data, err := io.ReadAll(f)
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 			}
@@ -57,10 +72,10 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 			}
 			updated := strings.Replace(content, a.OldString, a.NewString, 1)
 			mode := os.FileMode(0o644)
-			if info, err := os.Stat(full); err == nil {
+			if info != nil {
 				mode = info.Mode().Perm()
 			}
-			if err := os.WriteFile(full, []byte(updated), mode); err != nil {
+			if err := writeFileAtomic(full, []byte(updated), mode); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
 			}
 			return ToolResult{Output: fmt.Sprintf("已替换 %q 中的 1 处文本（%d → %d 字节）", a.Path, len(content), len(updated))}

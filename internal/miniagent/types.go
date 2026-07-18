@@ -78,7 +78,7 @@ type Signal struct {
 }
 
 // EmitFunc receives out-of-band signals from the loop.
-type EmitFunc func(sig Signal)
+type EmitFunc func(sig Signal) error
 
 // Result is what loop.Run returns.
 type Result struct {

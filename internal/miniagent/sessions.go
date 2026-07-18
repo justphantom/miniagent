@@ -68,7 +68,7 @@ func (h *History) NewSession(chatID string) (string, error) {
 	if err := os.MkdirAll(h.dir, 0o755); err != nil {
 		return "", err
 	}
-	f, err := os.OpenFile(h.sessionPath(chatID, sid), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(h.sessionPath(chatID, sid), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +84,9 @@ func (h *History) ListSessions(chatID string) ([]SessionInfo, error) {
 	if h == nil {
 		return nil, errors.New("miniagent: memory disabled")
 	}
-	h.resolve(chatID)
+	if chatID == "" {
+		return nil, errors.New("miniagent: chatID is empty")
+	}
 	entries, err := os.ReadDir(h.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -216,6 +218,9 @@ func (h *History) curPathFor(chatID string) string {
 }
 
 func sanitizeChatID(s string) string {
+	if s == "" {
+		return ""
+	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {

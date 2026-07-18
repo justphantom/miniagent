@@ -37,10 +37,7 @@ func WebFetchTool(httpClient *http.Client) Tool {
 			if !isHTTPURL(a.URL) {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("仅支持 http/https URL，收到 %q", a.URL)}
 			}
-			client := httpClient
-			if client == nil {
-				client = webfetchDefaultClient()
-			}
+			client := webfetchClient(httpClient)
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("构造请求失败：%v", err)}
@@ -75,29 +72,42 @@ func isHTTPURL(u string) bool {
 	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
-func isPublicHost(host string) bool {
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("webfetch: invalid address %q", addr)
+	}
 	if host == "" {
-		return false
+		return nil, fmt.Errorf("webfetch: empty host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !isPublicIP(ip) {
+			return nil, fmt.Errorf("webfetch: private address refused: %s", host)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
 	h := strings.ToLower(host)
 	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
-		return false
+		return nil, fmt.Errorf("webfetch: localhost refused")
 	}
-	ip := net.ParseIP(h)
-	if ip != nil {
-		return isPublicIP(ip)
-	}
-	addrs, err := net.LookupHost(h)
+	addrs, err := (&net.Resolver{}).LookupHost(ctx, host)
 	if err != nil {
-		return false
+		return nil, fmt.Errorf("webfetch: resolve %q: %w", host, err)
 	}
-	for _, addr := range addrs {
-		ip := net.ParseIP(addr)
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("webfetch: no addresses for %q", host)
+	}
+	var selected string
+	for _, a := range addrs {
+		ip := net.ParseIP(a)
 		if ip == nil || !isPublicIP(ip) {
-			return false
+			return nil, fmt.Errorf("webfetch: private address refused for %q", host)
+		}
+		if selected == "" {
+			selected = a
 		}
 	}
-	return true
+	return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(selected, port))
 }
 
 func isPublicIP(ip net.IP) bool {
@@ -105,20 +115,29 @@ func isPublicIP(ip net.IP) bool {
 		!ip.IsPrivate() && !ip.IsMulticast() && !ip.IsUnspecified()
 }
 
+func webfetchClient(src *http.Client) *http.Client {
+	if src == nil {
+		return webfetchDefaultClient()
+	}
+	c := *src
+	switch t := c.Transport.(type) {
+	case nil:
+		c.Transport = &http.Transport{DialContext: safeDialContext}
+	case *http.Transport:
+		tr := t.Clone()
+		tr.DialContext = safeDialContext
+		c.Transport = tr
+	default:
+		// 自定义 RoundTripper 无法注入 DialContext，保留原行为。
+	}
+	return &c
+}
+
 func webfetchDefaultClient() *http.Client {
 	return &http.Client{
 		Timeout: webfetchTimeout,
 		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, _, err := net.SplitHostPort(addr)
-				if err != nil {
-					return nil, fmt.Errorf("webfetch: invalid address %q", addr)
-				}
-				if !isPublicHost(host) {
-					return nil, fmt.Errorf("webfetch: private address refused: %s", host)
-				}
-				return (&net.Dialer{}).DialContext(ctx, network, addr)
-			},
+			DialContext: safeDialContext,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxWebFetchRedirects {

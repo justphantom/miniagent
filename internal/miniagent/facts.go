@@ -48,25 +48,34 @@ type FactStore struct {
 }
 
 // NewFactStore builds a FactStore rooted at {stateDir}/miniagent/memory.
-func NewFactStore(stateDir string, logger *slog.Logger) *FactStore {
+func NewFactStore(stateDir string, logger *slog.Logger) (*FactStore, error) {
+	if strings.TrimSpace(stateDir) == "" {
+		return nil, fmt.Errorf("miniagent: stateDir is empty")
+	}
 	return &FactStore{
 		dir:    filepath.Join(stateDir, "miniagent", "memory"),
 		logger: logger,
-	}
+	}, nil
 }
 
-func (s *FactStore) scopedFile(scope FactScope, chatID string) string {
+func (s *FactStore) scopedFile(scope FactScope, chatID string) (string, error) {
 	if scope == ScopeGlobal {
-		return filepath.Join(s.dir, "global.json")
+		return filepath.Join(s.dir, "global.json"), nil
 	}
 	if scope == ScopeProject {
-		return filepath.Join(s.dir, "project.json")
+		return filepath.Join(s.dir, "project.json"), nil
 	}
-	return filepath.Join(s.dir, sanitizeChatID(chatID)+".json")
+	if chatID == "" {
+		return "", fmt.Errorf("memory: chatID is empty")
+	}
+	return filepath.Join(s.dir, sanitizeChatID(chatID)+".json"), nil
 }
 
 func (s *FactStore) load(scope FactScope, chatID string) (map[string]Fact, error) {
-	path := s.scopedFile(scope, chatID)
+	path, err := s.scopedFile(scope, chatID)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -88,7 +97,10 @@ func (s *FactStore) load(scope FactScope, chatID string) (map[string]Fact, error
 }
 
 func (s *FactStore) save(scope FactScope, chatID string, facts map[string]Fact) error {
-	path := s.scopedFile(scope, chatID)
+	path, err := s.scopedFile(scope, chatID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}

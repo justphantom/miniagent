@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
 
 const maxReadFileChars = 20000
+const maxReadFileBytes = maxReadFileChars * 4
+
+const maxLineLimit = 10000
 
 type readfileArgs struct {
 	Path   string `json:"path"`
@@ -50,7 +54,15 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if info.IsDir() {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是目录，不是文件", a.Path)}
 			}
-			data, err := os.ReadFile(full)
+			if info.Size() > maxReadFileBytes {
+				return ToolResult{Output: truncate(readFileLimited(full), maxReadFileChars, "…")}
+			}
+			f, err := openToolFile(full, os.O_RDONLY, 0)
+			if err != nil {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+			}
+			defer f.Close()
+			data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
 			if err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 			}
@@ -63,7 +75,23 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 	}
 }
 
+func readFileLimited(path string) string {
+	f, err := openToolFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Sprintf("读取 %q 失败：%v", path, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
+	if err != nil {
+		return fmt.Sprintf("读取 %q 失败：%v", path, err)
+	}
+	return string(data)
+}
+
 func formatLines(content string, offset, limit int) string {
+	if limit < 0 || limit > maxLineLimit {
+		limit = maxLineLimit
+	}
 	lines := strings.Split(content, "\n")
 	start := offset
 	if start < 1 {

@@ -3,8 +3,10 @@ package miniagent
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"log/slog"
 )
@@ -18,8 +20,11 @@ type History struct {
 }
 
 // NewHistory builds a History rooted at {stateDir}/miniagent/history.
-func NewHistory(stateDir string, logger *slog.Logger) *History {
-	return &History{dir: filepath.Join(stateDir, "miniagent", "history"), logger: logger}
+func NewHistory(stateDir string, logger *slog.Logger) (*History, error) {
+	if strings.TrimSpace(stateDir) == "" {
+		return nil, fmt.Errorf("miniagent: stateDir is empty")
+	}
+	return &History{dir: filepath.Join(stateDir, "miniagent", "history"), logger: logger}, nil
 }
 
 // Load returns the stored conversation for chatID (trimmed to the token budget), or nil.
@@ -56,33 +61,30 @@ func (h *History) Load(chatID string) []Message {
 }
 
 // Append writes msgs as additional jsonl lines for chatID.
-func (h *History) Append(chatID string, msgs []Message) {
-	if h == nil || len(msgs) == 0 {
-		return
+func (h *History) Append(chatID string, msgs []Message) error {
+	if h == nil {
+		return nil
+	}
+	if chatID == "" {
+		return fmt.Errorf("history: chatID is empty")
+	}
+	if len(msgs) == 0 {
+		return nil
 	}
 	_, path := h.resolve(chatID)
 	if path == "" {
 		sid := newSessionID(now())
 		if err := h.writeCur(chatID, sid); err != nil {
-			if h.logger != nil {
-				h.logger.Warn("history: session pointer failed", "error", err)
-			}
-			return
+			return fmt.Errorf("history: session pointer failed: %w", err)
 		}
 		path = h.sessionPath(chatID, sid)
 	}
 	if err := os.MkdirAll(h.dir, 0o755); err != nil {
-		if h.logger != nil {
-			h.logger.Warn("history: mkdir failed", "error", err)
-		}
-		return
+		return fmt.Errorf("history: mkdir failed: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		if h.logger != nil {
-			h.logger.Warn("history: open failed", "error", err)
-		}
-		return
+		return fmt.Errorf("history: open failed: %w", err)
 	}
 	defer f.Close()
 	w := bufio.NewWriter(f)
@@ -94,20 +96,55 @@ func (h *History) Append(chatID string, msgs []Message) {
 			}
 			continue
 		}
-		_, _ = w.Write(b)
-		_ = w.WriteByte('\n')
+		if _, err := w.Write(b); err != nil {
+			return fmt.Errorf("history: write failed: %w", err)
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return fmt.Errorf("history: write failed: %w", err)
+		}
 	}
-	if err := w.Flush(); err != nil && h.logger != nil {
-		h.logger.Warn("history: flush failed", "error", err)
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("history: flush failed: %w", err)
 	}
+	return nil
 }
 
 func (h *History) trim(msgs []Message) []Message {
-	if h == nil || len(msgs) == 0 {
+	return trimMessages(msgs, maxHistoryTokens)
+}
+
+// trimMessages drops old turns until the estimated token budget is met.
+func trimMessages(msgs []Message, budget int) []Message {
+	if len(msgs) == 0 {
 		return msgs
 	}
-	for estimateTokens(msgs) > maxHistoryTokens && hasMultipleTurns(msgs) {
+	for estimateTokens(msgs) > budget && hasMultipleTurns(msgs) {
 		msgs = dropFirstTurn(msgs)
+	}
+	if estimateTokens(msgs) > budget {
+		msgs = truncateLastContents(msgs, budget)
+	}
+	return msgs
+}
+
+func truncateLastContents(msgs []Message, budget int) []Message {
+	for estimateTokens(msgs) > budget {
+		truncated := false
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				continue
+			}
+			runes := []rune(msgs[i].Content)
+			if len(runes) <= 50 {
+				continue
+			}
+			msgs[i].Content = string(runes[:len(runes)*3/4]) + "…"
+			truncated = true
+			break
+		}
+		if !truncated {
+			break
+		}
 	}
 	return msgs
 }
