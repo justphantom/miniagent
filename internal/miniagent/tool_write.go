@@ -1,0 +1,46 @@
+package miniagent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+type writefileArgs struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// WriteFileTool returns a write_file tool bound to workspaceRoot.
+func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
+	return Tool{
+		Name:        "write_file",
+		Description: "把 content 写入 workspace_root 内的文件（覆盖已有内容；自动创建父目录）。path 可相对 workspace_root 或绝对。",
+		Parameters: object(map[string]any{
+			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workspace_root 或绝对路径"},
+			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},
+		}, "path", "content"),
+		Call: func(_ context.Context, args string) ToolResult {
+			var a writefileArgs
+			if err := json.Unmarshal([]byte(args), &a); err != nil {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
+			}
+			if a.Path == "" {
+				return ToolResult{IsError: true, Output: "参数缺失：path"}
+			}
+			full, err := resolveToolPath(workspaceRoot, a.Path, unrestricted)
+			if err != nil {
+				return ToolResult{IsError: true, Output: err.Error()}
+			}
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("创建父目录失败：%v", err)}
+			}
+			if err := os.WriteFile(full, []byte(a.Content), 0o644); err != nil {
+				return ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
+			}
+			return ToolResult{Output: fmt.Sprintf("已写入 %d 字节到 %s", len(a.Content), a.Path)}
+		},
+	}
+}
