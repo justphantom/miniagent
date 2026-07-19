@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -150,17 +151,20 @@ func handleToolCalls(ctx context.Context, promptID string, step int, resp Respon
 	}
 	msgs = append(msgs, Message{Role: "assistant", ToolCalls: calls})
 
+	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且 emit 顺序确定。
 	for _, tc := range calls {
 		if err := emitSignal(Signal{Kind: SignalToolUse, Name: tc.Name, Input: tc.Args}); err != nil {
 			return msgs, err
 		}
-		tool, ok := toolByName[tc.Name]
-		var tres ToolResult
-		if !ok {
-			tres = ToolResult{IsError: true, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
-		} else {
-			tres = safeCall(ctx, logger, tool, tc.Name, tc.Args)
-		}
+	}
+
+	// 同一步内 LLM 一次发起的多个 tool_call 相互独立，串行会让总耗时 = Σ 单工具
+	// 耗时（shell/webfetch 各自可达数十秒）。并行执行，结果按原 index 回填，保证
+	// tool_result 信号与历史消息仍与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
+	results := runToolsParallel(ctx, logger, calls, toolByName)
+
+	for i, tc := range calls {
+		tres := results[i]
 		if logger != nil {
 			logger.Info("tool executed", "prompt_id", promptID, "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
 		}
@@ -170,6 +174,28 @@ func handleToolCalls(ctx context.Context, promptID string, step int, resp Respon
 		msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: truncateToolResult(tres.Output)})
 	}
 	return msgs, nil
+}
+
+// runToolsParallel 并行执行 calls，返回与 calls 同序的结果。
+// 各 goroutine 写入 results 的不同下标，无内存竞争；wg.Wait 提供 happens-before。
+// 未知工具在调度前短路，直接回填错误结果。每个 tool 的 panic 由 safeCall 兜底。
+func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall, toolByName map[string]Tool) []ToolResult {
+	results := make([]ToolResult, len(calls))
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		tool, ok := toolByName[tc.Name]
+		if !ok {
+			results[i] = ToolResult{IsError: true, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
+			continue
+		}
+		wg.Add(1)
+		go func(i int, tc ToolCall, tool Tool) {
+			defer wg.Done()
+			results[i] = safeCall(ctx, logger, tool, tc.Name, tc.Args)
+		}(i, tc, tool)
+	}
+	wg.Wait()
+	return results
 }
 
 func truncateToolResult(s string) string {

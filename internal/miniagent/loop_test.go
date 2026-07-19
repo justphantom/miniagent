@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeTransport queues raw HTTP response bodies for an HTTPClient.
@@ -281,5 +282,95 @@ func TestRun_StreamEmitsTextDelta(t *testing.T) {
 	}
 	if res.Usage.InputTokens != 2 {
 		t.Errorf("Usage = %+v", res.Usage)
+	}
+}
+
+// 一步内的多个 tool_call 必须并发执行：3 个工具都启动后才能 release 任一个，
+// 串行执行下最多只有 1 个工具会在 release 前启动。
+func TestRun_ToolsRunInParallel(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	mk := func(name string) Tool {
+		return Tool{
+			Name: name,
+			Call: func(context.Context, string) ToolResult {
+				started <- name
+				<-release
+				return ToolResult{Output: name}
+			},
+		}
+	}
+	tools := []Tool{mk("a"), mk("b"), mk("c")}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(
+			ToolCall{ID: "1", Name: "a", Args: "{}"},
+			ToolCall{ID: "2", Name: "b", Args: "{}"},
+			ToolCall{ID: "3", Name: "c", Args: "{}"},
+		),
+		textResponse("done"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = Run(context.Background(), llm, LoopConfig{Tools: tools}, "p1", "x", nil, nil, nil)
+		close(done)
+	}()
+
+	got := make(map[string]bool, 3)
+	for range 3 {
+		select {
+		case name := <-started:
+			got[name] = true
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only %d tools started before release, expected 3 (got %v)", len(got), got)
+		}
+	}
+	close(release)
+	<-done
+}
+
+// 并行执行下，tool_use 信号与历史 tool 消息仍按 LLM 给定的 tool_call 原序排列。
+func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
+	tools := []Tool{
+		{Name: "a", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "A"} }},
+		{Name: "b", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "B"} }},
+	}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(
+			ToolCall{ID: "1", Name: "b", Args: "{}"},
+			ToolCall{ID: "2", Name: "a", Args: "{}"},
+		),
+		textResponse("done"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	var uses []string
+	emit := func(s Signal) error {
+		if s.Kind == SignalToolUse {
+			uses = append(uses, s.Name)
+		}
+		return nil
+	}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "p1", "x", nil, emit, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(uses) != 2 || uses[0] != "b" || uses[1] != "a" {
+		t.Errorf("tool_use order = %v, want [b a]", uses)
+	}
+	var toolMsgs []Message
+	for _, m := range res.NewMessages {
+		if m.Role == "tool" {
+			toolMsgs = append(toolMsgs, m)
+		}
+	}
+	if len(toolMsgs) != 2 {
+		t.Fatalf("tool msgs = %d, want 2", len(toolMsgs))
+	}
+	if toolMsgs[0].ToolCallID != "1" || !strings.Contains(toolMsgs[0].Content, "B") {
+		t.Errorf("tool[0] = %+v, want id=1 content~B", toolMsgs[0])
+	}
+	if toolMsgs[1].ToolCallID != "2" || !strings.Contains(toolMsgs[1].Content, "A") {
+		t.Errorf("tool[1] = %+v, want id=2 content~A", toolMsgs[1])
 	}
 }
