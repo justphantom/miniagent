@@ -6,6 +6,7 @@ package miniagent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -83,7 +84,7 @@ func parseChatResponse(raw []byte) (Response, error) {
 		return Response{}, fmt.Errorf("parse llm response: %w", err)
 	}
 	if len(cr.Choices) == 0 {
-		return Response{}, fmt.Errorf("llm response had no choices")
+		return Response{}, errors.New("llm response had no choices")
 	}
 	ch := cr.Choices[0]
 	out := Response{

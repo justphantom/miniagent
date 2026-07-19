@@ -1,7 +1,7 @@
 package miniagent
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +16,7 @@ type MetaStore struct {
 // NewMetaStore builds a MetaStore rooted at {stateDir}/miniagent/meta.
 func NewMetaStore(stateDir string) (*MetaStore, error) {
 	if strings.TrimSpace(stateDir) == "" {
-		return nil, fmt.Errorf("miniagent: stateDir is empty")
+		return nil, errors.New("miniagent: stateDir is empty")
 	}
 	return &MetaStore{dir: filepath.Join(stateDir, "miniagent", "meta")}, nil
 }

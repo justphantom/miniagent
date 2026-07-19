@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,7 +23,7 @@ const maxWebFetchRedirects = 3
 func WebFetchTool(httpClient *http.Client) Tool {
 	return Tool{
 		Name:        "webfetch",
-		Description: "抓取一个 http(s) 网页并返回其纯文本内容（已去掉 script/style/HTML 标签，最长 " + fmt.Sprintf("%d", maxWebFetchChars) + " 字符）。",
+		Description: "抓取一个 http(s) 网页并返回其纯文本内容（已去掉 script/style/HTML 标签，最长 " + strconv.Itoa(maxWebFetchChars) + " 字符）。",
 		Parameters: object(map[string]any{
 			"url": map[string]any{"type": "string", "description": "要抓取的完整 http(s) URL"},
 		}, "url"),
@@ -79,7 +81,7 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 		return nil, fmt.Errorf("webfetch: invalid address %q", addr)
 	}
 	if host == "" {
-		return nil, fmt.Errorf("webfetch: empty host")
+		return nil, errors.New("webfetch: empty host")
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		if !isPublicIP(ip) {
@@ -89,7 +91,7 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	h := strings.ToLower(host)
 	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
-		return nil, fmt.Errorf("webfetch: localhost refused")
+		return nil, errors.New("webfetch: localhost refused")
 	}
 	addrs, err := (&net.Resolver{}).LookupHost(ctx, host)
 	if err != nil {

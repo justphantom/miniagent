@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -105,7 +106,7 @@ func formatLines(content string, offset, limit int) string {
 		return fmt.Sprintf("offset %d 超出文件行数（共 %d 行）", start, len(lines))
 	}
 	var sb strings.Builder
-	width := len(fmt.Sprintf("%d", end))
+	width := len(strconv.Itoa(end))
 	for i := start; i <= end; i++ {
 		fmt.Fprintf(&sb, "%*d │ %s\n", width, i, lines[i-1])
 	}

@@ -3,6 +3,7 @@ package miniagent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ type History struct {
 // NewHistory builds a History rooted at {stateDir}/miniagent/history.
 func NewHistory(stateDir string, logger *slog.Logger) (*History, error) {
 	if strings.TrimSpace(stateDir) == "" {
-		return nil, fmt.Errorf("miniagent: stateDir is empty")
+		return nil, errors.New("miniagent: stateDir is empty")
 	}
 	return &History{dir: filepath.Join(stateDir, "miniagent", "history"), logger: logger}, nil
 }
@@ -75,7 +76,7 @@ func (h *History) Append(chatID string, msgs []Message) error {
 		return nil
 	}
 	if chatID == "" {
-		return fmt.Errorf("history: chatID is empty")
+		return errors.New("history: chatID is empty")
 	}
 	if len(msgs) == 0 {
 		return nil

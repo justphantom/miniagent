@@ -2,7 +2,7 @@ package miniagent
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,7 +50,7 @@ type FactStore struct {
 // NewFactStore builds a FactStore rooted at {stateDir}/miniagent/memory.
 func NewFactStore(stateDir string, logger *slog.Logger) (*FactStore, error) {
 	if strings.TrimSpace(stateDir) == "" {
-		return nil, fmt.Errorf("miniagent: stateDir is empty")
+		return nil, errors.New("miniagent: stateDir is empty")
 	}
 	return &FactStore{
 		dir:    filepath.Join(stateDir, "miniagent", "memory"),
@@ -66,7 +66,7 @@ func (s *FactStore) scopedFile(scope FactScope, chatID string) (string, error) {
 		return filepath.Join(s.dir, "project.json"), nil
 	}
 	if chatID == "" {
-		return "", fmt.Errorf("memory: chatID is empty")
+		return "", errors.New("memory: chatID is empty")
 	}
 	return filepath.Join(s.dir, sanitizeChatID(chatID)+".json"), nil
 }
@@ -149,7 +149,7 @@ func (s *FactStore) Set(scope FactScope, chatID, key, value, source string) erro
 		return nil
 	}
 	if key == "" {
-		return fmt.Errorf("memory key cannot be empty")
+		return errors.New("memory key cannot be empty")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

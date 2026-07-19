@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,7 +51,7 @@ var allowedEnvVars = map[string]bool{
 func ShellTool(workspaceRoot string, unrestricted bool, blockedPatterns []string) Tool {
 	return Tool{
 		Name:        "shell",
-		Description: "在 workspace_root 下执行一条 shell 命令（sh -c）。返回 stdout+stderr 合并输出。命令最长运行 " + shellTimeout.String() + "；输出超过 " + fmt.Sprintf("%d", maxShellOutputChars) + " 字符会被截断。",
+		Description: "在 workspace_root 下执行一条 shell 命令（sh -c）。返回 stdout+stderr 合并输出。命令最长运行 " + shellTimeout.String() + "；输出超过 " + strconv.Itoa(maxShellOutputChars) + " 字符会被截断。",
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令，相对路径基于 workspace_root"},
 		}, "command"),
@@ -130,7 +132,7 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 
 func ensureWorkspaceDir(dir string) error {
 	if strings.TrimSpace(dir) == "" {
-		return fmt.Errorf("shell 未配置：workspace_root 为空")
+		return errors.New("shell 未配置：workspace_root 为空")
 	}
 	root, err := filepath.Abs(dir)
 	if err != nil {

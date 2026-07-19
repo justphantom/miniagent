@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +41,7 @@ func retryableStatus(code int) bool {
 // Do posts req to {BaseURL}/v1/chat/completions and parses the response.
 func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 	if c.APIKey == "" {
-		return Response{}, fmt.Errorf("miniagent: api_key is empty")
+		return Response{}, errors.New("miniagent: api_key is empty")
 	}
 	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
 	if err != nil || base.Scheme == "" || base.Host == "" {
@@ -118,7 +119,7 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string
 		return raw, resp.StatusCode, 0, fmt.Errorf("read response: %w", rerr)
 	}
 	if len(raw) > 1<<20 {
-		return raw[:1<<20], resp.StatusCode, 0, fmt.Errorf("response exceeded 1 MiB limit and was truncated")
+		return raw[:1<<20], resp.StatusCode, 0, errors.New("response exceeded 1 MiB limit and was truncated")
 	}
 	return raw, resp.StatusCode, parseRetryAfterHeader(resp.Header.Get("Retry-After")), nil
 }

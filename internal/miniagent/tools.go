@@ -1,6 +1,7 @@
 package miniagent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,7 +75,7 @@ func truncate(s string, n int, marker string) string {
 // resolveToolPath resolves a tool path under workspaceRoot or rejects it.
 func resolveToolPath(workspaceRoot, p string, unrestricted bool) (string, error) {
 	if workspaceRoot == "" {
-		return "", fmt.Errorf("未配置：workspace_root 为空")
+		return "", errors.New("未配置：workspace_root 为空")
 	}
 	if unrestricted {
 		full := p
