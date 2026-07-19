@@ -39,6 +39,26 @@ func main() {
 		showCurrent  = flag.Bool("show-current", false, "show current session/model/dir/permission for --chat-id, then exit")
 		useSession   = flag.String("use-session", "", "switch to session <id> for --chat-id, then exit")
 		delSession   = flag.String("del-session", "", "delete session <id> for --chat-id, then exit")
+
+		// Mutation subcommands. Each dispatches before the main conversation
+		// flow. The -set-* flags read their value from the existing -model/
+		// -workdir/-permission flags; to CLEAR a pin the bridge uses the
+		// explicit -clear-* flag (necessary because -permission has a
+		// non-empty default of "default", so empty-value-as-clear would be
+		// ambiguous for that one flag and inconsistent for the others).
+		newSession       = flag.Bool("new-session", false, "create a new session for --chat-id, then exit")
+		setModel         = flag.Bool("set-model", false, "set the model pin for --chat-id (reads value from -model), then exit")
+		clearModel       = flag.Bool("clear-model", false, "clear the model pin for --chat-id, then exit")
+		setDir           = flag.Bool("set-dir", false, "set the directory pin for --chat-id (reads value from -workdir), then exit")
+		clearDir         = flag.Bool("clear-dir", false, "clear the directory pin for --chat-id, then exit")
+		setPerm          = flag.Bool("set-permission", false, "set the permission pin for --chat-id (reads value from -permission), then exit")
+		clearPerm        = flag.Bool("clear-permission", false, "clear the permission pin for --chat-id, then exit")
+		memoryList       = flag.Bool("memory-list", false, "list long-term facts for --chat-id, then exit")
+		memoryDelete     = flag.String("memory-delete", "", "delete fact <key> for --chat-id, then exit")
+		memorySearch     = flag.String("memory-search", "", "search facts by substring <query> for --chat-id, then exit")
+		scope            = flag.String("scope", "chat", "scope for memory-* subcommands: chat|project|global")
+		prefix           = flag.String("prefix", "", "key prefix filter for --memory-list")
+		limit            = flag.Int("limit", 20, "max results for --memory-search")
 	)
 	flag.Parse()
 
@@ -69,6 +89,46 @@ func main() {
 	}
 	if *delSession != "" {
 		runDelSession(*stateDir, *chatID, *delSession)
+		return
+	}
+	if *newSession {
+		runNewSession(*stateDir, *chatID)
+		return
+	}
+	if *setModel {
+		runSetModel(*stateDir, *chatID, *model)
+		return
+	}
+	if *clearModel {
+		runSetModel(*stateDir, *chatID, "")
+		return
+	}
+	if *setDir {
+		runSetDir(*stateDir, *chatID, *workdir)
+		return
+	}
+	if *clearDir {
+		runSetDir(*stateDir, *chatID, "")
+		return
+	}
+	if *setPerm {
+		runSetPermission(*stateDir, *chatID, *permission)
+		return
+	}
+	if *clearPerm {
+		runSetPermission(*stateDir, *chatID, "")
+		return
+	}
+	if *memoryList {
+		runMemoryList(*stateDir, *chatID, *scope, *prefix)
+		return
+	}
+	if *memoryDelete != "" {
+		runMemoryDelete(*stateDir, *chatID, *scope, *memoryDelete)
+		return
+	}
+	if *memorySearch != "" {
+		runMemorySearch(*stateDir, *chatID, *scope, *memorySearch, *limit)
 		return
 	}
 

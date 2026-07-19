@@ -205,3 +205,33 @@ func (s *FactStore) Delete(scope FactScope, chatID, key string) error {
 	delete(facts, key)
 	return s.save(scope, chatID, facts)
 }
+
+// Search returns facts whose key or value contains query (case-insensitive),
+// sorted by key and truncated to limit (default 20 when limit <= 0). Used by
+// the -memory-search subcommand so the bridge does not duplicate the logic.
+func (s *FactStore) Search(scope FactScope, chatID, query string, limit int) ([]Fact, error) {
+	if s == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	q := strings.ToLower(query)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	facts, err := s.load(scope, chatID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Fact, 0, len(facts))
+	for _, f := range facts {
+		if strings.Contains(strings.ToLower(f.Key), q) || strings.Contains(strings.ToLower(f.Value), q) {
+			out = append(out, f)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}

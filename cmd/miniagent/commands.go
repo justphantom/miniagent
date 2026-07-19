@@ -168,6 +168,160 @@ func runDelSession(stateDir, chatID, sid string) {
 	fmt.Printf("deleted session %s\n", sid) //nolint:forbidigo // CLI 输出
 }
 
+// mustMeta builds a MetaStore and validates state-dir/chat-id, exiting with a
+// clear message on missing input. Used by the -set-* mutation subcommands.
+func mustMeta(stateDir, chatID, action string) *miniagent.MetaStore {
+	if stateDir == "" {
+		fmt.Fprintf(os.Stderr, "miniagent: --state-dir is required for --%s\n", action)
+		os.Exit(1)
+	}
+	if chatID == "" {
+		fmt.Fprintf(os.Stderr, "miniagent: --chat-id is required for --%s\n", action)
+		os.Exit(1)
+	}
+	m, err := miniagent.NewMetaStore(stateDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
+		os.Exit(1)
+	}
+	return m
+}
+
+// mustFacts builds a FactStore and validates state-dir/chat-id.
+func mustFacts(stateDir, chatID, action string) *miniagent.FactStore {
+	if stateDir == "" {
+		fmt.Fprintf(os.Stderr, "miniagent: --state-dir is required for --%s\n", action)
+		os.Exit(1)
+	}
+	if chatID == "" {
+		fmt.Fprintf(os.Stderr, "miniagent: --chat-id is required for --%s\n", action)
+		os.Exit(1)
+	}
+	f, err := miniagent.NewFactStore(stateDir, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: init memory: %v\n", err)
+		os.Exit(1)
+	}
+	return f
+}
+
+func runNewSession(stateDir, chatID string) {
+	h := mustHistory(stateDir, chatID, "new-session")
+	sid, err := h.NewSession(chatID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: new session: %v\n", err)
+		os.Exit(1)
+	}
+	out, _ := json.MarshalIndent(map[string]string{"session_id": sid}, "", "  ")
+	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+}
+
+func runSetModel(stateDir, chatID, model string) {
+	m := mustMeta(stateDir, chatID, "set-model")
+	if err := m.SetModel(chatID, model); err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: set model: %v\n", err)
+		os.Exit(1)
+	}
+	out, _ := json.MarshalIndent(map[string]string{"model": model}, "", "  ")
+	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+}
+
+func runSetDir(stateDir, chatID, dir string) {
+	m := mustMeta(stateDir, chatID, "set-dir")
+	if err := m.SetDirectory(chatID, dir); err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: set directory: %v\n", err)
+		os.Exit(1)
+	}
+	out, _ := json.MarshalIndent(map[string]string{"directory": dir}, "", "  ")
+	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+}
+
+func runSetPermission(stateDir, chatID, perm string) {
+	m := mustMeta(stateDir, chatID, "set-permission")
+	if err := m.SetPermission(chatID, perm); err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: set permission: %v\n", err)
+		os.Exit(1)
+	}
+	out, _ := json.MarshalIndent(map[string]string{"permission": perm}, "", "  ")
+	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+}
+
+// factOut is the JSON shape for -memory-list and -memory-search results.
+type factOut struct {
+	Key       string `json:"key"`
+	Value     string `json:"value"`
+	Scope     string `json:"scope"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func runMemoryList(stateDir, chatID, scope, prefix string) {
+	f := mustFacts(stateDir, chatID, "memory-list")
+	s := miniagent.ParseFactScope(scope)
+	facts, err := f.List(s, chatID, prefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: list memory: %v\n", err)
+		os.Exit(1)
+	}
+	out := make([]factOut, 0, len(facts)) // empty array (not null) when no facts
+	for _, fact := range facts {
+		out = append(out, factOut{
+			Key:       fact.Key,
+			Value:     fact.Value,
+			Scope:     string(s),
+			UpdatedAt: fact.UpdatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: marshal memory: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出
+}
+
+func runMemoryDelete(stateDir, chatID, scope, key string) {
+	f := mustFacts(stateDir, chatID, "memory-delete")
+	s := miniagent.ParseFactScope(scope)
+	_, existed, err := f.Get(s, chatID, key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: lookup memory: %v\n", err)
+		os.Exit(1)
+	}
+	if existed {
+		if err := f.Delete(s, chatID, key); err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: delete memory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	out, _ := json.MarshalIndent(map[string]bool{"existed": existed}, "", "  ")
+	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+}
+
+func runMemorySearch(stateDir, chatID, scope, query string, limit int) {
+	f := mustFacts(stateDir, chatID, "memory-search")
+	s := miniagent.ParseFactScope(scope)
+	facts, err := f.Search(s, chatID, query, limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: search memory: %v\n", err)
+		os.Exit(1)
+	}
+	out := make([]factOut, 0, len(facts))
+	for _, fact := range facts {
+		out = append(out, factOut{
+			Key:       fact.Key,
+			Value:     fact.Value,
+			Scope:     string(s),
+			UpdatedAt: fact.UpdatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: marshal search: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出
+}
+
 // toolConfig 是 buildTools 的入参，把 main 的 flag 解析结果集中传递，
 // 避免函数签名挂一长串 *string。
 type toolConfig struct {
