@@ -82,8 +82,9 @@ linters:
     # ===== 不开启（与项目哲学冲突）=====
     # - varnamelen    : 禁用短变量名，违反 Go 惯用法（i/n/s/m）
     # - wsl / wsl_v5  : 强制空行风格，过严且主观
-    # - funlen        : 函数长度，AGENTS.md 已限定单文件 300 行
-    # - cyclop/gocognit/gocyclo/maintidx : 复杂度，已用 funlen 兜底
+    # - funlen        : 函数长度，AGENTS.md 已限定单函数职责
+    # - cyclop/gocognit/gocyclo/maintidx : 复杂度，手写 HTML tokenizer
+    #                  为避免引入第三方依赖而保留高复杂度，属合理取舍
     # - lll           : 行长，AGENTS.md 未限定行长
     # - mnd           : 魔法数字，标准库代码大量魔法数（如 1<<20）
     # - exhaustruct   : 结构体必须全字段初始化，过严
@@ -107,15 +108,20 @@ linters:
     # - dupl          : 重复代码检测，噪音大
     # - dogsled       : 禁用 _ 占位，过严
     # - gosec 的 G302/G304 等需要 file 级别判断，见 settings 处理
+    #
+    # 以下 disable 段是 --default=all 模式下的"黑名单"：default=standard 时
+    # 这些 linter 本就不会启用，此处仅为了让 golangci-lint run --default=all
+    # 也能通过。每项附理由。
 
   disable:
     - depguard       # 需要显式依赖白名单；cmd 引用 internal/miniagent 是 monorepo 正常结构
     - err113         # 强制 error 作 sentinel，与项目"标准库优先"约定冲突
     - exhaustruct    # 强制结构体全字段初始化，过严；HTTPClient 等结构体允许零值
+    - funcorder      # 强制导出方法在前；本项目测试依赖包内方法顺序，已通过重构满足但不愿受约束
     - gochecknoglobals # 禁止所有包级 var 过严；retryDelays/version 等合理使用
-    - gocognit       # 认知复杂度；手写 HTML tokenizer 等合理场景复杂度高，已用 funlen 兜底
+    - gocognit       # 认知复杂度；手写 HTML tokenizer 为避免第三方依赖而保留高复杂度
     - goconst        # JSON tag/map key/role 字符串反复出现是结构需要，提常量降低可读性
-    - gocyclo        # 圈复杂度；与 gocognit 一致，已用 funlen 兜底
+    - gocyclo        # 圈复杂度；与 gocognit 一致，手写 tokenizer 合理取舍
     - godoclint      # 包注释格式；项目无 godoc 需求
     - gosmopolitan   # i18n 检查；项目明确中文输出
     - lll            # 行长度；AGENTS.md 未限定行长
@@ -146,10 +152,6 @@ linters:
       disabled-checks:
         - hugeParam       # 大结构体按值传递（项目无此问题）
         - rangeValCopy    # range 值拷贝（项目用 index 访问）
-
-    goconst:
-      min-len: 4         # 字符串最短 4 才提示提常量
-      min-occurrences: 4 # 至少出现 4 次（默认 3，调宽降噪音）
 
     revive:
       # 精选 revive 规则，避开过严项
@@ -215,11 +217,6 @@ linters:
       - path: ^cmd/
         linters: [forbidigo, gocritic]
         text: "fmt\\.Print|print|println"
-
-      # version 变量由 ldflags 注入，必须用 var 而非 const
-      - path: ^cmd/miniagent/main\.go$
-        linters: [gochecknoglobals]
-        text: "version"
 
       # errcheck 对 defer Close 的检查：Go 惯用法是只读关闭后忽略错误，
       # 用 _ = 显式忽略已表达意图
