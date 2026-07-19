@@ -40,62 +40,24 @@ func retryableStatus(code int) bool {
 
 // Do posts req to {BaseURL}/v1/chat/completions and parses the response.
 func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
-	if c.APIKey == "" {
-		return Response{}, errors.New("miniagent: api_key is empty")
-	}
-	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
-	if err != nil || base.Scheme == "" || base.Host == "" {
-		return Response{}, fmt.Errorf("miniagent: base_url %q is invalid", c.BaseURL)
-	}
-	client := c.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: 120 * time.Second}
-	}
-	body, err := buildChatBody(req)
+	client, u, body, err := c.prepareDo(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("build request body: %w", err)
+		return Response{}, err
 	}
-	u := base.JoinPath("/v1/chat/completions")
 	if c.Logger != nil {
 		c.Logger.Debug("http request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
 	}
+	return c.executeChat(ctx, client, u.String(), body)
+}
 
-	var lastErr error
-	for attempt := 0; ; attempt++ {
-		raw, status, raHeader, err := c.doOnce(ctx, client, u.String(), body)
-		if err == nil && status == http.StatusOK {
-			if c.Logger != nil {
-				c.Logger.Debug("http response", "status", status, "bytes", len(raw), "attempt", attempt)
-			}
-			return parseChatResponse(raw)
-		}
-		if err != nil {
-			lastErr = fmt.Errorf("llm request: %w", err)
-		} else {
-			lastErr = fmt.Errorf("llm returned %d: %s", status, truncate(string(raw), 500, "…"))
-		}
-		if err != nil || !retryableStatus(status) || attempt >= len(retryDelays) {
-			return Response{}, lastErr
-		}
-		delay := retryDelays[attempt]
-		// Retry-After 优先：HTTP 头是标准做法，body 里的 retry_after 是部分厂商扩展。
-		// 取 header 与 body 的较大值，保守退避。
-		if ra := raHeader; ra > delay {
-			delay = ra
-		}
-		if ra := parseRetryAfter(raw); ra > delay {
-			delay = ra
-		}
-		const maxRetryDelay = 60 * time.Second
-		if delay > maxRetryDelay {
-			delay = maxRetryDelay
-		}
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return Response{}, ctx.Err()
-		}
+// ListModels calls GET {BaseURL}/v1/models and returns the model ids.
+// 与 Do 共用重试策略与 body 上限，避免异常端点返回超大 body 拖垮内存。
+func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
+	client, u, err := c.prepareListModels()
+	if err != nil {
+		return nil, err
 	}
+	return c.executeListModels(ctx, client, u)
 }
 
 func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string, body []byte) (raw []byte, status int, retryAfter time.Duration, err error) {
@@ -124,59 +86,6 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, url string
 	return raw, resp.StatusCode, parseRetryAfterHeader(resp.Header.Get("Retry-After")), nil
 }
 
-// ListModels calls GET {BaseURL}/v1/models and returns the model ids.
-// ListModels calls GET {BaseURL}/v1/models and returns the model ids.
-// 与 Do 共用重试策略与 body 上限，避免异常端点返回超大 body 拖垮内存。
-const maxModelsBodyBytes = 4 << 20 // 4 MiB
-
-func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
-	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
-	if err != nil || base.Scheme == "" || base.Host == "" {
-		return nil, fmt.Errorf("miniagent: base_url %q is invalid", c.BaseURL)
-	}
-	client := c.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
-	u := base.JoinPath("/v1/models").String()
-
-	var lastErr error
-	for attempt := 0; ; attempt++ {
-		raw, status, err := c.doGetOnce(ctx, client, u)
-		if err == nil && status == http.StatusOK {
-			var v struct {
-				Data []struct {
-					ID string `json:"id"`
-				} `json:"data"`
-			}
-			if err := json.Unmarshal(raw, &v); err != nil {
-				return nil, fmt.Errorf("parse models: %w", err)
-			}
-			out := make([]string, 0, len(v.Data))
-			for _, m := range v.Data {
-				if m.ID != "" {
-					out = append(out, m.ID)
-				}
-			}
-			return out, nil
-		}
-		if err != nil {
-			lastErr = fmt.Errorf("list models: %w", err)
-		} else {
-			lastErr = fmt.Errorf("list models: %d", status)
-		}
-		if err != nil || !retryableStatus(status) || attempt >= len(retryDelays) {
-			return nil, lastErr
-		}
-		delay := retryDelays[attempt]
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
 // doGetOnce 是 ListModels 的单次 GET，返回原始 body 用于复用 parseRetryAfter。
 func (c *HTTPClient) doGetOnce(ctx context.Context, client *http.Client, url string) (raw []byte, status int, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -197,6 +106,127 @@ func (c *HTTPClient) doGetOnce(ctx context.Context, client *http.Client, url str
 		return raw[:maxModelsBodyBytes], resp.StatusCode, fmt.Errorf("models response exceeded %d bytes", maxModelsBodyBytes)
 	}
 	return raw, resp.StatusCode, nil
+}
+
+func (c *HTTPClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, error) {
+	if c.APIKey == "" {
+		return nil, nil, nil, errors.New("miniagent: api_key is empty")
+	}
+	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return nil, nil, nil, fmt.Errorf("miniagent: base_url %q is invalid", c.BaseURL)
+	}
+	client := c.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 120 * time.Second}
+	}
+	body, err := buildChatBody(req)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build request body: %w", err)
+	}
+	return client, base.JoinPath("/v1/chat/completions"), body, nil
+}
+
+func (c *HTTPClient) executeChat(ctx context.Context, client *http.Client, url string, body []byte) (Response, error) {
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		raw, status, raHeader, err := c.doOnce(ctx, client, url, body)
+		if err == nil && status == http.StatusOK {
+			if c.Logger != nil {
+				c.Logger.Debug("http response", "status", status, "bytes", len(raw), "attempt", attempt)
+			}
+			return parseChatResponse(raw)
+		}
+
+		lastErr = formatDoErr(raw, status, err)
+		if err != nil || !retryableStatus(status) || attempt >= len(retryDelays) {
+			return Response{}, lastErr
+		}
+
+		if err := sleepRetry(ctx, attempt, raHeader, raw); err != nil {
+			return Response{}, err
+		}
+	}
+}
+
+func (c *HTTPClient) prepareListModels() (*http.Client, string, error) {
+	base, err := url.Parse(strings.TrimRight(c.BaseURL, "/"))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return nil, "", fmt.Errorf("miniagent: base_url %q is invalid", c.BaseURL)
+	}
+	client := c.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	return client, base.JoinPath("/v1/models").String(), nil
+}
+
+func (c *HTTPClient) executeListModels(ctx context.Context, client *http.Client, url string) ([]string, error) {
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		raw, status, err := c.doGetOnce(ctx, client, url)
+		if err == nil && status == http.StatusOK {
+			return parseModels(raw)
+		}
+
+		lastErr = formatListModelsErr(status, err)
+		if err != nil || !retryableStatus(status) || attempt >= len(retryDelays) {
+			return nil, lastErr
+		}
+
+		if err := sleepRetry(ctx, attempt, 0, raw); err != nil {
+			return nil, err
+		}
+	}
+}
+
+const maxModelsBodyBytes = 4 << 20 // 4 MiB
+
+func parseModels(raw []byte) ([]string, error) {
+	var v struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, fmt.Errorf("parse models: %w", err)
+	}
+	out := make([]string, 0, len(v.Data))
+	for _, m := range v.Data {
+		if m.ID != "" {
+			out = append(out, m.ID)
+		}
+	}
+	return out, nil
+}
+
+func formatDoErr(raw []byte, status int, err error) error {
+	if err != nil {
+		return fmt.Errorf("llm request: %w", err)
+	}
+	return fmt.Errorf("llm returned %d: %s", status, truncate(string(raw), 500, "…"))
+}
+
+func formatListModelsErr(status int, err error) error {
+	if err != nil {
+		return fmt.Errorf("list models: %w", err)
+	}
+	return fmt.Errorf("list models: %d", status)
+}
+
+func sleepRetry(ctx context.Context, attempt int, raHeader time.Duration, raw []byte) error {
+	delay := retryDelays[attempt]
+	// Retry-After 优先：HTTP 头是标准做法，body 里的 retry_after 是部分厂商扩展。
+	// 取 header 与 body 的较大值，保守退避。
+	delay = max(delay, raHeader, parseRetryAfter(raw))
+	const maxRetryDelay = 60 * time.Second
+	delay = min(delay, maxRetryDelay)
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func parseRetryAfter(body []byte) time.Duration {

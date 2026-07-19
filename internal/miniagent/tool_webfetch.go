@@ -89,28 +89,36 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
-	h := strings.ToLower(host)
-	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+	if isLocalhost(host) {
 		return nil, errors.New("webfetch: localhost refused")
 	}
+	selected, err := resolvePublicAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(selected, port))
+}
+
+func isLocalhost(host string) bool {
+	h := strings.ToLower(host)
+	return h == "localhost" || strings.HasSuffix(h, ".localhost")
+}
+
+func resolvePublicAddr(ctx context.Context, host string) (string, error) {
 	addrs, err := (&net.Resolver{}).LookupHost(ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("webfetch: resolve %q: %w", host, err)
+		return "", fmt.Errorf("webfetch: resolve %q: %w", host, err)
 	}
 	if len(addrs) == 0 {
-		return nil, fmt.Errorf("webfetch: no addresses for %q", host)
+		return "", fmt.Errorf("webfetch: no addresses for %q", host)
 	}
-	var selected string
 	for _, a := range addrs {
 		ip := net.ParseIP(a)
 		if ip == nil || !isPublicIP(ip) {
-			return nil, fmt.Errorf("webfetch: private address refused for %q", host)
-		}
-		if selected == "" {
-			selected = a
+			return "", fmt.Errorf("webfetch: private address refused for %q", host)
 		}
 	}
-	return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(selected, port))
+	return addrs[0], nil
 }
 
 // isPublicIP 仅在所有内置非公网判定之外，再叠加 IPv6 协议嵌套段：
@@ -231,110 +239,153 @@ var blockTags = map[string]bool{
 // It skips script/style/title/noscript, inserts newlines for block tags,
 // and strips remaining tags.
 func htmlToText(body []byte) string {
-	var out strings.Builder
-	var skipDepth int
-	var lastTag string
-	var inTag bool
-	var tagName strings.Builder
-	var text strings.Builder
-	flushText := func() {
-		if text.Len() == 0 {
-			return
-		}
-		s := strings.TrimSpace(text.String())
-		text.Reset()
-		if s == "" {
-			return
-		}
-		if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") && !strings.HasSuffix(out.String(), " ") {
-			out.WriteByte(' ')
-		}
-		out.WriteString(s)
-	}
-	for i := 0; i < len(body); i++ {
-		b := body[i]
-		if inTag {
+	t := &htmlTokenizer{body: body}
+	return t.parse()
+}
+
+type htmlTokenizer struct {
+	body      []byte
+	out       strings.Builder
+	text      strings.Builder
+	tagName   strings.Builder
+	skipDepth int
+	lastTag   string
+	inTag     bool
+}
+
+func (t *htmlTokenizer) parse() string {
+	for i := 0; i < len(t.body); i++ {
+		b := t.body[i]
+		if t.inTag {
 			if b == '>' {
-				inTag = false
-				raw := tagName.String()
-				tagName.Reset()
-				closing := false
-				if strings.HasPrefix(raw, "/") {
-					closing = true
-					raw = raw[1:]
-				}
-				name, _, _ := strings.Cut(raw, " ")
-				name = strings.ToLower(name)
-				if closing {
-					if skipDepth > 0 && (skipTags[name] || (name != "" && lastTag == name)) {
-						skipDepth--
-						if skipDepth == 0 {
-							lastTag = ""
-						}
-					}
-					if skipDepth == 0 && blockTags[name] {
-						flushText()
-						if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
-							out.WriteByte('\n')
-						}
-					}
-				} else {
-					if skipTags[name] {
-						flushText()
-						skipDepth++
-						lastTag = name
-					} else if skipDepth == 0 && blockTags[name] {
-						flushText()
-						if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
-							out.WriteByte('\n')
-						}
-					}
-				}
+				t.inTag = false
+				t.handleTagEnd()
 				continue
 			}
-			if tagName.Len() == 0 && b == '/' {
-				tagName.WriteByte('/')
-			} else if b != ' ' && b != '\t' && b != '\n' && b != '\r' && b != '/' {
-				tagName.WriteByte(b)
-			} else if tagName.Len() > 0 && b == ' ' {
-				tagName.WriteByte(' ')
-			}
+			t.handleTagChar(b)
 			continue
 		}
 		if b == '<' {
-			// 拦截 HTML 注释与 CDATA：直接找到对应结束标记，避免其中的 >
-			// 提前关闭 tag 解析（畸形 HTML 可能导致异常或泄漏注释内容）。
-			if rest := body[i:]; bytes.HasPrefix(rest, []byte("<!--")) {
-				if end := bytes.Index(body[i+4:], []byte("-->")); end >= 0 {
-					i += 4 + end + 2
-					continue
-				}
-				i = len(body) - 1
+			if end, ok := t.skipComment(i); ok {
+				i = end
 				continue
 			}
-			if rest := body[i:]; bytes.HasPrefix(rest, []byte("<![CDATA[")) {
-				start := i + 9
-				if end := bytes.Index(body[start:], []byte("]]>")); end >= 0 {
-					if skipDepth == 0 {
-						text.Write(body[start : start+end])
-					}
-					i = start + end + 2
-					continue
-				}
-				if skipDepth == 0 {
-					text.Write(body[start:])
-				}
-				i = len(body) - 1
+			if end, ok := t.readCDATA(i); ok {
+				i = end
 				continue
 			}
-			flushText()
-			inTag = true
+			t.flushText()
+			t.inTag = true
 			continue
 		}
-		if skipDepth == 0 {
-			text.WriteByte(b)
+		if t.skipDepth == 0 {
+			t.text.WriteByte(b)
 		}
 	}
-	flushText()
-	return strings.TrimSpace(out.String())
+	t.flushText()
+	return strings.TrimSpace(t.out.String())
+}
+
+func (t *htmlTokenizer) flushText() {
+	if t.text.Len() == 0 {
+		return
+	}
+	s := strings.TrimSpace(t.text.String())
+	t.text.Reset()
+	if s == "" {
+		return
+	}
+	if t.out.Len() > 0 && !strings.HasSuffix(t.out.String(), "\n") && !strings.HasSuffix(t.out.String(), " ") {
+		t.out.WriteByte(' ')
+	}
+	t.out.WriteString(s)
+}
+
+func (t *htmlTokenizer) writeNewline() {
+	if t.out.Len() > 0 && !strings.HasSuffix(t.out.String(), "\n") {
+		t.out.WriteByte('\n')
+	}
+}
+
+func (t *htmlTokenizer) handleTagEnd() {
+	raw := t.tagName.String()
+	t.tagName.Reset()
+	closing := false
+	if strings.HasPrefix(raw, "/") {
+		closing = true
+		raw = raw[1:]
+	}
+	name, _, _ := strings.Cut(raw, " ")
+	name = strings.ToLower(name)
+	if closing {
+		t.handleCloseTag(name)
+	} else {
+		t.handleOpenTag(name)
+	}
+}
+
+func (t *htmlTokenizer) handleOpenTag(name string) {
+	if skipTags[name] {
+		t.flushText()
+		t.skipDepth++
+		t.lastTag = name
+		return
+	}
+	if t.skipDepth == 0 && blockTags[name] {
+		t.flushText()
+		t.writeNewline()
+	}
+}
+
+func (t *htmlTokenizer) handleCloseTag(name string) {
+	if t.skipDepth > 0 && (skipTags[name] || (name != "" && t.lastTag == name)) {
+		t.skipDepth--
+		if t.skipDepth == 0 {
+			t.lastTag = ""
+		}
+	}
+	if t.skipDepth == 0 && blockTags[name] {
+		t.flushText()
+		t.writeNewline()
+	}
+}
+
+func (t *htmlTokenizer) handleTagChar(b byte) {
+	switch {
+	case t.tagName.Len() == 0 && b == '/':
+		t.tagName.WriteByte('/')
+	case b != ' ' && b != '\t' && b != '\n' && b != '\r' && b != '/':
+		t.tagName.WriteByte(b)
+	case t.tagName.Len() > 0 && b == ' ':
+		t.tagName.WriteByte(' ')
+	}
+}
+
+// skipComment 跳过 HTML 注释。返回 (新位置, true) 表示成功跳过；否则返回 (i, false)。
+func (t *htmlTokenizer) skipComment(i int) (int, bool) {
+	if !bytes.HasPrefix(t.body[i:], []byte("<!--")) {
+		return i, false
+	}
+	if end := bytes.Index(t.body[i+4:], []byte("-->")); end >= 0 {
+		return i + 4 + end + 2, true
+	}
+	return len(t.body) - 1, true
+}
+
+// readCDATA 读取 CDATA 内容。返回 (新位置, true) 表示成功处理；否则返回 (i, false)。
+func (t *htmlTokenizer) readCDATA(i int) (int, bool) {
+	if !bytes.HasPrefix(t.body[i:], []byte("<![CDATA[")) {
+		return i, false
+	}
+	start := i + 9
+	if end := bytes.Index(t.body[start:], []byte("]]>")); end >= 0 {
+		if t.skipDepth == 0 {
+			t.text.Write(t.body[start : start+end])
+		}
+		return start + end + 2, true
+	}
+	if t.skipDepth == 0 {
+		t.text.Write(t.body[start:])
+	}
+	return len(t.body) - 1, true
 }

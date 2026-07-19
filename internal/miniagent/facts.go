@@ -58,76 +58,6 @@ func NewFactStore(stateDir string, logger *slog.Logger) (*FactStore, error) {
 	}, nil
 }
 
-func (s *FactStore) scopedFile(scope FactScope, chatID string) (string, error) {
-	if scope == ScopeGlobal {
-		return filepath.Join(s.dir, "global.json"), nil
-	}
-	if scope == ScopeProject {
-		return filepath.Join(s.dir, "project.json"), nil
-	}
-	if chatID == "" {
-		return "", errors.New("memory: chatID is empty")
-	}
-	return filepath.Join(s.dir, sanitizeChatID(chatID)+".json"), nil
-}
-
-func (s *FactStore) load(scope FactScope, chatID string) (map[string]Fact, error) {
-	path, err := s.scopedFile(scope, chatID)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path) //nolint:gosec // G304: path 由内部 stateDir/chatID 派生，且 FactStore 仅在内部调用
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]Fact{}, nil
-		}
-		return nil, err
-	}
-	out := map[string]Fact{}
-	if len(data) == 0 {
-		return out, nil
-	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		if s.logger != nil {
-			s.logger.Warn("corrupt fact file, resetting", "path", path, "error", err)
-		}
-		return map[string]Fact{}, nil
-	}
-	return out, nil
-}
-
-func (s *FactStore) save(scope FactScope, chatID string, facts map[string]Fact) error {
-	path, err := s.scopedFile(scope, chatID)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(s.dir, 0o750); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(s.dir, ".memory-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpName) }
-	enc := json.NewEncoder(tmp)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(facts); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
-}
-
 // Get returns one fact. ok is false when the key is absent or memory is off.
 func (s *FactStore) Get(scope FactScope, chatID, key string) (Fact, bool, error) {
 	if s == nil {
@@ -234,4 +164,74 @@ func (s *FactStore) Search(scope FactScope, chatID, query string, limit int) ([]
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+func (s *FactStore) scopedFile(scope FactScope, chatID string) (string, error) {
+	if scope == ScopeGlobal {
+		return filepath.Join(s.dir, "global.json"), nil
+	}
+	if scope == ScopeProject {
+		return filepath.Join(s.dir, "project.json"), nil
+	}
+	if chatID == "" {
+		return "", errors.New("memory: chatID is empty")
+	}
+	return filepath.Join(s.dir, sanitizeChatID(chatID)+".json"), nil
+}
+
+func (s *FactStore) load(scope FactScope, chatID string) (map[string]Fact, error) {
+	path, err := s.scopedFile(scope, chatID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path 由内部 stateDir/chatID 派生，且 FactStore 仅在内部调用
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]Fact{}, nil
+		}
+		return nil, err
+	}
+	out := map[string]Fact{}
+	if len(data) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("corrupt fact file, resetting", "path", path, "error", err)
+		}
+		return map[string]Fact{}, nil
+	}
+	return out, nil
+}
+
+func (s *FactStore) save(scope FactScope, chatID string, facts map[string]Fact) error {
+	path, err := s.scopedFile(scope, chatID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.dir, 0o750); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(s.dir, ".memory-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	enc := json.NewEncoder(tmp)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(facts); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }

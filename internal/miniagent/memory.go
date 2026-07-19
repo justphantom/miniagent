@@ -83,17 +83,29 @@ func (h *History) Append(chatID string, msgs []Message) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	path := h.resolve(chatID)
-	if path == "" {
-		sid := newSessionID(now())
-		if err := h.writeCur(chatID, sid); err != nil {
-			return fmt.Errorf("history: session pointer failed: %w", err)
-		}
-		path = h.sessionPath(chatID, sid)
+	path, err := h.ensurePath(chatID)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(h.dir, 0o750); err != nil {
 		return fmt.Errorf("history: mkdir failed: %w", err)
 	}
+	return h.appendToFile(path, msgs)
+}
+
+func (h *History) ensurePath(chatID string) (string, error) {
+	path := h.resolve(chatID)
+	if path != "" {
+		return path, nil
+	}
+	sid := newSessionID(now())
+	if err := h.writeCur(chatID, sid); err != nil {
+		return "", fmt.Errorf("history: session pointer failed: %w", err)
+	}
+	return h.sessionPath(chatID, sid), nil
+}
+
+func (h *History) appendToFile(path string, msgs []Message) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: path 由内部 sessionPath 派生
 	if err != nil {
 		return fmt.Errorf("history: open failed: %w", err)

@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,48 +36,77 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			var a readfileArgs
-			if err := json.Unmarshal([]byte(args), &a); err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
-			}
-			if a.Path == "" {
-				return ToolResult{IsError: true, Output: "参数缺失：path"}
-			}
-			if a.Offset < 0 {
-				a.Offset = 0
-			}
-
-			full, err := resolveToolPath(workspaceRoot, a.Path, unrestricted)
-			if err != nil {
-				return ToolResult{IsError: true, Output: err.Error()}
-			}
-
-			info, err := os.Stat(full)
-			if err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("无法访问 %q：%v", a.Path, err)}
-			}
-			if info.IsDir() {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是目录，不是文件", a.Path)}
-			}
-			if info.Size() > maxReadFileBytes {
-				return ToolResult{Output: truncate(readFileLimited(full), maxReadFileChars, "…")}
-			}
-			f, err := openNoFollow(full, os.O_RDONLY, 0)
-			if err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
-			}
-			defer func() { _ = f.Close() }()
-			data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
-			if err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
-			}
-			content := string(data)
-			if a.Offset == 0 && a.Limit == 0 {
-				return ToolResult{Output: truncate(content, maxReadFileChars, "…")}
-			}
-			return ToolResult{Output: truncate(formatLines(content, a.Offset, a.Limit), maxReadFileChars, "…")}
+			return runReadFile(workspaceRoot, unrestricted, args)
 		},
 	}
+}
+
+func runReadFile(workspaceRoot string, unrestricted bool, args string) ToolResult {
+	a, err := parseReadArgs(args)
+	if err != nil {
+		return ToolResult{IsError: true, Output: err.Error()}
+	}
+	full, info, err := resolveReadTarget(workspaceRoot, a.Path, unrestricted)
+	if err != nil {
+		return ToolResult{IsError: true, Output: err.Error()}
+	}
+	content, err := readFileContent(full, info)
+	if err != nil {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+	}
+	return ToolResult{Output: truncate(formatReadOutput(content, a.Offset, a.Limit), maxReadFileChars, "…")}
+}
+
+func parseReadArgs(args string) (readfileArgs, error) {
+	var a readfileArgs
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return readfileArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
+	}
+	if a.Path == "" {
+		return readfileArgs{}, errors.New("参数缺失：path")
+	}
+	if a.Offset < 0 {
+		a.Offset = 0
+	}
+	return a, nil
+}
+
+func resolveReadTarget(workspaceRoot, path string, unrestricted bool) (string, os.FileInfo, error) {
+	full, err := resolveToolPath(workspaceRoot, path, unrestricted)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return "", nil, err
+	}
+	if info.IsDir() {
+		return "", nil, fmt.Errorf("%q 是目录，不是文件", path)
+	}
+	return full, info, nil
+}
+
+func readFileContent(full string, info os.FileInfo) (string, error) {
+	if info.Size() > maxReadFileBytes {
+		return readFileLimited(full), nil
+	}
+	f, err := openNoFollow(full, os.O_RDONLY, 0)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func formatReadOutput(content string, offset, limit int) string {
+	if offset == 0 && limit == 0 {
+		return content
+	}
+	return formatLines(content, offset, limit)
 }
 
 func readFileLimited(path string) string {

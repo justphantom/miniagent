@@ -46,7 +46,7 @@ func textResponse(text string) string {
 }
 
 func toolResponse(calls ...ToolCall) string {
-	var tcs []string
+	tcs := make([]string, 0, len(calls))
 	for _, c := range calls {
 		tcs = append(tcs, fmt.Sprintf(`{"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}`, c.ID, c.Name, c.Args))
 	}

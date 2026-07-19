@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,57 +32,81 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			var a editfileArgs
-			if err := json.Unmarshal([]byte(args), &a); err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
-			}
-			if a.Path == "" {
-				return ToolResult{IsError: true, Output: "参数缺失：path"}
-			}
-			if a.OldString == "" {
-				return ToolResult{IsError: true, Output: "参数缺失：old_string（不能为空）"}
-			}
-			if a.OldString == a.NewString {
-				return ToolResult{IsError: true, Output: "old_string 与 new_string 相同，无需替换"}
-			}
-			full, err := resolveToolPath(workspaceRoot, a.Path, unrestricted)
-			if err != nil {
-				return ToolResult{IsError: true, Output: err.Error()}
-			}
-			info, err := os.Lstat(full)
-			if err == nil && info.Mode()&os.ModeSymlink != 0 {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是符号链接，拒绝编辑", a.Path)}
-			}
-			if err == nil && info.Size() > maxEditFileBytes {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
-			}
-			f, err := openNoFollow(full, os.O_RDONLY, 0)
-			if err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
-			}
-			defer func() { _ = f.Close() }()
-			data, err := io.ReadAll(f)
-			if err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
-			}
-			content := string(data)
-			count := strings.Count(content, a.OldString)
-			switch count {
-			case 0:
-				return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中未找到。文件可能已被修改，请先 read_file 查看当前内容。", a.Path)}
-			case 1:
-			default:
-				return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中出现 %d 次。请提供更多上下文（扩大 old_string 范围）使其唯一匹配。", a.Path, count)}
-			}
-			updated := strings.Replace(content, a.OldString, a.NewString, 1)
-			mode := os.FileMode(0o644)
-			if info != nil {
-				mode = info.Mode().Perm()
-			}
-			if err := writeFileAtomic(full, []byte(updated), mode); err != nil {
-				return ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
-			}
-			return ToolResult{Output: fmt.Sprintf("已替换 %q 中的 1 处文本（%d → %d 字节）", a.Path, len(content), len(updated))}
+			return runEditFile(workspaceRoot, unrestricted, args)
 		},
 	}
+}
+
+func runEditFile(workspaceRoot string, unrestricted bool, args string) ToolResult {
+	a, err := parseEditArgs(args)
+	if err != nil {
+		return ToolResult{IsError: true, Output: err.Error()}
+	}
+	full, info, err := resolveEditTarget(workspaceRoot, a.Path, unrestricted)
+	if err != nil {
+		return ToolResult{IsError: true, Output: err.Error()}
+	}
+	return applyEdit(full, info, a)
+}
+
+func parseEditArgs(args string) (editfileArgs, error) {
+	var a editfileArgs
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return editfileArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
+	}
+	if a.Path == "" {
+		return editfileArgs{}, errors.New("参数缺失：path")
+	}
+	if a.OldString == "" {
+		return editfileArgs{}, errors.New("参数缺失：old_string（不能为空）")
+	}
+	if a.OldString == a.NewString {
+		return editfileArgs{}, errors.New("old_string 与 new_string 相同，无需替换")
+	}
+	return a, nil
+}
+
+func resolveEditTarget(workspaceRoot, path string, unrestricted bool) (string, os.FileInfo, error) {
+	full, err := resolveToolPath(workspaceRoot, path, unrestricted)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err := os.Lstat(full)
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", nil, fmt.Errorf("%q 是符号链接，拒绝编辑", path)
+	}
+	if err == nil && info.Size() > maxEditFileBytes {
+		return "", nil, fmt.Errorf("文件 %q 超过最大编辑限制 %d 字节", path, maxEditFileBytes)
+	}
+	return full, info, nil
+}
+
+func applyEdit(full string, info os.FileInfo, a editfileArgs) ToolResult {
+	f, err := openNoFollow(full, os.O_RDONLY, 0)
+	if err != nil {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+	}
+	content := string(data)
+	count := strings.Count(content, a.OldString)
+	switch count {
+	case 0:
+		return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中未找到。文件可能已被修改，请先 read_file 查看当前内容。", a.Path)}
+	case 1:
+	default:
+		return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中出现 %d 次。请提供更多上下文（扩大 old_string 范围）使其唯一匹配。", a.Path, count)}
+	}
+	updated := strings.Replace(content, a.OldString, a.NewString, 1)
+	mode := os.FileMode(0o644)
+	if info != nil {
+		mode = info.Mode().Perm()
+	}
+	if err := writeFileAtomic(full, []byte(updated), mode); err != nil {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
+	}
+	return ToolResult{Output: fmt.Sprintf("已替换 %q 中的 1 处文本（%d → %d 字节）", a.Path, len(content), len(updated))}
 }

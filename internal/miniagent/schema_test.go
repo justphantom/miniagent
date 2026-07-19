@@ -61,14 +61,16 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := []Tool{
+	memoryTools := MemoryTools(store, "chat-1")
+	tools := make([]Tool, 0, 5+len(memoryTools))
+	tools = append(tools,
 		ReadFileTool(workdir, false),
 		WriteFileTool(workdir, false),
 		EditFileTool(workdir, false),
 		ShellTool(workdir, false, nil),
 		WebFetchTool(nil),
-	}
-	tools = append(tools, MemoryTools(store, "chat-1")...)
+	)
+	tools = append(tools, memoryTools...)
 
 	for _, tk := range tools {
 		b, err := json.Marshal(tk.Parameters)

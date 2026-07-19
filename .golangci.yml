@@ -108,6 +108,31 @@ linters:
     # - dogsled       : 禁用 _ 占位，过严
     # - gosec 的 G302/G304 等需要 file 级别判断，见 settings 处理
 
+  disable:
+    - depguard       # 需要显式依赖白名单；cmd 引用 internal/miniagent 是 monorepo 正常结构
+    - err113         # 强制 error 作 sentinel，与项目"标准库优先"约定冲突
+    - exhaustruct    # 强制结构体全字段初始化，过严；HTTPClient 等结构体允许零值
+    - gochecknoglobals # 禁止所有包级 var 过严；retryDelays/version 等合理使用
+    - gocognit       # 认知复杂度；手写 HTML tokenizer 等合理场景复杂度高，已用 funlen 兜底
+    - goconst        # JSON tag/map key/role 字符串反复出现是结构需要，提常量降低可读性
+    - gocyclo        # 圈复杂度；与 gocognit 一致，已用 funlen 兜底
+    - godoclint      # 包注释格式；项目无 godoc 需求
+    - gosmopolitan   # i18n 检查；项目明确中文输出
+    - lll            # 行长度；AGENTS.md 未限定行长
+    - maintidx       # 维护性指数；与 gocognit/gocyclo 一致
+    - mnd            # 魔法数字；标准库代码与工具配置中大量使用
+    - nlreturn       # return/break/continue 前强制空行，过严
+    - noinlineerr    # 禁止内联 err 声明；与项目惯用写法冲突
+    - nolintlint     # nolint 注释维护成本爆炸，默认不开
+    - nonamedreturns # 禁止命名返回；doOnce/doGetOnce 等命名返回表达意图更清晰
+    - paralleltest   # 强制 t.Parallel()；本项目测试无并行需求
+    - tagliatelle    # JSON tag 命名风格；本项目用 OpenAI schema 已定
+    - testpackage    # 强制 _test 包名；违反测试访问私有字段的合理需求
+    - varnamelen     # 禁用短变量名；违反 Go 惯用法（i/n/s/m/sb）
+    - wrapcheck      # 强制 wrap 库 error；与项目"errors 直接返回"约定冲突
+    - wsl            # 强制空行风格（cuddling），过严且主观
+    - wsl_v5         # wsl 的 v5 版本
+
   settings:
     # ===== 风格 linter 阈值调宽，避免与项目冲突 =====
     interfacebloat:

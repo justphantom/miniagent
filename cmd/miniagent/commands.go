@@ -54,8 +54,8 @@ func runListModels(apiKey, baseURL string) {
 	}
 	c := &miniagent.HTTPClient{APIKey: apiKey, BaseURL: baseURL}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	models, err := c.ListModels(ctx)
+	cancel()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
 		os.Exit(1)
@@ -212,8 +212,7 @@ func runNewSession(stateDir, chatID string) {
 		fmt.Fprintf(os.Stderr, "miniagent: new session: %v\n", err)
 		os.Exit(1)
 	}
-	out, _ := json.MarshalIndent(map[string]string{"session_id": sid}, "", "  ")
-	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"session_id": sid})) //nolint:forbidigo // CLI 输出
 }
 
 func runSetModel(stateDir, chatID, model string) {
@@ -222,8 +221,7 @@ func runSetModel(stateDir, chatID, model string) {
 		fmt.Fprintf(os.Stderr, "miniagent: set model: %v\n", err)
 		os.Exit(1)
 	}
-	out, _ := json.MarshalIndent(map[string]string{"model": model}, "", "  ")
-	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"model": model})) //nolint:forbidigo // CLI 输出
 }
 
 func runSetDir(stateDir, chatID, dir string) {
@@ -232,8 +230,7 @@ func runSetDir(stateDir, chatID, dir string) {
 		fmt.Fprintf(os.Stderr, "miniagent: set directory: %v\n", err)
 		os.Exit(1)
 	}
-	out, _ := json.MarshalIndent(map[string]string{"directory": dir}, "", "  ")
-	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"directory": dir})) //nolint:forbidigo // CLI 输出
 }
 
 func runSetPermission(stateDir, chatID, perm string) {
@@ -242,8 +239,7 @@ func runSetPermission(stateDir, chatID, perm string) {
 		fmt.Fprintf(os.Stderr, "miniagent: set permission: %v\n", err)
 		os.Exit(1)
 	}
-	out, _ := json.MarshalIndent(map[string]string{"permission": perm}, "", "  ")
-	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"permission": perm})) //nolint:forbidigo // CLI 输出
 }
 
 // factOut is the JSON shape for -memory-list and -memory-search results.
@@ -293,8 +289,7 @@ func runMemoryDelete(stateDir, chatID, scope, key string) {
 			os.Exit(1)
 		}
 	}
-	out, _ := json.MarshalIndent(map[string]bool{"existed": existed}, "", "  ")
-	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]bool{"existed": existed})) //nolint:forbidigo // CLI 输出
 }
 
 func runMemorySearch(stateDir, chatID, scope, query string, limit int) {
@@ -320,6 +315,15 @@ func runMemorySearch(stateDir, chatID, scope, query string, limit int) {
 		os.Exit(1)
 	}
 	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出
+}
+
+func mustMarshalJSON(v any) string {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: marshal output: %v\n", err)
+		os.Exit(1)
+	}
+	return string(b)
 }
 
 // toolConfig 是 buildTools 的入参，把 main 的 flag 解析结果集中传递，
