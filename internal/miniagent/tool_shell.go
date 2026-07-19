@@ -75,7 +75,7 @@ func ShellTool(workspaceRoot string, unrestricted bool, blockedPatterns []string
 			}
 			runCtx, cancel := context.WithTimeout(ctx, shellTimeout)
 			defer cancel()
-			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command) //nolint:gosec // G204: shell 工具的本质就是执行用户/LLM 命令，已有 workspace_root 路径约束+黑名单+env 白名单+进程组清理
+			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command)
 			cmd.Dir = workspaceRoot
 			// unrestricted 模式下 cmd.Dir 可能为空（继承进程 cwd），由 exec 自行处理；
 			// 受限模式必须保证 workspace_root 可访问。

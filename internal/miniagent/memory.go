@@ -46,7 +46,7 @@ func (h *History) Load(chatID string) []Message {
 	if path == "" {
 		return nil
 	}
-	f, err := os.Open(path) //nolint:gosec // G304: path 由内部 sessionPath 派生，chatID 已 sanitize
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
@@ -106,7 +106,7 @@ func (h *History) ensurePath(chatID string) (string, error) {
 }
 
 func (h *History) appendToFile(path string, msgs []Message) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: path 由内部 sessionPath 派生
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("history: open failed: %w", err)
 	}

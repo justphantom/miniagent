@@ -95,7 +95,7 @@ func TestWriteFile_CreatesNew(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "a.txt")) //nolint:gosec // G304: 测试 fixture 路径
+	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
 	if string(got) != "hello" {
 		t.Errorf("content = %q", got)
 	}
@@ -138,7 +138,7 @@ func TestEditFile_UniqueReplacement(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "e.txt")) //nolint:gosec // G304: 测试 fixture 路径
+	got, _ := os.ReadFile(filepath.Join(dir, "e.txt"))
 	if string(got) != "hi world" {
 		t.Errorf("content = %q", got)
 	}
@@ -173,7 +173,7 @@ func TestWriteFile_SymlinkEscapeRejected(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
-	got, _ := os.ReadFile(filepath.Join(outside, "target.txt")) //nolint:gosec // G304: 测试 fixture 路径
+	got, _ := os.ReadFile(filepath.Join(outside, "target.txt"))
 	if string(got) != "ORIGINAL" {
 		t.Errorf("outside file was modified: %q", got)
 	}
@@ -211,7 +211,7 @@ func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
-	got, _ := os.ReadFile(filepath.Join(outside, "target.txt")) //nolint:gosec // G304: 测试 fixture 路径
+	got, _ := os.ReadFile(filepath.Join(outside, "target.txt"))
 	if string(got) != "hello world" {
 		t.Errorf("outside file was modified: %q", got)
 	}

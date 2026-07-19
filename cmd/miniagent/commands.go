@@ -65,7 +65,7 @@ func runListModels(apiKey, baseURL string) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal models: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(out)) //nolint:forbidigo // CLI 输出到 stdout 是工具职责
+	fmt.Println(string(out))
 }
 
 func mustHistory(stateDir, chatID, action string) *miniagent.History {
@@ -107,7 +107,7 @@ func runListSessions(stateDir, chatID string) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal sessions: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出到 stdout 是工具职责
+	fmt.Println(string(b))
 }
 
 func runShowCurrent(stateDir, chatID string) {
@@ -147,7 +147,7 @@ func runShowCurrent(stateDir, chatID string) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal current: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出到 stdout 是工具职责
+	fmt.Println(string(b))
 }
 
 func runUseSession(stateDir, chatID, sid string) {
@@ -156,7 +156,7 @@ func runUseSession(stateDir, chatID, sid string) {
 		fmt.Fprintf(os.Stderr, "miniagent: use session: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("switched to session %s\n", sid) //nolint:forbidigo // CLI 输出
+	fmt.Printf("switched to session %s\n", sid)
 }
 
 func runDelSession(stateDir, chatID, sid string) {
@@ -165,7 +165,7 @@ func runDelSession(stateDir, chatID, sid string) {
 		fmt.Fprintf(os.Stderr, "miniagent: delete session: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("deleted session %s\n", sid) //nolint:forbidigo // CLI 输出
+	fmt.Printf("deleted session %s\n", sid)
 }
 
 // mustMeta builds a MetaStore and validates state-dir/chat-id, exiting with a
@@ -212,7 +212,7 @@ func runNewSession(stateDir, chatID string) {
 		fmt.Fprintf(os.Stderr, "miniagent: new session: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(mustMarshalJSON(map[string]string{"session_id": sid})) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"session_id": sid}))
 }
 
 func runSetModel(stateDir, chatID, model string) {
@@ -221,7 +221,7 @@ func runSetModel(stateDir, chatID, model string) {
 		fmt.Fprintf(os.Stderr, "miniagent: set model: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(mustMarshalJSON(map[string]string{"model": model})) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"model": model}))
 }
 
 func runSetDir(stateDir, chatID, dir string) {
@@ -230,7 +230,7 @@ func runSetDir(stateDir, chatID, dir string) {
 		fmt.Fprintf(os.Stderr, "miniagent: set directory: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(mustMarshalJSON(map[string]string{"directory": dir})) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"directory": dir}))
 }
 
 func runSetPermission(stateDir, chatID, perm string) {
@@ -239,7 +239,7 @@ func runSetPermission(stateDir, chatID, perm string) {
 		fmt.Fprintf(os.Stderr, "miniagent: set permission: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(mustMarshalJSON(map[string]string{"permission": perm})) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]string{"permission": perm}))
 }
 
 // factOut is the JSON shape for -memory-list and -memory-search results.
@@ -272,7 +272,7 @@ func runMemoryList(stateDir, chatID, scope, prefix string) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal memory: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出
+	fmt.Println(string(b))
 }
 
 func runMemoryDelete(stateDir, chatID, scope, key string) {
@@ -289,7 +289,7 @@ func runMemoryDelete(stateDir, chatID, scope, key string) {
 			os.Exit(1)
 		}
 	}
-	fmt.Println(mustMarshalJSON(map[string]bool{"existed": existed})) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(map[string]bool{"existed": existed}))
 }
 
 // parseMemorySetArg 把 "--memory-set key=value" 的值拆成 key/value。
@@ -325,7 +325,7 @@ func runMemorySet(stateDir, chatID, scope, arg string) {
 		Value:     fact.Value,
 		Scope:     string(s),
 		UpdatedAt: fact.UpdatedAt.Format("2006-01-02 15:04:05"),
-	})) //nolint:forbidigo // CLI 输出
+	}))
 }
 
 func runMemoryGet(stateDir, chatID, scope, key string) {
@@ -342,7 +342,7 @@ func runMemoryGet(stateDir, chatID, scope, key string) {
 		out["value"] = fact.Value
 		out["updated_at"] = fact.UpdatedAt.Format("2006-01-02 15:04:05")
 	}
-	fmt.Println(mustMarshalJSON(out)) //nolint:forbidigo // CLI 输出
+	fmt.Println(mustMarshalJSON(out))
 }
 
 func runMemorySearch(stateDir, chatID, scope, query string, limit int) {
@@ -367,7 +367,7 @@ func runMemorySearch(stateDir, chatID, scope, query string, limit int) {
 		fmt.Fprintf(os.Stderr, "miniagent: marshal search: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(b)) //nolint:forbidigo // CLI 输出
+	fmt.Println(string(b))
 }
 
 func mustMarshalJSON(v any) string {

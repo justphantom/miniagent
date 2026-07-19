@@ -107,7 +107,7 @@ func main() {
 	apiKey := os.Getenv("MINIAGENT_API_KEY")
 
 	if *f.showVer {
-		fmt.Printf("miniagent %s\n", version) //nolint:forbidigo // CLI 输出
+		fmt.Printf("miniagent %s\n", version)
 		os.Exit(0)
 	}
 
