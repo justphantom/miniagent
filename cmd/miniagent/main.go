@@ -47,6 +47,8 @@ type cliFlags struct {
 	setPerm      *bool
 	clearPerm    *bool
 	memoryList   *bool
+	memoryGet    *string
+	memorySet    *string
 	memoryDelete *string
 	memorySearch *string
 	scope        *string
@@ -88,6 +90,8 @@ func parseFlags() *cliFlags {
 	f.setPerm = flag.Bool("set-permission", false, "set the permission pin for --chat-id (reads value from -permission), then exit")
 	f.clearPerm = flag.Bool("clear-permission", false, "clear the permission pin for --chat-id, then exit")
 	f.memoryList = flag.Bool("memory-list", false, "list long-term facts for --chat-id, then exit")
+	f.memoryGet = flag.String("memory-get", "", "read fact <key> for --chat-id, then exit")
+	f.memorySet = flag.String("memory-set", "", "write fact as <key>=<value> for --chat-id, then exit")
 	f.memoryDelete = flag.String("memory-delete", "", "delete fact <key> for --chat-id, then exit")
 	f.memorySearch = flag.String("memory-search", "", "search facts by substring <query> for --chat-id, then exit")
 	f.scope = flag.String("scope", "chat", "scope for memory-* subcommands: chat|project|global")
@@ -183,6 +187,14 @@ func dispatchMutationSubcommand(f *cliFlags) bool {
 }
 
 func dispatchMemorySubcommand(f *cliFlags) bool {
+	if *f.memorySet != "" {
+		runMemorySet(*f.stateDir, *f.chatID, *f.scope, *f.memorySet)
+		return true
+	}
+	if *f.memoryGet != "" {
+		runMemoryGet(*f.stateDir, *f.chatID, *f.scope, *f.memoryGet)
+		return true
+	}
 	if *f.memoryList {
 		runMemoryList(*f.stateDir, *f.chatID, *f.scope, *f.prefix)
 		return true

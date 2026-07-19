@@ -172,3 +172,36 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// parseMemorySetArg 按 key=value 解析；value 允许含 '='，key 必须非空。
+func TestParseMemorySetArg(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantK   string
+		wantV   string
+		wantErr bool
+	}{
+		{"user.lang=zh", "user.lang", "zh", false},
+		{"k=a=b=c", "k", "a=b=c", false}, // 仅按首个 '=' 切，value 保留后续 '='
+		{"empty=", "empty", "", false},   // 空 value 合法
+		{"noeq", "", "", true},           // 缺 '='
+		{"=val", "", "", true},           // key 为空
+		{"", "", "", true},
+	}
+	for _, c := range cases {
+		k, v, err := parseMemorySetArg(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("parseMemorySetArg(%q): want error, got (%q,%q,nil)", c.in, k, v)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseMemorySetArg(%q): unexpected error %v", c.in, err)
+			continue
+		}
+		if k != c.wantK || v != c.wantV {
+			t.Errorf("parseMemorySetArg(%q) = (%q,%q), want (%q,%q)", c.in, k, v, c.wantK, c.wantV)
+		}
+	}
+}

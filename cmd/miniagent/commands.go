@@ -292,6 +292,59 @@ func runMemoryDelete(stateDir, chatID, scope, key string) {
 	fmt.Println(mustMarshalJSON(map[string]bool{"existed": existed})) //nolint:forbidigo // CLI 输出
 }
 
+// parseMemorySetArg 把 "--memory-set key=value" 的值拆成 key/value。
+// key 必须非空；value 允许包含 '='（仅按首个 '=' 切分）。
+func parseMemorySetArg(arg string) (key, value string, err error) {
+	k, v, ok := strings.Cut(arg, "=")
+	if !ok || k == "" {
+		return "", "", fmt.Errorf("memory-set 参数格式应为 key=value，收到 %q", arg)
+	}
+	return k, v, nil
+}
+
+func runMemorySet(stateDir, chatID, scope, arg string) {
+	key, value, err := parseMemorySetArg(arg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
+		os.Exit(1)
+	}
+	f := mustFacts(stateDir, chatID, "memory-set")
+	s := miniagent.ParseFactScope(scope)
+	if err := f.Set(s, chatID, key, value, "cli"); err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: set memory: %v\n", err)
+		os.Exit(1)
+	}
+	// 回读以拿到 updated_at，便于脚本确认落盘时间。
+	fact, _, err := f.Get(s, chatID, key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: read back memory: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(mustMarshalJSON(factOut{
+		Key:       fact.Key,
+		Value:     fact.Value,
+		Scope:     string(s),
+		UpdatedAt: fact.UpdatedAt.Format("2006-01-02 15:04:05"),
+	})) //nolint:forbidigo // CLI 输出
+}
+
+func runMemoryGet(stateDir, chatID, scope, key string) {
+	f := mustFacts(stateDir, chatID, "memory-get")
+	s := miniagent.ParseFactScope(scope)
+	fact, ok, err := f.Get(s, chatID, key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: get memory: %v\n", err)
+		os.Exit(1)
+	}
+	out := map[string]any{"scope": string(s), "found": ok}
+	if ok {
+		out["key"] = fact.Key
+		out["value"] = fact.Value
+		out["updated_at"] = fact.UpdatedAt.Format("2006-01-02 15:04:05")
+	}
+	fmt.Println(mustMarshalJSON(out)) //nolint:forbidigo // CLI 输出
+}
+
 func runMemorySearch(stateDir, chatID, scope, query string, limit int) {
 	f := mustFacts(stateDir, chatID, "memory-search")
 	s := miniagent.ParseFactScope(scope)
