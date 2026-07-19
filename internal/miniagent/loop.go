@@ -65,12 +65,21 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
 
+		// token 预算护栏：累计超限立即以 Incomplete 终止，避免单轮烧爆。
+		// 与 maxIterations 叠加，先到先停；已计入的 Usage/NewMessages 仍返回，不浪费。
+		if cfg.MaxTokensBudget > 0 && total.InputTokens+total.OutputTokens >= cfg.MaxTokensBudget {
+			if logger != nil {
+				logger.Warn("loop: token budget exceeded", "budget", cfg.MaxTokensBudget, "input", total.InputTokens, "output", total.OutputTokens, "step", step)
+			}
+			return Result{Usage: total, Steps: step, NewMessages: msgs[len(history):], Incomplete: true}, nil
+		}
+
 		if len(resp.ToolCalls) == 0 {
 			msgs = append(msgs, Message{Role: "assistant", Content: resp.Text})
 			return Result{Text: resp.Text, Usage: total, Steps: step, NewMessages: msgs[len(history):]}, nil
 		}
 
-		msgs, err = handleToolCalls(ctx, promptID, step, resp, toolByName, msgs, emitSignal, logger)
+		msgs, err = handleToolCalls(ctx, promptID, step, resp, toolByName, msgs, emitSignal, logger, cfg.MaxParallelTools)
 		if err != nil {
 			return Result{Usage: total, Steps: step}, err
 		}
@@ -99,7 +108,12 @@ func makeUserMessages(history []Message, userPrompt string) []Message {
 }
 
 func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolSpecs []ToolSpec, onText func(string) error, logger *slog.Logger) (Response, error) {
-	msgs = trimMessages(msgs, maxHistoryTokens)
+	// 历史裁剪预算可配置：<=0 沿用默认。每步裁剪保证请求体不超模型上下文窗口。
+	budget := cfg.MaxHistoryTokens
+	if budget <= 0 {
+		budget = maxHistoryTokens
+	}
+	msgs = trimMessages(msgs, budget)
 	if logger != nil {
 		logger.Debug("llm call start", "prompt_id", promptID, "step", step, "model", cfg.Model)
 	}
@@ -141,7 +155,7 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID stri
 	return resp, nil
 }
 
-func handleToolCalls(ctx context.Context, promptID string, step int, resp Response, toolByName map[string]Tool, msgs []Message, emitSignal func(Signal) error, logger *slog.Logger) ([]Message, error) {
+func handleToolCalls(ctx context.Context, promptID string, step int, resp Response, toolByName map[string]Tool, msgs []Message, emitSignal func(Signal) error, logger *slog.Logger, maxParallel int) ([]Message, error) {
 	calls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		calls[i] = tc
@@ -161,7 +175,7 @@ func handleToolCalls(ctx context.Context, promptID string, step int, resp Respon
 	// 同一步内 LLM 一次发起的多个 tool_call 相互独立，串行会让总耗时 = Σ 单工具
 	// 耗时（shell/webfetch 各自可达数十秒）。并行执行，结果按原 index 回填，保证
 	// tool_result 信号与历史消息仍与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
-	results := runToolsParallel(ctx, logger, calls, toolByName)
+	results := runToolsParallel(ctx, logger, calls, toolByName, maxParallel)
 
 	for i, tc := range calls {
 		tres := results[i]
@@ -179,9 +193,14 @@ func handleToolCalls(ctx context.Context, promptID string, step int, resp Respon
 // runToolsParallel 并行执行 calls，返回与 calls 同序的结果。
 // 各 goroutine 写入 results 的不同下标，无内存竞争；wg.Wait 提供 happens-before。
 // 未知工具在调度前短路，直接回填错误结果。每个 tool 的 panic 由 safeCall 兜底。
-func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall, toolByName map[string]Tool) []ToolResult {
+// maxParallel>0 时用 buffered chan 做信号量限制同时在途的工具数。
+func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall, toolByName map[string]Tool, maxParallel int) []ToolResult {
 	results := make([]ToolResult, len(calls))
 	var wg sync.WaitGroup
+	var sem chan struct{}
+	if maxParallel > 0 {
+		sem = make(chan struct{}, maxParallel)
+	}
 	for i, tc := range calls {
 		tool, ok := toolByName[tc.Name]
 		if !ok {
@@ -191,6 +210,10 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 		wg.Add(1)
 		go func(i int, tc ToolCall, tool Tool) {
 			defer wg.Done()
+			if sem != nil {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+			}
 			results[i] = safeCall(ctx, logger, tool, tc.Name, tc.Args)
 		}(i, tc, tool)
 	}

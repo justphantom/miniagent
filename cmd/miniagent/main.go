@@ -56,6 +56,10 @@ type cliFlags struct {
 	limit        *int
 
 	stream *bool
+
+	maxParallelTools *int
+	maxTokensBudget  *int
+	maxHistoryTokens *int
 }
 
 func parseFlags() *cliFlags {
@@ -102,6 +106,11 @@ func parseFlags() *cliFlags {
 
 	// 默认开启：流式下首字节快、可中途感知。端点不支持 SSE 时用 -stream=false 回退非流式。
 	f.stream = flag.Bool("stream", true, "stream SSE text deltas (default true)")
+
+	// 护栏与上下文预算：默认值见 internal/miniagent 对应常量；0 表示沿用默认或不限。
+	f.maxParallelTools = flag.Int("max-parallel-tools", 8, "max concurrent tool calls within one step (0 = unlimited)")
+	f.maxTokensBudget = flag.Int("max-tokens-budget", 0, "per-turn cumulative input+output token cap; stops with incomplete result (0 = unlimited)")
+	f.maxHistoryTokens = flag.Int("max-history-tokens", 0, "history trimming token budget (0 = default 6000)")
 
 	flag.Parse()
 	return f
@@ -290,12 +299,15 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, t
 	memoryContext := buildMemoryContext(st.facts, *f.chatID, logger)
 
 	result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
-		Model:         *f.model,
-		System:        *f.system,
-		MemoryContext: memoryContext,
-		MaxTokens:     *f.maxTokens,
-		Tools:         tools,
-		Stream:        *f.stream,
+		Model:            *f.model,
+		System:           *f.system,
+		MemoryContext:    memoryContext,
+		MaxTokens:        *f.maxTokens,
+		Tools:            tools,
+		Stream:           *f.stream,
+		MaxParallelTools: *f.maxParallelTools,
+		MaxTokensBudget:  *f.maxTokensBudget,
+		MaxHistoryTokens: *f.maxHistoryTokens,
 	}, "cli", string(prompt), hist, emit, logger)
 
 	if err != nil {

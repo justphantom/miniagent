@@ -110,4 +110,12 @@ type LoopConfig struct {
 	// Stream=true 时走 SSE 流式，文本增量经 SignalText 透传给 emit。
 	// 与 emit 解耦：emit 只为 tool 信号时无需开 Stream。
 	Stream bool
+	// MaxParallelTools 限制同一步内并行工具的并发数（<=0 表示不限制）。防止 LLM
+	// 一次发起大量 tool_call 时耗尽 FD/连接或触发目标服务限流。
+	MaxParallelTools int
+	// MaxTokensBudget 限制单轮对话累计 token（输入+输出）上限，超限提前以
+	// Incomplete 终止（0 表示不限制）。与 maxIterations 步数限制叠加生效。
+	MaxTokensBudget int
+	// MaxHistoryTokens 覆盖历史裁剪的 token 预算（<=0 沿用默认 maxHistoryTokens）。
+	MaxHistoryTokens int
 }

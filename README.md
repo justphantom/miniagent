@@ -53,6 +53,9 @@ make test       # go test -race ./...
 -show-current            显示 --chat-id 的当前会话/模型/目录/权限，完成后退出
 -state-dir string        状态目录（空 = 无状态、无持久化）
 -stream                  流式 SSE 输出文本增量（默认 true；-stream=false 回退非流式）
+-max-parallel-tools int  单步内并行工具的并发上限（默认 8；0 = 不限制）
+-max-tokens-budget int   单轮累计 input+output token 上限，超限以 incomplete 终止（默认 0 = 不限制）
+-max-history-tokens int  历史裁剪的 token 预算（默认 0 = 沿用内置 6000）
 -system string           系统提示词（默认 "你是一个简洁的助手，回答通常不超过 500 字。"）
 -use-session string      把 --chat-id 切到会话 <id>，完成后退出
 -verbose                 输出 tool_use 和 tool_result 事件（默认只输出 tool_use）
@@ -325,7 +328,9 @@ LLM 调用（`POST /v1/chat/completions`）与 `--list-models`（`GET /v1/models
 | 常量 | 值 | 含义 |
 |------|----|------|
 | `maxIterations` | 20 | 单轮对话的 LLM 调用上限 |
-| `maxHistoryTokens` | 6000 | 历史裁剪的 token 预算 |
+| `maxHistoryTokens` | 6000 | 历史裁剪的 token 预算（可被 `-max-history-tokens` 覆盖） |
+| `MaxParallelTools` | 8 | 单步内并行工具并发上限（`-max-parallel-tools`，0 = 不限） |
+| `MaxTokensBudget` | 0 | 单轮累计 token 上限（`-max-tokens-budget`，0 = 不限） |
 | `maxToolResultInHistory` | 2000 | 单条 tool 结果进入历史的字符数 |
 | `maxMemoryContextItems` | 30 | 自动注入 system prompt 的 chat 事实条数上限 |
 | `maxMemoryContextChars` | 2000 | 自动注入 system prompt 的事实总字符上限 |

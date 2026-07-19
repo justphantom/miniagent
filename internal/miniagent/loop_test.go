@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -372,5 +373,89 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 	}
 	if toolMsgs[1].ToolCallID != "2" || !strings.Contains(toolMsgs[1].Content, "A") {
 		t.Errorf("tool[1] = %+v, want id=2 content~A", toolMsgs[1])
+	}
+}
+
+// MaxParallelTools 限制同一步内同时在途的工具数：6 个工具 / limit=2，并发峰值应为 2。
+func TestRun_ParallelToolsRespectLimit(t *testing.T) {
+	var inflight, peak int32
+	release := make(chan struct{})
+	mk := func(name string) Tool {
+		return Tool{
+			Name: name,
+			Call: func(context.Context, string) ToolResult {
+				n := atomic.AddInt32(&inflight, 1)
+				for {
+					p := atomic.LoadInt32(&peak)
+					if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
+						break
+					}
+				}
+				<-release
+				atomic.AddInt32(&inflight, -1)
+				return ToolResult{Output: name}
+			},
+		}
+	}
+	tools := []Tool{mk("a"), mk("b"), mk("c"), mk("d"), mk("e"), mk("f")}
+	calls := make([]ToolCall, 0, len(tools))
+	for _, tk := range tools {
+		calls = append(calls, ToolCall{ID: tk.Name, Name: tk.Name, Args: "{}"})
+	}
+	tr := &fakeTransport{responses: []string{toolResponse(calls...), textResponse("done")}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	done := make(chan struct{})
+	go func() {
+		_, _ = Run(context.Background(), llm, LoopConfig{Tools: tools, MaxParallelTools: 2}, "p1", "x", nil, nil, nil)
+		close(done)
+	}()
+
+	// 等并发爬到上限：信号量满 = 恰好 2 在途，证明限流生效。
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&inflight) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	peakSnap := atomic.LoadInt32(&peak)
+	close(release)
+	<-done
+	if peakSnap != 2 {
+		t.Errorf("peak concurrent tools = %d, want 2", peakSnap)
+	}
+}
+
+// MaxTokensBudget 超限立即以 Incomplete 终止，无最终文本。textResponse 单次 usage=2。
+func TestRun_TokenBudgetStopsLoop(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("hello")}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", MaxTokensBudget: 2}, "p1", "hi", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Incomplete {
+		t.Error("expected Incomplete=true on budget exceeded")
+	}
+	if res.Text != "" {
+		t.Errorf("Text = %q, want empty", res.Text)
+	}
+	if res.Steps != 1 {
+		t.Errorf("Steps = %d, want 1", res.Steps)
+	}
+}
+
+// MaxHistoryTokens 覆盖默认 6000：小预算应把超长旧历史整 turn 丢掉，仅保留本轮 prompt。
+func TestRun_CustomHistoryTokenBudget(t *testing.T) {
+	big := strings.Repeat("a", 3000)
+	history := []Message{{Role: "user", Content: big}, {Role: "assistant", Content: big}}
+	tr := &fakeTransport{responses: []string{textResponse("ok")}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	_, err := Run(context.Background(), llm, LoopConfig{Model: "m", MaxHistoryTokens: 10}, "p1", "hi", history, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(tr.lastBody, strings.Repeat("a", 100)) {
+		t.Errorf("budget=10 should have dropped the big history, body still contains it")
+	}
+	if !strings.Contains(tr.lastBody, "hi") {
+		t.Errorf("current prompt dropped: %s", tr.lastBody)
 	}
 }
