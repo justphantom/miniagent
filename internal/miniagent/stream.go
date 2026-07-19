@@ -34,7 +34,8 @@ type streamEvent struct {
 func StreamEmitFunc(w io.Writer, verbose bool) EmitFunc {
 	enc := json.NewEncoder(w)
 	return func(sig Signal) error {
-		if !verbose && sig.Kind != SignalToolUse {
+		// SignalText 是核心流式输出，始终透传；verbose 只控制 tool_result。
+		if !verbose && sig.Kind != SignalToolUse && sig.Kind != SignalText {
 			return nil
 		}
 		return enc.Encode(signalToStreamEvent(sig))
@@ -65,6 +66,8 @@ func signalToStreamEvent(sig Signal) streamEvent {
 		return streamEvent{Type: "tool_use", Name: sig.Name, Input: sig.Input}
 	case SignalToolResult:
 		return streamEvent{Type: "tool_result", Name: sig.Name, Input: sig.Input, Output: sig.Output, IsError: sig.IsError}
+	case SignalText:
+		return streamEvent{Type: "text", Text: sig.Text}
 	default:
 		return streamEvent{Type: string(sig.Kind), Name: sig.Name}
 	}

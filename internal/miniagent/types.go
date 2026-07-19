@@ -24,6 +24,8 @@ type Request struct {
 	Messages  []Message
 	MaxTokens int
 	Tools     []ToolSpec
+	// Stream=true 时走 SSE 流式（见 HTTPClient.DoStream），文本增量经 SignalText 透传。
+	Stream bool
 }
 
 // ToolSpec declares one tool to the LLM (OpenAI function-calling schema).
@@ -67,6 +69,7 @@ type SignalKind string
 const (
 	SignalToolUse    SignalKind = "tool_use"
 	SignalToolResult SignalKind = "tool_result"
+	SignalText       SignalKind = "text" // 流式文本增量片段（非完整回答）
 )
 
 // Signal is one out-of-band event the loop fires.
@@ -76,6 +79,8 @@ type Signal struct {
 	Input   string
 	Output  string
 	IsError bool
+	// Text 仅 SignalText 使用：一次文本增量片段，拼接后才是完整回答。
+	Text string
 }
 
 // EmitFunc receives out-of-band signals from the loop.
@@ -102,4 +107,7 @@ type LoopConfig struct {
 	MemoryContext string
 	MaxTokens     int
 	Tools         []Tool
+	// Stream=true 时走 SSE 流式，文本增量经 SignalText 透传给 emit。
+	// 与 emit 解耦：emit 只为 tool 信号时无需开 Stream。
+	Stream bool
 }

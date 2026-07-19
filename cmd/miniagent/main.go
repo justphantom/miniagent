@@ -54,6 +54,8 @@ type cliFlags struct {
 	scope        *string
 	prefix       *string
 	limit        *int
+
+	stream *bool
 }
 
 func parseFlags() *cliFlags {
@@ -97,6 +99,9 @@ func parseFlags() *cliFlags {
 	f.scope = flag.String("scope", "chat", "scope for memory-* subcommands: chat|project|global")
 	f.prefix = flag.String("prefix", "", "key prefix filter for --memory-list")
 	f.limit = flag.Int("limit", 20, "max results for --memory-search")
+
+	// 默认开启：流式下首字节快、可中途感知。端点不支持 SSE 时用 -stream=false 回退非流式。
+	f.stream = flag.Bool("stream", true, "stream SSE text deltas (default true)")
 
 	flag.Parse()
 	return f
@@ -290,6 +295,7 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, t
 		MemoryContext: memoryContext,
 		MaxTokens:     *f.maxTokens,
 		Tools:         tools,
+		Stream:        *f.stream,
 	}, "cli", string(prompt), hist, emit, logger)
 
 	if err != nil {

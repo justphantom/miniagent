@@ -44,12 +44,20 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 
 	msgs := makeUserMessages(history, userPrompt)
 	total := Usage{}
+	// 仅在显式开启 Stream 且有 emit 时透传文本增量；onText 返回 error 沿 emit
+	// 契约上抛，下游断开（如 stdout broken pipe）会让 DoStream 立即停止生成。
+	var onText func(string) error
+	if cfg.Stream && emit != nil {
+		onText = func(t string) error {
+			return emitSignal(Signal{Kind: SignalText, Text: t})
+		}
+	}
 
 	for step := 1; step <= maxIterations; step++ {
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1}, err
 		}
-		resp, err := callLLM(ctx, llm, cfg, promptID, step, msgs, toolSpecs, logger)
+		resp, err := callLLM(ctx, llm, cfg, promptID, step, msgs, toolSpecs, onText, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1}, err
 		}
@@ -89,7 +97,7 @@ func makeUserMessages(history []Message, userPrompt string) []Message {
 	return msgs
 }
 
-func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolSpecs []ToolSpec, logger *slog.Logger) (Response, error) {
+func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolSpecs []ToolSpec, onText func(string) error, logger *slog.Logger) (Response, error) {
 	msgs = trimMessages(msgs, maxHistoryTokens)
 	if logger != nil {
 		logger.Debug("llm call start", "prompt_id", promptID, "step", step, "model", cfg.Model)
@@ -99,13 +107,21 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID stri
 	if cfg.MemoryContext != "" {
 		system += cfg.MemoryContext
 	}
-	resp, err := llm.Do(ctx, Request{
+	req := Request{
 		Model:     cfg.Model,
 		System:    system,
 		Messages:  msgs,
 		MaxTokens: cfg.MaxTokens,
 		Tools:     toolSpecs,
-	})
+	}
+	// onText 非 nil 表示上层要文本增量：走流式。否则沿用非流式 Do，保持现有契约。
+	var resp Response
+	var err error
+	if onText != nil {
+		resp, err = llm.DoStream(ctx, req, onText)
+	} else {
+		resp, err = llm.Do(ctx, req)
+	}
 	callDur := time.Since(callStart)
 	if err != nil {
 		if logger != nil {

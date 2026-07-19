@@ -3,6 +3,7 @@
 一个用 Go 标准库实现的最小 LLM agent。从 stdin 读取一个 prompt，驱动 ReAct 循环（LLM ↔ 工具调用），把过程事件和最终结果以 NDJSON（每行一个 JSON 对象）写到 stdout。
 
 - 后端：OpenAI 兼容的 `/v1/chat/completions` 接口
+- 流式：默认走 SSE，文本以增量片段实时输出（`-stream=false` 回退非流式）
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
 - 工具：文件读写编辑、shell、webfetch、长期记忆
 - 状态：可选的会话历史 + 三层记忆（chat / project / global）
@@ -51,6 +52,7 @@ make test       # go test -race ./...
 -set-permission          设置 --chat-id 的权限 pin（读 -permission 的值），完成后退出
 -show-current            显示 --chat-id 的当前会话/模型/目录/权限，完成后退出
 -state-dir string        状态目录（空 = 无状态、无持久化）
+-stream                  流式 SSE 输出文本增量（默认 true；-stream=false 回退非流式）
 -system string           系统提示词（默认 "你是一个简洁的助手，回答通常不超过 500 字。"）
 -use-session string      把 --chat-id 切到会话 <id>，完成后退出
 -verbose                 输出 tool_use 和 tool_result 事件（默认只输出 tool_use）
@@ -107,12 +109,13 @@ make test       # go test -race ./...
 
 | type | 何时输出 | 字段 |
 |------|---------|------|
+| `text` | 流式开启时，LLM 文本增量（一段回答可多次） | `text` |
 | `tool_use` | 每次 LLM 请求工具调用 | `name`, `input` |
 | `tool_result` | 工具执行完毕（仅 `-verbose` 时输出） | `name`, `input`, `output`, `is_error` |
 | `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `incomplete` |
 | `error` | 主流程失败，**终态** | `message` |
 
-> 默认模式（非 `-verbose`）：只输出 `tool_use`，不输出 `tool_result`。`result` 和 `error` 在任何模式下都会输出。
+> 默认模式（非 `-verbose`）：输出 `tool_use` 和 `text`（流式开启时），不输出 `tool_result`。`result` 和 `error` 在任何模式下都会输出。`-stream=false` 时不产生 `text` 事件，最终回答只在 `result.text` 里。
 
 ### 字段说明
 
@@ -120,7 +123,7 @@ make test       # go test -race ./...
 - `input`：工具参数的原始 JSON 字符串（LLM 透传）
 - `output`：工具返回的文本（可能被工具内部截断）
 - `is_error`：true 表示工具内部错误（参数缺失、路径越界、超时等），不终止循环
-- `text`：最终回答文本（`incomplete=true` 时为空）
+- `text`：`text` 事件里是增量片段（流式，多次拼接成完整回答）；`result` 事件里是完整回答文本（`incomplete=true` 时为空）
 - `model`：本次调用使用的模型 id
 - `input_tokens` / `output_tokens`：累计的 token 用量
 - `steps`：本轮 LLM 调用次数
@@ -129,13 +132,18 @@ make test       # go test -race ./...
 
 ### 输出示例
 
-默认模式（非 verbose）：
+默认模式（非 verbose，流式开启）：
 
 ```jsonl
+{"type":"text","text":"测试"}
+{"type":"text","text":"全部通过"}
+{"type":"text","text":"。"}
 {"type":"tool_use","name":"read_file","input":"{\"path\":\"a.go\"}"}
 {"type":"tool_use","name":"shell","input":"{\"command\":\"go test ./...\"}"}
 {"type":"result","text":"测试全部通过。","model":"gpt-4o","input_tokens":320,"output_tokens":48,"steps":3}
 ```
+
+> 流式下 `text` 事件是增量片段，消费方需自行拼接；`result.text` 仍是完整回答。`-stream=false` 时不产生 `text` 事件。
 
 verbose 模式：
 
@@ -310,6 +318,7 @@ LLM 调用（`POST /v1/chat/completions`）与 `--list-models`（`GET /v1/models
 - 单次退避上限 60s
 - 响应 body 上限：LLM 调用 1 MiB，`--list-models` 4 MiB（恰好上限不截断，超过则报错）
 - ctx 取消立即返回 `context.Canceled` / `context.DeadlineExceeded`
+- 流式（`-stream`，默认）重试边界：仅在收到首个 200 响应前重试（连接失败或上述可重试状态码）；一旦进入 SSE 流读取，`text` 增量已透传给消费方，不再重试，直接返回 error。流式请求复用 `http.Client.Timeout`（默认 120s），该超时覆盖整个流读过程
 
 ## 内部约束（常量）
 

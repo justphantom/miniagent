@@ -1,4 +1,4 @@
-.PHONY: build test fmt clean deploy
+.PHONY: build test fmt lint clean deploy
 
 COMMIT := $(shell git describe --always --dirty)
 
@@ -11,6 +11,9 @@ test:
 
 fmt:
 	gofmt -s -w .
+
+lint:
+	golangci-lint run ./...
 
 clean:
 	rm -rf bin/

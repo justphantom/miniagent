@@ -249,3 +249,37 @@ func TestRun_MaxIterationsReturnsIncompleteResult(t *testing.T) {
 		t.Error("expected non-zero usage accounting")
 	}
 }
+
+// Stream=true 时文本应分片经 SignalText 透传，最终聚合为完整 Response。
+func TestRun_StreamEmitsTextDelta(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hel"}}]}`,
+		`data: {"choices":[{"delta":{"content":"lo"}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":2}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	tr := &fakeTransport{responses: []string{sse}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	var deltas []string
+	emit := func(sig Signal) error {
+		if sig.Kind == SignalText {
+			deltas = append(deltas, sig.Text)
+		}
+		return nil
+	}
+	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", Stream: true}, "p1", "hi", nil, emit, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Text != "Hello" {
+		t.Errorf("Text = %q, want Hello", res.Text)
+	}
+	if strings.Join(deltas, "") != "Hello" {
+		t.Errorf("deltas = %v", deltas)
+	}
+	if res.Usage.InputTokens != 2 {
+		t.Errorf("Usage = %+v", res.Usage)
+	}
+}
