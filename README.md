@@ -25,33 +25,59 @@ make test       # go test -race ./...
 ## CLI 参数
 
 ```
--base-url string        endpoint 根地址（不含 /v1），或 $MINIAGENT_BASE_URL
+-base-url string         endpoint 根地址（不含 /v1），或 $MINIAGENT_BASE_URL
 -blocked-patterns string JSON 数组，覆盖内置 shell 黑名单（如 '["rm -rf","mkfs"]'）
--chat-id string         会话隔离 id；空表示无历史
--del-session string     删除 --chat-id 下的会话 <id>，完成后退出
--list-models            调用 /v1/models 列出可用模型，完成后退出
--list-sessions          列出 --chat-id 的所有会话，完成后退出
--max-tokens int         单次 LLM 调用的最大输出 token 数（默认 4096）
--model string           LLM 模型 id（运行对话时必需）
--permission string      权限模式：plan / default / free（默认 default）
--show-current           显示 --chat-id 的当前会话/模型/目录/权限，完成后退出
--state-dir string       状态目录（空 = 无状态、无持久化）
--system string          系统提示词（默认 "你是一个简洁的助手，回答通常不超过 500 字。"）
--use-session string     把 --chat-id 切到会话 <id>，完成后退出
--verbose                输出 tool_use 和 tool_result 事件（默认只输出 tool_use）
--version                显示版本号并退出
--workdir string         工作目录（工具路径边界 + shell 的 cwd）
+-chat-id string          会话隔离 id；空表示无历史
+-clear-dir               清空 --chat-id 的目录 pin，完成后退出
+-clear-model             清空 --chat-id 的模型 pin，完成后退出
+-clear-permission        清空 --chat-id 的权限 pin，完成后退出
+-del-session string      删除 --chat-id 下的会话 <id>，完成后退出
+-limit int               --memory-search 的最大结果数（默认 20）
+-list-models             调用 /v1/models 列出可用模型，完成后退出
+-list-sessions           列出 --chat-id 的所有会话，完成后退出
+-max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
+-memory-delete string    删除 --chat-id 的事实 <key>，完成后退出
+-memory-get string       读取 --chat-id 的事实 <key>，完成后退出
+-memory-list             列出 --chat-id 的长期事实，完成后退出
+-memory-search string    按子串 <query> 搜索 --chat-id 的事实，完成后退出
+-memory-set string       以 <key>=<value> 写入 --chat-id 的事实，完成后退出
+-model string            LLM 模型 id（运行对话时必需；-set-model 也读此值）
+-new-session             为 --chat-id 创建新会话，完成后退出
+-permission string       权限模式：plan / default / free（默认 default；-set-permission 也读此值）
+-prefix string           --memory-list 的 key 前缀过滤
+-scope string            memory-* 子命令的范围：chat / project / global（默认 chat）
+-set-dir                 设置 --chat-id 的目录 pin（读 -workdir 的值），完成后退出
+-set-model               设置 --chat-id 的模型 pin（读 -model 的值），完成后退出
+-set-permission          设置 --chat-id 的权限 pin（读 -permission 的值），完成后退出
+-show-current            显示 --chat-id 的当前会话/模型/目录/权限，完成后退出
+-state-dir string        状态目录（空 = 无状态、无持久化）
+-system string           系统提示词（默认 "你是一个简洁的助手，回答通常不超过 500 字。"）
+-use-session string      把 --chat-id 切到会话 <id>，完成后退出
+-verbose                 输出 tool_use 和 tool_result 事件（默认只输出 tool_use）
+-version                 显示版本号并退出
+-workdir string          工作目录（工具路径边界 + shell 的 cwd；-set-dir 也读此值）
 ```
 
 ### 子命令（互斥，按下列顺序检查，先命中者执行后退出）
 
-1. `-version` → 打印 `miniagent <version>` 到 stdout，退出码 0
+> 因为 `-permission` 有非空默认值 `"default"`，无法用"空值=清除"的约定，所以每个 pin 都配了显式的 `-clear-*`。`-set-*` 读对应业务 flag（`-model`/`-workdir`/`-permission`）的当前值；`-clear-*` 等价于以空值调用同名 set。
+
+1. `-version` → 打印 `miniagent <version>`，退出码 0
 2. `-list-models` → 调用 `GET {base-url}/v1/models`，打印 JSON 字符串数组
 3. `-list-sessions` → 打印 `--chat-id` 的会话数组
-4. `-show-current` → 打印当前会话状态
+4. `-show-current` → 打印当前会话/模型/目录/权限
 5. `-use-session <id>` → 切换会话，打印 `switched to session <id>`
 6. `-del-session <id>` → 删除会话，打印 `deleted session <id>`
-7. 无上述参数 → 走主对话流程
+7. `-new-session` → 创建新会话，打印 `{"session_id": ...}`
+8. `-set-model` / `-clear-model` → 写/清模型 pin
+9. `-set-dir` / `-clear-dir` → 写/清目录 pin
+10. `-set-permission` / `-clear-permission` → 写/清权限 pin
+11. `-memory-set <key>=<value>` → 写入事实，打印该事实
+12. `-memory-get <key>` → 读取事实，打印 `{"found": ...}`
+13. `-memory-list` → 列出事实（可配 `-prefix`/`-scope`）
+14. `-memory-delete <key>` → 删除事实，打印 `{"existed": ...}`
+15. `-memory-search <query>` → 搜索事实（可配 `-limit`/`-scope`）
+16. 无上述参数 → 走主对话流程
 
 ### 主对话流程的前置检查
 
@@ -135,6 +161,15 @@ verbose 模式：
 - `-show-current`：缩进 JSON 对象，含 `chat_id`/`session_id`/`model`/`directory`/`permission`
 - `-use-session`：纯文本 `switched to session <id>`
 - `-del-session`：纯文本 `deleted session <id>`
+- `-new-session`：`{"session_id": "<id>}`
+- `-set-model` / `-clear-model`：`{"model": "<value>"}`
+- `-set-dir` / `-clear-dir`：`{"directory": "<value>"}`
+- `-set-permission` / `-clear-permission`：`{"permission": "<value>"}`
+- `-memory-set`：缩进 JSON 对象，含 `key`/`value`/`scope`/`updated_at`（写入后回读）
+- `-memory-get`：缩进 JSON 对象；命中时含 `found:true`+`key`/`value`/`scope`/`updated_at`，未命中时 `{"found":false,"scope":"<scope>"}`
+- `-memory-list`：缩进 JSON 数组，元素含 `key`/`value`/`scope`/`updated_at`（空结果为 `[]`）
+- `-memory-delete`：`{"existed": <bool>}`（删除不存在的 key 不报错，`existed:false`）
+- `-memory-search`：缩进 JSON 数组，结构与 `-memory-list` 相同，按子串匹配并截断到 `-limit`
 
 子命令输出序列化失败时 stderr 报错并退出码 1。
 
@@ -315,6 +350,21 @@ echo "审阅 a.go 的实现" | MINIAGENT_API_KEY=sk-xxx \
 
 # 查看会话状态
 ./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -show-current
+
+# 固定该 chat 的模型/目录/权限（之后对话可不传这些 flag）
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -set-model -model gpt-4o
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -set-dir -workdir ./repo
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -clear-permission
+
+# 手动沉淀长期事实（也可让 LLM 在对话中通过 memory_set 工具写入）
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -memory-set 'user.lang=zh'
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -memory-get 'user.lang'
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -memory-list -scope global
+
+# 新建/切换/删除会话
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -new-session
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -use-session 20260101-120000
+./bin/miniagent -state-dir ~/.miniagent -chat-id task-1 -list-sessions
 
 # 查看版本
 ./bin/miniagent -version
