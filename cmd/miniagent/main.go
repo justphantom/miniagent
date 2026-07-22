@@ -46,14 +46,6 @@ type cliFlags struct {
 	clearDir     *bool
 	setPerm      *bool
 	clearPerm    *bool
-	memoryList   *bool
-	memoryGet    *string
-	memorySet    *string
-	memoryDelete *string
-	memorySearch *string
-	scope        *string
-	prefix       *string
-	limit        *int
 
 	stream *bool
 
@@ -69,9 +61,9 @@ func parseFlags() *cliFlags {
 	f.system = flag.String("system", "你是一个简洁的助手，回答通常不超过 500 字。", "system prompt")
 	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens")
 	f.workdir = flag.String("workdir", "", "working directory (tool bounds + shell cwd)")
-	f.stateDir = flag.String("state-dir", "", "state directory for session/memory (empty = stateless)")
+	f.stateDir = flag.String("state-dir", "", "state directory for sessions (empty = stateless)")
 	f.chatID = flag.String("chat-id", "", "chat id for per-chat session isolation (empty = no history)")
-	f.permission = flag.String("permission", "default", "permission mode: plan (read-only), default (bounded), free (unrestricted)")
+	f.permission = flag.String("permission", "default", "permission mode: default (bounded) or free (unrestricted)")
 	f.verbose = flag.Bool("verbose", false, "emit tool_use and tool_result events (default: tool_use only)")
 	f.blockedPat = flag.String("blocked-patterns", "", "JSON array of blocked shell patterns (overrides built-in defaults)")
 	f.showVer = flag.Bool("version", false, "show version")
@@ -95,14 +87,6 @@ func parseFlags() *cliFlags {
 	f.clearDir = flag.Bool("clear-dir", false, "clear the directory pin for --chat-id, then exit")
 	f.setPerm = flag.Bool("set-permission", false, "set the permission pin for --chat-id (reads value from -permission), then exit")
 	f.clearPerm = flag.Bool("clear-permission", false, "clear the permission pin for --chat-id, then exit")
-	f.memoryList = flag.Bool("memory-list", false, "list long-term facts for --chat-id, then exit")
-	f.memoryGet = flag.String("memory-get", "", "read fact <key> for --chat-id, then exit")
-	f.memorySet = flag.String("memory-set", "", "write fact as <key>=<value> for --chat-id, then exit")
-	f.memoryDelete = flag.String("memory-delete", "", "delete fact <key> for --chat-id, then exit")
-	f.memorySearch = flag.String("memory-search", "", "search facts by substring <query> for --chat-id, then exit")
-	f.scope = flag.String("scope", "chat", "scope for memory-* subcommands: chat|project|global")
-	f.prefix = flag.String("prefix", "", "key prefix filter for --memory-list")
-	f.limit = flag.Int("limit", 20, "max results for --memory-search")
 
 	// 默认开启：流式下首字节快、可中途感知。端点不支持 SSE 时用 -stream=false 回退非流式。
 	f.stream = flag.Bool("stream", true, "stream SSE text deltas (default true)")
@@ -138,10 +122,7 @@ func dispatchSubcommand(f *cliFlags, apiKey string) bool {
 	if dispatchMetadataSubcommand(f, apiKey) {
 		return true
 	}
-	if dispatchMutationSubcommand(f) {
-		return true
-	}
-	return dispatchMemorySubcommand(f)
+	return dispatchMutationSubcommand(f)
 }
 
 func dispatchMetadataSubcommand(f *cliFlags, apiKey string) bool {
@@ -200,35 +181,11 @@ func dispatchMutationSubcommand(f *cliFlags) bool {
 	return false
 }
 
-func dispatchMemorySubcommand(f *cliFlags) bool {
-	if *f.memorySet != "" {
-		runMemorySet(*f.stateDir, *f.chatID, *f.scope, *f.memorySet)
-		return true
-	}
-	if *f.memoryGet != "" {
-		runMemoryGet(*f.stateDir, *f.chatID, *f.scope, *f.memoryGet)
-		return true
-	}
-	if *f.memoryList {
-		runMemoryList(*f.stateDir, *f.chatID, *f.scope, *f.prefix)
-		return true
-	}
-	if *f.memoryDelete != "" {
-		runMemoryDelete(*f.stateDir, *f.chatID, *f.scope, *f.memoryDelete)
-		return true
-	}
-	if *f.memorySearch != "" {
-		runMemorySearch(*f.stateDir, *f.chatID, *f.scope, *f.memorySearch, *f.limit)
-		return true
-	}
-	return false
-}
-
 func runConversation(f *cliFlags, apiKey string, logger *slog.Logger) {
 	validateConversationFlags(f, apiKey)
 	prompt := mustReadPrompt()
 	llm := buildLLM(apiKey, *f.baseURL, logger)
-	tools := buildToolSet(f, logger)
+	tools := buildToolSet(f)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -270,7 +227,7 @@ func buildLLM(apiKey, baseURL string, logger *slog.Logger) *miniagent.HTTPClient
 	}
 }
 
-func buildToolSet(f *cliFlags, logger *slog.Logger) []miniagent.Tool {
+func buildToolSet(f *cliFlags) []miniagent.Tool {
 	var blockedPats []string
 	if *f.blockedPat != "" {
 		if err := json.Unmarshal([]byte(*f.blockedPat), &blockedPats); err != nil {
@@ -284,11 +241,6 @@ func buildToolSet(f *cliFlags, logger *slog.Logger) []miniagent.Tool {
 		workdir:         *f.workdir,
 		blockedPatterns: blockedPats,
 	})
-
-	st := initStores(*f.stateDir, *f.chatID, *f.model, *f.workdir, *f.permission, logger)
-	if st.facts != nil {
-		tools = append(tools, miniagent.MemoryTools(st.facts, *f.chatID)...)
-	}
 	return tools
 }
 
@@ -296,12 +248,10 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, t
 	st := initStores(*f.stateDir, *f.chatID, *f.model, *f.workdir, *f.permission, logger)
 	hist := st.history.Load(*f.chatID)
 	emit := miniagent.StreamEmitFunc(os.Stdout, *f.verbose)
-	memoryContext := buildMemoryContext(st.facts, *f.chatID, logger)
 
 	result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
 		Model:            *f.model,
 		System:           *f.system,
-		MemoryContext:    memoryContext,
 		MaxTokens:        *f.maxTokens,
 		Tools:            tools,
 		Stream:           *f.stream,
@@ -331,19 +281,4 @@ func emitConversationResult(result miniagent.Result, f *cliFlags, logger *slog.L
 		logger.Warn("emit result failed", "error", err)
 		os.Exit(1)
 	}
-}
-
-func buildMemoryContext(facts *miniagent.FactStore, chatID string, logger *slog.Logger) string {
-	if facts == nil {
-		return ""
-	}
-	chatFacts, err := facts.List(miniagent.ScopeChat, chatID, "")
-	if err != nil {
-		logger.Warn("memory: list failed", "error", err)
-		return ""
-	}
-	if len(chatFacts) == 0 {
-		return ""
-	}
-	return formatFactsForCLI(chatFacts)
 }

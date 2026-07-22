@@ -118,13 +118,9 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID stri
 		logger.Debug("llm call start", "prompt_id", promptID, "step", step, "model", cfg.Model)
 	}
 	callStart := time.Now()
-	system := cfg.System
-	if cfg.MemoryContext != "" {
-		system += cfg.MemoryContext
-	}
 	req := Request{
 		Model:     cfg.Model,
-		System:    system,
+		System:    cfg.System,
 		Messages:  msgs,
 		MaxTokens: cfg.MaxTokens,
 		Tools:     toolSpecs,
@@ -173,7 +169,7 @@ func handleToolCalls(ctx context.Context, promptID string, step int, resp Respon
 	}
 
 	// 同一步内 LLM 一次发起的多个 tool_call 相互独立，串行会让总耗时 = Σ 单工具
-	// 耗时（shell/webfetch 各自可达数十秒）。并行执行，结果按原 index 回填，保证
+	// 耗时（shell 可达数十秒）。并行执行，结果按原 index 回填，保证
 	// tool_result 信号与历史消息仍与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
 	results := runToolsParallel(ctx, logger, calls, toolByName, maxParallel)
 

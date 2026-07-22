@@ -49,7 +49,7 @@ func (h *History) resolve(chatID string) string {
 	return path
 }
 
-// Current returns the active session id, or "" when none / memory disabled.
+// Current returns the active session id, or "" when none or history disabled.
 func (h *History) Current(chatID string) string {
 	if h == nil {
 		return ""
@@ -60,7 +60,7 @@ func (h *History) Current(chatID string) string {
 // NewSession points the chat at a fresh empty session.
 func (h *History) NewSession(chatID string) (string, error) {
 	if h == nil {
-		return "", errors.New("miniagent: memory disabled")
+		return "", errors.New("miniagent: history disabled")
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -86,7 +86,7 @@ func (h *History) NewSession(chatID string) (string, error) {
 // ListSessions enumerates the chat's session files, oldest first.
 func (h *History) ListSessions(chatID string) ([]SessionInfo, error) {
 	if h == nil {
-		return nil, errors.New("miniagent: memory disabled")
+		return nil, errors.New("miniagent: history disabled")
 	}
 	if chatID == "" {
 		return nil, errors.New("miniagent: chatID is empty")
@@ -120,7 +120,7 @@ func (h *History) ListSessions(chatID string) ([]SessionInfo, error) {
 // UseSession switches the chat back to a stored session.
 func (h *History) UseSession(chatID, sid string) error {
 	if h == nil {
-		return errors.New("miniagent: memory disabled")
+		return errors.New("miniagent: history disabled")
 	}
 	if !validSessionID(sid) {
 		return fmt.Errorf("miniagent: invalid session id %q", sid)
@@ -136,7 +136,7 @@ func (h *History) UseSession(chatID, sid string) error {
 // DeleteSession removes a session file.
 func (h *History) DeleteSession(chatID, sid string) error {
 	if h == nil {
-		return errors.New("miniagent: memory disabled")
+		return errors.New("miniagent: history disabled")
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()

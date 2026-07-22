@@ -1,38 +1,19 @@
 package main
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// plan 模式 + 空 workdir：只应注册 webfetch（read_file 被跳过）。
-func TestBuildTools_PlanEmptyWorkdir(t *testing.T) {
-	tools := buildTools(toolConfig{permission: "plan", workdir: ""})
-	names := toolNames(tools)
-	if len(names) != 1 || names[0] != "webfetch" {
-		t.Errorf("plan+empty workdir = %v, want [webfetch]", names)
-	}
-}
-
-// plan 模式 + workdir：注册 read_file + webfetch。
-func TestBuildTools_PlanWithWorkdir(t *testing.T) {
-	tools := buildTools(toolConfig{permission: "plan", workdir: t.TempDir()})
-	names := toolNames(tools)
-	if len(names) != 2 || names[0] != "read_file" || names[1] != "webfetch" {
-		t.Errorf("plan+workdir = %v, want [read_file webfetch]", names)
-	}
-}
-
-// default 模式 + workdir：4 个文件/shell 工具 + webfetch。
+// default 模式 + workdir：注册 4 个文件/shell 工具。
 func TestBuildTools_DefaultWithWorkdir(t *testing.T) {
 	tools := buildTools(toolConfig{permission: "default", workdir: t.TempDir()})
 	names := toolNames(tools)
-	if len(names) != 5 {
+	if len(names) != 4 {
 		t.Errorf("default+workdir got %d tools: %v", len(names), names)
 	}
-	expect := map[string]bool{"read_file": true, "write_file": true, "edit_file": true, "shell": true, "webfetch": true}
+	expect := map[string]bool{"read_file": true, "write_file": true, "edit_file": true, "shell": true}
 	for _, n := range names {
 		if !expect[n] {
 			t.Errorf("unexpected tool %q", n)
@@ -40,20 +21,19 @@ func TestBuildTools_DefaultWithWorkdir(t *testing.T) {
 	}
 }
 
-// default 模式 + 空 workdir：只注册 webfetch。
+// default 模式 + 空 workdir：不注册任何工具。
 func TestBuildTools_DefaultEmptyWorkdir(t *testing.T) {
 	tools := buildTools(toolConfig{permission: "default", workdir: ""})
-	names := toolNames(tools)
-	if len(names) != 1 || names[0] != "webfetch" {
-		t.Errorf("default+empty workdir = %v, want [webfetch]", names)
+	if len(tools) != 0 {
+		t.Errorf("default+empty workdir = %v, want []", toolNames(tools))
 	}
 }
 
 // free 模式即使 workdir 为空也注册全部工具（unrestricted）。
 func TestBuildTools_FreeEmptyWorkdir(t *testing.T) {
 	tools := buildTools(toolConfig{permission: "free", workdir: ""})
-	if len(tools) != 5 {
-		t.Errorf("free+empty workdir got %d tools, want 5", len(tools))
+	if len(tools) != 4 {
+		t.Errorf("free+empty workdir got %d tools, want 4", len(tools))
 	}
 }
 
@@ -75,19 +55,19 @@ func TestBuildTools_BlockedPatternsPropagated(t *testing.T) {
 // stateDir 或 chatID 任一为空，initStores 返回空 stores（全 nil）。
 func TestInitStores_EmptyReturnsNil(t *testing.T) {
 	s := initStores("", "c1", "m", "/tmp", "default", nil)
-	if s.history != nil || s.facts != nil || s.meta != nil {
+	if s.history != nil || s.meta != nil {
 		t.Errorf("empty stateDir should return nil stores, got %+v", s)
 	}
 	s = initStores(t.TempDir(), "", "m", "/tmp", "default", nil)
-	if s.history != nil || s.facts != nil || s.meta != nil {
+	if s.history != nil || s.meta != nil {
 		t.Errorf("empty chatID should return nil stores, got %+v", s)
 	}
 }
 
-// 两者都给值时，三个 store 都应初始化，且 meta 落盘。
-func TestInitStores_OpensAllThree(t *testing.T) {
+// 两者都给值时，store 都应初始化，且 meta 落盘。
+func TestInitStores_OpensAll(t *testing.T) {
 	s := initStores(t.TempDir(), "chat-1", "gpt-4o", "/tmp/x", "default", nil)
-	if s.history == nil || s.facts == nil || s.meta == nil {
+	if s.history == nil || s.meta == nil {
 		t.Fatalf("expected all stores non-nil: %+v", s)
 	}
 	if got := s.meta.Model("chat-1"); got != "gpt-4o" {
@@ -107,101 +87,4 @@ func toolNames(tools []miniagent.Tool) []string {
 		out[i] = t.Name
 	}
 	return out
-}
-
-// 条数超过上限时应截断并标注总数，避免 system prompt 膨胀。
-func TestFormatFactsForCLI_TruncatesByItemCount(t *testing.T) {
-	facts := make([]miniagent.Fact, maxMemoryContextItems+10)
-	for i := range facts {
-		facts[i] = miniagent.Fact{Key: "k" + itoa(i), Value: "v"}
-	}
-	got := formatFactsForCLI(facts)
-	if !strings.Contains(got, "已显示前") {
-		t.Errorf("expected truncation marker, got:\n%s", got)
-	}
-}
-
-// 总字符超过上限时也应截断。
-func TestFormatFactsForCLI_TruncatesByCharLimit(t *testing.T) {
-	big := strings.Repeat("x", maxMemoryContextChars)
-	facts := []miniagent.Fact{
-		{Key: "k1", Value: big},
-		{Key: "k2", Value: big},
-	}
-	got := formatFactsForCLI(facts)
-	if !strings.Contains(got, "已显示前") {
-		t.Errorf("expected char-limit truncation, got length=%d", len(got))
-	}
-}
-
-// 少量事实正常输出，无截断标注。
-func TestFormatFactsForCLI_NoTruncationWhenSmall(t *testing.T) {
-	facts := []miniagent.Fact{{Key: "user.lang", Value: "zh"}}
-	got := formatFactsForCLI(facts)
-	if strings.Contains(got, "已显示前") {
-		t.Errorf("unexpected truncation: %s", got)
-	}
-	if !strings.Contains(got, "user.lang: zh") {
-		t.Errorf("missing fact content: %s", got)
-	}
-}
-
-// 空列表返回空字符串。
-func TestFormatFactsForCLI_Empty(t *testing.T) {
-	if got := formatFactsForCLI(nil); got != "" {
-		t.Errorf("empty = %q, want empty", got)
-	}
-}
-
-// itoa 是避免引入 strconv 的本地实现（仅测试用）。
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	if neg {
-		b = append([]byte{'-'}, b...)
-	}
-	return string(b)
-}
-
-// parseMemorySetArg 按 key=value 解析；value 允许含 '='，key 必须非空。
-func TestParseMemorySetArg(t *testing.T) {
-	cases := []struct {
-		in      string
-		wantK   string
-		wantV   string
-		wantErr bool
-	}{
-		{"user.lang=zh", "user.lang", "zh", false},
-		{"k=a=b=c", "k", "a=b=c", false}, // 仅按首个 '=' 切，value 保留后续 '='
-		{"empty=", "empty", "", false},   // 空 value 合法
-		{"noeq", "", "", true},           // 缺 '='
-		{"=val", "", "", true},           // key 为空
-		{"", "", "", true},
-	}
-	for _, c := range cases {
-		k, v, err := parseMemorySetArg(c.in)
-		if c.wantErr {
-			if err == nil {
-				t.Errorf("parseMemorySetArg(%q): want error, got (%q,%q,nil)", c.in, k, v)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("parseMemorySetArg(%q): unexpected error %v", c.in, err)
-			continue
-		}
-		if k != c.wantK || v != c.wantV {
-			t.Errorf("parseMemorySetArg(%q) = (%q,%q), want (%q,%q)", c.in, k, v, c.wantK, c.wantV)
-		}
-	}
 }

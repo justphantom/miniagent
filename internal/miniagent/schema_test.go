@@ -54,23 +54,14 @@ func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 }
 
 // 所有内置工具的 Parameters 序列化后，required 字段不得为 null。
-// 覆盖全可选参数工具（如 memory_list）的回归。
 func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 	workdir := t.TempDir()
-	store, err := NewFactStore(t.TempDir(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	memoryTools := MemoryTools(store, "chat-1")
-	tools := make([]Tool, 0, 5+len(memoryTools))
-	tools = append(tools,
+	tools := []Tool{
 		ReadFileTool(workdir, false),
 		WriteFileTool(workdir, false),
 		EditFileTool(workdir, false),
 		ShellTool(workdir, false, nil),
-		WebFetchTool(nil),
-	)
-	tools = append(tools, memoryTools...)
+	}
 
 	for _, tk := range tools {
 		b, err := json.Marshal(tk.Parameters)
@@ -96,26 +87,5 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 		if strings.Contains(string(b), `"required":null`) {
 			t.Errorf("%s: raw JSON has required:null: %s", tk.Name, b)
 		}
-	}
-}
-
-// memory_list 是当前唯一全可选参数的工具，单独点名覆盖，防止未来被改回。
-func TestMemoryListSchema_NoNullRequired(t *testing.T) {
-	store, err := NewFactStore(t.TempDir(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var list Tool
-	for _, tk := range MemoryTools(store, "c") {
-		if tk.Name == "memory_list" {
-			list = tk
-		}
-	}
-	b, err := json.Marshal(list.Parameters)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if strings.Contains(string(b), `"required"`) {
-		t.Errorf("memory_list should omit required, got %s", b)
 	}
 }

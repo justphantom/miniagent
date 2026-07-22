@@ -102,10 +102,9 @@ type Result struct {
 
 // LoopConfig carries the per-turn LLM parameters.
 type LoopConfig struct {
-	Model         string
-	System        string
-	MemoryContext string
-	MaxTokens     int
+	Model     string
+	System    string
+	MaxTokens int
 	Tools         []Tool
 	// Stream=true 时走 SSE 流式，文本增量经 SignalText 透传给 emit。
 	// 与 emit 解耦：emit 只为 tool 信号时无需开 Stream。

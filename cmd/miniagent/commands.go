@@ -6,46 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
-
-// formatFactsForCLI renders chat-scope facts as an appended system-prompt block.
-// 双上限：条数与字符。事实累积过多时截断并标注，避免 system prompt 膨胀
-// 挤占模型上下文（该路径不受 maxHistoryTokens 裁剪约束）。
-const (
-	maxMemoryContextItems = 30
-	maxMemoryContextChars = 2000
-)
-
-func formatFactsForCLI(facts []miniagent.Fact) string {
-	if len(facts) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("\n\n以下是与当前对话相关的已知事实（由用户或之前的对话沉淀）：\n")
-	shown := 0
-	truncated := false
-	for _, f := range facts {
-		line := fmt.Sprintf("- %s: %s\n", f.Key, f.Value)
-		if sb.Len()+len(line) > maxMemoryContextChars {
-			truncated = true
-			break
-		}
-		sb.WriteString(line)
-		shown++
-		if shown >= maxMemoryContextItems {
-			truncated = true
-			break
-		}
-	}
-	if truncated {
-		fmt.Fprintf(&sb, "（共 %d 条，已显示前 %d 条）\n", len(facts), shown)
-	}
-	return sb.String()
-}
 
 func runListModels(apiKey, baseURL string) {
 	if apiKey == "" {
@@ -187,24 +151,6 @@ func mustMeta(stateDir, chatID, action string) *miniagent.MetaStore {
 	return m
 }
 
-// mustFacts builds a FactStore and validates state-dir/chat-id.
-func mustFacts(stateDir, chatID, action string) *miniagent.FactStore {
-	if stateDir == "" {
-		fmt.Fprintf(os.Stderr, "miniagent: --state-dir is required for --%s\n", action)
-		os.Exit(1)
-	}
-	if chatID == "" {
-		fmt.Fprintf(os.Stderr, "miniagent: --chat-id is required for --%s\n", action)
-		os.Exit(1)
-	}
-	f, err := miniagent.NewFactStore(stateDir, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: init memory: %v\n", err)
-		os.Exit(1)
-	}
-	return f
-}
-
 func runNewSession(stateDir, chatID string) {
 	h := mustHistory(stateDir, chatID, "new-session")
 	sid, err := h.NewSession(chatID)
@@ -242,134 +188,6 @@ func runSetPermission(stateDir, chatID, perm string) {
 	fmt.Println(mustMarshalJSON(map[string]string{"permission": perm}))
 }
 
-// factOut is the JSON shape for -memory-list and -memory-search results.
-type factOut struct {
-	Key       string `json:"key"`
-	Value     string `json:"value"`
-	Scope     string `json:"scope"`
-	UpdatedAt string `json:"updated_at"`
-}
-
-func runMemoryList(stateDir, chatID, scope, prefix string) {
-	f := mustFacts(stateDir, chatID, "memory-list")
-	s := miniagent.ParseFactScope(scope)
-	facts, err := f.List(s, chatID, prefix)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: list memory: %v\n", err)
-		os.Exit(1)
-	}
-	out := make([]factOut, 0, len(facts)) // empty array (not null) when no facts
-	for _, fact := range facts {
-		out = append(out, factOut{
-			Key:       fact.Key,
-			Value:     fact.Value,
-			Scope:     string(s),
-			UpdatedAt: fact.UpdatedAt.Format("2006-01-02 15:04:05"),
-		})
-	}
-	b, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: marshal memory: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(b))
-}
-
-func runMemoryDelete(stateDir, chatID, scope, key string) {
-	f := mustFacts(stateDir, chatID, "memory-delete")
-	s := miniagent.ParseFactScope(scope)
-	_, existed, err := f.Get(s, chatID, key)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: lookup memory: %v\n", err)
-		os.Exit(1)
-	}
-	if existed {
-		if err := f.Delete(s, chatID, key); err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: delete memory: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	fmt.Println(mustMarshalJSON(map[string]bool{"existed": existed}))
-}
-
-// parseMemorySetArg 把 "--memory-set key=value" 的值拆成 key/value。
-// key 必须非空；value 允许包含 '='（仅按首个 '=' 切分）。
-func parseMemorySetArg(arg string) (key, value string, err error) {
-	k, v, ok := strings.Cut(arg, "=")
-	if !ok || k == "" {
-		return "", "", fmt.Errorf("memory-set 参数格式应为 key=value，收到 %q", arg)
-	}
-	return k, v, nil
-}
-
-func runMemorySet(stateDir, chatID, scope, arg string) {
-	key, value, err := parseMemorySetArg(arg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
-		os.Exit(1)
-	}
-	f := mustFacts(stateDir, chatID, "memory-set")
-	s := miniagent.ParseFactScope(scope)
-	if err := f.Set(s, chatID, key, value, "cli"); err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: set memory: %v\n", err)
-		os.Exit(1)
-	}
-	// 回读以拿到 updated_at，便于脚本确认落盘时间。
-	fact, _, err := f.Get(s, chatID, key)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: read back memory: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(mustMarshalJSON(factOut{
-		Key:       fact.Key,
-		Value:     fact.Value,
-		Scope:     string(s),
-		UpdatedAt: fact.UpdatedAt.Format("2006-01-02 15:04:05"),
-	}))
-}
-
-func runMemoryGet(stateDir, chatID, scope, key string) {
-	f := mustFacts(stateDir, chatID, "memory-get")
-	s := miniagent.ParseFactScope(scope)
-	fact, ok, err := f.Get(s, chatID, key)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: get memory: %v\n", err)
-		os.Exit(1)
-	}
-	out := map[string]any{"scope": string(s), "found": ok}
-	if ok {
-		out["key"] = fact.Key
-		out["value"] = fact.Value
-		out["updated_at"] = fact.UpdatedAt.Format("2006-01-02 15:04:05")
-	}
-	fmt.Println(mustMarshalJSON(out))
-}
-
-func runMemorySearch(stateDir, chatID, scope, query string, limit int) {
-	f := mustFacts(stateDir, chatID, "memory-search")
-	s := miniagent.ParseFactScope(scope)
-	facts, err := f.Search(s, chatID, query, limit)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: search memory: %v\n", err)
-		os.Exit(1)
-	}
-	out := make([]factOut, 0, len(facts))
-	for _, fact := range facts {
-		out = append(out, factOut{
-			Key:       fact.Key,
-			Value:     fact.Value,
-			Scope:     string(s),
-			UpdatedAt: fact.UpdatedAt.Format("2006-01-02 15:04:05"),
-		})
-	}
-	b, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: marshal search: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(b))
-}
-
 func mustMarshalJSON(v any) string {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -387,43 +205,29 @@ type toolConfig struct {
 	blockedPatterns []string
 }
 
-// buildTools 按权限模式装配工具集。空 workdir 与模式的组合会打印 stderr
-// 告警但仍返回已注册的工具（与历史行为一致）。
+// buildTools 按权限模式装配工具集。空 workdir 且非 free 时打印 stderr
+// 告警并返回空工具集（与历史行为一致）。
 func buildTools(cfg toolConfig) []miniagent.Tool {
 	unrestricted := cfg.permission == "free"
-	var tools []miniagent.Tool
-	switch cfg.permission {
-	case "plan":
-		if cfg.workdir != "" {
-			tools = append(tools, miniagent.ReadFileTool(cfg.workdir, unrestricted))
-		} else {
-			fmt.Fprintln(os.Stderr, "miniagent: --workdir is empty, read_file not registered (plan mode needs a workspace)")
-		}
-		tools = append(tools, miniagent.WebFetchTool(nil))
-	default:
-		if cfg.workdir != "" || unrestricted {
-			tools = append(tools,
-				miniagent.ReadFileTool(cfg.workdir, unrestricted),
-				miniagent.WriteFileTool(cfg.workdir, unrestricted),
-				miniagent.EditFileTool(cfg.workdir, unrestricted),
-				miniagent.ShellTool(cfg.workdir, unrestricted, cfg.blockedPatterns),
-			)
-		} else {
-			fmt.Fprintln(os.Stderr, "miniagent: --workdir is empty AND permission is not free; read_file/write_file/shell/edit_file not registered")
-		}
-		tools = append(tools, miniagent.WebFetchTool(nil))
+	if cfg.workdir == "" && !unrestricted {
+		fmt.Fprintln(os.Stderr, "miniagent: --workdir is empty AND permission is not free; read_file/write_file/shell/edit_file not registered")
+		return nil
 	}
-	return tools
+	return []miniagent.Tool{
+		miniagent.ReadFileTool(cfg.workdir, unrestricted),
+		miniagent.WriteFileTool(cfg.workdir, unrestricted),
+		miniagent.EditFileTool(cfg.workdir, unrestricted),
+		miniagent.ShellTool(cfg.workdir, unrestricted, cfg.blockedPatterns),
+	}
 }
 
-// stores 聚合一次 turn 需要的三个持久化句柄。
+// stores 聚合一次 turn 需要的持久化句柄。
 type stores struct {
 	history *miniagent.History
-	facts   *miniagent.FactStore
 	meta    *miniagent.MetaStore
 }
 
-// initStores 在 stateDir+chatID 都非空时打开三个 store，并把 model/dir/permission
+// initStores 在 stateDir+chatID 都非空时打开 store，并把 model/dir/permission
 // 写入 meta；返回的 stores 字段任一可能为 nil（无状态模式）。
 func initStores(stateDir, chatID, model, workdir, permission string, logger *slog.Logger) stores {
 	if stateDir == "" || chatID == "" {
@@ -432,11 +236,6 @@ func initStores(stateDir, chatID, model, workdir, permission string, logger *slo
 	history, err := miniagent.NewHistory(stateDir, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
-		os.Exit(1)
-	}
-	facts, err := miniagent.NewFactStore(stateDir, logger)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: init memory: %v\n", err)
 		os.Exit(1)
 	}
 	meta, err := miniagent.NewMetaStore(stateDir)
@@ -453,5 +252,5 @@ func initStores(stateDir, chatID, model, workdir, permission string, logger *slo
 	if err := meta.SetPermission(chatID, permission); err != nil {
 		logger.Warn("meta: set permission failed", "error", err)
 	}
-	return stores{history: history, facts: facts, meta: meta}
+	return stores{history: history, meta: meta}
 }
