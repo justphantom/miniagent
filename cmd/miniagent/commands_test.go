@@ -52,32 +52,21 @@ func TestBuildTools_BlockedPatternsPropagated(t *testing.T) {
 	}
 }
 
-// stateDir 或 chatID 任一为空，initStores 返回空 stores（全 nil）。
-func TestInitStores_EmptyReturnsNil(t *testing.T) {
-	s := initStores("", "c1", "m", "/tmp", "default", nil)
-	if s.history != nil || s.meta != nil {
-		t.Errorf("empty stateDir should return nil stores, got %+v", s)
+// stateDir 或 chatID 任一为空，initHistory 返回 nil（无状态模式）。
+func TestInitHistory_EmptyReturnsNil(t *testing.T) {
+	if h := initHistory("", "c1", nil); h != nil {
+		t.Errorf("empty stateDir should return nil, got %v", h)
 	}
-	s = initStores(t.TempDir(), "", "m", "/tmp", "default", nil)
-	if s.history != nil || s.meta != nil {
-		t.Errorf("empty chatID should return nil stores, got %+v", s)
+	if h := initHistory(t.TempDir(), "", nil); h != nil {
+		t.Errorf("empty chatID should return nil, got %v", h)
 	}
 }
 
-// 两者都给值时，store 都应初始化，且 meta 落盘。
-func TestInitStores_OpensAll(t *testing.T) {
-	s := initStores(t.TempDir(), "chat-1", "gpt-4o", "/tmp/x", "default", nil)
-	if s.history == nil || s.meta == nil {
-		t.Fatalf("expected all stores non-nil: %+v", s)
-	}
-	if got := s.meta.Model("chat-1"); got != "gpt-4o" {
-		t.Errorf("meta.Model = %q, want gpt-4o", got)
-	}
-	if got := s.meta.Directory("chat-1"); got != "/tmp/x" {
-		t.Errorf("meta.Directory = %q", got)
-	}
-	if got := s.meta.Permission("chat-1"); got != "default" {
-		t.Errorf("meta.Permission = %q", got)
+// 两者都给值时，history 应初始化。
+func TestInitHistory_OpensHistory(t *testing.T) {
+	h := initHistory(t.TempDir(), "chat-1", nil)
+	if h == nil {
+		t.Fatalf("expected non-nil history")
 	}
 }
 

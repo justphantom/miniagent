@@ -35,17 +35,10 @@ type cliFlags struct {
 
 	listModels   *bool
 	listSessions *bool
-	showCurrent  *bool
 	useSession   *string
 	delSession   *string
 
-	newSession   *bool
-	setModel     *bool
-	clearModel   *bool
-	setDir       *bool
-	clearDir     *bool
-	setPerm      *bool
-	clearPerm    *bool
+	newSession *bool
 
 	stream *bool
 
@@ -70,23 +63,9 @@ func parseFlags() *cliFlags {
 
 	f.listModels = flag.Bool("list-models", false, "list available models from the endpoint, then exit")
 	f.listSessions = flag.Bool("list-sessions", false, "list sessions for --chat-id, then exit")
-	f.showCurrent = flag.Bool("show-current", false, "show current session/model/dir/permission for --chat-id, then exit")
 	f.useSession = flag.String("use-session", "", "switch to session <id> for --chat-id, then exit")
 	f.delSession = flag.String("del-session", "", "delete session <id> for --chat-id, then exit")
-
-	// Mutation subcommands. Each dispatches before the main conversation
-	// flow. The -set-* flags read their value from the existing -model/
-	// -workdir/-permission flags; to CLEAR a pin the bridge uses the
-	// explicit -clear-* flag (necessary because -permission has a
-	// non-empty default of "default", so empty-value-as-clear would be
-	// ambiguous for that one flag and inconsistent for the others).
 	f.newSession = flag.Bool("new-session", false, "create a new session for --chat-id, then exit")
-	f.setModel = flag.Bool("set-model", false, "set the model pin for --chat-id (reads value from -model), then exit")
-	f.clearModel = flag.Bool("clear-model", false, "clear the model pin for --chat-id, then exit")
-	f.setDir = flag.Bool("set-dir", false, "set the directory pin for --chat-id (reads value from -workdir), then exit")
-	f.clearDir = flag.Bool("clear-dir", false, "clear the directory pin for --chat-id, then exit")
-	f.setPerm = flag.Bool("set-permission", false, "set the permission pin for --chat-id (reads value from -permission), then exit")
-	f.clearPerm = flag.Bool("clear-permission", false, "clear the permission pin for --chat-id, then exit")
 
 	// 默认开启：流式下首字节快、可中途感知。端点不支持 SSE 时用 -stream=false 回退非流式。
 	f.stream = flag.Bool("stream", true, "stream SSE text deltas (default true)")
@@ -119,23 +98,12 @@ func main() {
 }
 
 func dispatchSubcommand(f *cliFlags, apiKey string) bool {
-	if dispatchMetadataSubcommand(f, apiKey) {
-		return true
-	}
-	return dispatchMutationSubcommand(f)
-}
-
-func dispatchMetadataSubcommand(f *cliFlags, apiKey string) bool {
 	if *f.listModels {
 		runListModels(apiKey, *f.baseURL)
 		return true
 	}
 	if *f.listSessions {
 		runListSessions(*f.stateDir, *f.chatID)
-		return true
-	}
-	if *f.showCurrent {
-		runShowCurrent(*f.stateDir, *f.chatID)
 		return true
 	}
 	if *f.useSession != "" {
@@ -146,36 +114,8 @@ func dispatchMetadataSubcommand(f *cliFlags, apiKey string) bool {
 		runDelSession(*f.stateDir, *f.chatID, *f.delSession)
 		return true
 	}
-	return false
-}
-
-func dispatchMutationSubcommand(f *cliFlags) bool {
 	if *f.newSession {
 		runNewSession(*f.stateDir, *f.chatID)
-		return true
-	}
-	if *f.setModel {
-		runSetModel(*f.stateDir, *f.chatID, *f.model)
-		return true
-	}
-	if *f.clearModel {
-		runSetModel(*f.stateDir, *f.chatID, "")
-		return true
-	}
-	if *f.setDir {
-		runSetDir(*f.stateDir, *f.chatID, *f.workdir)
-		return true
-	}
-	if *f.clearDir {
-		runSetDir(*f.stateDir, *f.chatID, "")
-		return true
-	}
-	if *f.setPerm {
-		runSetPermission(*f.stateDir, *f.chatID, *f.permission)
-		return true
-	}
-	if *f.clearPerm {
-		runSetPermission(*f.stateDir, *f.chatID, "")
 		return true
 	}
 	return false
@@ -186,13 +126,13 @@ func runConversation(f *cliFlags, apiKey string, logger *slog.Logger) {
 	prompt := mustReadPrompt()
 	llm := buildLLM(apiKey, *f.baseURL, logger)
 	tools := buildToolSet(f)
-	st := initStores(*f.stateDir, *f.chatID, *f.model, *f.workdir, *f.permission, logger)
+	hist := initHistory(*f.stateDir, *f.chatID, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	result := mustRunAgent(ctx, llm, f, st, tools, prompt, logger)
-	emitConversationResult(result, f, st, logger)
+	result := mustRunAgent(ctx, llm, f, hist, tools, prompt, logger)
+	emitConversationResult(result, f, hist, logger)
 }
 
 func validateConversationFlags(f *cliFlags, apiKey string) {
@@ -245,8 +185,8 @@ func buildToolSet(f *cliFlags) []miniagent.Tool {
 	return tools
 }
 
-func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, st stores, tools []miniagent.Tool, prompt []byte, logger *slog.Logger) miniagent.Result {
-	hist := st.history.Load(*f.chatID)
+func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, hist *miniagent.History, tools []miniagent.Tool, prompt []byte, logger *slog.Logger) miniagent.Result {
+	loaded := hist.Load(*f.chatID)
 	emit := miniagent.StreamEmitFunc(os.Stdout, *f.verbose)
 
 	result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
@@ -258,7 +198,7 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, s
 		MaxParallelTools: *f.maxParallelTools,
 		MaxTokensBudget:  *f.maxTokensBudget,
 		MaxHistoryTokens: *f.maxHistoryTokens,
-	}, "cli", string(prompt), hist, emit, logger)
+	}, "cli", string(prompt), loaded, emit, logger)
 
 	if err != nil {
 		if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
@@ -269,8 +209,8 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, s
 	return result
 }
 
-func emitConversationResult(result miniagent.Result, f *cliFlags, st stores, logger *slog.Logger) {
-	if err := st.history.Append(*f.chatID, result.NewMessages); err != nil {
+func emitConversationResult(result miniagent.Result, f *cliFlags, hist *miniagent.History, logger *slog.Logger) {
+	if err := hist.Append(*f.chatID, result.NewMessages); err != nil {
 		logger.Warn("history: append failed", "error", err)
 	}
 	if result.Incomplete {

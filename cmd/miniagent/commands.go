@@ -79,46 +79,6 @@ func runListSessions(stateDir, chatID string) {
 	fmt.Println(string(b))
 }
 
-func runShowCurrent(stateDir, chatID string) {
-	if stateDir == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: --state-dir is required for --show-current")
-		os.Exit(1)
-	}
-	if chatID == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: --chat-id is required for --show-current")
-		os.Exit(1)
-	}
-	h, err := miniagent.NewHistory(stateDir, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
-		os.Exit(1)
-	}
-	meta, err := miniagent.NewMetaStore(stateDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
-		os.Exit(1)
-	}
-	info := struct {
-		ChatID     string `json:"chat_id"`
-		SessionID  string `json:"session_id"`
-		Model      string `json:"model"`
-		Directory  string `json:"directory"`
-		Permission string `json:"permission"`
-	}{
-		ChatID:     chatID,
-		SessionID:  h.Current(chatID),
-		Model:      meta.Model(chatID),
-		Directory:  meta.Directory(chatID),
-		Permission: meta.Permission(chatID),
-	}
-	b, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: marshal current: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(b))
-}
-
 func runUseSession(stateDir, chatID, sid string) {
 	h := mustHistory(stateDir, chatID, "use-session")
 	if err := h.UseSession(chatID, sid); err != nil {
@@ -137,18 +97,6 @@ func runDelSession(stateDir, chatID, sid string) {
 	fmt.Printf("deleted session %s\n", sid)
 }
 
-// mustMeta builds a MetaStore and validates state-dir/chat-id, exiting with a
-// clear message on missing input. Used by the -set-* mutation subcommands.
-func mustMeta(stateDir, chatID, action string) *miniagent.MetaStore {
-	mustStoreArgs(stateDir, chatID, action)
-	m, err := miniagent.NewMetaStore(stateDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
-		os.Exit(1)
-	}
-	return m
-}
-
 func runNewSession(stateDir, chatID string) {
 	h := mustHistory(stateDir, chatID, "new-session")
 	sid, err := h.NewSession(chatID)
@@ -157,29 +105,6 @@ func runNewSession(stateDir, chatID string) {
 		os.Exit(1)
 	}
 	fmt.Println(mustMarshalJSON(map[string]string{"session_id": sid}))
-}
-
-// runSetPin 是 -set-model/-set-dir/-set-permission 的公共骨架：
-// 写 pin 并以 JSON 回显。action 用于错误提示（如 "set-model"）。
-func runSetPin(stateDir, chatID, action, key, value string, set func(*miniagent.MetaStore, string, string) error) {
-	m := mustMeta(stateDir, chatID, action)
-	if err := set(m, chatID, value); err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: %s: %v\n", action, err)
-		os.Exit(1)
-	}
-	fmt.Println(mustMarshalJSON(map[string]string{key: value}))
-}
-
-func runSetModel(stateDir, chatID, model string) {
-	runSetPin(stateDir, chatID, "set-model", "model", model, (*miniagent.MetaStore).SetModel)
-}
-
-func runSetDir(stateDir, chatID, dir string) {
-	runSetPin(stateDir, chatID, "set-dir", "directory", dir, (*miniagent.MetaStore).SetDirectory)
-}
-
-func runSetPermission(stateDir, chatID, perm string) {
-	runSetPin(stateDir, chatID, "set-permission", "permission", perm, (*miniagent.MetaStore).SetPermission)
 }
 
 func mustMarshalJSON(v any) string {
@@ -215,36 +140,15 @@ func buildTools(cfg toolConfig) []miniagent.Tool {
 	}
 }
 
-// stores 聚合一次 turn 需要的持久化句柄。
-type stores struct {
-	history *miniagent.History
-	meta    *miniagent.MetaStore
-}
-
-// initStores 在 stateDir+chatID 都非空时打开 store，并把 model/dir/permission
-// 写入 meta；返回的 stores 字段任一可能为 nil（无状态模式）。
-func initStores(stateDir, chatID, model, workdir, permission string, logger *slog.Logger) stores {
+// initHistory 在 stateDir+chatID 都非空时打开 history；无状态模式返回 nil。
+func initHistory(stateDir, chatID string, logger *slog.Logger) *miniagent.History {
 	if stateDir == "" || chatID == "" {
-		return stores{}
+		return nil
 	}
 	history, err := miniagent.NewHistory(stateDir, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: init history: %v\n", err)
 		os.Exit(1)
 	}
-	meta, err := miniagent.NewMetaStore(stateDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: init meta: %v\n", err)
-		os.Exit(1)
-	}
-	if err := meta.SetModel(chatID, model); err != nil {
-		logger.Warn("meta: set model failed", "error", err)
-	}
-	if err := meta.SetDirectory(chatID, workdir); err != nil {
-		logger.Warn("meta: set directory failed", "error", err)
-	}
-	if err := meta.SetPermission(chatID, permission); err != nil {
-		logger.Warn("meta: set permission failed", "error", err)
-	}
-	return stores{history: history, meta: meta}
+	return history
 }
