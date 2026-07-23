@@ -186,12 +186,13 @@ func runConversation(f *cliFlags, apiKey string, logger *slog.Logger) {
 	prompt := mustReadPrompt()
 	llm := buildLLM(apiKey, *f.baseURL, logger)
 	tools := buildToolSet(f)
+	st := initStores(*f.stateDir, *f.chatID, *f.model, *f.workdir, *f.permission, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	result := mustRunAgent(ctx, llm, f, tools, prompt, logger)
-	emitConversationResult(result, f, logger)
+	result := mustRunAgent(ctx, llm, f, st, tools, prompt, logger)
+	emitConversationResult(result, f, st, logger)
 }
 
 func validateConversationFlags(f *cliFlags, apiKey string) {
@@ -244,8 +245,7 @@ func buildToolSet(f *cliFlags) []miniagent.Tool {
 	return tools
 }
 
-func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, tools []miniagent.Tool, prompt []byte, logger *slog.Logger) miniagent.Result {
-	st := initStores(*f.stateDir, *f.chatID, *f.model, *f.workdir, *f.permission, logger)
+func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, st stores, tools []miniagent.Tool, prompt []byte, logger *slog.Logger) miniagent.Result {
 	hist := st.history.Load(*f.chatID)
 	emit := miniagent.StreamEmitFunc(os.Stdout, *f.verbose)
 
@@ -269,8 +269,7 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, t
 	return result
 }
 
-func emitConversationResult(result miniagent.Result, f *cliFlags, logger *slog.Logger) {
-	st := initStores(*f.stateDir, *f.chatID, *f.model, *f.workdir, *f.permission, logger)
+func emitConversationResult(result miniagent.Result, f *cliFlags, st stores, logger *slog.Logger) {
 	if err := st.history.Append(*f.chatID, result.NewMessages); err != nil {
 		logger.Warn("history: append failed", "error", err)
 	}
