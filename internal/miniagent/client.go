@@ -120,7 +120,7 @@ func (c *HTTPClient) prepareListModels() (*http.Client, string, error) {
 func (c *HTTPClient) executeListModels(ctx context.Context, client *http.Client, url string) ([]string, error) {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		raw, status, _, err := c.doRaw(ctx, client, http.MethodGet, url, nil, maxModelsBodyBytes)
+		raw, status, retryAfter, err := c.doRaw(ctx, client, http.MethodGet, url, nil, maxModelsBodyBytes)
 		if err == nil && status == http.StatusOK {
 			return parseModels(raw)
 		}
@@ -129,7 +129,7 @@ func (c *HTTPClient) executeListModels(ctx context.Context, client *http.Client,
 		if err != nil {
 			return nil, lastErr
 		}
-		ok, rerr := retryIfPossible(ctx, attempt, status, 0, raw)
+		ok, rerr := retryIfPossible(ctx, attempt, status, retryAfter, raw)
 		if rerr != nil {
 			return nil, rerr
 		}
