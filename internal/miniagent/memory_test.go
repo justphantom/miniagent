@@ -231,6 +231,20 @@ func TestEstimateTokens_Empty(t *testing.T) {
 	}
 }
 
+// 1.2× safety margin 必须实际生效：构造已知输入，断言返回值 == baseTotal*6/5。
+// 若有人把 `return total * 6 / 5` 改回 `return total`，本测试必须失败。
+func TestEstimateTokens_AppliesSafetyMargin(t *testing.T) {
+	// 117 个 ASCII 字节：baseTotal = perMessageOverhead(4) + (117+2)/3 = 4 + 39 = 43。
+	// 应用 1.2× 后 = 43 * 6 / 5 = 51（不含 margin 则为 43）。
+	content := strings.Repeat("a", 117)
+	msgs := []Message{{Role: "user", Content: content}}
+	got := estimateTokens(msgs)
+	const want = 43 * 6 / 5 // = 51
+	if got != want {
+		t.Errorf("estimateTokens = %d, want %d (base 43 with 1.2x safety margin)", got, want)
+	}
+}
+
 // 多 goroutine 并发 Append 同一 chatID 不应损坏 jsonl 文件：
 // 每条 Message 序列化为一行，最终 load 回来行数应等于写入总数。
 func TestHistory_ConcurrentAppendSafe(t *testing.T) {
