@@ -172,4 +172,3 @@ func TestShell_MissingWorkspaceRootRejected(t *testing.T) {
 		t.Fatal("expected missing workspace root to be rejected")
 	}
 }
-
