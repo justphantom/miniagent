@@ -1,6 +1,5 @@
-// sse.go 是 OpenAI chat completions 流式响应（SSE）的解析层。
-// 与 wire.go 的非流式 parseChatResponse 对偶：把逐 chunk 的 delta 聚合为
-// 与非流式同构的 Response，让上层 loop 无感切换。
+// sse.go 把 OpenAI chat completions 的 SSE 增量帧聚合成完整 Response。
+// 恒流式专用：callLLM 只走 DoStream，故无非流式解析对偶。
 package miniagent
 
 import (
