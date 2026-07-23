@@ -124,12 +124,6 @@ func (h *History) DeleteSession(chatID, sid string) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if sid == "" {
-		h.resolve(chatID)
-		if sid = h.current(chatID); sid == "" {
-			return errors.New("miniagent: no session to delete")
-		}
-	}
 	if !validSessionID(sid) {
 		return fmt.Errorf("miniagent: invalid session id %q", sid)
 	}

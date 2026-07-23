@@ -54,7 +54,13 @@ func runReadFile(workspaceRoot string, unrestricted bool, args string) ToolResul
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 	}
-	return ToolResult{Output: truncate(formatReadOutput(content, a.Offset, a.Limit), maxReadFileChars, "…")}
+	var formatted string
+	if a.Offset == 0 && a.Limit == 0 {
+		formatted = content
+	} else {
+		formatted = formatLines(content, a.Offset, a.Limit)
+	}
+	return ToolResult{Output: truncate(formatted, maxReadFileChars, "…")}
 }
 
 func parseReadArgs(args string) (readfileArgs, error) {
@@ -99,13 +105,6 @@ func readFileContent(full string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
-}
-
-func formatReadOutput(content string, offset, limit int) string {
-	if offset == 0 && limit == 0 {
-		return content
-	}
-	return formatLines(content, offset, limit)
 }
 
 func formatLines(content string, offset, limit int) string {

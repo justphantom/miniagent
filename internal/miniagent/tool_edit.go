@@ -72,9 +72,6 @@ func resolveEditTarget(workspaceRoot, path string, unrestricted bool) (string, o
 		return "", nil, err
 	}
 	info, err := os.Lstat(full)
-	if err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return "", nil, fmt.Errorf("%q 是符号链接，拒绝编辑", path)
-	}
 	if err == nil && info.Size() > maxEditFileBytes {
 		return "", nil, fmt.Errorf("文件 %q 超过最大编辑限制 %d 字节", path, maxEditFileBytes)
 	}

@@ -67,7 +67,7 @@ func (h *History) Load(chatID string) []Message {
 	if err := sc.Err(); err != nil && h.logger != nil {
 		h.logger.Warn("history: read error", "error", err)
 	}
-	return h.trim(msgs)
+	return trimMessages(msgs, maxHistoryTokens)
 }
 
 // Append writes msgs as additional jsonl lines for chatID.

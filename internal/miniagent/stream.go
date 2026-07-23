@@ -64,9 +64,6 @@ func signalToStreamEvent(sig Signal) streamEvent {
 		return streamEvent{Type: "tool_use", Name: sig.Name, Input: sig.Input}
 	case SignalToolResult:
 		return streamEvent{Type: "tool_result", Name: sig.Name, Input: sig.Input, Output: sig.Output, IsError: sig.IsError}
-	case SignalText:
-		return streamEvent{Type: "text", Text: sig.Text}
-	default:
-		return streamEvent{Type: string(sig.Kind), Name: sig.Name}
 	}
+	return streamEvent{Type: "text", Text: sig.Text}
 }

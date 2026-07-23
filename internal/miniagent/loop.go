@@ -39,7 +39,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")
 	}
-	toolSpecs, toolByName := buildToolIndex(cfg.Tools)
+	toolByName := buildToolIndex(cfg.Tools)
 	emitSignal := func(sig Signal) error {
 		if emit != nil {
 			return emit(sig)
@@ -47,7 +47,10 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		return nil
 	}
 
-	msgs := makeUserMessages(history, userPrompt)
+	userMsg := Message{Role: "user", Content: userPrompt}
+	msgs := make([]Message, 0, len(history)+1)
+	msgs = append(msgs, history...)
+	msgs = append(msgs, userMsg)
 	total := Usage{}
 	// emit 非 nil 时透传文本增量；onText 返回 error 沿 emit 契约上抛，下游断开
 	// （如 stdout broken pipe）会让 DoStream 立即停止生成。
@@ -62,7 +65,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1}, err
 		}
-		resp, err := callLLM(ctx, llm, cfg, promptID, step, msgs, toolSpecs, onText, logger)
+		resp, err := callLLM(ctx, llm, cfg, promptID, step, msgs, toolByName, onText, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1}, err
 		}
@@ -84,23 +87,15 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 	return Result{Usage: total, Steps: maxIterations, NewMessages: msgs[len(history):]}, nil
 }
 
-func buildToolIndex(tools []Tool) ([]Tool, map[string]Tool) {
+func buildToolIndex(tools []Tool) map[string]Tool {
 	toolByName := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		toolByName[t.Name] = t
 	}
-	return tools, toolByName
+	return toolByName
 }
 
-func makeUserMessages(history []Message, userPrompt string) []Message {
-	userMsg := Message{Role: "user", Content: userPrompt}
-	msgs := make([]Message, 0, len(history)+1)
-	msgs = append(msgs, history...)
-	msgs = append(msgs, userMsg)
-	return msgs
-}
-
-func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolSpecs []Tool, onText func(string) error, logger *slog.Logger) (Response, error) {
+func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolByName map[string]Tool, onText func(string) error, logger *slog.Logger) (Response, error) {
 	// 每步裁剪保证请求体不超模型上下文窗口。
 	msgs = trimMessages(msgs, maxHistoryTokens)
 	if logger != nil {
@@ -112,7 +107,7 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID stri
 		System:    cfg.System,
 		Messages:  msgs,
 		MaxTokens: cfg.MaxTokens,
-		Tools:     toolSpecs,
+		Tools:     cfg.Tools,
 	}
 	// 恒走流式：onText 为 nil 时 DoStream 仍会聚合 SSE 增量，只是不回传文本片段。
 	resp, err := llm.DoStream(ctx, req, onText)
