@@ -64,14 +64,15 @@ func (c *HTTPClient) DoStream(ctx context.Context, req Request, onText func(stri
 
 		// 非 200：读 body（限 1MiB）决定是否可重试，与 Do 对齐。
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
+		raHeader := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
 		_ = resp.Body.Close()
 		lastErr = formatDoErr(raw, resp.StatusCode, nil)
-		if !retryableStatus(resp.StatusCode) || attempt >= len(retryDelays) {
-			return Response{}, lastErr
+		ok, rerr := retryIfPossible(ctx, attempt, resp.StatusCode, raHeader, raw)
+		if rerr != nil {
+			return Response{}, rerr
 		}
-		raHeader := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
-		if e := sleepRetry(ctx, attempt, raHeader, raw); e != nil {
-			return Response{}, e
+		if !ok {
+			return Response{}, lastErr
 		}
 	}
 }
