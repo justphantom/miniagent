@@ -2,8 +2,6 @@ package main
 
 import (
 	"testing"
-
-	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // buildTools 无条件注册 4 个工具，与 workdir 是否为空无关。
@@ -20,18 +18,10 @@ func TestBuildTools_AlwaysRegisters4(t *testing.T) {
 	}
 }
 
-// workdir 为空也注册 4 个工具（free 形态默认）。
+// workdir 为空也注册 4 个工具。
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 	tools := buildTools("")
 	if len(tools) != 4 {
 		t.Fatalf("got %d tools, want 4", len(tools))
 	}
-}
-
-func toolNames(tools []miniagent.Tool) []string {
-	out := make([]string, len(tools))
-	for i, t := range tools {
-		out[i] = t.Name
-	}
-	return out
 }

@@ -55,7 +55,7 @@ func main() {
 	prompt := mustReadPrompt()
 	llm := buildLLM(apiKey, *f.baseURL, logger)
 	tools := buildTools(*f.workdir)
-	emit := miniagent.StreamEmitFunc(os.Stdout)
+	onToolUse := miniagent.ToolUseWriter(os.Stdout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -65,7 +65,7 @@ func main() {
 		System:    *f.system,
 		MaxTokens: *f.maxTokens,
 		Tools:     tools,
-	}, string(prompt), emit, logger)
+	}, string(prompt), onToolUse, logger)
 	if err != nil {
 		if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
 			logger.Warn("emit error failed", "error", eerr)
@@ -108,5 +108,16 @@ func buildLLM(apiKey, baseURL string, logger *slog.Logger) *miniagent.HTTPClient
 		BaseURL: baseURL,
 		HTTP:    &http.Client{Timeout: 120 * time.Second},
 		Logger:  logger,
+	}
+}
+
+// buildTools 无条件注册 4 个工具。workdir 为空时工具内部按各自规则处理
+// （read/write/edit 走 resolveToolPath，shell 把 cmd.Dir 留空继承 cwd）。
+func buildTools(workdir string) []miniagent.Tool {
+	return []miniagent.Tool{
+		miniagent.ReadFileTool(workdir),
+		miniagent.WriteFileTool(workdir),
+		miniagent.EditFileTool(workdir),
+		miniagent.ShellTool(workdir),
 	}
 }

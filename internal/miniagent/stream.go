@@ -29,18 +29,12 @@ type errorEvent struct {
 	Message string `json:"message"`
 }
 
-// StreamEmitFunc returns an EmitFunc that writes tool_use Signal events as NDJSON.
-//
-// 错误契约：返回的 error 会沿 emitSignal → Run 一路上抛到调用方。当下游
-// io.Writer 不可写（如 stdout 管道被消费者提前关闭）时，Run 会立刻终止
-// 返回该 error，而非继续后续 LLM 调用浪费 token。
-func StreamEmitFunc(w io.Writer) EmitFunc {
+// ToolUseWriter 返回一个 OnToolUse 回调：每次调用把工具名与参数写成一条
+// NDJSON tool_use 事件到 w。错误契约见 OnToolUse。
+func ToolUseWriter(w io.Writer) OnToolUse {
 	enc := json.NewEncoder(w)
-	return func(sig Signal) error {
-		if sig.Kind != SignalToolUse {
-			return nil
-		}
-		return enc.Encode(toolUseEvent{Type: "tool_use", Name: sig.Name, Input: sig.Input})
+	return func(name, input string) error {
+		return enc.Encode(toolUseEvent{Type: "tool_use", Name: name, Input: input})
 	}
 }
 

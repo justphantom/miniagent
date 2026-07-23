@@ -36,19 +36,13 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 // Run 单轮 ReAct 循环：把 userPrompt 发给 llm，模型若请求工具则执行后回灌，
 // 直到模型给出无 tool_calls 的最终文本或撞 maxIterations 上限。
 //
-// emit 仅在每次工具调用前发 SignalToolUse；最终文本只在返回的 Result.Text 里
-// 一次性给出，不再做增量透传。logger 为 nil 时静默。
-func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, emit EmitFunc, logger *slog.Logger) (Result, error) {
+// onToolUse 仅在每次工具执行前被调用一次；最终文本只在返回的 Result.Text 里
+// 一次性给出。logger 为 nil 时静默。
+func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, onToolUse OnToolUse, logger *slog.Logger) (Result, error) {
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")
 	}
 	toolByName := buildToolIndex(cfg.Tools)
-	emitSignal := func(sig Signal) error {
-		if emit != nil {
-			return emit(sig)
-		}
-		return nil
-	}
 
 	msgs := []Message{{Role: "user", Content: userPrompt}}
 	total := Usage{}
@@ -68,7 +62,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			return Result{Text: resp.Text, Usage: total, Steps: step}, nil
 		}
 
-		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, emitSignal, logger)
+		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, onToolUse, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step}, err
 		}
@@ -114,7 +108,7 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msg
 	return resp, nil
 }
 
-func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, emitSignal func(Signal) error, logger *slog.Logger) ([]Message, error) {
+func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, onToolUse OnToolUse, logger *slog.Logger) ([]Message, error) {
 	calls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		calls[i] = tc
@@ -124,10 +118,12 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 	}
 	msgs = append(msgs, Message{Role: "assistant", ToolCalls: calls})
 
-	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且 emit 顺序确定。
-	for _, tc := range calls {
-		if err := emitSignal(Signal{Kind: SignalToolUse, Name: tc.Name, Input: tc.Args}); err != nil {
-			return msgs, err
+	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
+	if onToolUse != nil {
+		for _, tc := range calls {
+			if err := onToolUse(tc.Name, tc.Args); err != nil {
+				return msgs, err
+			}
 		}
 	}
 

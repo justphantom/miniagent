@@ -55,22 +55,10 @@ type ToolResult struct {
 	IsError bool
 }
 
-// SignalKind tags what a Signal reports.
-type SignalKind string
-
-const (
-	SignalToolUse SignalKind = "tool_use"
-)
-
-// Signal is one out-of-band event the loop fires.
-type Signal struct {
-	Kind  SignalKind
-	Name  string
-	Input string
-}
-
-// EmitFunc receives out-of-band signals from the loop.
-type EmitFunc func(sig Signal) error
+// OnToolUse 是工具执行前的回调：name 为工具名，input 为原始 JSON 参数。
+// 返回 error 会沿调用链上抛到 Run——当下游不可写（stdout 管道被消费者提前
+// 关闭）时立即终止循环，避免继续烧 token。传 nil 表示不通知。
+type OnToolUse func(name, input string) error
 
 // Result is what loop.Run returns.
 type Result struct {

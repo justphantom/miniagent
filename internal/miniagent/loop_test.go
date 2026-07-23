@@ -92,9 +92,9 @@ func TestRun_ReActToolThenText(t *testing.T) {
 		textResponse("done"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	var signals []Signal
-	emit := func(s Signal) error { signals = append(signals, s); return nil }
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", emit, nil)
+	var uses []string
+	onToolUse := func(name, input string) error { uses = append(uses, name); return nil }
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", onToolUse, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -104,9 +104,9 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	if !called {
 		t.Error("tool not called")
 	}
-	// 只 emit tool_use（文本不再增量透传，终态由 Result 携带）。
-	if len(signals) != 1 || signals[0].Kind != SignalToolUse || signals[0].Name != "echo" {
-		t.Errorf("signals = %+v", signals)
+	// 只通知一次 tool_use（终态文本由 Result 携带）。
+	if len(uses) != 1 || uses[0] != "echo" {
+		t.Errorf("uses = %v", uses)
 	}
 }
 
@@ -254,13 +254,11 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var uses []string
-	emit := func(s Signal) error {
-		if s.Kind == SignalToolUse {
-			uses = append(uses, s.Name)
-		}
+	onToolUse := func(name, input string) error {
+		uses = append(uses, name)
 		return nil
 	}
-	_, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", emit, nil)
+	_, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", onToolUse, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

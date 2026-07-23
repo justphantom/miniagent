@@ -7,20 +7,16 @@ import (
 	"testing"
 )
 
-// 非 tool_use 信号一律丢弃（即便误构造）。
-func TestStreamEmitFunc_OnlyToolUse(t *testing.T) {
+// 每次调用写一条 tool_use 事件，且不含 output 字段。
+func TestToolUseWriter(t *testing.T) {
 	var buf bytes.Buffer
-	emit := StreamEmitFunc(&buf)
-	// 构造一个非法 Kind 验证：被静默丢弃。
-	if err := emit(Signal{Kind: SignalKind("bogus"), Name: "x"}); err != nil {
-		t.Fatalf("emit bogus: %v", err)
-	}
-	if err := emit(Signal{Kind: SignalToolUse, Name: "read_file", Input: `{"path":"a"}`}); err != nil {
-		t.Fatalf("emit tool_use: %v", err)
+	emit := ToolUseWriter(&buf)
+	if err := emit("read_file", `{"path":"a"}`); err != nil {
+		t.Fatalf("emit: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 1 {
-		t.Fatalf("lines = %d, want 1 (non tool_use must be dropped)", len(lines))
+		t.Fatalf("lines = %d, want 1", len(lines))
 	}
 	var ev map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &ev); err != nil {
