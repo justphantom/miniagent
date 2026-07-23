@@ -57,10 +57,10 @@ func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 	workdir := t.TempDir()
 	tools := []Tool{
-		ReadFileTool(workdir, false),
-		WriteFileTool(workdir, false),
-		EditFileTool(workdir, false),
-		ShellTool(workdir, false, nil),
+		ReadFileTool(workdir),
+		WriteFileTool(workdir),
+		EditFileTool(workdir),
+		ShellTool(workdir),
 	}
 
 	for _, tk := range tools {

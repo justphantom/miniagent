@@ -16,10 +16,10 @@ type writefileArgs struct {
 }
 
 // WriteFileTool returns a write_file tool bound to workspaceRoot.
-func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
+func WriteFileTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "write_file",
-		Description: "把 content 写入 workspace_root 内的文件（覆盖已有内容；自动创建父目录）。path 可相对 workspace_root 或绝对。",
+		Description: "把 content 写入文件（覆盖已有内容；自动创建父目录）。path 可相对 workspace_root 或绝对。",
 		Parameters: object(map[string]any{
 			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workspace_root 或绝对路径"},
 			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},
@@ -38,21 +38,10 @@ func WriteFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if len(a.Content) > maxWriteFileBytes {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("content 超过最大限制 %d 字节", maxWriteFileBytes)}
 			}
-			full, err := resolveToolPath(workspaceRoot, a.Path, unrestricted)
-			if err != nil {
-				return ToolResult{IsError: true, Output: err.Error()}
-			}
+			full := resolveToolPath(workspaceRoot, a.Path)
 			if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("创建父目录失败：%v", err)}
 			}
-			// MkdirAll 之后再走一次解析：此前父目录可能不存在导致 EvalSymlinks
-			// 走 NotExist 分支，依赖字符串层兜底。此刻目录已落盘，可对最终路径
-			// 做文件系统层校验，关闭"先检查后创建"窗口下的符号链接逃逸。
-			finalPath, err := resolveToolPath(workspaceRoot, a.Path, unrestricted)
-			if err != nil {
-				return ToolResult{IsError: true, Output: err.Error()}
-			}
-			full = finalPath
 			mode := os.FileMode(0o644)
 			if info, err := os.Lstat(full); err == nil {
 				mode = info.Mode().Perm()

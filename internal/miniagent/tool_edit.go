@@ -19,10 +19,10 @@ type editfileArgs struct {
 }
 
 // EditFileTool returns an edit_file tool bound to workspaceRoot.
-func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
+func EditFileTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "edit_file",
-		Description: "精确替换文件中的一段文本。old_string 必须在文件中唯一出现（精确匹配，含缩进和换行）。出现 0 次或多次均失败。先 read_file 查看内容再编辑。",
+		Description: "精确替换文件中的一段文本。old_string 必须在文件中唯一出现（精确匹配，含缩进和换行）。出现 0 次或多次均失败。拒绝编辑符号链接。先 read_file 查看内容再编辑。",
 		Parameters: object(map[string]any{
 			"path":       map[string]any{"type": "string", "description": "要编辑的文件路径，相对 workspace_root 或绝对路径"},
 			"old_string": map[string]any{"type": "string", "description": "要被替换的原文（必须与文件中的内容精确匹配，含缩进和换行）"},
@@ -32,19 +32,23 @@ func EditFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			return runEditFile(workspaceRoot, unrestricted, args)
+			return runEditFile(workspaceRoot, args)
 		},
 	}
 }
 
-func runEditFile(workspaceRoot string, unrestricted bool, args string) ToolResult {
+func runEditFile(workspaceRoot, args string) ToolResult {
 	a, err := parseEditArgs(args)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
-	full, info, err := resolveEditTarget(workspaceRoot, a.Path, unrestricted)
+	full := resolveToolPath(workspaceRoot, a.Path)
+	info, err := os.Lstat(full)
 	if err != nil {
-		return ToolResult{IsError: true, Output: err.Error()}
+		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+	}
+	if info.Size() > maxEditFileBytes {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
 	}
 	return applyEdit(full, info, a)
 }
@@ -66,19 +70,9 @@ func parseEditArgs(args string) (editfileArgs, error) {
 	return a, nil
 }
 
-func resolveEditTarget(workspaceRoot, path string, unrestricted bool) (string, os.FileInfo, error) {
-	full, err := resolveToolPath(workspaceRoot, path, unrestricted)
-	if err != nil {
-		return "", nil, err
-	}
-	info, err := os.Lstat(full)
-	if err == nil && info.Size() > maxEditFileBytes {
-		return "", nil, fmt.Errorf("文件 %q 超过最大编辑限制 %d 字节", path, maxEditFileBytes)
-	}
-	return full, info, nil
-}
-
 func applyEdit(full string, info os.FileInfo, a editfileArgs) ToolResult {
+	// openNoFollow 拒绝最终路径是符号链接的情形（O_NOFOLLOW），防止
+	// 通过符号链接把外部文件覆盖式编辑。
 	f, err := openNoFollow(full, os.O_RDONLY, 0)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}

@@ -11,100 +11,118 @@ import (
 	"time"
 )
 
-func TestHTTPClient_ListModels(t *testing.T) {
+// 正常文本回复：解析出 content、usage、finish_reason。
+func TestHTTPClient_Do_TextResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, `{"data":[{"id":"a"},{"id":"b"}]}`)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":5}}`)
 	}))
 	defer srv.Close()
 
 	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	models, err := c.ListModels(context.Background())
+	resp, err := c.Do(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}})
 	if err != nil {
-		t.Fatalf("ListModels: %v", err)
+		t.Fatalf("Do: %v", err)
 	}
-	if len(models) != 2 || models[0] != "a" || models[1] != "b" {
-		t.Errorf("models = %v", models)
+	if resp.Text != "hello" {
+		t.Errorf("Text = %q", resp.Text)
+	}
+	if resp.FinishReason != "stop" {
+		t.Errorf("FinishReason = %q", resp.FinishReason)
+	}
+	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 5 {
+		t.Errorf("Usage = %+v", resp.Usage)
+	}
+	if len(resp.ToolCalls) != 0 {
+		t.Errorf("ToolCalls = %v", resp.ToolCalls)
 	}
 }
 
-// ListModels 应对 5xx 重试。
-func TestHTTPClient_ListModels_RetriesTransient(t *testing.T) {
-	calls := 0
+// 带 tool_calls 的回复：name/arguments/id 正确解析。
+func TestHTTPClient_Do_ToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls < 2 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		_, _ = fmt.Fprint(w, `{"data":[{"id":"a"}]}`)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
 	}))
 	defer srv.Close()
 
 	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.ListModels(context.Background())
+	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
-		t.Fatalf("ListModels: %v", err)
+		t.Fatalf("Do: %v", err)
 	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want 2", calls)
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d", len(resp.ToolCalls))
+	}
+	tc := resp.ToolCalls[0]
+	if tc.ID != "c1" || tc.Name != "read_file" || tc.Args != `{"path":"a"}` {
+		t.Errorf("tc = %+v", tc)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("FinishReason = %q", resp.FinishReason)
 	}
 }
 
-// 超大 body 应被截断报错，不撑爆内存。
-func TestHTTPClient_ListModels_RejectsOversizedBody(t *testing.T) {
+// 非 200 状态码：返回错误，body 截断到 500 字。
+func TestHTTPClient_Do_NonOKStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(bytes.Repeat([]byte("a"), maxModelsBodyBytes+1024))
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"bad model"}}`)
 	}))
 	defer srv.Close()
 
 	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.ListModels(context.Background())
+	_, err := c.Do(context.Background(), Request{Model: "m"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// 超大 body 应报错，不撑爆内存也不静默截断。
+func TestHTTPClient_Do_RejectsOversizedBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("a"), maxChatBodyBytes+1024))
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected oversize error")
 	}
-}
-
-func TestRetryableStatus(t *testing.T) {
-	for _, code := range []int{429, 500, 502, 503, 504} {
-		if !retryableStatus(code) {
-			t.Errorf("%d should be retryable", code)
-		}
-	}
-	if retryableStatus(400) || retryableStatus(404) {
-		t.Error("4xx should not be retryable")
+	if !strings.Contains(err.Error(), "exceeded") {
+		t.Errorf("err = %v", err)
 	}
 }
 
-func TestParseRetryAfter(t *testing.T) {
-	got := parseRetryAfter([]byte(`{"error":{"retry_after":2.5}}`))
-	if got < 2*time.Second || got > 3*time.Second {
-		t.Errorf("retry_after = %v", got)
-	}
-	if parseRetryAfter([]byte(`{}`)) != 0 {
-		t.Error("expected 0")
+// 空 API key：prepareDo 阶段就报错。
+func TestHTTPClient_Do_EmptyAPIKey(t *testing.T) {
+	c := &HTTPClient{}
+	_, err := c.Do(context.Background(), Request{})
+	if err == nil {
+		t.Fatal("expected error for empty api key")
 	}
 }
 
-func TestParseRetryAfterHeader(t *testing.T) {
-	if got := parseRetryAfterHeader("3"); got != 3*time.Second {
-		t.Errorf("numeric seconds: got %v", got)
+// 恰好达到上限的 body 不应被误报截断。
+func TestHTTPClient_Do_AcceptsLimitBody(t *testing.T) {
+	// 构造一个合法的 JSON，content 长度填到接近 maxChatBodyBytes。
+	// 用 padding 字段避免 JSON 结构本身超限。
+	padding := bytes.Repeat([]byte("a"), maxChatBodyBytes-200)
+	body := fmt.Sprintf(`{"choices":[{"message":{"content":"x","padding":"%s"},"finish_reason":"stop"}]}`, string(padding))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	resp, err := c.Do(context.Background(), Request{Model: "m"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
 	}
-	if got := parseRetryAfterHeader(""); got != 0 {
-		t.Errorf("empty: got %v", got)
-	}
-	if got := parseRetryAfterHeader("0"); got != 0 {
-		t.Errorf("zero: got %v", got)
-	}
-	// HTTP-date：未来 2 小时。
-	future := time.Now().Add(2 * time.Hour).UTC().Format(http.TimeFormat)
-	got := parseRetryAfterHeader(future)
-	if got < 1*time.Hour || got > 3*time.Hour {
-		t.Errorf("http-date: got %v", got)
-	}
-	// 过去的日期应返回 0。
-	past := time.Now().Add(-1 * time.Hour).UTC().Format(http.TimeFormat)
-	if got := parseRetryAfterHeader(past); got != 0 {
-		t.Errorf("past date: got %v", got)
+	if resp.Text != "x" {
+		t.Errorf("Text = %q", resp.Text)
 	}
 }
 
@@ -133,72 +151,14 @@ func TestBuildChatBody_SkipsZeroMaxTokens(t *testing.T) {
 	}
 }
 
-// 恒流式：buildChatBody 总会带 stream:true 与 stream_options.include_usage。
-func TestBuildChatBody_AlwaysStream(t *testing.T) {
+// 非流式：buildChatBody 不应再带 stream / stream_options。
+func TestBuildChatBody_NoStream(t *testing.T) {
 	body, err := buildChatBody(Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if !contains(string(body), `"stream":true`) || !contains(string(body), `"include_usage":true`) {
-		t.Errorf("body missing stream options: %s", body)
-	}
-}
-
-// DoStream 在首个 200 前对 5xx 重试：首字节后不再重试。
-func TestHTTPClient_DoStream_RetriesTransient(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls < 2 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n"))
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"))
-		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n"))
-		_, _ = w.Write([]byte("data: [DONE]\n"))
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.DoStream(context.Background(), Request{}, nil)
-	if err != nil {
-		t.Fatalf("DoStream: %v", err)
-	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want 2", calls)
-	}
-	if resp.Text != "ok" {
-		t.Errorf("Text = %q", resp.Text)
-	}
-}
-
-// 非 200 且不可重试状态码立即返回错误。
-func TestHTTPClient_DoStream_NoRetryOn4xx(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.DoStream(context.Background(), Request{}, nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if calls != 1 {
-		t.Errorf("calls = %d, want 1", calls)
-	}
-}
-
-// 空 API key 在 prepareDo 阶段就报错。
-func TestHTTPClient_DoStream_EmptyAPIKey(t *testing.T) {
-	c := &HTTPClient{}
-	_, err := c.DoStream(context.Background(), Request{}, nil)
-	if err == nil {
-		t.Fatal("expected error for empty api key")
+	if contains(string(body), `"stream"`) || contains(string(body), `"stream_options"`) {
+		t.Errorf("body should not include stream fields: %s", body)
 	}
 }
 

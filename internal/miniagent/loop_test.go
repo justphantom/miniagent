@@ -2,16 +2,65 @@ package miniagent
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 )
 
+// fakeTransport 把预设的非流式 JSON body 按调用顺序回放，便于 loop 测试
+// 不依赖真实端点。lastBody 记录最后一次请求体供断言。
+type fakeTransport struct {
+	responses []string
+	statuses  []int
+	calls     int
+	lastBody  string
+}
+
+func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		b, _ := io.ReadAll(req.Body)
+		f.lastBody = string(b)
+		_ = req.Body.Close()
+	}
+	idx := f.calls
+	f.calls++
+	status := http.StatusOK
+	if idx < len(f.statuses) {
+		status = f.statuses[idx]
+	}
+	body := ""
+	if idx < len(f.responses) {
+		body = f.responses[idx]
+	}
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
+}
+
+// textResponse 构造非流式 chat completions JSON：单条 choice，纯文本回复。
+func textResponse(text string) string {
+	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
+}
+
+// toolResponse 构造非流式 chat completions JSON：单条 choice 带 tool_calls。
+func toolResponse(calls ...ToolCall) string {
+	tcs := make([]string, 0, len(calls))
+	for _, c := range calls {
+		tcs = append(tcs, fmt.Sprintf(`{"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}`, c.ID, c.Name, c.Args))
+	}
+	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[%s]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, strings.Join(tcs, ","))
+}
+
 func TestRun_TextOnlyReturnsImmediately(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("hello world")}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", System: "be brief"}, "p1", "hi", nil, nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", System: "be brief"}, "hi", nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -45,7 +94,7 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var signals []Signal
 	emit := func(s Signal) error { signals = append(signals, s); return nil }
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, emit, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", emit, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -55,9 +104,9 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	if !called {
 		t.Error("tool not called")
 	}
-	// 恒流式：textResponse 的 content 增量会经 SignalText 透传一次。
-	if len(signals) != 3 {
-		t.Errorf("signals = %d", len(signals))
+	// 只 emit tool_use（文本不再增量透传，终态由 Result 携带）。
+	if len(signals) != 1 || signals[0].Kind != SignalToolUse || signals[0].Name != "echo" {
+		t.Errorf("signals = %+v", signals)
 	}
 }
 
@@ -67,18 +116,15 @@ func TestRun_UnknownToolYieldsErrorResult(t *testing.T) {
 		textResponse("ok"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{}, "p1", "x", nil, nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{}, "x", nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if res.Steps != 2 {
 		t.Errorf("Steps = %d", res.Steps)
 	}
-	if len(res.NewMessages) < 3 {
-		t.Fatalf("history too short: %+v", res.NewMessages)
-	}
-	if !strings.Contains(res.NewMessages[2].Content, "未知工具") {
-		t.Errorf("history[2] = %q", res.NewMessages[2].Content)
+	if res.Text != "ok" {
+		t.Errorf("Text = %q", res.Text)
 	}
 }
 
@@ -92,89 +138,39 @@ func TestRun_ToolPanicRecovered(t *testing.T) {
 		textResponse("recovered"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	var signals []Signal
-	emit := func(s Signal) error { signals = append(signals, s); return nil }
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, emit, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if res.Text != "recovered" {
 		t.Errorf("Text = %q", res.Text)
 	}
-	var resultSig Signal
-	for _, s := range signals {
-		if s.Kind == SignalToolResult {
-			resultSig = s
-		}
-	}
-	if !resultSig.IsError {
-		t.Errorf("tool_result = %+v", resultSig)
-	}
-}
-
-func TestRun_EmptyToolCallIDSynthesized(t *testing.T) {
-	tool := Tool{Name: "echo", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
-	tr := &fakeTransport{responses: []string{
-		toolResponse(ToolCall{ID: "", Name: "echo", Args: ""}),
-		textResponse("done"),
-	}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, nil, nil)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.Text != "done" {
-		t.Errorf("Text = %q", res.Text)
-	}
-	var assistantID, toolMsgID string
-	for _, m := range res.NewMessages {
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			assistantID = m.ToolCalls[0].ID
-		}
-		if m.Role == "tool" {
-			toolMsgID = m.ToolCallID
-		}
-	}
-	if assistantID == "" || assistantID != toolMsgID {
-		t.Errorf("pairing broken: %q vs %q", assistantID, toolMsgID)
-	}
-}
-
-func TestRun_TrimLongHistory(t *testing.T) {
-	big := strings.Repeat("a", 3000)
-	history := []Message{{Role: "user", Content: big}, {Role: "assistant", Content: big}}
-	tr := &fakeTransport{responses: []string{textResponse("ok")}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, err := Run(context.Background(), llm, LoopConfig{Model: "m"}, "p1", "hi", history, nil, nil)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if !strings.Contains(tr.lastBody, "hi") {
-		t.Errorf("current prompt dropped: %s", tr.lastBody)
+	if res.Steps != 2 {
+		t.Errorf("Steps = %d", res.Steps)
 	}
 }
 
 func TestRun_LLMErrorPropagates(t *testing.T) {
-	// 4 次 503：覆盖 DoStream 的 3 次重试 + 1 次最终失败（1+2+4s 退避后放弃）。
-	tr := &fakeTransport{statuses: []int{
-		http.StatusServiceUnavailable, http.StatusServiceUnavailable,
-		http.StatusServiceUnavailable, http.StatusServiceUnavailable,
-	}}
+	// 单次 503：无重试，立即返回 error。
+	tr := &fakeTransport{statuses: []int{http.StatusServiceUnavailable}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, err := Run(context.Background(), llm, LoopConfig{}, "p1", "hi", nil, nil, nil)
+	_, err := Run(context.Background(), llm, LoopConfig{}, "hi", nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if tr.calls != 1 {
+		t.Errorf("calls = %d, want 1 (no retry)", tr.calls)
 	}
 }
 
 func TestRun_NilClientErrors(t *testing.T) {
-	if _, err := Run(context.Background(), nil, LoopConfig{}, "p1", "hi", nil, nil, nil); err == nil {
+	if _, err := Run(context.Background(), nil, LoopConfig{}, "hi", nil, nil); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 // 工具调用永不停：每次都返回 tool_calls，触发 maxIterations 上限。
-// 终止信号由 Steps=maxIterations + 空 Text 表达（不再有 Incomplete 字段）。
+// 终止信号由 Steps=maxIterations + 空 Text 表达。
 func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	responses := make([]string, maxIterations+2)
@@ -183,7 +179,7 @@ func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: responses}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "p1", "x", nil, nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
 	if err != nil {
 		t.Fatalf("expected nil error on max iterations, got %v", err)
 	}
@@ -192,9 +188,6 @@ func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	}
 	if res.Text != "" {
 		t.Errorf("Text = %q, want empty (truncated)", res.Text)
-	}
-	if len(res.NewMessages) == 0 {
-		t.Error("expected non-empty history to preserve burned tokens")
 	}
 	if res.Usage.InputTokens == 0 {
 		t.Error("expected non-zero usage accounting")
@@ -229,7 +222,7 @@ func TestRun_ToolsRunInParallel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = Run(context.Background(), llm, LoopConfig{Tools: tools}, "p1", "x", nil, nil, nil)
+		_, _ = Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", nil, nil)
 		close(done)
 	}()
 
@@ -246,7 +239,7 @@ func TestRun_ToolsRunInParallel(t *testing.T) {
 	<-done
 }
 
-// 并行执行下，tool_use 信号与历史 tool 消息仍按 LLM 给定的 tool_call 原序排列。
+// 并行执行下，tool_use 信号仍按 LLM 给定的 tool_call 原序排列。
 func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 	tools := []Tool{
 		{Name: "a", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "A"} }},
@@ -267,26 +260,43 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 		}
 		return nil
 	}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "p1", "x", nil, emit, nil)
+	_, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", emit, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(uses) != 2 || uses[0] != "b" || uses[1] != "a" {
 		t.Errorf("tool_use order = %v, want [b a]", uses)
 	}
-	var toolMsgs []Message
-	for _, m := range res.NewMessages {
-		if m.Role == "tool" {
-			toolMsgs = append(toolMsgs, m)
-		}
+}
+
+// 已取消的 context 必须立即中止 Run，避免继续烧 token。
+func TestRun_CancelledCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
+	_, err := Run(ctx, llm, LoopConfig{}, "hi", nil, nil)
+	if err == nil {
+		t.Fatal("expected error")
 	}
-	if len(toolMsgs) != 2 {
-		t.Fatalf("tool msgs = %d, want 2", len(toolMsgs))
+}
+
+// 多步 ReAct：第一步工具结果回灌，第二步拿到最终文本。
+func TestRun_MultiStepReAct(t *testing.T) {
+	tool := Tool{Name: "query", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "data-42"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "query", Args: "{}"}),
+		toolResponse(ToolCall{ID: "c2", Name: "query", Args: "{}"}),
+		textResponse("final answer"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if toolMsgs[0].ToolCallID != "1" || !strings.Contains(toolMsgs[0].Content, "B") {
-		t.Errorf("tool[0] = %+v, want id=1 content~B", toolMsgs[0])
+	if res.Steps != 3 {
+		t.Errorf("Steps = %d, want 3", res.Steps)
 	}
-	if toolMsgs[1].ToolCallID != "2" || !strings.Contains(toolMsgs[1].Content, "A") {
-		t.Errorf("tool[1] = %+v, want id=2 content~A", toolMsgs[1])
+	if res.Text != "final answer" {
+		t.Errorf("Text = %q", res.Text)
 	}
 }

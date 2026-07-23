@@ -23,10 +23,10 @@ type readfileArgs struct {
 }
 
 // ReadFileTool returns a read_file tool bound to workspaceRoot.
-func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
+func ReadFileTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "read_file",
-		Description: "读取 workspace_root 内的文本文件内容。支持 offset/limit 按行范围读取，输出带行号标注。path 可以是绝对路径或相对 workspace_root 的路径。",
+		Description: "读取文本文件内容。支持 offset/limit 按行范围读取，输出带行号标注。path 可以是绝对路径或相对 workspace_root 的路径。",
 		Parameters: object(map[string]any{
 			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workspace_root 或绝对路径"},
 			"offset": map[string]any{"type": "integer", "description": "起始行号（1-based），默认 1（从头开始）"},
@@ -36,19 +36,23 @@ func ReadFileTool(workspaceRoot string, unrestricted bool) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			return runReadFile(workspaceRoot, unrestricted, args)
+			return runReadFile(workspaceRoot, args)
 		},
 	}
 }
 
-func runReadFile(workspaceRoot string, unrestricted bool, args string) ToolResult {
+func runReadFile(workspaceRoot, args string) ToolResult {
 	a, err := parseReadArgs(args)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
-	full, err := resolveReadTarget(workspaceRoot, a.Path, unrestricted)
+	full := resolveToolPath(workspaceRoot, a.Path)
+	info, err := os.Stat(full)
 	if err != nil {
-		return ToolResult{IsError: true, Output: err.Error()}
+		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+	}
+	if info.IsDir() {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是目录，不是文件", a.Path)}
 	}
 	content, err := readFileContent(full)
 	if err != nil {
@@ -75,21 +79,6 @@ func parseReadArgs(args string) (readfileArgs, error) {
 		a.Offset = 0
 	}
 	return a, nil
-}
-
-func resolveReadTarget(workspaceRoot, path string, unrestricted bool) (string, error) {
-	full, err := resolveToolPath(workspaceRoot, path, unrestricted)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(full)
-	if err != nil {
-		return "", err
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("%q 是目录，不是文件", path)
-	}
-	return full, nil
 }
 
 // LimitReader 天然处理超大文件：超过 maxReadFileBytes 的部分直接丢弃，

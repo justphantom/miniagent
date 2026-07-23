@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"log/slog"
 )
@@ -34,8 +33,12 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 	return tool.Call(ctx, args)
 }
 
-// Run drives the ReAct loop for one turn.
-func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPrompt string, history []Message, emit EmitFunc, logger *slog.Logger) (Result, error) {
+// Run 单轮 ReAct 循环：把 userPrompt 发给 llm，模型若请求工具则执行后回灌，
+// 直到模型给出无 tool_calls 的最终文本或撞 maxIterations 上限。
+//
+// emit 仅在每次工具调用前发 SignalToolUse；最终文本只在返回的 Result.Text 里
+// 一次性给出，不再做增量透传。logger 为 nil 时静默。
+func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, emit EmitFunc, logger *slog.Logger) (Result, error) {
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")
 	}
@@ -47,25 +50,14 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		return nil
 	}
 
-	userMsg := Message{Role: "user", Content: userPrompt}
-	msgs := make([]Message, 0, len(history)+1)
-	msgs = append(msgs, history...)
-	msgs = append(msgs, userMsg)
+	msgs := []Message{{Role: "user", Content: userPrompt}}
 	total := Usage{}
-	// emit 非 nil 时透传文本增量；onText 返回 error 沿 emit 契约上抛，下游断开
-	// （如 stdout broken pipe）会让 DoStream 立即停止生成。
-	var onText func(string) error
-	if emit != nil {
-		onText = func(t string) error {
-			return emitSignal(Signal{Kind: SignalText, Text: t})
-		}
-	}
 
 	for step := 1; step <= maxIterations; step++ {
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1}, err
 		}
-		resp, err := callLLM(ctx, llm, cfg, promptID, step, msgs, toolByName, onText, logger)
+		resp, err := callLLM(ctx, llm, cfg, step, msgs, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1}, err
 		}
@@ -73,18 +65,17 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 		total.OutputTokens += resp.Usage.OutputTokens
 
 		if len(resp.ToolCalls) == 0 {
-			msgs = append(msgs, Message{Role: "assistant", Content: resp.Text})
-			return Result{Text: resp.Text, Usage: total, Steps: step, NewMessages: msgs[len(history):]}, nil
+			return Result{Text: resp.Text, Usage: total, Steps: step}, nil
 		}
 
-		msgs, err = handleToolCalls(ctx, promptID, step, resp, toolByName, msgs, emitSignal, logger)
+		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, emitSignal, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step}, err
 		}
 	}
-	// 达到迭代上限时返回 nil error，让上层仍能消费已累积的 Usage/History，
-	// 避免烧掉的 token 全部丢弃。Steps=maxIterations 是终止信号（无最终 Text）。
-	return Result{Usage: total, Steps: maxIterations, NewMessages: msgs[len(history):]}, nil
+	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。
+	// Steps=maxIterations 是终止信号（无最终 Text）。
+	return Result{Usage: total, Steps: maxIterations}, nil
 }
 
 func buildToolIndex(tools []Tool) map[string]Tool {
@@ -95,13 +86,10 @@ func buildToolIndex(tools []Tool) map[string]Tool {
 	return toolByName
 }
 
-func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolByName map[string]Tool, onText func(string) error, logger *slog.Logger) (Response, error) {
-	// 每步裁剪保证请求体不超模型上下文窗口。
-	msgs = trimMessages(msgs, maxHistoryTokens)
+func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, logger *slog.Logger) (Response, error) {
 	if logger != nil {
-		logger.Debug("llm call start", "prompt_id", promptID, "step", step, "model", cfg.Model)
+		logger.Debug("llm call start", "step", step, "model", cfg.Model)
 	}
-	callStart := time.Now()
 	req := Request{
 		Model:     cfg.Model,
 		System:    cfg.System,
@@ -109,27 +97,24 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID stri
 		MaxTokens: cfg.MaxTokens,
 		Tools:     cfg.Tools,
 	}
-	// 恒走流式：onText 为 nil 时 DoStream 仍会聚合 SSE 增量，只是不回传文本片段。
-	resp, err := llm.DoStream(ctx, req, onText)
-	callDur := time.Since(callStart)
+	resp, err := llm.Do(ctx, req)
 	if err != nil {
 		if logger != nil {
-			logger.Warn("llm call failed", "prompt_id", promptID, "step", step, "error", err, "duration_ms", callDur.Milliseconds())
+			logger.Warn("llm call failed", "step", step, "error", err)
 		}
 		return Response{}, fmt.Errorf("llm call %d: %w", step, err)
 	}
 	if logger != nil {
-		logger.Info("llm call done", "prompt_id", promptID, "step", step, "duration_ms", callDur.Milliseconds(), "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
+		logger.Info("llm call done", "step", step, "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
 	}
-	// finish_reason 非 stop/tool_calls 表示回答被 max_tokens 或内容过滤截断，
-	// 最终文本是不完整的，调用方应感知。这里仅告警不改返回结构，避免破坏现有契约。
+	// finish_reason 非 stop/tool_calls 表示回答被 max_tokens 或内容过滤截断。
 	if logger != nil && resp.FinishReason != "" && resp.FinishReason != "stop" && resp.FinishReason != "tool_calls" {
-		logger.Warn("llm response truncated", "prompt_id", promptID, "step", step, "finish_reason", resp.FinishReason)
+		logger.Warn("llm response truncated", "step", step, "finish_reason", resp.FinishReason)
 	}
 	return resp, nil
 }
 
-func handleToolCalls(ctx context.Context, promptID string, step int, resp Response, toolByName map[string]Tool, msgs []Message, emitSignal func(Signal) error, logger *slog.Logger) ([]Message, error) {
+func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, emitSignal func(Signal) error, logger *slog.Logger) ([]Message, error) {
 	calls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		calls[i] = tc
@@ -147,17 +132,14 @@ func handleToolCalls(ctx context.Context, promptID string, step int, resp Respon
 	}
 
 	// 同一步内 LLM 一次发起的多个 tool_call 相互独立，串行会让总耗时 = Σ 单工具
-	// 耗时（shell 可达数十秒）。并行执行，结果按原 index 回填，保证
-	// tool_result 信号与历史消息仍与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
+	// 耗时（shell 可达数十秒）。并行执行，结果按原 index 回填，保证历史消息
+	// 与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
 	results := runToolsParallel(ctx, logger, calls, toolByName)
 
 	for i, tc := range calls {
 		tres := results[i]
 		if logger != nil {
-			logger.Info("tool executed", "prompt_id", promptID, "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
-		}
-		if err := emitSignal(Signal{Kind: SignalToolResult, Name: tc.Name, Input: tc.Args, Output: tres.Output, IsError: tres.IsError}); err != nil {
-			return msgs, err
+			logger.Info("tool executed", "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
 		}
 		msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: truncateToolResult(tres.Output)})
 	}

@@ -59,20 +59,14 @@ type ToolResult struct {
 type SignalKind string
 
 const (
-	SignalToolUse    SignalKind = "tool_use"
-	SignalToolResult SignalKind = "tool_result"
-	SignalText       SignalKind = "text" // 流式文本增量片段（非完整回答）
+	SignalToolUse SignalKind = "tool_use"
 )
 
 // Signal is one out-of-band event the loop fires.
 type Signal struct {
-	Kind    SignalKind
-	Name    string
-	Input   string
-	Output  string
-	IsError bool
-	// Text 仅 SignalText 使用：一次文本增量片段，拼接后才是完整回答。
-	Text string
+	Kind  SignalKind
+	Name  string
+	Input string
 }
 
 // EmitFunc receives out-of-band signals from the loop.
@@ -83,10 +77,6 @@ type Result struct {
 	Text  string
 	Usage Usage
 	Steps int
-	// NewMessages 是本轮 Run 期间新增到对话历史的消息（含 assistant 工具调用、
-	// tool 结果、最终 assistant 文本），供持久化层 append。命名 NewMessages
-	// 而非 History，是为了避免被误读为"全量历史"。
-	NewMessages []Message
 }
 
 // LoopConfig carries the per-turn LLM parameters.

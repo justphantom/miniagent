@@ -60,8 +60,5 @@ func buildChatBody(req Request) ([]byte, error) {
 		}
 		payload["tools"] = funcs
 	}
-	// 恒流式：必须开启 include_usage，否则 usage 不在 SSE 里出现，聚合器拿不到 token 计数。
-	payload["stream"] = true
-	payload["stream_options"] = map[string]any{"include_usage": true}
 	return json.Marshal(payload)
 }
