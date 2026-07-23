@@ -46,11 +46,11 @@ func runReadFile(workspaceRoot string, unrestricted bool, args string) ToolResul
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
-	full, info, err := resolveReadTarget(workspaceRoot, a.Path, unrestricted)
+	full, err := resolveReadTarget(workspaceRoot, a.Path, unrestricted)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
-	content, err := readFileContent(full, info)
+	content, err := readFileContent(full)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 	}
@@ -71,25 +71,24 @@ func parseReadArgs(args string) (readfileArgs, error) {
 	return a, nil
 }
 
-func resolveReadTarget(workspaceRoot, path string, unrestricted bool) (string, os.FileInfo, error) {
+func resolveReadTarget(workspaceRoot, path string, unrestricted bool) (string, error) {
 	full, err := resolveToolPath(workspaceRoot, path, unrestricted)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	info, err := os.Stat(full)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if info.IsDir() {
-		return "", nil, fmt.Errorf("%q 是目录，不是文件", path)
+		return "", fmt.Errorf("%q 是目录，不是文件", path)
 	}
-	return full, info, nil
+	return full, nil
 }
 
-func readFileContent(full string, info os.FileInfo) (string, error) {
-	if info.Size() > maxReadFileBytes {
-		return readFileLimited(full), nil
-	}
+// LimitReader 天然处理超大文件：超过 maxReadFileBytes 的部分直接丢弃，
+// 无需按 size 预分支。
+func readFileContent(full string) (string, error) {
 	f, err := openNoFollow(full, os.O_RDONLY, 0)
 	if err != nil {
 		return "", err
@@ -107,19 +106,6 @@ func formatReadOutput(content string, offset, limit int) string {
 		return content
 	}
 	return formatLines(content, offset, limit)
-}
-
-func readFileLimited(path string) string {
-	f, err := openNoFollow(path, os.O_RDONLY, 0)
-	if err != nil {
-		return fmt.Sprintf("读取 %q 失败：%v", path, err)
-	}
-	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
-	if err != nil {
-		return fmt.Sprintf("读取 %q 失败：%v", path, err)
-	}
-	return string(data)
 }
 
 func formatLines(content string, offset, limit int) string {
