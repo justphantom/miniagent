@@ -3,7 +3,6 @@ package miniagent
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,76 +10,6 @@ import (
 	"testing"
 	"time"
 )
-
-func TestHTTPClient_Do_ReturnsResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer sk-test" {
-			t.Errorf("missing auth header")
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`))
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk-test", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.Do(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	if resp.Text != "hi" {
-		t.Errorf("Text = %q, want hi", resp.Text)
-	}
-	if resp.Usage.InputTokens != 2 || resp.Usage.OutputTokens != 1 {
-		t.Errorf("Usage = %+v", resp.Usage)
-	}
-}
-
-func TestHTTPClient_Do_RetriesTransient(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls < 2 {
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{})
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want 2", calls)
-	}
-}
-
-func TestHTTPClient_Do_NoRetryOn4xx(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if calls != 1 {
-		t.Errorf("calls = %d, want 1", calls)
-	}
-}
-
-func TestHTTPClient_Do_EmptyAPIKey(t *testing.T) {
-	c := &HTTPClient{}
-	_, err := c.Do(context.Background(), Request{})
-	if err == nil {
-		t.Fatal("expected error for empty api key")
-	}
-}
 
 func TestHTTPClient_ListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +27,7 @@ func TestHTTPClient_ListModels(t *testing.T) {
 	}
 }
 
-// ListModels 应对 5xx 重试，与 Do 行为对齐。
+// ListModels 应对 5xx 重试。
 func TestHTTPClient_ListModels_RetriesTransient(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,31 +61,6 @@ func TestHTTPClient_ListModels_RejectsOversizedBody(t *testing.T) {
 	_, err := c.ListModels(context.Background())
 	if err == nil {
 		t.Fatal("expected oversize error")
-	}
-}
-
-func TestParseChatResponse_ToolCalls(t *testing.T) {
-	raw := []byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
-	resp, err := parseChatResponse(raw)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(resp.ToolCalls) != 1 {
-		t.Fatalf("tool calls = %d", len(resp.ToolCalls))
-	}
-	if resp.ToolCalls[0].Name != "read_file" || resp.ToolCalls[0].ID != "c1" {
-		t.Errorf("tool call = %+v", resp.ToolCalls[0])
-	}
-}
-
-func TestParseChatResponse_FinishReason(t *testing.T) {
-	raw := []byte(`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"partial..."}}],"usage":{}}`)
-	resp, err := parseChatResponse(raw)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if resp.FinishReason != "length" {
-		t.Errorf("FinishReason = %q", resp.FinishReason)
 	}
 }
 
@@ -204,75 +108,6 @@ func TestParseRetryAfterHeader(t *testing.T) {
 	}
 }
 
-// Retry-After 头应被采纳为退避时长。
-func TestHTTPClient_Do_RespectsRetryAfterHeader(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls < 2 {
-			w.Header().Set("Retry-After", "1")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	start := time.Now()
-	_, err := c.Do(context.Background(), Request{})
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want 2", calls)
-	}
-	if elapsed < 900*time.Millisecond {
-		t.Errorf("Retry-After=1 not honored: elapsed=%v", elapsed)
-	}
-}
-
-// 恰好 1MiB 的合法响应不应被误判为截断（off-by-one 回归）。
-func TestHTTPClient_Do_ExactOneMiBNotTruncated(t *testing.T) {
-	const size = 1 << 20
-	prefix := `{"choices":[{"message":{"content":"`
-	suffix := `"}}],"usage":{}}`
-	pad := size - len(prefix) - len(suffix)
-	if pad < 0 {
-		t.Skipf("size too small for wrap")
-	}
-	final := append([]byte(prefix), bytes.Repeat([]byte{'a'}, pad)...)
-	final = append(final, suffix...)
-	if len(final) != size {
-		t.Fatalf("payload size = %d, want %d", len(final), size)
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(final)
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{})
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-}
-
-// 超过 1MiB 必须报错并截断到 1MiB。
-func TestHTTPClient_Do_OverOneMiBTruncated(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(strings.Repeat("a", (1<<20)+100)))
-	}))
-	defer srv.Close()
-
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{})
-	if err == nil {
-		t.Fatal("expected truncation error")
-	}
-}
-
 func TestBuildChatBody_IncludesTools(t *testing.T) {
 	body, err := buildChatBody(Request{
 		Model:    "m",
@@ -298,18 +133,72 @@ func TestBuildChatBody_SkipsZeroMaxTokens(t *testing.T) {
 	}
 }
 
-func TestHTTPClient_Do_ContextCancel(t *testing.T) {
+// 恒流式：buildChatBody 总会带 stream:true 与 stream_options.include_usage。
+func TestBuildChatBody_AlwaysStream(t *testing.T) {
+	body, err := buildChatBody(Request{Model: "m"})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if !contains(string(body), `"stream":true`) || !contains(string(body), `"include_usage":true`) {
+		t.Errorf("body missing stream options: %s", body)
+	}
+}
+
+// DoStream 在首个 200 前对 5xx 重试：首字节后不再重试。
+func TestHTTPClient_DoStream_RetriesTransient(t *testing.T) {
+	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(100 * time.Millisecond)
+		calls++
+		if calls < 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n"))
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(ctx, Request{})
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("err = %v, want context.Canceled", err)
+	resp, err := c.DoStream(context.Background(), Request{}, nil)
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2", calls)
+	}
+	if resp.Text != "ok" {
+		t.Errorf("Text = %q", resp.Text)
+	}
+}
+
+// 非 200 且不可重试状态码立即返回错误。
+func TestHTTPClient_DoStream_NoRetryOn4xx(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.DoStream(context.Background(), Request{}, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1", calls)
+	}
+}
+
+// 空 API key 在 prepareDo 阶段就报错。
+func TestHTTPClient_DoStream_EmptyAPIKey(t *testing.T) {
+	c := &HTTPClient{}
+	_, err := c.DoStream(context.Background(), Request{}, nil)
+	if err == nil {
+		t.Fatal("expected error for empty api key")
 	}
 }
 

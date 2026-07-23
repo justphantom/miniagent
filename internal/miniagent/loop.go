@@ -45,10 +45,10 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 
 	msgs := makeUserMessages(history, userPrompt)
 	total := Usage{}
-	// 仅在显式开启 Stream 且有 emit 时透传文本增量；onText 返回 error 沿 emit
-	// 契约上抛，下游断开（如 stdout broken pipe）会让 DoStream 立即停止生成。
+	// emit 非 nil 时透传文本增量；onText 返回 error 沿 emit 契约上抛，下游断开
+	// （如 stdout broken pipe）会让 DoStream 立即停止生成。
 	var onText func(string) error
-	if cfg.Stream && emit != nil {
+	if emit != nil {
 		onText = func(t string) error {
 			return emitSignal(Signal{Kind: SignalText, Text: t})
 		}
@@ -123,14 +123,8 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID stri
 		MaxTokens: cfg.MaxTokens,
 		Tools:     toolSpecs,
 	}
-	// onText 非 nil 表示上层要文本增量：走流式。否则沿用非流式 Do，保持现有契约。
-	var resp Response
-	var err error
-	if onText != nil {
-		resp, err = llm.DoStream(ctx, req, onText)
-	} else {
-		resp, err = llm.Do(ctx, req)
-	}
+	// 恒走流式：onText 为 nil 时 DoStream 仍会聚合 SSE 增量，只是不回传文本片段。
+	resp, err := llm.DoStream(ctx, req, onText)
 	callDur := time.Since(callStart)
 	if err != nil {
 		if logger != nil {

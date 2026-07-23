@@ -24,8 +24,6 @@ type Request struct {
 	Messages  []Message
 	MaxTokens int
 	Tools     []Tool
-	// Stream=true 时走 SSE 流式（见 HTTPClient.DoStream），文本增量经 SignalText 透传。
-	Stream bool
 }
 
 // Tool is one agent tool the LLM may call. Name/Description/Parameters
@@ -100,9 +98,6 @@ type LoopConfig struct {
 	System    string
 	MaxTokens int
 	Tools         []Tool
-	// Stream=true 时走 SSE 流式，文本增量经 SignalText 透传给 emit。
-	// 与 emit 解耦：emit 只为 tool 信号时无需开 Stream。
-	Stream bool
 	// MaxParallelTools 限制同一步内并行工具的并发数（<=0 表示不限制）。防止 LLM
 	// 一次发起大量 tool_call 时耗尽 FD/连接或触发目标服务限流。
 	MaxParallelTools int

@@ -40,8 +40,6 @@ type cliFlags struct {
 
 	newSession *bool
 
-	stream *bool
-
 	maxParallelTools *int
 	maxTokensBudget  *int
 	maxHistoryTokens *int
@@ -66,9 +64,6 @@ func parseFlags() *cliFlags {
 	f.useSession = flag.String("use-session", "", "switch to session <id> for --chat-id, then exit")
 	f.delSession = flag.String("del-session", "", "delete session <id> for --chat-id, then exit")
 	f.newSession = flag.Bool("new-session", false, "create a new session for --chat-id, then exit")
-
-	// 默认开启：流式下首字节快、可中途感知。端点不支持 SSE 时用 -stream=false 回退非流式。
-	f.stream = flag.Bool("stream", true, "stream SSE text deltas (default true)")
 
 	// 护栏与上下文预算：默认值见 internal/miniagent 对应常量；0 表示沿用默认或不限。
 	f.maxParallelTools = flag.Int("max-parallel-tools", 8, "max concurrent tool calls within one step (0 = unlimited)")
@@ -194,7 +189,6 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, h
 		System:           *f.system,
 		MaxTokens:        *f.maxTokens,
 		Tools:            tools,
-		Stream:           *f.stream,
 		MaxParallelTools: *f.maxParallelTools,
 		MaxTokensBudget:  *f.maxTokensBudget,
 		MaxHistoryTokens: *f.maxHistoryTokens,

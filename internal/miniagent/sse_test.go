@@ -84,20 +84,6 @@ func TestParseSSEStream_OnTextErrorAborts(t *testing.T) {
 	}
 }
 
-func TestBuildChatBody_StreamOption(t *testing.T) {
-	body, err := buildChatBody(Request{Model: "m", Stream: true})
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	s := string(body)
-	if !contains(s, `"stream":true`) {
-		t.Errorf("missing stream:true: %s", s)
-	}
-	if !contains(s, `"include_usage":true`) {
-		t.Errorf("missing include_usage: %s", s)
-	}
-}
-
 func TestHTTPClient_DoStream_ReturnsResponse(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"choices":[{"delta":{"content":"Hel"}}]}`,

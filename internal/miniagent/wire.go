@@ -6,8 +6,6 @@ package miniagent
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 )
 
 type chatMessage struct {
@@ -62,44 +60,8 @@ func buildChatBody(req Request) ([]byte, error) {
 		}
 		payload["tools"] = funcs
 	}
-	// 流式必须开启 include_usage，否则 usage 只在非流式 body 里出现，
-	// 流式下聚合器拿不到 token 计数。
-	if req.Stream {
-		payload["stream"] = true
-		payload["stream_options"] = map[string]any{"include_usage": true}
-	}
+	// 恒流式：必须开启 include_usage，否则 usage 不在 SSE 里出现，聚合器拿不到 token 计数。
+	payload["stream"] = true
+	payload["stream_options"] = map[string]any{"include_usage": true}
 	return json.Marshal(payload)
-}
-
-func parseChatResponse(raw []byte) (Response, error) {
-	var cr struct {
-		Choices []struct {
-			FinishReason string `json:"finish_reason"`
-			Message      struct {
-				Role      string         `json:"role"`
-				Content   string         `json:"content"`
-				ToolCalls []chatToolCall `json:"tool_calls"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(raw, &cr); err != nil {
-		return Response{}, fmt.Errorf("parse llm response: %w", err)
-	}
-	if len(cr.Choices) == 0 {
-		return Response{}, errors.New("llm response had no choices")
-	}
-	ch := cr.Choices[0]
-	out := Response{
-		Text:         ch.Message.Content,
-		Usage:        Usage{InputTokens: cr.Usage.PromptTokens, OutputTokens: cr.Usage.CompletionTokens},
-		FinishReason: ch.FinishReason,
-	}
-	for _, tc := range ch.Message.ToolCalls {
-		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Fn.Name, Args: tc.Fn.Args})
-	}
-	return out, nil
 }

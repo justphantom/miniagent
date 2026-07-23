@@ -38,20 +38,8 @@ func retryableStatus(code int) bool {
 	return false
 }
 
-// Do posts req to {BaseURL}/v1/chat/completions and parses the response.
-func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
-	client, u, body, err := c.prepareDo(req)
-	if err != nil {
-		return Response{}, err
-	}
-	if c.Logger != nil {
-		c.Logger.Debug("http request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
-	}
-	return c.executeChat(ctx, client, u.String(), body)
-}
-
 // ListModels calls GET {BaseURL}/v1/models and returns the model ids.
-// 与 Do 共用重试策略与 body 上限，避免异常端点返回超大 body 拖垮内存。
+// 与 chat 共用重试策略与 body 上限，避免异常端点返回超大 body 拖垮内存。
 func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
 	client, u, err := c.prepareListModels()
 	if err != nil {
@@ -119,31 +107,6 @@ func (c *HTTPClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, err
 		return nil, nil, nil, fmt.Errorf("build request body: %w", err)
 	}
 	return client, u, body, nil
-}
-
-func (c *HTTPClient) executeChat(ctx context.Context, client *http.Client, url string, body []byte) (Response, error) {
-	var lastErr error
-	for attempt := 0; ; attempt++ {
-		raw, status, raHeader, err := c.doRaw(ctx, client, http.MethodPost, url, body, 1<<20)
-		if err == nil && status == http.StatusOK {
-			if c.Logger != nil {
-				c.Logger.Debug("http response", "status", status, "bytes", len(raw), "attempt", attempt)
-			}
-			return parseChatResponse(raw)
-		}
-
-		lastErr = formatDoErr(raw, status, err)
-		if err != nil {
-			return Response{}, lastErr
-		}
-		ok, rerr := retryIfPossible(ctx, attempt, status, raHeader, raw)
-		if rerr != nil {
-			return Response{}, rerr
-		}
-		if !ok {
-			return Response{}, lastErr
-		}
-	}
 }
 
 func (c *HTTPClient) prepareListModels() (*http.Client, string, error) {

@@ -20,7 +20,6 @@ import (
 // 超时注意：复用 c.HTTP 的 Timeout，它覆盖整个流读过程；长回答场景需配置
 // 更长 Timeout 或改由 ctx 控制单步超时。
 func (c *HTTPClient) DoStream(ctx context.Context, req Request, onText func(string) error) (Response, error) {
-	req.Stream = true
 	client, u, body, err := c.prepareDo(req)
 	if err != nil {
 		return Response{}, err

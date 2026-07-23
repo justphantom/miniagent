@@ -37,7 +37,6 @@ make test       # go test -race ./...
 -new-session             为 --chat-id 创建新会话，完成后退出
 -permission string       权限模式：default / free（默认 default）
 -state-dir string        状态目录（空 = 无状态、无持久化）
--stream                  流式 SSE 输出文本增量（默认 true；-stream=false 回退非流式）
 -max-parallel-tools int  单步内并行工具的并发上限（默认 8；0 = 不限制）
 -max-tokens-budget int   单轮累计 input+output token 上限，超限以 incomplete 终止（默认 0 = 不限制）
 -max-history-tokens int  历史裁剪的 token 预算（默认 0 = 沿用内置 6000）
@@ -83,13 +82,13 @@ make test       # go test -race ./...
 
 | type | 何时输出 | 字段 |
 |------|---------|------|
-| `text` | 流式开启时，LLM 文本增量（一段回答可多次） | `text` |
+| `text` | LLM 文本增量（一段回答可多次） | `text` |
 | `tool_use` | 每次 LLM 请求工具调用 | `name`, `input` |
 | `tool_result` | 工具执行完毕（仅 `-verbose` 时输出） | `name`, `input`, `output`, `is_error` |
 | `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `incomplete` |
 | `error` | 主流程失败，**终态** | `message` |
 
-> 默认模式（非 `-verbose`）：输出 `tool_use` 和 `text`（流式开启时），不输出 `tool_result`。`result` 和 `error` 在任何模式下都会输出。`-stream=false` 时不产生 `text` 事件，最终回答只在 `result.text` 里。
+> 默认模式（非 `-verbose`）：输出 `tool_use` 和 `text`，不输出 `tool_result`。`result` 和 `error` 在任何模式下都会输出。
 
 ### 字段说明
 
@@ -97,7 +96,7 @@ make test       # go test -race ./...
 - `input`：工具参数的原始 JSON 字符串（LLM 透传）
 - `output`：工具返回的文本（可能被工具内部截断）
 - `is_error`：true 表示工具内部错误（参数缺失、路径越界、超时等），不终止循环
-- `text`：`text` 事件里是增量片段（流式，多次拼接成完整回答）；`result` 事件里是完整回答文本（`incomplete=true` 时为空）
+- `text`：`text` 事件里是增量片段（多次拼接成完整回答）；`result` 事件里是完整回答文本（`incomplete=true` 时为空）
 - `model`：本次调用使用的模型 id
 - `input_tokens` / `output_tokens`：累计的 token 用量
 - `steps`：本轮 LLM 调用次数
@@ -106,7 +105,7 @@ make test       # go test -race ./...
 
 ### 输出示例
 
-默认模式（非 verbose，流式开启）：
+默认模式（非 verbose）：
 
 ```jsonl
 {"type":"text","text":"测试"}
@@ -117,7 +116,7 @@ make test       # go test -race ./...
 {"type":"result","text":"测试全部通过。","model":"gpt-4o","input_tokens":320,"output_tokens":48,"steps":3}
 ```
 
-> 流式下 `text` 事件是增量片段，消费方需自行拼接；`result.text` 仍是完整回答。`-stream=false` 时不产生 `text` 事件。
+> 流式下 `text` 事件是增量片段，消费方需自行拼接；`result.text` 仍是完整回答。
 
 verbose 模式：
 
@@ -235,7 +234,7 @@ LLM 调用（`POST /v1/chat/completions`）与 `--list-models`（`GET /v1/models
 - 单次退避上限 60s
 - 响应 body 上限：LLM 调用 1 MiB，`--list-models` 4 MiB（恰好上限不截断，超过则报错）
 - ctx 取消立即返回 `context.Canceled` / `context.DeadlineExceeded`
-- 流式（`-stream`，默认）重试边界：仅在收到首个 200 响应前重试（连接失败或上述可重试状态码）；一旦进入 SSE 流读取，`text` 增量已透传给消费方，不再重试，直接返回 error。流式请求复用 `http.Client.Timeout`（默认 120s），该超时覆盖整个流读过程
+- 流式重试边界：仅在收到首个 200 响应前重试（连接失败或上述可重试状态码）；一旦进入 SSE 流读取，`text` 增量已透传给消费方，不再重试，直接返回 error。流式请求复用 `http.Client.Timeout`（默认 120s），该超时覆盖整个流读过程
 
 ## 内部约束（常量）
 

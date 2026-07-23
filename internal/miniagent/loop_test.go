@@ -43,16 +43,30 @@ func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
+// textResponse / toolResponse 构造 SSE 流（恒流式下 fakeTransport 必须返回 SSE 帧）。
 func textResponse(text string) string {
-	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
+	return strings.Join([]string{
+		fmt.Sprintf(`data: {"choices":[{"delta":{"content":%q}}]}`, text),
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
 }
 
 func toolResponse(calls ...ToolCall) string {
-	tcs := make([]string, 0, len(calls))
-	for _, c := range calls {
-		tcs = append(tcs, fmt.Sprintf(`{"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}`, c.ID, c.Name, c.Args))
+	chunks := make([]string, 0, len(calls)+3)
+	// 首帧带 id/name 与空 arguments；OpenAI 流式协议要求 index 区分多个 tool_call。
+	for i, c := range calls {
+		chunks = append(chunks, fmt.Sprintf(`data: {"choices":[{"delta":{"tool_calls":[{"index":%d,"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}]}}]}`, i, c.ID, c.Name, c.Args))
 	}
-	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","tool_calls":[%s]}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, strings.Join(tcs, ","))
+	chunks = append(chunks,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		`data: [DONE]`,
+		"",
+	)
+	return strings.Join(chunks, "\n")
 }
 
 func TestRun_TextOnlyReturnsImmediately(t *testing.T) {
@@ -102,7 +116,8 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	if !called {
 		t.Error("tool not called")
 	}
-	if len(signals) != 2 {
+	// 恒流式：textResponse 的 content 增量会经 SignalText 透传一次。
+	if len(signals) != 3 {
 		t.Errorf("signals = %d", len(signals))
 	}
 }
@@ -201,7 +216,11 @@ func TestRun_TrimLongHistory(t *testing.T) {
 }
 
 func TestRun_LLMErrorPropagates(t *testing.T) {
-	tr := &fakeTransport{statuses: []int{http.StatusServiceUnavailable}}
+	// 4 次 503：覆盖 DoStream 的 3 次重试 + 1 次最终失败（1+2+4s 退避后放弃）。
+	tr := &fakeTransport{statuses: []int{
+		http.StatusServiceUnavailable, http.StatusServiceUnavailable,
+		http.StatusServiceUnavailable, http.StatusServiceUnavailable,
+	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	_, err := Run(context.Background(), llm, LoopConfig{}, "p1", "hi", nil, nil, nil)
 	if err == nil {
@@ -271,7 +290,7 @@ func TestRun_StreamEmitsTextDelta(t *testing.T) {
 		}
 		return nil
 	}
-	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", Stream: true}, "p1", "hi", nil, emit, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Model: "m"}, "p1", "hi", nil, emit, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
