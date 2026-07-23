@@ -118,7 +118,7 @@ linters:
     - err113         # 强制 error 作 sentinel，与项目"标准库优先"约定冲突
     - exhaustruct    # 强制结构体全字段初始化，过严；HTTPClient 等结构体允许零值
     - funcorder      # 强制导出方法在前；本项目测试依赖包内方法顺序，已通过重构满足但不愿受约束
-    - gochecknoglobals # 禁止所有包级 var 过严；retryDelays/version 等合理使用
+    - gochecknoglobals # 禁止所有包级 var 过严；version 等合理使用
     - gocognit       # 认知复杂度；手写 HTML tokenizer 为避免第三方依赖而保留高复杂度
     - goconst        # JSON tag/map key/role 字符串反复出现是结构需要，提常量降低可读性
     - gocyclo        # 圈复杂度；与 gocognit 一致，手写 tokenizer 合理取舍
