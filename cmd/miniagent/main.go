@@ -39,10 +39,6 @@ type cliFlags struct {
 	delSession   *string
 
 	newSession *bool
-
-	maxParallelTools *int
-	maxTokensBudget  *int
-	maxHistoryTokens *int
 }
 
 func parseFlags() *cliFlags {
@@ -64,11 +60,6 @@ func parseFlags() *cliFlags {
 	f.useSession = flag.String("use-session", "", "switch to session <id> for --chat-id, then exit")
 	f.delSession = flag.String("del-session", "", "delete session <id> for --chat-id, then exit")
 	f.newSession = flag.Bool("new-session", false, "create a new session for --chat-id, then exit")
-
-	// 护栏与上下文预算：默认值见 internal/miniagent 对应常量；0 表示沿用默认或不限。
-	f.maxParallelTools = flag.Int("max-parallel-tools", 8, "max concurrent tool calls within one step (0 = unlimited)")
-	f.maxTokensBudget = flag.Int("max-tokens-budget", 0, "per-turn cumulative input+output token cap; stops with incomplete result (0 = unlimited)")
-	f.maxHistoryTokens = flag.Int("max-history-tokens", 0, "history trimming token budget (0 = default 6000)")
 
 	flag.Parse()
 	return f
@@ -185,13 +176,10 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, h
 	emit := miniagent.StreamEmitFunc(os.Stdout, *f.verbose)
 
 	result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
-		Model:            *f.model,
-		System:           *f.system,
-		MaxTokens:        *f.maxTokens,
-		Tools:            tools,
-		MaxParallelTools: *f.maxParallelTools,
-		MaxTokensBudget:  *f.maxTokensBudget,
-		MaxHistoryTokens: *f.maxHistoryTokens,
+		Model:     *f.model,
+		System:    *f.system,
+		MaxTokens: *f.maxTokens,
+		Tools:     tools,
 	}, "cli", string(prompt), loaded, emit, logger)
 
 	if err != nil {
@@ -206,9 +194,6 @@ func mustRunAgent(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, h
 func emitConversationResult(result miniagent.Result, f *cliFlags, hist *miniagent.History, logger *slog.Logger) {
 	if err := hist.Append(*f.chatID, result.NewMessages); err != nil {
 		logger.Warn("history: append failed", "error", err)
-	}
-	if result.Incomplete {
-		logger.Warn("loop: hit max iterations; usage/history emitted but no final text", "steps", result.Steps)
 	}
 	if err := miniagent.EmitResult(os.Stdout, result, *f.model); err != nil {
 		logger.Warn("emit result failed", "error", err)
