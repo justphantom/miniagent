@@ -23,16 +23,18 @@ type Request struct {
 	System    string
 	Messages  []Message
 	MaxTokens int
-	Tools     []ToolSpec
+	Tools     []Tool
 	// Stream=true 时走 SSE 流式（见 HTTPClient.DoStream），文本增量经 SignalText 透传。
 	Stream bool
 }
 
-// ToolSpec declares one tool to the LLM (OpenAI function-calling schema).
-type ToolSpec struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
+// Tool is one agent tool the LLM may call. Name/Description/Parameters
+// 即 OpenAI function-calling schema 三要素，序列化由 wire.go 完成。
+type Tool struct {
+	Name        string
+	Description string
+	Parameters  map[string]any
+	Call        func(ctx context.Context, args string) ToolResult
 }
 
 // Response is what the LLM returned for one Request.
@@ -47,14 +49,6 @@ type Response struct {
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
-}
-
-// Tool is one agent tool the LLM may call.
-type Tool struct {
-	Name        string
-	Description string
-	Parameters  map[string]any
-	Call        func(ctx context.Context, args string) ToolResult
 }
 
 // ToolResult is the outcome of one tool call.

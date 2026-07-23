@@ -89,14 +89,12 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID, userPro
 	return Result{Usage: total, Steps: maxIterations, NewMessages: msgs[len(history):], Incomplete: true}, nil
 }
 
-func buildToolIndex(tools []Tool) ([]ToolSpec, map[string]Tool) {
-	toolSpecs := make([]ToolSpec, 0, len(tools))
+func buildToolIndex(tools []Tool) ([]Tool, map[string]Tool) {
 	toolByName := make(map[string]Tool, len(tools))
 	for _, t := range tools {
-		toolSpecs = append(toolSpecs, ToolSpec{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
 		toolByName[t.Name] = t
 	}
-	return toolSpecs, toolByName
+	return tools, toolByName
 }
 
 func makeUserMessages(history []Message, userPrompt string) []Message {
@@ -107,7 +105,7 @@ func makeUserMessages(history []Message, userPrompt string) []Message {
 	return msgs
 }
 
-func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolSpecs []ToolSpec, onText func(string) error, logger *slog.Logger) (Response, error) {
+func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, promptID string, step int, msgs []Message, toolSpecs []Tool, onText func(string) error, logger *slog.Logger) (Response, error) {
 	// 历史裁剪预算可配置：<=0 沿用默认。每步裁剪保证请求体不超模型上下文窗口。
 	budget := cfg.MaxHistoryTokens
 	if budget <= 0 {

@@ -278,7 +278,7 @@ func TestBuildChatBody_IncludesTools(t *testing.T) {
 		Model:    "m",
 		System:   "sys",
 		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools:    []ToolSpec{{Name: "read_file", Description: "d", Parameters: map[string]any{"type": "object"}}},
+		Tools:    []Tool{{Name: "read_file", Description: "d", Parameters: map[string]any{"type": "object"}}},
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)
