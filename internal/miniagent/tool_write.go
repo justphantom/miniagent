@@ -1,11 +1,9 @@
 package miniagent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 )
@@ -75,7 +73,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpName) }
-	if _, err := io.Copy(tmp, bytes.NewReader(data)); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		cleanup()
 		return err
