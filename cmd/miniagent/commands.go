@@ -13,7 +13,7 @@ import (
 
 func runListModels(apiKey, baseURL string) {
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: --api-key is required for --list-models")
+		fmt.Fprintln(os.Stderr, "miniagent: $MINIAGENT_API_KEY is required for --list-models")
 		os.Exit(1)
 	}
 	c := &miniagent.HTTPClient{APIKey: apiKey, BaseURL: baseURL}
