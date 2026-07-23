@@ -133,10 +133,6 @@ func (h *History) appendToFile(path string, msgs []Message) error {
 	return nil
 }
 
-func (h *History) trim(msgs []Message) []Message {
-	return trimMessages(msgs, maxHistoryTokens)
-}
-
 // trimMessages drops old turns until the estimated token budget is met.
 func trimMessages(msgs []Message, budget int) []Message {
 	if len(msgs) == 0 {
