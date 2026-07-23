@@ -190,27 +190,7 @@ func (h *History) writeCur(chatID, sid string) error {
 	if err := os.MkdirAll(h.dir, 0o750); err != nil {
 		return err
 	}
-	target := h.curPathFor(chatID)
-	tmp, err := os.CreateTemp(h.dir, ".cur-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpName) }
-	if _, err := tmp.WriteString(sid); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(tmpName, target); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
+	return writeFileAtomic(h.curPathFor(chatID), []byte(sid), 0o600)
 }
 
 func (h *History) sessionPath(chatID, sid string) string {

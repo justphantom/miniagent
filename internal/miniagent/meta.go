@@ -73,25 +73,5 @@ func (m *MetaStore) write(chatID, name, value string) error {
 	if err := os.MkdirAll(m.dir, 0o750); err != nil {
 		return err
 	}
-	path := m.path(chatID, name)
-	tmp, err := os.CreateTemp(m.dir, ".meta-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpName) }
-	if _, err := tmp.WriteString(value); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
+	return writeFileAtomic(m.path(chatID, name), []byte(value), 0o600)
 }
