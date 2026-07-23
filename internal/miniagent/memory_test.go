@@ -2,8 +2,6 @@ package miniagent
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -161,22 +159,6 @@ func TestHistory_DeleteSession(t *testing.T) {
 	}
 }
 
-func TestHistory_LegacyMigration(t *testing.T) {
-	dir := t.TempDir()
-	h, _ := NewHistory(dir, nil)
-	legacy := filepath.Join(dir, "miniagent", "history", "chat1.jsonl")
-	if err := mkdir(filepath.Dir(legacy)); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeFile(legacy, `{"role":"user","content":"legacy"}`+"\n"); err != nil {
-		t.Fatal(err)
-	}
-	loaded := h.Load("chat1")
-	if len(loaded) != 1 || loaded[0].Content != "legacy" {
-		t.Errorf("loaded = %+v", loaded)
-	}
-}
-
 func TestSanitizeChatID(t *testing.T) {
 	if sanitizeChatID("a/b@c") != "a_b_c" {
 		t.Errorf("sanitize = %q", sanitizeChatID("a/b@c"))
@@ -275,6 +257,3 @@ func TestHistory_ConcurrentAppendSafe(t *testing.T) {
 		t.Errorf("loaded = %d lines, want %d (concurrent append corrupted jsonl?)", len(loaded), want)
 	}
 }
-
-func mkdir(p string) error              { return os.MkdirAll(p, 0o750) }
-func writeFile(p, content string) error { return os.WriteFile(p, []byte(content), 0o600) }
