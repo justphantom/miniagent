@@ -2,7 +2,6 @@ package miniagent
 
 import "context"
 
-// Message is one chat message.
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
@@ -10,14 +9,12 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
-// ToolCall is one LLM-requested tool invocation.
 type ToolCall struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Args string `json:"args"` // raw JSON arguments string
 }
 
-// Request is the backend-agnostic call to the LLM.
 type Request struct {
 	Model     string
 	System    string
@@ -35,7 +32,6 @@ type Tool struct {
 	Call        func(ctx context.Context, args string) ToolResult
 }
 
-// Response is what the LLM returned for one Request.
 type Response struct {
 	Text         string
 	ToolCalls    []ToolCall
@@ -43,13 +39,11 @@ type Response struct {
 	FinishReason string // stop|length|tool_calls|content_filter|null；非 stop 表示回答被截断/过滤
 }
 
-// Usage is the token accounting for one call.
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
 }
 
-// ToolResult is the outcome of one tool call.
 type ToolResult struct {
 	Output  string
 	IsError bool
@@ -60,7 +54,6 @@ type ToolResult struct {
 // 关闭）时立即终止循环，避免继续烧 token。传 nil 表示不通知。
 type OnToolUse func(name, input string) error
 
-// Result is what loop.Run returns.
 type Result struct {
 	Text  string
 	Usage Usage

@@ -38,7 +38,6 @@ func ToolUseWriter(w io.Writer) OnToolUse {
 	}
 }
 
-// EmitResult writes the terminal result event to w.
 func EmitResult(w io.Writer, result Result, model string) error {
 	return json.NewEncoder(w).Encode(resultEvent{
 		Type:         "result",
@@ -50,7 +49,6 @@ func EmitResult(w io.Writer, result Result, model string) error {
 	})
 }
 
-// EmitError writes the terminal error event to w.
 func EmitError(w io.Writer, msg string) error {
 	return json.NewEncoder(w).Encode(errorEvent{Type: "error", Message: msg})
 }
