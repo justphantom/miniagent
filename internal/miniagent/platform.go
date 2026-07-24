@@ -8,10 +8,10 @@ import (
 	"syscall"
 )
 
-// setPGid puts the child in a new process group so kill(-pgid) can reach
+// setPGID puts the child in a new process group so kill(-pgid) can reach
 // the whole tree spawned by sh -c (otherwise grandchildren go orphan on
 // timeout).
-func setPGid(cmd *exec.Cmd) {
+func setPGID(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}

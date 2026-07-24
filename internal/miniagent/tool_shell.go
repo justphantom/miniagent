@@ -42,7 +42,7 @@ func ShellTool(workspaceRoot string) Tool {
 			// cmd.Env 不设：子进程继承父进程全量环境。
 			// 独立进程组：超时 kill(-pgid) 才能连带清理 sh 派生的孙子进程，
 			// 否则 make/find 之类会成孤儿继续跑。
-			setPGid(cmd)
+			setPGID(cmd)
 			body, err := runShellLimited(runCtx, cmd)
 			if err != nil {
 				if runCtx.Err() == context.DeadlineExceeded {
