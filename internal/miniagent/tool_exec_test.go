@@ -91,16 +91,52 @@ func TestShell_EmptyWorkdirInheritsCwd(t *testing.T) {
 	}
 }
 
-// 子进程继承父进程全量环境（不再有白名单）。
+// 子进程继承父进程全量环境（MINIAGENT_* 前缀除外），其他变量原样透传。
 func TestShell_InheritsFullEnv(t *testing.T) {
-	t.Setenv("MINIAGENT_TEST_VAR", "inherited")
+	t.Setenv("MINIAGENT_TEST_INHERIT", "inherited")
 	s := ShellTool(t.TempDir())
-	res := s.Call(context.Background(), `{"command":"echo $MINIAGENT_TEST_VAR"}`)
+	res := s.Call(context.Background(), `{"command":"echo $MINIAGENT_TEST_INHERIT"}`)
 	if res.IsError {
 		t.Fatalf("shell failed: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "inherited") {
-		t.Errorf("env not inherited: %q", res.Output)
+	if strings.Contains(res.Output, "inherited") {
+		t.Errorf("MINIAGENT_* should be scrubbed: %q", res.Output)
+	}
+	// 非 MINIAGENT_ 前缀变量应正常继承。
+	t.Setenv("TEST_SHELL_INHERIT", "passed-through")
+	res2 := s.Call(context.Background(), `{"command":"echo $TEST_SHELL_INHERIT"}`)
+	if res2.IsError {
+		t.Fatalf("shell failed: %s", res2.Output)
+	}
+	if !strings.Contains(res2.Output, "passed-through") {
+		t.Errorf("non-MINIAGENT env not inherited: %q", res2.Output)
+	}
+}
+
+// MINIAGENT_API_KEY 必须被剥离，避免 LLM 通过 shell 读取宿主密钥。
+func TestShell_ScrubsAPIKey(t *testing.T) {
+	t.Setenv("MINIAGENT_API_KEY", "sk-secret-leak")
+	s := ShellTool(t.TempDir())
+	res := s.Call(context.Background(), `{"command":"echo [$MINIAGENT_API_KEY]"}`)
+	if res.IsError {
+		t.Fatalf("shell failed: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "sk-secret-leak") {
+		t.Errorf("API key leaked to child: %q", res.Output)
+	}
+}
+
+// 所有 MINIAGENT_* 前缀变量都应被剥离（含 BASE_URL 等配置信息）。
+func TestShell_ScrubsAllMiniagentVars(t *testing.T) {
+	t.Setenv("MINIAGENT_API_KEY", "sk-leak")
+	t.Setenv("MINIAGENT_BASE_URL", "https://private.example.internal")
+	s := ShellTool(t.TempDir())
+	res := s.Call(context.Background(), `{"command":"env | grep MINIAGENT_ | wc -l"}`)
+	if res.IsError {
+		t.Fatalf("shell failed: %s", res.Output)
+	}
+	if !strings.Contains(strings.TrimSpace(res.Output), "0") {
+		t.Errorf("MINIAGENT_* vars leaked: %q", res.Output)
 	}
 }
 

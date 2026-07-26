@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -39,7 +40,9 @@ func ShellTool(workspaceRoot string) Tool {
 			defer cancel()
 			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command)
 			cmd.Dir = workspaceRoot
-			// cmd.Env 不设：子进程继承父进程全量环境。
+			// 子进程环境继承父进程全量，但显式剥离所有 MINIAGENT_* 前缀变量
+			// （API_KEY/BASE_URL 等），避免 LLM 通过 shell 读取宿主配置与密钥。
+			cmd.Env = scrubEnv(os.Environ())
 			// 独立进程组：超时 kill(-pgid) 才能连带清理 sh 派生的孙子进程，
 			// 否则 make/find 之类会成孤儿继续跑。
 			setPGID(cmd)
@@ -83,4 +86,18 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	// 兜底：正常退出后也整组清理一次，防后台 & 残留。
 	killProcessGroup(cmd)
 	return truncate(out.String(), maxShellOutputChars, "…"), err
+}
+
+// scrubEnv 复制 env 并移除所有 MINIAGENT_* 前缀条目（API_KEY/BASE_URL 等），
+// 防止子进程读取宿主配置（含密钥与私有端点）。其他环境变量原样保留
+// （free 模式不引入白名单）。
+func scrubEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "MINIAGENT_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }

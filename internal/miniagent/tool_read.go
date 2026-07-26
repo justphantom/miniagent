@@ -51,18 +51,25 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 	}
-	if info.IsDir() {
-		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是目录，不是文件", a.Path)}
+	if !info.Mode().IsRegular() {
+		// 拒绝非普通文件：FIFO/设备/socket 会让 openNoFollow 阻塞（无写者的
+		// FIFO 永久卡住）或读出非文本字节流；只允许 regular 文件。
+		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 不是普通文件（mode=%s），仅支持 regular file", a.Path, info.Mode().String())}
 	}
 	content, err := readFileContent(full)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 	}
-	var formatted string
-	if a.Offset == 0 && a.Limit == 0 {
-		formatted = content
-	} else {
-		formatted = formatLines(content, a.Offset, a.Limit)
+	// 二进制兜底：含 NUL 字节几乎必为二进制（UTF-8/常见编码均不使用 NUL），
+	// 让 LLM 读乱码会污染上下文 + 浪费 token。检测前 8 KiB 足够低成本拦截。
+	scanLimit := min(len(content), 8192)
+	if strings.IndexByte(content[:scanLimit], 0) >= 0 {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是二进制文件（含 NUL 字节），read_file 仅支持文本", a.Path)}
+	}
+	// 始终带行号：edit_file 需要精确匹配，行号帮助 LLM 定位 offset。
+	formatted, err := formatLines(content, a.Offset, a.Limit)
+	if err != nil {
+		return ToolResult{IsError: true, Output: err.Error()}
 	}
 	return ToolResult{Output: truncate(formatted, maxReadFileChars, "…")}
 }
@@ -96,7 +103,14 @@ func readFileContent(full string) (string, error) {
 	return string(data), nil
 }
 
-func formatLines(content string, offset, limit int) string {
+// formatLines 给 content 加 "N │ line" 前缀，按 [offset, offset+limit-1] 范围
+// 截取。offset<=0 视作 1；limit<=0 或越界视作读到末尾；limit>maxLineLimit 截断。
+// offset 超过文件行数时返回 error（让调用方标记 IsError，而非静默空输出）。
+// 空文件（content==""）直接返回空串，避免输出"1 │ "伪空行。
+func formatLines(content string, offset, limit int) (string, error) {
+	if content == "" {
+		return "", nil
+	}
 	if limit < 0 || limit > maxLineLimit {
 		limit = maxLineLimit
 	}
@@ -107,12 +121,12 @@ func formatLines(content string, offset, limit int) string {
 		end = start + limit - 1
 	}
 	if start > len(lines) {
-		return fmt.Sprintf("offset %d 超出文件行数（共 %d 行）", start, len(lines))
+		return "", fmt.Errorf("offset %d 超出文件行数（共 %d 行）", start, len(lines))
 	}
 	var sb strings.Builder
 	width := len(strconv.Itoa(end))
 	for i := start; i <= end; i++ {
 		fmt.Fprintf(&sb, "%*d │ %s\n", width, i, lines[i-1])
 	}
-	return sb.String()
+	return sb.String(), nil
 }
