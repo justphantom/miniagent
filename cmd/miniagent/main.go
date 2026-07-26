@@ -20,12 +20,13 @@ import (
 var version = "dev"
 
 type cliFlags struct {
-	model     *string
-	baseURL   *string
-	system    *string
-	maxTokens *int
-	workdir   *string
-	showVer   *bool
+	model       *string
+	baseURL     *string
+	system      *string
+	maxTokens   *int
+	maxDuration *time.Duration
+	workdir     *string
+	showVer     *bool
 }
 
 func parseFlags() *cliFlags {
@@ -33,7 +34,8 @@ func parseFlags() *cliFlags {
 	f.model = flag.String("model", "", "LLM model id (required)")
 	f.baseURL = flag.String("base-url", os.Getenv("MINIAGENT_BASE_URL"), "LLM endpoint root, no /v1 suffix (or $MINIAGENT_BASE_URL)")
 	f.system = flag.String("system", "你是一个简洁的助手，回答通常不超过 500 字。", "system prompt")
-	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens")
+	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
+	f.maxDuration = flag.Duration("max-duration", 0, "overall wall-clock limit (0 = unlimited); covers all LLM calls + tool runs")
 	f.workdir = flag.String("workdir", "", "working directory (tool path prefix + shell cwd)")
 	f.showVer = flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -59,6 +61,11 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if *f.maxDuration > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *f.maxDuration)
+		defer cancel()
+	}
 
 	result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
 		Model:     *f.model,
