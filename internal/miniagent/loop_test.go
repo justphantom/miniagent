@@ -151,15 +151,19 @@ func TestRun_ToolPanicRecovered(t *testing.T) {
 }
 
 func TestRun_LLMErrorPropagates(t *testing.T) {
-	// 单次 503：无重试，立即返回 error。
-	tr := &fakeTransport{statuses: []int{http.StatusServiceUnavailable}}
+	// 3 次 503：重试 maxRetries 次后仍失败，最终把错误上抛。
+	tr := &fakeTransport{statuses: []int{
+		http.StatusServiceUnavailable,
+		http.StatusServiceUnavailable,
+		http.StatusServiceUnavailable,
+	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	_, err := Run(context.Background(), llm, LoopConfig{}, "hi", nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if tr.calls != 1 {
-		t.Errorf("calls = %d, want 1 (no retry)", tr.calls)
+	if tr.calls != 1+maxRetries {
+		t.Errorf("calls = %d, want %d (1 + maxRetries)", tr.calls, 1+maxRetries)
 	}
 }
 
