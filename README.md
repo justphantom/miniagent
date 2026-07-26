@@ -5,8 +5,9 @@
 - 后端：OpenAI 兼容的 `/v1/chat/completions` 接口
 - 非流式：每次 LLM 调用是普通 POST，等完整响应返回（无 SSE、无增量片段）
 - 无状态：单次 stdin → stdout，无历史、无会话、无落盘
-- 无重试：HTTP 失败直接返回 error
-- 无安全边界：工具不约束路径（可读写任意路径），shell 无黑名单；隔离责任完全交给调用方（容器/cgroup 等）
+- 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
+- 无路径边界约束：工具不约束路径（绝对路径可读写任意位置），shell 无黑名单；仅对 `read_file`/`edit_file` 的最终路径做符号链接拒绝（`O_NOFOLLOW`），不构成完整安全边界。隔离责任完全交给调用方（容器/cgroup 等）
+- 平台：仅 Linux/macOS（Unix）。`platform.go` 用 `//go:build !windows` 隔离 setpgid/killpg/O_NOFOLLOW，未提供 Windows fallback
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
 - 工具：`read_file` / `write_file` / `edit_file` / `shell`（全部 free 模式）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行
@@ -29,6 +30,7 @@ make test       # go test -race ./...
 
 ```
 -base-url string         endpoint 根地址（不含 /v1），或 $MINIAGENT_BASE_URL
+-max-duration duration   整体墙钟上限（覆盖所有 LLM 调用 + 工具执行），0 表示不限（默认 0）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
 -model string            LLM 模型 id（必需）
 -system string           系统提示词（默认 "你是一个简洁的助手，回答通常不超过 500 字。"）
@@ -101,7 +103,7 @@ make test       # go test -race ./...
 
 ### `read_file`
 
-读取文本文件，输出带行号标注。支持 `offset`/`limit` 按行范围读取。
+读取文本文件，输出统一带行号标注（`N │ line` 格式，便于 `edit_file` 定位）。支持 `offset`/`limit` 按行范围读取。
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
@@ -109,7 +111,7 @@ make test       # go test -race ./...
 | `offset` | int | 否 | 起始行（1-based），默认 1 |
 | `limit` | int | 否 | 最多返回行数，默认全部，上限 10000 |
 
-约束：单文件最大 80000 字节（超出部分丢弃），输出超过 20000 字符截断。拒绝读取符号链接。
+约束：单文件最大 80000 字节（超出部分丢弃），输出超过 20000 字符截断。拒绝读取符号链接、目录、非 regular 文件（FIFO/设备/socket）、二进制内容（含 NUL 字节）。`offset` 超出文件行数返回 IsError。
 
 ### `write_file`
 
@@ -145,7 +147,7 @@ make test       # go test -race ./...
 约束：
 - 命令超时 60 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
 - 输出超过 20000 字符截断
-- 子进程**继承父进程全部环境变量**（无白名单；`MINIAGENT_API_KEY` 等也会泄漏给子进程，调用方需自行评估风险）
+- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；其他第三方工具的敏感变量（如 `DATABASE_URL`）仍会泄漏，调用方需自行评估风险
 
 ## 退出码
 
@@ -167,6 +169,8 @@ make test       # go test -race ./...
 | `maxShellOutputChars` | 20000 | shell 输出字符上限 |
 | `shellTimeout` | 60s | shell 命令超时 |
 | `maxChatBodyBytes` | 4 MiB | chat completions 响应 body 上限 |
+| `maxRetries` | 2 | LLM 调用最大重试次数（仅 429/500/502/503/504 + 网络错） |
+| `retryBaseDelay` / `retryMaxDelay` | 500ms / 8s | 重试指数退火基线 / 单次封顶 |
 
 ## 完整调用示例
 
@@ -183,6 +187,10 @@ echo "在当前目录跑测试并总结失败原因" | MINIAGENT_API_KEY=sk-xxx 
 echo "重构这段代码" | MINIAGENT_API_KEY=sk-xxx \
   ./bin/miniagent -model gpt-4o -base-url https://api.openai.com \
   -system "你是资深 Go 工程师" -max-tokens 8192
+
+# 限制整体墙钟 5 分钟（防止 ReAct 循环失控烧 token）
+echo "跑全量测试并总结" | MINIAGENT_API_KEY=sk-xxx \
+  ./bin/miniagent -model gpt-4o -base-url https://api.openai.com -max-duration 5m
 
 # 查看版本
 ./bin/miniagent -version

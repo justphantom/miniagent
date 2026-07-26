@@ -11,6 +11,8 @@
 #   4. gosec 误报在 settings.gosec.excludes 中精确 silence 并附理由，不做
 #      全局排除。
 #   5. 不开启 nolintlint：会让 nolint 注释维护成本爆炸，社区共识是默认关。
+#   6. 平台范围：仅 Linux/macOS（Unix）。platform.go 用 //go:build !windows
+#      隔离 setpgid/killpg/O_NOFOLLOW，无 windows fallback。
 #
 # 运行：golangci-lint run
 # 全量：golangci-lint run --default=all（启用全部 linter，含未在 enable 列出的）
@@ -183,20 +185,18 @@ linters:
     # ===== gosec 误报精确排除（附真实理由）=====
     gosec:
       excludes:
-        # G301 目录权限 0o750：stateDir 需用户可读，0o755 是合理默认
-        # （文件本身仍 0o600，目录权限不泄露内容）
+        # G302/G301 文件/目录权限：write/edit 用 0o644/0o750 是合理默认，
+        # 工具文件不含敏感信息，权限收紧无额外收益。
         - G301
-        # G302 文件权限 0o750：同 G301
         - G302
-        # G304 路径变量：文件操作路径已通过 resolveUnderRoot + checkUnderRoot
-        # + EvalSymlinks 三层校验（含 TOCTOU 闭环），变量来源是内部
-        # stateDir/chatID 而非用户直接输入
+        # G304 路径变量：本形态为 free 模式（README 明示无路径边界约束），
+        # 路径来源是 LLM 而非可信输入，约束责任交给调用方（容器/cgroup）。
+        # openNoFollow 仅拒绝符号链接最终段，不做目录边界校验。
         - G304
-        # G602 slice 越界：estimateTokens 的 msgs[i] 在 for i := range 循环内，
-        # 类型系统已保证不越界（误报）
+        # G602 slice 越界：estimateTokens 已删（无记忆层），误报兜底保留。
         - G602
-        # G204 tainted 子进程：shell 工具的本质就是执行用户/LLM 命令，已有
-        # workspace_root 路径约束 + 黑名单 + env 白名单 + 进程组清理
+        # G204 tainted 子进程：shell 工具的本质就是执行 LLM 命令，已有
+        # 60s 超时 + 进程组 SIGKILL 清理；真正隔离依赖调用方。
         - G204
 
   exclusions:
@@ -215,7 +215,7 @@ linters:
 
       # main 包的命令行输出：fmt.Println/Printf 是 CLI 工具职责
       - path: ^cmd/
-        linters: [forbidigo, gocritic]
+        linters: [gocritic]
         text: "fmt\\.Print|print|println"
 
       # errcheck 对 defer Close 的检查：Go 惯用法是只读关闭后忽略错误，
