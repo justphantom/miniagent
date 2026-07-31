@@ -58,6 +58,9 @@ type Result struct {
 	Text  string
 	Usage Usage
 	Steps int
+	// Messages 是截至返回时的全量 transcript（History + 本轮新增），
+	// 所有 return 路径（含出错、撞 maxIterations）都带回，供会话持久化。
+	Messages []Message
 }
 
 // LoopConfig carries the per-turn LLM parameters.
@@ -66,4 +69,7 @@ type LoopConfig struct {
 	System    string
 	MaxTokens int
 	Tools     []Tool
+	// History 是本轮之前的会话历史，按序拼在新 user prompt 之前。
+	// Run 不修改其内容。
+	History []Message
 }

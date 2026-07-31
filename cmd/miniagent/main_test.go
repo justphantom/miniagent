@@ -4,9 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -118,6 +124,67 @@ func TestCLI_EmptyStdinExits1(t *testing.T) {
 		t.Errorf("code = %d, want 1", code)
 	}
 	if !strings.Contains(out, "stdin is empty") {
+		t.Errorf("missing error: %s", out)
+	}
+}
+
+// 两轮接续 e2e：fork 出的子进程真实请求父进程内的 httptest server。
+// 第二轮的请求体必须包含第一轮的回答（上下文自动带入），session 文件
+// 落盘完整 transcript。
+func TestCLI_SessionTwoTurns(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"回答X"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	sess := filepath.Join(t.TempDir(), "s.json")
+	args := []string{"-model", "m", "-base-url", srv.URL, "-session", sess}
+	code, out := runMainBin(t, "第一轮提问", args, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("turn1 code = %d, out = %s", code, out)
+	}
+	code, out = runMainBin(t, "第二轮提问", args, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("turn2 code = %d, out = %s", code, out)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("server got %d requests, want 2", len(bodies))
+	}
+	if !strings.Contains(bodies[1], "第一轮提问") || !strings.Contains(bodies[1], "回答X") || !strings.Contains(bodies[1], "第二轮提问") {
+		t.Errorf("turn2 request missing turn1 context: %s", bodies[1])
+	}
+
+	data, err := os.ReadFile(sess)
+	if err != nil {
+		t.Fatalf("session file not written: %v", err)
+	}
+	for _, want := range []string{"第一轮提问", "回答X", "第二轮提问"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("session file missing %q: %s", want, data)
+		}
+	}
+}
+
+// 损坏的 session 文件 → stderr 报错 + 退出码 1，不静默丢弃历史。
+func TestCLI_CorruptSessionExits1(t *testing.T) {
+	sess := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(sess, []byte("{oops"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runMainBin(t, "prompt", []string{"-model", "x", "-session", sess}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "load session") {
 		t.Errorf("missing error: %s", out)
 	}
 }

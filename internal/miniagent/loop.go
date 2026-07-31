@@ -44,32 +44,38 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	}
 	toolByName := buildToolIndex(cfg.Tools)
 
-	msgs := []Message{{Role: "user", Content: userPrompt}}
+	// 复制 History 而非 append 到其底层数组：接续对话时调用方可能复用同一
+	// slice，原地 append 会越界写调用方的数据。
+	msgs := make([]Message, 0, len(cfg.History)+1)
+	msgs = append(msgs, cfg.History...)
+	msgs = append(msgs, Message{Role: "user", Content: userPrompt})
 	total := Usage{}
 
 	for step := 1; step <= maxIterations; step++ {
 		if err := ctx.Err(); err != nil {
-			return Result{Usage: total, Steps: step - 1}, err
+			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
 		}
 		resp, err := callLLM(ctx, llm, cfg, step, msgs, logger)
 		if err != nil {
-			return Result{Usage: total, Steps: step - 1}, err
+			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
 		}
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
 
 		if len(resp.ToolCalls) == 0 {
-			return Result{Text: resp.Text, Usage: total, Steps: step}, nil
+			// 最终文本入历史：接续对话需要看到上一轮的回答。
+			msgs = append(msgs, Message{Role: "assistant", Content: resp.Text})
+			return Result{Text: resp.Text, Usage: total, Steps: step, Messages: msgs}, nil
 		}
 
 		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, onToolUse, logger)
 		if err != nil {
-			return Result{Usage: total, Steps: step}, err
+			return Result{Usage: total, Steps: step, Messages: msgs}, err
 		}
 	}
 	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。
 	// Steps=maxIterations 是终止信号（无最终 Text）。
-	return Result{Usage: total, Steps: maxIterations}, nil
+	return Result{Usage: total, Steps: maxIterations, Messages: msgs}, nil
 }
 
 func buildToolIndex(tools []Tool) map[string]Tool {

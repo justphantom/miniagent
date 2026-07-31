@@ -26,6 +26,7 @@ type cliFlags struct {
 	maxTokens   *int
 	maxDuration *time.Duration
 	workdir     *string
+	session     *string
 	showVer     *bool
 }
 
@@ -37,6 +38,7 @@ func parseFlags() *cliFlags {
 	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
 	f.maxDuration = flag.Duration("max-duration", 0, "overall wall-clock limit (0 = unlimited); covers all LLM calls + tool runs")
 	f.workdir = flag.String("workdir", "", "working directory (tool path prefix + shell cwd)")
+	f.session = flag.String("session", "", "session file for continuing conversation (JSON history, created if missing)")
 	f.showVer = flag.Bool("version", false, "show version")
 	flag.Parse()
 	return f
@@ -55,6 +57,7 @@ func main() {
 
 	validateConversationFlags(f, apiKey)
 	prompt := mustReadPrompt()
+	history := mustLoadSession(*f.session)
 	llm := buildLLM(apiKey, *f.baseURL, logger)
 	tools := buildTools(*f.workdir)
 	onToolUse := miniagent.ToolUseWriter(os.Stdout)
@@ -72,8 +75,11 @@ func main() {
 		System:    *f.system,
 		MaxTokens: *f.maxTokens,
 		Tools:     tools,
+		History:   history,
 	}, string(prompt), onToolUse, logger)
 	if err != nil {
+		// Run 出错时不写回 session：不把失败轮的半成品历史固化（工具的
+		// 副作用已发生但无记录，是已接受的取舍）。
 		if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
 			logger.Warn("emit error failed", "error", eerr)
 		}
@@ -82,6 +88,14 @@ func main() {
 	if err := miniagent.EmitResult(os.Stdout, result, *f.model); err != nil {
 		logger.Warn("emit result failed", "error", err)
 		os.Exit(1)
+	}
+	// result 已送达消费方后再持久化：写回失败只影响下次接续，用退出码 1
+	// 显式告知，不吞错也不丢本轮回答。
+	if *f.session != "" {
+		if err := miniagent.SaveSession(*f.session, result.Messages); err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -107,6 +121,18 @@ func mustReadPrompt() []byte {
 		os.Exit(1)
 	}
 	return prompt
+}
+
+func mustLoadSession(path string) []miniagent.Message {
+	if path == "" {
+		return nil
+	}
+	history, err := miniagent.LoadSession(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
+		os.Exit(1)
+	}
+	return history
 }
 
 func buildLLM(apiKey, baseURL string, logger *slog.Logger) *miniagent.HTTPClient {

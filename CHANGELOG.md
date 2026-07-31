@@ -5,7 +5,15 @@
 
 ## [Unreleased]
 
+### Added
+- `-session <path>` flag：会话接续。文件存在则加载 `[]Message` 历史作为上下文，
+  Run 成功后把完整 transcript 原子写回（0o600）；Run 出错不写回。思考内容
+  （reasoning）不入上下文也不落盘（`Message` 无对应字段）。
+
 ### Changed
+- `Run` 的 `Result` 新增 `Messages`（全量 transcript，所有返回路径均带回）；
+  `LoopConfig` 新增 `History`（历史前缀）。最终 assistant 文本现在会追加到
+  transcript 末尾（此前只经 `Result.Text` 返回）。
 - 工具重命名：`read_file` → `read`、`write_file` → `write`、`edit_file` → `edit`
   （`shell` 不变）。工具 schema 属于外部契约，消费方需同步更新。
 
