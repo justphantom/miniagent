@@ -174,6 +174,9 @@ func (c *HTTPClient) endpoint(path string, defaultTimeout time.Duration) (*http.
 	if base.Scheme == "" || base.Host == "" {
 		return nil, nil, fmt.Errorf("miniagent: base_url %q 缺少 scheme 或 host（应为 http(s)://host[:port]）", c.BaseURL)
 	}
+	if base.Scheme != "http" && base.Scheme != "https" {
+		return nil, nil, fmt.Errorf("miniagent: base_url %q 的 scheme %q 不支持（仅 http/https）", c.BaseURL, base.Scheme)
+	}
 	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: defaultTimeout}

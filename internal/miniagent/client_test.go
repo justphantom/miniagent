@@ -134,6 +134,19 @@ func TestHTTPClient_Do_BaseURLMissingScheme(t *testing.T) {
 	}
 }
 
+// BaseURL 用非 http(s) scheme（如 ftp）：必须在组请求前拒绝，而非等请求
+// 失败才报错。
+func TestHTTPClient_Do_BaseURLUnsupportedScheme(t *testing.T) {
+	c := &HTTPClient{APIKey: "sk", BaseURL: "ftp://example.com"}
+	_, err := c.Do(context.Background(), Request{Model: "m"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "不支持") {
+		t.Errorf("err should reject scheme: %v", err)
+	}
+}
+
 // 恰好达到上限的 body 不应被误报截断。
 func TestHTTPClient_Do_AcceptsLimitBody(t *testing.T) {
 	// 构造一个合法的 JSON，content 长度填到接近 maxChatBodyBytes。
