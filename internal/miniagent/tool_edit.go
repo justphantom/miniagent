@@ -18,11 +18,11 @@ type editfileArgs struct {
 	NewString string `json:"new_string"`
 }
 
-// EditFileTool returns an edit_file tool bound to workspaceRoot.
+// EditFileTool returns an edit tool bound to workspaceRoot.
 func EditFileTool(workspaceRoot string) Tool {
 	return Tool{
-		Name:        "edit_file",
-		Description: "精确替换文件中的一段文本。old_string 必须在文件中唯一出现（精确匹配，含缩进和换行）。出现 0 次或多次均失败。拒绝编辑符号链接。先 read_file 查看内容再编辑。",
+		Name:        "edit",
+		Description: "精确替换文件中的一段文本。old_string 必须在文件中唯一出现（精确匹配，含缩进和换行）。出现 0 次或多次均失败。拒绝编辑符号链接。先 read 查看内容再编辑。",
 		Parameters: object(map[string]any{
 			"path":       map[string]any{"type": "string", "description": "要编辑的文件路径，相对 workspace_root 或绝对路径"},
 			"old_string": map[string]any{"type": "string", "description": "要被替换的原文（必须与文件中的内容精确匹配，含缩进和换行）"},
@@ -86,7 +86,7 @@ func applyEdit(full string, info os.FileInfo, a editfileArgs) ToolResult {
 	count := strings.Count(content, a.OldString)
 	switch count {
 	case 0:
-		return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中未找到。文件可能已被修改，请先 read_file 查看当前内容。", a.Path)}
+		return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中未找到。文件可能已被修改，请先 read 查看当前内容。", a.Path)}
 	case 1:
 	default:
 		return ToolResult{IsError: true, Output: fmt.Sprintf("old_string 在 %q 中出现 %d 次。请提供更多上下文（扩大 old_string 范围）使其唯一匹配。", a.Path, count)}

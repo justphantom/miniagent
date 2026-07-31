@@ -32,7 +32,7 @@ func TestBuildTools_AlwaysRegisters4(t *testing.T) {
 	if len(tools) != 4 {
 		t.Fatalf("got %d tools, want 4", len(tools))
 	}
-	expect := map[string]bool{"read_file": true, "write_file": true, "edit_file": true, "shell": true}
+	expect := map[string]bool{"read": true, "write": true, "edit": true, "shell": true}
 	for _, tk := range tools {
 		if !expect[tk.Name] {
 			t.Errorf("unexpected tool %q", tk.Name)

@@ -42,7 +42,7 @@ func TestHTTPClient_Do_TextResponse(t *testing.T) {
 // 带 tool_calls 的回复：name/arguments/id 正确解析。
 func TestHTTPClient_Do_ToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
 	}))
 	defer srv.Close()
 
@@ -55,7 +55,7 @@ func TestHTTPClient_Do_ToolCalls(t *testing.T) {
 		t.Fatalf("ToolCalls = %d", len(resp.ToolCalls))
 	}
 	tc := resp.ToolCalls[0]
-	if tc.ID != "c1" || tc.Name != "read_file" || tc.Args != `{"path":"a"}` {
+	if tc.ID != "c1" || tc.Name != "read" || tc.Args != `{"path":"a"}` {
 		t.Errorf("tc = %+v", tc)
 	}
 	if resp.FinishReason != "tool_calls" {
@@ -145,12 +145,12 @@ func TestBuildChatBody_IncludesTools(t *testing.T) {
 		Model:    "m",
 		System:   "sys",
 		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools:    []Tool{{Name: "read_file", Description: "d", Parameters: map[string]any{"type": "object"}}},
+		Tools:    []Tool{{Name: "read", Description: "d", Parameters: map[string]any{"type": "object"}}},
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if !contains(string(body), `"tools"`) || !contains(string(body), `"read_file"`) {
+	if !contains(string(body), `"tools"`) || !contains(string(body), `"read"`) {
 		t.Errorf("body missing tools: %s", body)
 	}
 }

@@ -6,10 +6,10 @@
 - 非流式：每次 LLM 调用是普通 POST，等完整响应返回（无 SSE、无增量片段）
 - 无状态：单次 stdin → stdout，无历史、无会话、无落盘
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
-- 无路径边界约束：工具不约束路径（绝对路径可读写任意位置），shell 无黑名单；仅对 `read_file`/`edit_file` 的最终路径做符号链接拒绝（`O_NOFOLLOW`），不构成完整安全边界。隔离责任完全交给调用方（容器/cgroup 等）
+- 无路径边界约束：工具不约束路径（绝对路径可读写任意位置），shell 无黑名单；仅对 `read`/`edit` 的最终路径做符号链接拒绝（`O_NOFOLLOW`），不构成完整安全边界。隔离责任完全交给调用方（容器/cgroup 等）
 - 平台：仅 Linux/macOS（Unix）。`platform.go` 用 `//go:build !windows` 隔离 setpgid/killpg/O_NOFOLLOW，未提供 Windows fallback
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：`read_file` / `write_file` / `edit_file` / `shell`（全部 free 模式）
+- 工具：`read` / `write` / `edit` / `shell`（全部 free 模式）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行
 
 ## 构建
@@ -79,7 +79,7 @@ make test       # go test -race ./...
 正常带工具调用：
 
 ```jsonl
-{"type":"tool_use","name":"read_file","input":"{\"path\":\"a.go\"}"}
+{"type":"tool_use","name":"read","input":"{\"path\":\"a.go\"}"}
 {"type":"tool_use","name":"shell","input":"{\"command\":\"go test ./...\"}"}
 {"type":"result","text":"测试全部通过。","model":"gpt-4o","input_tokens":320,"output_tokens":48,"steps":3}
 ```
@@ -101,9 +101,9 @@ make test       # go test -race ./...
 
 4 个工具全部为 free 模式：无路径边界约束、无 shell 黑名单。工具参数为 JSON 对象。
 
-### `read_file`
+### `read`
 
-读取文本文件，输出统一带行号标注（`N │ line` 格式，便于 `edit_file` 定位）。支持 `offset`/`limit` 按行范围读取。
+读取文本文件，输出统一带行号标注（`N │ line` 格式，便于 `edit` 定位）。支持 `offset`/`limit` 按行范围读取。
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
@@ -113,7 +113,7 @@ make test       # go test -race ./...
 
 约束：单文件最大 80000 字节（超出部分丢弃），输出超过 20000 字符截断。拒绝读取符号链接、目录、非 regular 文件（FIFO/设备/socket）、二进制内容（含 NUL 字节）。`offset` 超出文件行数返回 IsError。
 
-### `write_file`
+### `write`
 
 覆盖写入文件，自动创建父目录，原子替换（temp + rename），保留原文件权限。
 
@@ -124,7 +124,7 @@ make test       # go test -race ./...
 
 约束：`content` 最大 10 MiB。
 
-### `edit_file`
+### `edit`
 
 精确替换文件中的一段文本。`old_string` 必须在文件中唯一出现（出现 0 次或多次都失败）。拒绝编辑符号链接。
 
@@ -164,7 +164,7 @@ make test       # go test -race ./...
 | `maxParallelTools` | 8 | 单步内并行工具并发上限 |
 | `maxToolResultInHistory` | 2000 | 单条 tool 结果进入历史消息的字符数 |
 | `maxReadFileBytes` / `maxReadFileChars` | 80000 / 20000 | 读文件字节 / 输出字符上限 |
-| `maxLineLimit` | 10000 | `read_file` 的 `limit` 上限 |
+| `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
 | `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | 写 / 编辑文件字节上限 |
 | `maxShellOutputChars` | 20000 | shell 输出字符上限 |
 | `shellTimeout` | 60s | shell 命令超时 |

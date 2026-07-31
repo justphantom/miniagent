@@ -3,6 +3,12 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Changed
+- 工具重命名：`read_file` → `read`、`write_file` → `write`、`edit_file` → `edit`
+  （`shell` 不变）。工具 schema 属于外部契约，消费方需同步更新。
+
 ## [1.0.0] - 2026-07-26
 
 首次稳定版。锁定外部契约（CLI flags / NDJSON 事件结构 / 工具 schema）。

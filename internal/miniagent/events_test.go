@@ -11,7 +11,7 @@ import (
 func TestToolUseWriter(t *testing.T) {
 	var buf bytes.Buffer
 	emit := ToolUseWriter(&buf)
-	if err := emit("read_file", `{"path":"a"}`); err != nil {
+	if err := emit("read", `{"path":"a"}`); err != nil {
 		t.Fatalf("emit: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -22,7 +22,7 @@ func TestToolUseWriter(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if ev["type"] != "tool_use" || ev["name"] != "read_file" {
+	if ev["type"] != "tool_use" || ev["name"] != "read" {
 		t.Errorf("event = %+v", ev)
 	}
 	if _, ok := ev["output"]; ok {

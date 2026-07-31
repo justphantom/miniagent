@@ -15,10 +15,10 @@ type writefileArgs struct {
 	Content string `json:"content"`
 }
 
-// WriteFileTool returns a write_file tool bound to workspaceRoot.
+// WriteFileTool returns a write tool bound to workspaceRoot.
 func WriteFileTool(workspaceRoot string) Tool {
 	return Tool{
-		Name:        "write_file",
+		Name:        "write",
 		Description: "把 content 写入文件（覆盖已有内容；自动创建父目录）。path 可相对 workspace_root 或绝对。",
 		Parameters: object(map[string]any{
 			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workspace_root 或绝对路径"},

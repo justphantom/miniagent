@@ -25,7 +25,7 @@ func TestReadFile_RelativePath(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	// 默认输出带行号（edit_file 依赖行号定位）。
+	// 默认输出带行号（edit 依赖行号定位）。
 	if !strings.Contains(res.Output, "1 │ hello world") {
 		t.Errorf("Output = %q", res.Output)
 	}
@@ -138,7 +138,7 @@ func TestEditFile_MultipleMatchesFails(t *testing.T) {
 	}
 }
 
-// edit_file 通过 openNoFollow 拒绝最终路径是符号链接的情形。
+// edit 通过 openNoFollow 拒绝最终路径是符号链接的情形。
 func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -164,15 +164,15 @@ func TestFileTools_RespectCancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for name, tool := range map[string]Tool{
-		"read_file":  ReadFileTool(dir),
-		"write_file": WriteFileTool(dir),
-		"edit_file":  EditFileTool(dir),
+		"read":  ReadFileTool(dir),
+		"write": WriteFileTool(dir),
+		"edit":  EditFileTool(dir),
 	} {
 		args := `{"path":"x.txt"}`
 		switch name {
-		case "write_file":
+		case "write":
 			args = `{"path":"x.txt","content":"y"}`
-		case "edit_file":
+		case "edit":
 			args = `{"path":"x.txt","old_string":"h","new_string":"H"}`
 		}
 		res := tool.Call(ctx, args)
@@ -185,7 +185,7 @@ func TestFileTools_RespectCancelledCtx(t *testing.T) {
 	}
 }
 
-// workdir 为空：read_file 用相对路径仍能工作（依赖调用方进程 cwd）。
+// workdir 为空：read 用相对路径仍能工作（依赖调用方进程 cwd）。
 func TestReadFile_EmptyWorkdir(t *testing.T) {
 	dir := writeTemp(t, "cwd.txt", "from-cwd")
 	res := ReadFileTool("").Call(context.Background(), `{"path":"`+filepath.Join(dir, "cwd.txt")+`"}`)

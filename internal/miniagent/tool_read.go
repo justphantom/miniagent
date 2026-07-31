@@ -22,10 +22,10 @@ type readfileArgs struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-// ReadFileTool returns a read_file tool bound to workspaceRoot.
+// ReadFileTool returns a read tool bound to workspaceRoot.
 func ReadFileTool(workspaceRoot string) Tool {
 	return Tool{
-		Name:        "read_file",
+		Name:        "read",
 		Description: "读取文本文件内容。支持 offset/limit 按行范围读取，输出带行号标注。path 可以是绝对路径或相对 workspace_root 的路径。",
 		Parameters: object(map[string]any{
 			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workspace_root 或绝对路径"},
@@ -64,9 +64,9 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 	// 让 LLM 读乱码会污染上下文 + 浪费 token。检测前 8 KiB 足够低成本拦截。
 	scanLimit := min(len(content), 8192)
 	if strings.IndexByte(content[:scanLimit], 0) >= 0 {
-		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是二进制文件（含 NUL 字节），read_file 仅支持文本", a.Path)}
+		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 是二进制文件（含 NUL 字节），read 仅支持文本", a.Path)}
 	}
-	// 始终带行号：edit_file 需要精确匹配，行号帮助 LLM 定位 offset。
+	// 始终带行号：edit 需要精确匹配，行号帮助 LLM 定位 offset。
 	formatted, err := formatLines(content, a.Offset, a.Limit)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
