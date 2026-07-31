@@ -53,7 +53,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	// slice，原地 append 会越界写调用方的数据。
 	msgs := make([]Message, 0, len(cfg.History)+1)
 	msgs = append(msgs, cfg.History...)
-	msgs = append(msgs, Message{Role: "user", Content: userPrompt})
+	msgs = append(msgs, Message{Role: roleUser, Content: userPrompt})
 	total := Usage{}
 
 	for step := 1; step <= maxIterations; step++ {
@@ -69,7 +69,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 
 		if len(resp.ToolCalls) == 0 {
 			// 最终文本入历史：接续对话需要看到上一轮的回答。
-			msgs = append(msgs, Message{Role: "assistant", Content: resp.Text})
+			msgs = append(msgs, Message{Role: roleAssistant, Content: resp.Text})
 			return Result{Text: resp.Text, Usage: total, Steps: step, Messages: msgs}, nil
 		}
 
@@ -127,7 +127,7 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 			calls[i].ID = fmt.Sprintf("synth_%d_%d", step, i)
 		}
 	}
-	msgs = append(msgs, Message{Role: "assistant", ToolCalls: calls})
+	msgs = append(msgs, Message{Role: roleAssistant, ToolCalls: calls})
 
 	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
 	if onToolUse != nil {
@@ -148,7 +148,7 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 		if logger != nil {
 			logger.Info("tool executed", "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
 		}
-		msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: truncateToolResult(tres.Output)})
+		msgs = append(msgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: truncateToolResult(tres.Output)})
 	}
 	return msgs, nil
 }

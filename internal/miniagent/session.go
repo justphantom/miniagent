@@ -47,9 +47,9 @@ func LoadSession(path string) ([]Message, error) {
 
 func validateSessionMessage(m Message) error {
 	switch m.Role {
-	case "user", "assistant":
+	case roleUser, roleAssistant:
 		return nil
-	case "tool":
+	case roleTool:
 		if m.ToolCallID == "" {
 			return errors.New("tool 消息缺少 tool_call_id")
 		}
@@ -66,14 +66,14 @@ func validateToolPairing(msgs []Message) error {
 	pending := map[string]bool{}
 	for i, m := range msgs {
 		switch m.Role {
-		case "assistant":
+		case roleAssistant:
 			for _, tc := range m.ToolCalls {
 				if pending[tc.ID] {
 					return fmt.Errorf("第 %d 条：tool_call id %q 重复", i, tc.ID)
 				}
 				pending[tc.ID] = true
 			}
-		case "tool":
+		case roleTool:
 			if !pending[m.ToolCallID] {
 				return fmt.Errorf("第 %d 条：tool 消息的 tool_call_id %q 没有对应的 assistant tool_call", i, m.ToolCallID)
 			}

@@ -2,6 +2,14 @@ package miniagent
 
 import "context"
 
+// 消息 role 常量：loop/session/wire 多处匹配同一组取值，抽常量防拼写漂移。
+const (
+	roleSystem    = "system"
+	roleUser      = "user"
+	roleAssistant = "assistant"
+	roleTool      = "tool"
+)
+
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`

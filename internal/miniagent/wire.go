@@ -27,7 +27,7 @@ type chatToolCall struct {
 func buildChatBody(req Request) ([]byte, error) {
 	msgs := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
-		msgs = append(msgs, chatMessage{Role: "system", Content: req.System})
+		msgs = append(msgs, chatMessage{Role: roleSystem, Content: req.System})
 	}
 	for _, m := range req.Messages {
 		cm := chatMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
