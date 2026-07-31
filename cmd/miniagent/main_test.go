@@ -128,6 +128,18 @@ func TestCLI_EmptyStdinExits1(t *testing.T) {
 	}
 }
 
+// 超大 prompt 必须在入口处拒绝：否则写回 session 后会撞 LoadSession 的
+// 大小上限，导致会话永久无法接续。
+func TestCLI_OversizedStdinExits1(t *testing.T) {
+	code, out := runMainBin(t, strings.Repeat("x", maxPromptBytes+1), []string{"-model", "x"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "超过大小上限") {
+		t.Errorf("missing error: %s", out)
+	}
+}
+
 // 两轮接续 e2e：fork 出的子进程真实请求父进程内的 httptest server。
 // 第二轮的请求体必须包含第一轮的回答（上下文自动带入），session 文件
 // 落盘完整 transcript。

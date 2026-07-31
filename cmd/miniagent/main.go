@@ -113,10 +113,19 @@ func validateConversationFlags(f *cliFlags, apiKey string) {
 	}
 }
 
+// maxPromptBytes 是 stdin prompt 的大小上限：无上限读取既撑内存，写回
+// session 后又会撞 LoadSession 的 maxSessionBytes 上限，导致会话永久无法
+// 接续。取值小于 session 上限，给后续轮次的 transcript 增长留出空间。
+const maxPromptBytes = 1 << 20
+
 func mustReadPrompt() []byte {
-	prompt, err := io.ReadAll(os.Stdin)
+	prompt, err := io.ReadAll(io.LimitReader(os.Stdin, maxPromptBytes+1))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: read stdin: %v\n", err)
+		os.Exit(1)
+	}
+	if len(prompt) > maxPromptBytes {
+		fmt.Fprintf(os.Stderr, "miniagent: stdin prompt 超过大小上限 %d 字节\n", maxPromptBytes)
 		os.Exit(1)
 	}
 	if len(prompt) == 0 {
