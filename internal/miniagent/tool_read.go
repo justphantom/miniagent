@@ -9,10 +9,16 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maxReadFileChars = 20000
 const maxReadFileBytes = maxReadFileChars * 4
+
+// fileOpTimeout 是 read/edit 的内置操作超时：IsRegular 已切断 FIFO 阻塞主因，
+// 此处兜底挂起的文件系统（NFS 等）。超时返回后后台 goroutine 可能仍阻塞在
+// 内核读，属已接受取舍。
+const fileOpTimeout = 30 * time.Second
 
 const maxLineLimit = 10000
 
@@ -36,7 +42,16 @@ func ReadFileTool(workspaceRoot string) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			return runReadFile(workspaceRoot, args)
+			runCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+			defer cancel()
+			done := make(chan ToolResult, 1)
+			go func() { done <- runReadFile(workspaceRoot, args) }()
+			select {
+			case r := <-done:
+				return r
+			case <-runCtx.Done():
+				return ToolResult{IsError: true, Output: "读取超时或已取消：" + runCtx.Err().Error()}
+			}
 		},
 	}
 }

@@ -158,6 +158,25 @@ func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	}
 }
 
+// edit 同样必须拒绝非 regular 文件：FIFO 会让 openNoFollow 永久阻塞（edit 无
+// 内置超时），进而占满并行信号量使整个 Run 挂死。
+func TestEditFile_RejectsNonRegular(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "mkfifo", fifo).Run(); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	res := EditFileTool(dir).Call(context.Background(), `{"path":"fifo","old_string":"x","new_string":"y"}`)
+	if !res.IsError {
+		t.Fatal("expected FIFO to be rejected")
+	}
+	if !strings.Contains(res.Output, "普通文件") {
+		t.Errorf("Output = %q", res.Output)
+	}
+}
+
 // 已取消的 ctx 应让文件工具立即返回，不进入 IO。
 func TestFileTools_RespectCancelledCtx(t *testing.T) {
 	dir := writeTemp(t, "x.txt", "hello")

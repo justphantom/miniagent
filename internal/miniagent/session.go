@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -16,19 +17,22 @@ const maxSessionBytes = 4 << 20
 // 未知、tool 消息缺 tool_call_id、超过大小上限）返回 error：调用方应直接
 // 报错退出，不静默丢弃历史。
 func LoadSession(path string) ([]Message, error) {
-	info, err := os.Stat(path)
+	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > maxSessionBytes {
-		return nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, maxSessionBytes)
-	}
-	data, err := os.ReadFile(path)
+	defer func() { _ = f.Close() }()
+	// 单次 open + LimitReader：消除 Stat/ReadFile 之间的 TOCTOU，并把读取量硬封顶，
+	// 防文件被并发替换为超大内容撑爆内存（maxSessionBytes 的原始意图）。
+	data, err := io.ReadAll(io.LimitReader(f, maxSessionBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(data)) > maxSessionBytes {
+		return nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, maxSessionBytes)
 	}
 	var msgs []Message
 	if err := json.Unmarshal(data, &msgs); err != nil {

@@ -201,6 +201,17 @@ func TestCLI_CorruptSessionExits1(t *testing.T) {
 	}
 }
 
+// 非法 -log-level 应报错退出码 1。
+func TestCLI_InvalidLogLevelExits1(t *testing.T) {
+	code, out := runMainBin(t, "prompt", []string{"-model", "x", "-log-level", "bogus"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "invalid -log-level") {
+		t.Errorf("missing error: %s", out)
+	}
+}
+
 // http（非 loopback）BaseURL 应警告明文传 key；loopback/https 不警告。
 func TestWarnInsecureBaseURL(t *testing.T) {
 	r, w, err := os.Pipe()
@@ -212,6 +223,8 @@ func TestWarnInsecureBaseURL(t *testing.T) {
 	warnInsecureBaseURL("http://llm.internal:8000")
 	warnInsecureBaseURL("http://localhost:8080")
 	warnInsecureBaseURL("http://127.0.0.1:11434")
+	warnInsecureBaseURL("http://127.0.0.2:8000") // 127.0.0.0/8 整段都是 loopback
+	warnInsecureBaseURL("http://[::1]:8000")
 	warnInsecureBaseURL("https://api.openai.com")
 	_ = w.Close()
 	os.Stderr = old

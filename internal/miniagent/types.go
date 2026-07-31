@@ -37,7 +37,8 @@ type Tool struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
-	Call        func(ctx context.Context, args string) ToolResult
+	// Call 加 json:"-"：防未来误 json.Marshal(Tool) 时报 unsupported type。
+	Call        func(ctx context.Context, args string) ToolResult `json:"-"`
 }
 
 type Response struct {

@@ -30,6 +30,7 @@ make test       # go test -race ./...
 
 ```
 -base-url string         endpoint 根地址（不含 /v1），或 $MINIAGENT_BASE_URL
+-log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-duration duration   整体墙钟上限（覆盖所有 LLM 调用 + 工具执行），0 表示不限（默认 0）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
 -model string            LLM 模型 id（必需）

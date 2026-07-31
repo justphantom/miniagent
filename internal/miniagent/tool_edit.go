@@ -32,7 +32,16 @@ func EditFileTool(workspaceRoot string) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			return runEditFile(workspaceRoot, args)
+			runCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+			defer cancel()
+			done := make(chan ToolResult, 1)
+			go func() { done <- runEditFile(workspaceRoot, args) }()
+			select {
+			case r := <-done:
+				return r
+			case <-runCtx.Done():
+				return ToolResult{IsError: true, Output: "编辑超时或已取消：" + runCtx.Err().Error()}
+			}
 		},
 	}
 }
@@ -46,6 +55,11 @@ func runEditFile(workspaceRoot, args string) ToolResult {
 	info, err := os.Lstat(full)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+	}
+	if !info.Mode().IsRegular() {
+		// 拒绝非普通文件：FIFO/字符设备会让 openNoFollow 在无写者时永久阻塞，
+		// 目录/socket 同理；与 read 工具对齐。
+		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 不是普通文件（mode=%s），仅支持 regular file", a.Path, info.Mode().String())}
 	}
 	if info.Size() > maxEditFileBytes {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
@@ -71,16 +85,21 @@ func parseEditArgs(args string) (editFileArgs, error) {
 }
 
 func applyEdit(full string, info os.FileInfo, a editFileArgs) ToolResult {
-	// openNoFollow 拒绝最终路径是符号链接的情形（O_NOFOLLOW），防止
-	// 通过符号链接把外部文件覆盖式编辑。
+	// openNoFollow 仅拒绝最终路径分量是符号链接（O_NOFOLLOW）；中间目录
+	// 不做解析校验，不构成路径边界（free 模式，见 README）。
 	f, err := openNoFollow(full, os.O_RDONLY, 0)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(f)
+	// 读取量封顶：Lstat 的 Size 与 ReadAll 间存在 TOCTOU（文件被并发替换为更大
+	// 内容或字符设备），以实际读取字节数兜底防无界分配；与 read 工具对齐。
+	data, err := io.ReadAll(io.LimitReader(f, maxEditFileBytes+1))
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+	}
+	if int64(len(data)) > maxEditFileBytes {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 读取超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
 	}
 	content := string(data)
 	count := strings.Count(content, a.OldString)

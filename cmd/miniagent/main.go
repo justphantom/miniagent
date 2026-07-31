@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +30,7 @@ type cliFlags struct {
 	maxDuration *time.Duration
 	workdir     *string
 	session     *string
+	logLevel    *string
 	showVer     *bool
 }
 
@@ -41,6 +43,7 @@ func parseFlags() *cliFlags {
 	f.maxDuration = flag.Duration("max-duration", 0, "overall wall-clock limit (0 = unlimited); covers all LLM calls + tool runs")
 	f.workdir = flag.String("workdir", "", "working directory (tool path prefix + shell cwd)")
 	f.session = flag.String("session", "", "session file for continuing conversation (JSON history, created if missing)")
+	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
 	f.showVer = flag.Bool("version", false, "show version")
 	flag.Parse()
 	return f
@@ -55,7 +58,7 @@ func main() {
 	}
 
 	apiKey := os.Getenv("MINIAGENT_API_KEY")
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: mustParseLogLevel(*f.logLevel)}))
 
 	validateConversationFlags(f, apiKey)
 	warnInsecureBaseURL(*f.baseURL)
@@ -85,11 +88,16 @@ func main() {
 		// 副作用已发生但无记录，是已接受的取舍）。
 		if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
 			logger.Warn("emit error failed", "error", eerr)
+			// stdout 终态事件未送达（消费方提前关管道等），至少把原始错误落地到
+			// stderr，避免消费方只剩退出码、丢失错误链。
+			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 		}
 		os.Exit(1)
 	}
 	if err := miniagent.EmitResult(os.Stdout, result, *f.model); err != nil {
 		logger.Warn("emit result failed", "error", err)
+		// result 终态事件未送达 stdout，兜底把文本摘要写 stderr，便于排障。
+		fmt.Fprintf(os.Stderr, "miniagent: emit result failed: %v (text: %.200q)\n", err, result.Text)
 		os.Exit(1)
 	}
 	// result 已送达消费方后再持久化：写回失败只影响下次接续，用退出码 1
@@ -100,6 +108,15 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+func mustParseLogLevel(s string) slog.Level {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(s)); err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: invalid -log-level %q (want debug|info|warn|error)\n", s)
+		os.Exit(1)
+	}
+	return level
 }
 
 func validateConversationFlags(f *cliFlags, apiKey string) {
@@ -142,11 +159,17 @@ func warnInsecureBaseURL(baseURL string) {
 	if err != nil || u.Scheme != "http" {
 		return
 	}
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1", "::1":
+	host := u.Hostname()
+	if host == "localhost" {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "miniagent: warning: base-url %q uses plain http, API key sent unencrypted\n", baseURL)
+	// IsLoopback 覆盖整个 127.0.0.0/8 与 ::1，字面量枚举会漏 127.0.0.2 等。
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return
+	}
+	// Redacted 剥离 userinfo：base-url 形如 http://user:pass@host 时，%q 会把
+	// 基本认证凭证一起落入 stderr（可能被日志聚合扩散）。
+	fmt.Fprintf(os.Stderr, "miniagent: warning: base-url %s uses plain http, API key sent unencrypted\n", u.Redacted())
 }
 
 func mustLoadSession(path string) []miniagent.Message {

@@ -40,8 +40,8 @@ func ShellTool(workspaceRoot string) Tool {
 			defer cancel()
 			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command)
 			cmd.Dir = workspaceRoot
-			// 子进程环境继承父进程全量，但显式剥离所有 MINIAGENT_* 前缀变量
-			// （API_KEY/BASE_URL 等），避免 LLM 通过 shell 读取宿主配置与密钥。
+			// 仅剥离 MINIAGENT_* 前缀变量，降低 LLM 直接 echo 宿主配置的概率；
+			// 非隔离边界，见 scrubEnv 注释。
 			cmd.Env = scrubEnv(os.Environ())
 			// 独立进程组：超时 kill(-pgid) 才能连带清理 sh 派生的孙子进程，
 			// 否则 make/find 之类会成孤儿继续跑。
@@ -81,16 +81,24 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	}()
 	var out bytes.Buffer
 	limited := io.LimitReader(pr, maxShellOutputBytes)
-	_, _ = io.Copy(&out, limited)
+	n, _ := io.Copy(&out, limited)
+	if n >= maxShellOutputBytes {
+		// 输出达上限：LimitReader 已 EOF，但子进程仍向写满的 pipe 继续写而阻塞，
+		// cmd.Wait 不返回、空等至 60s 超时。主动 kill 整组并关 pipe，让子进程
+		// 收 SIGPIPE/被杀后 Wait 立即返回，避免高输出命令被误判为"超时"。
+		killProcessGroup(cmd)
+		_ = pw.Close()
+	}
 	err := <-waitErr
 	// 兜底：正常退出后也整组清理一次，防后台 & 残留。
 	killProcessGroup(cmd)
 	return truncate(out.String(), maxShellOutputChars, "…"), err
 }
 
-// scrubEnv 复制 env 并移除所有 MINIAGENT_* 前缀条目（API_KEY/BASE_URL 等），
-// 防止子进程读取宿主配置（含密钥与私有端点）。其他环境变量原样保留
-// （free 模式不引入白名单）。
+// scrubEnv 复制 env 并移除所有 MINIAGENT_* 前缀条目（API_KEY/BASE_URL 等）。
+// 这不是密钥隔离边界：其他第三方变量原样继承，且子进程可经
+// /proc/<ppid>/environ 读到 exec 前的环境。free 模式下隔离依赖调用方
+// （容器/独立 UID），见 README。
 func scrubEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

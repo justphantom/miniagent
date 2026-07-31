@@ -47,7 +47,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")
 	}
-	toolByName := buildToolIndex(cfg.Tools)
+	toolByName := buildToolIndex(cfg.Tools, logger)
 
 	// 复制 History 而非 append 到其底层数组：接续对话时调用方可能复用同一
 	// slice，原地 append 会越界写调用方的数据。
@@ -83,9 +83,13 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	return Result{Usage: total, Steps: maxIterations, Finish: finishMaxIterations, Messages: msgs}, nil
 }
 
-func buildToolIndex(tools []Tool) map[string]Tool {
+func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
 	toolByName := make(map[string]Tool, len(tools))
 	for _, t := range tools {
+		if _, dup := toolByName[t.Name]; dup && logger != nil {
+			// 重名静默覆盖会让前者不可达且无任何线索，路由歧义极难排查。
+			logger.Warn("duplicate tool name, last wins", "tool", t.Name)
+		}
 		toolByName[t.Name] = t
 	}
 	return toolByName
@@ -170,7 +174,14 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 		wg.Add(1)
 		go func(i int, tc ToolCall, tool Tool) {
 			defer wg.Done()
-			sem <- struct{}{}
+			// 信号量获取联动 ctx：取消后排队中的调用直接放弃，不再等空位；
+			// 否则一个不尊重 ctx 的阻塞工具会永久占位，wg.Wait 不返回、Run 挂死。
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results[i] = ToolResult{IsError: true, Output: "已取消"}
+				return
+			}
 			defer func() { <-sem }()
 			results[i] = safeCall(ctx, logger, tool, tc.Name, tc.Args)
 		}(i, tc, tool)

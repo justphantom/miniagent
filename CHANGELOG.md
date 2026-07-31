@@ -3,7 +3,7 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [1.1.0] - 2026-08-01
 
 ### Added
 - `-session <path>` flag：会话接续。文件存在则加载 `[]Message` 历史作为上下文，
@@ -12,8 +12,23 @@
 - `LoadSession` 校验：文件大小上限 4 MiB、role 合法性、tool_calls/tool 消息
   一一配对，损坏即报错退出；`SaveSession` 拒绝空 transcript。
 - BaseURL 为 `http://` 且非 loopback 时 stderr 警告 API key 明文上链。
+- `-log-level <debug|info|warn|error>` flag：替代硬编码 debug 级别，默认 `info`。
 
 ### Fixed
+- `edit` 拒绝非 regular 文件（FIFO/设备等），与 `read` 对齐，消除 open 永久
+  阻塞主因；`read`/`edit` 增加内置 30s 操作超时兜底（挂起的文件系统不再卡死
+  整轮）。
+- `edit` 读取改单次 open + `LimitReader` 封顶，消除 Stat/Read 间 TOCTOU 与
+  无界分配；`LoadSession` 同样改单次 open + `LimitReader`。
+- 工具执行获取并发信号量改为可被 ctx 取消：整体取消后排队调用直接放弃。
+- `shell` 输出达上限时主动 kill 进程组并关闭管道，高输出命令不再被误判为
+  超时。
+- `Retry-After` 头缺失与显式 `0` 区分：缺失按退避等待，显式 `0` 立即重试。
+- 注册重名工具时输出 `Warn` 日志。
+- 终态事件（error/result）写 stdout 失败时兜底写 stderr，不再只剩退出码。
+- BaseURL 警告改用 `u.Redacted()`，不再把 userinfo 凭证落入 stderr；loopback
+  判定改用 `net.IP.IsLoopback()`，覆盖整个 127.0.0.0/8（`127.0.0.2` 等不再误
+  报警）。
 - 端点返回空 `choices`（内容过滤/代理故障）现在报错，不再被当作"成功的
   空回答"（退出码 0、text 为空）。
 
@@ -25,6 +40,9 @@
   CLI flag 一致）。
 - 工具重命名：`read_file` → `read`、`write_file` → `write`、`edit_file` → `edit`
   （`shell` 不变）。工具 schema 属于外部契约，消费方需同步更新。
+- 安全注释去承诺化：`O_NOFOLLOW` 仅拒最终路径分量的符号链接（中间目录不
+  校验）、`scrubEnv` 仅剥 `MINIAGENT_*` 前缀（非密钥隔离边界，`/proc` 可读
+  exec 前环境）。代码行为不变，README 已声明 free 模式边界由调用方保证。
 
 ## [1.0.0] - 2026-07-26
 

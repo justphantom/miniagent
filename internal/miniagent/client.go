@@ -66,7 +66,8 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 			return Response{}, err
 		}
 		delay := backoff
-		if retryAfter > 0 {
+		if retryAfter >= 0 {
+			// 显式 Retry-After（含 0：立即重试）取代退避；-1 表示未提供，走 backoff。
 			delay = retryAfter
 		}
 		if delay > retryMaxDelay {
@@ -147,11 +148,12 @@ func shouldRetryStatus(code int) bool {
 }
 
 // parseRetryAfter 解析 Retry-After 头：秒数（RFC 7231 §7.1.3）或 HTTP-date。
-// 解析失败或未提供返回 0。返回值不做上限封顶（封顶在调用处）。
+// 未提供或解析失败返回 -1（哨兵），以区分显式 "Retry-After: 0"——后者语义为
+// 立即重试。返回值不做上限封顶（封顶在调用处）。
 func parseRetryAfter(h http.Header) time.Duration {
 	v := strings.TrimSpace(h.Get("Retry-After"))
 	if v == "" {
-		return 0
+		return -1
 	}
 	if sec, err := strconv.Atoi(v); err == nil && sec >= 0 {
 		return time.Duration(sec) * time.Second
@@ -161,7 +163,7 @@ func parseRetryAfter(h http.Header) time.Duration {
 			return d
 		}
 	}
-	return 0
+	return -1
 }
 
 // endpoint 解析 BaseURL 并拼接 path；c.HTTP 为 nil 时用 defaultTimeout 的默认 client。

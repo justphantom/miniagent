@@ -212,3 +212,27 @@ func TestHTTPClient_Do_RetriesOnNetworkError(t *testing.T) {
 		t.Errorf("calls = %d, want >= 2 (network retry)", got)
 	}
 }
+
+// parseRetryAfter 必须区分"未提供"（-1，走 backoff）与"显式 0"（0，立即重试），
+// 否则合法的 Retry-After: 0 会被误当作未提供而退回退避，违背服务端意图。
+func TestParseRetryAfter(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{"absent", "", -1},
+		{"explicit-zero", "0", 0},
+		{"seconds", "2", 2 * time.Second},
+		{"garbage", "not-a-date", -1},
+	}
+	for _, c := range cases {
+		h := http.Header{}
+		if c.header != "" {
+			h.Set("Retry-After", c.header)
+		}
+		if got := parseRetryAfter(h); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}

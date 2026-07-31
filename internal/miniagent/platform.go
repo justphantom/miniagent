@@ -30,8 +30,8 @@ func killProcessGroup(cmd *exec.Cmd) {
 	}
 }
 
-// openNoFollow 以 O_NOFOLLOW 打开 path，拒绝最终路径是符号链接的情形，
-// 防止经符号链接编辑/读取 workspace 之外的文件。
+// openNoFollow 以 O_NOFOLLOW 打开 path，仅拒绝最终路径分量是符号链接。
+// 中间目录仍可是符号链接，不构成路径边界；free 模式下隔离由调用方保证。
 func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 	fd, err := syscall.Open(path, flag|syscall.O_NOFOLLOW, uint32(perm))
 	if err != nil {
