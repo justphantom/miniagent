@@ -173,7 +173,7 @@ func TestRun_NilClientErrors(t *testing.T) {
 }
 
 // 工具调用永不停：每次都返回 tool_calls，触发 maxIterations 上限。
-// 终止信号由 Steps=maxIterations + 空 Text 表达。
+// 终止信号由 Finish=max_iterations 表达（Steps=maxIterations + 空 Text）。
 func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	responses := make([]string, maxIterations+2)
@@ -188,6 +188,9 @@ func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	}
 	if res.Steps != maxIterations {
 		t.Errorf("Steps = %d, want %d", res.Steps, maxIterations)
+	}
+	if res.Finish != finishMaxIterations {
+		t.Errorf("Finish = %q, want %q", res.Finish, finishMaxIterations)
 	}
 	if res.Text != "" {
 		t.Errorf("Text = %q, want empty (truncated)", res.Text)

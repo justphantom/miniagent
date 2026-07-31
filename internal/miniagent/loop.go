@@ -70,7 +70,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 		if len(resp.ToolCalls) == 0 {
 			// 最终文本入历史：接续对话需要看到上一轮的回答。
 			msgs = append(msgs, Message{Role: roleAssistant, Content: resp.Text})
-			return Result{Text: resp.Text, Usage: total, Steps: step, Messages: msgs}, nil
+			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs}, nil
 		}
 
 		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, onToolUse, logger)
@@ -79,8 +79,8 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 		}
 	}
 	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。
-	// Steps=maxIterations 是终止信号（无最终 Text）。
-	return Result{Usage: total, Steps: maxIterations, Messages: msgs}, nil
+	// Finish=finishMaxIterations 是终止信号（无最终 Text）。
+	return Result{Usage: total, Steps: maxIterations, Finish: finishMaxIterations, Messages: msgs}, nil
 }
 
 func buildToolIndex(tools []Tool) map[string]Tool {

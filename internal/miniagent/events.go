@@ -12,8 +12,9 @@ type toolUseEvent struct {
 	Input string `json:"input"`
 }
 
-// resultEvent 是终态事件。text/model/input_tokens/output_tokens/steps 均
-// 不带 omitempty，为 0 也会出现键名，方便消费方稳定 parse。
+// resultEvent 是终态事件。text/model/input_tokens/output_tokens/steps/finish
+// 均不带 omitempty，为 0/空串也会出现键名，方便消费方稳定 parse。
+// finish 为 stop（正常完成）或 max_iterations（撞迭代上限，text 为空）。
 type resultEvent struct {
 	Type         string `json:"type"`
 	Text         string `json:"text"`
@@ -21,6 +22,7 @@ type resultEvent struct {
 	InputTokens  int    `json:"input_tokens"`
 	OutputTokens int    `json:"output_tokens"`
 	Steps        int    `json:"steps"`
+	Finish       string `json:"finish"`
 }
 
 // errorEvent 是终态错误事件。
@@ -46,6 +48,7 @@ func EmitResult(w io.Writer, result Result, model string) error {
 		InputTokens:  result.Usage.InputTokens,
 		OutputTokens: result.Usage.OutputTokens,
 		Steps:        result.Steps,
+		Finish:       result.Finish,
 	})
 }
 

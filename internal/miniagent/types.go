@@ -66,10 +66,18 @@ type Result struct {
 	Text  string
 	Usage Usage
 	Steps int
+	// Finish 是终止原因：finishStop（模型给出最终文本）或
+	// finishMaxIterations（撞迭代上限，Text 为空）。出错返回时为空串。
+	Finish string
 	// Messages 是截至返回时的全量 transcript（History + 本轮新增），
 	// 所有 return 路径（含出错、撞 maxIterations）都带回，供会话持久化。
 	Messages []Message
 }
+
+const (
+	finishStop          = "stop"
+	finishMaxIterations = "max_iterations"
+)
 
 // LoopConfig carries the per-turn LLM parameters.
 type LoopConfig struct {
