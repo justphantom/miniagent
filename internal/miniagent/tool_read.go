@@ -16,7 +16,7 @@ const maxReadFileBytes = maxReadFileChars * 4
 
 const maxLineLimit = 10000
 
-type readfileArgs struct {
+type readFileArgs struct {
 	Path   string `json:"path"`
 	Offset int    `json:"offset,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
@@ -26,9 +26,9 @@ type readfileArgs struct {
 func ReadFileTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "read",
-		Description: "读取文本文件内容。支持 offset/limit 按行范围读取，输出带行号标注。path 可以是绝对路径或相对 workspace_root 的路径。",
+		Description: "读取文本文件内容。支持 offset/limit 按行范围读取，输出带行号标注。path 可以是绝对路径或相对 workdir 的路径。",
 		Parameters: object(map[string]any{
-			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workspace_root 或绝对路径"},
+			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workdir 或绝对路径"},
 			"offset": map[string]any{"type": "integer", "description": "起始行号（1-based），默认 1（从头开始）"},
 			"limit":  map[string]any{"type": "integer", "description": "最多返回的行数，默认全部"},
 		}, "path"),
@@ -74,13 +74,13 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 	return ToolResult{Output: truncate(formatted, maxReadFileChars, "…")}
 }
 
-func parseReadArgs(args string) (readfileArgs, error) {
-	var a readfileArgs
+func parseReadArgs(args string) (readFileArgs, error) {
+	var a readFileArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return readfileArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
+		return readFileArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
 	}
 	if a.Path == "" {
-		return readfileArgs{}, errors.New("参数缺失：path")
+		return readFileArgs{}, errors.New("参数缺失：path")
 	}
 	if a.Offset < 0 {
 		a.Offset = 0

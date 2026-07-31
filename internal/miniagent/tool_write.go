@@ -10,7 +10,7 @@ import (
 
 const maxWriteFileBytes = 10 << 20
 
-type writefileArgs struct {
+type writeFileArgs struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 }
@@ -19,16 +19,16 @@ type writefileArgs struct {
 func WriteFileTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "write",
-		Description: "把 content 写入文件（覆盖已有内容；自动创建父目录）。path 可相对 workspace_root 或绝对。",
+		Description: "把 content 写入文件（覆盖已有内容；自动创建父目录）。path 可相对 workdir 或绝对。",
 		Parameters: object(map[string]any{
-			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workspace_root 或绝对路径"},
+			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workdir 或绝对路径"},
 			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},
 		}, "path", "content"),
 		Call: func(ctx context.Context, args string) ToolResult {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			var a writefileArgs
+			var a writeFileArgs
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
 				return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
 			}

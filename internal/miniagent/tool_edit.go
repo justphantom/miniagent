@@ -12,7 +12,7 @@ import (
 
 const maxEditFileBytes = 10 << 20
 
-type editfileArgs struct {
+type editFileArgs struct {
 	Path      string `json:"path"`
 	OldString string `json:"old_string"`
 	NewString string `json:"new_string"`
@@ -24,7 +24,7 @@ func EditFileTool(workspaceRoot string) Tool {
 		Name:        "edit",
 		Description: "精确替换文件中的一段文本。old_string 必须在文件中唯一出现（精确匹配，含缩进和换行）。出现 0 次或多次均失败。拒绝编辑符号链接。先 read 查看内容再编辑。",
 		Parameters: object(map[string]any{
-			"path":       map[string]any{"type": "string", "description": "要编辑的文件路径，相对 workspace_root 或绝对路径"},
+			"path":       map[string]any{"type": "string", "description": "要编辑的文件路径，相对 workdir 或绝对路径"},
 			"old_string": map[string]any{"type": "string", "description": "要被替换的原文（必须与文件中的内容精确匹配，含缩进和换行）"},
 			"new_string": map[string]any{"type": "string", "description": "替换后的新文本"},
 		}, "path", "old_string", "new_string"),
@@ -53,24 +53,24 @@ func runEditFile(workspaceRoot, args string) ToolResult {
 	return applyEdit(full, info, a)
 }
 
-func parseEditArgs(args string) (editfileArgs, error) {
-	var a editfileArgs
+func parseEditArgs(args string) (editFileArgs, error) {
+	var a editFileArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return editfileArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
+		return editFileArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
 	}
 	if a.Path == "" {
-		return editfileArgs{}, errors.New("参数缺失：path")
+		return editFileArgs{}, errors.New("参数缺失：path")
 	}
 	if a.OldString == "" {
-		return editfileArgs{}, errors.New("参数缺失：old_string（不能为空）")
+		return editFileArgs{}, errors.New("参数缺失：old_string（不能为空）")
 	}
 	if a.OldString == a.NewString {
-		return editfileArgs{}, errors.New("old_string 与 new_string 相同，无需替换")
+		return editFileArgs{}, errors.New("old_string 与 new_string 相同，无需替换")
 	}
 	return a, nil
 }
 
-func applyEdit(full string, info os.FileInfo, a editfileArgs) ToolResult {
+func applyEdit(full string, info os.FileInfo, a editFileArgs) ToolResult {
 	// openNoFollow 拒绝最终路径是符号链接的情形（O_NOFOLLOW），防止
 	// 通过符号链接把外部文件覆盖式编辑。
 	f, err := openNoFollow(full, os.O_RDONLY, 0)

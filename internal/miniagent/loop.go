@@ -38,6 +38,11 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 //
 // onToolUse 仅在每次工具执行前被调用一次；最终文本只在返回的 Result.Text 里
 // 一次性给出。logger 为 nil 时静默。
+//
+// Result.Messages 是截至返回时的全量 transcript，所有 return 路径均带回。
+// 注意：onToolUse 报错返回时，Messages 尾部可能是"有 tool_calls、无对应
+// tool 结果"的 assistant 消息——该尾部不能直接作为 History 续跑（端点会
+// 因配对断裂 400）。CLI 在出错分支不写回 session，库使用者同理不应持久化。
 func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, onToolUse OnToolUse, logger *slog.Logger) (Result, error) {
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")

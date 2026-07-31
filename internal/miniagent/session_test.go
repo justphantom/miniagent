@@ -75,6 +75,53 @@ func TestLoadSession_ToolMissingCallIDFails(t *testing.T) {
 	}
 }
 
+// 超过 maxSessionBytes 的 session 文件必须拒绝：超大历史会撑内存并被完整
+// 拼进下次请求烧 token。
+func TestLoadSession_OversizedFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.json")
+	if err := os.WriteFile(path, make([]byte, maxSessionBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSession(path); err == nil {
+		t.Fatal("expected error for oversized session file")
+	}
+}
+
+// tool_calls 与 tool 消息配对断裂（手改/截断的 session）必须拒绝，
+// 否则下一轮请求直接被端点 400。
+func TestLoadSession_DanglingToolCallFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dangling.json")
+	msgs := `[{"role":"user","content":"q"},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"read","args":"{}"}]}]`
+	if err := os.WriteFile(path, []byte(msgs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSession(path); err == nil {
+		t.Fatal("expected error for dangling tool_call")
+	}
+}
+
+func TestLoadSession_OrphanToolMessageFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orphan.json")
+	msgs := `[{"role":"user","content":"q"},{"role":"tool","tool_call_id":"cX","content":"x"}]`
+	if err := os.WriteFile(path, []byte(msgs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSession(path); err == nil {
+		t.Fatal("expected error for orphan tool message")
+	}
+}
+
+// 空 transcript 拒写：nil 会落成 "null"，"空会话"与"新会话"无法区分。
+func TestSaveSession_EmptyRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.json")
+	if err := SaveSession(path, nil); err == nil {
+		t.Fatal("expected error for empty transcript")
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("file should not be created")
+	}
+}
+
 // 对话内容属敏感数据：落盘权限必须 0o600。
 func TestSaveSession_FileMode0600(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perm.json")

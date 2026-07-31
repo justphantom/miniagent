@@ -9,8 +9,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,6 +58,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	validateConversationFlags(f, apiKey)
+	warnInsecureBaseURL(*f.baseURL)
 	prompt := mustReadPrompt()
 	history := mustLoadSession(*f.session)
 	llm := buildLLM(apiKey, *f.baseURL, logger)
@@ -121,6 +124,20 @@ func mustReadPrompt() []byte {
 		os.Exit(1)
 	}
 	return prompt
+}
+
+// warnInsecureBaseURL：http（非 loopback）时 API key 明文上链，stderr 警告。
+// 不强制拒绝：本地 vLLM/Ollama 是合法场景。
+func warnInsecureBaseURL(baseURL string) {
+	u, err := url.Parse(strings.TrimRight(baseURL, "/"))
+	if err != nil || u.Scheme != "http" {
+		return
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return
+	}
+	fmt.Fprintf(os.Stderr, "miniagent: warning: base-url %q uses plain http, API key sent unencrypted\n", baseURL)
 }
 
 func mustLoadSession(path string) []miniagent.Message {

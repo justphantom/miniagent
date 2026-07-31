@@ -67,7 +67,7 @@ make test       # go test -race ./...
 
 - `name`：工具名，见下文"工具清单"
 - `input`：工具参数的原始 JSON 字符串（LLM 透传）
-- `text`：完整回答文本（达到 `maxIterations` 上限被强制终止时为空字符串，键名仍在）
+- `text`：完整回答文本（达到 `maxIterations` 上限被强制终止时为空字符串，键名仍在）。注意：回答被 `max_tokens` 截断（`finish_reason:length`）时 `text` 是半截文本，无专门字段标记，仅在 stderr 日志有 `llm response truncated` 警告
 - `model`：本次调用使用的模型 id
 - `input_tokens` / `output_tokens`：累计的 token 用量
 - `steps`：本轮 LLM 调用次数
@@ -148,7 +148,7 @@ make test       # go test -race ./...
 约束：
 - 命令超时 60 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
 - 输出超过 20000 字符截断
-- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；其他第三方工具的敏感变量（如 `DATABASE_URL`）仍会泄漏，调用方需自行评估风险
+- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或不经环境变量传 key；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
 ## 会话接续（-session）
 
@@ -157,7 +157,8 @@ make test       # go test -race ./...
 - 文件存在则加载其中 `[]Message` 作为历史前缀，自动带入上下文；不存在则视为新会话，结束后创建。
 - Run 成功结束后把完整 transcript（历史 + 本轮 user/assistant/tool 往返 + 最终回答）原子写回（temp+rename，权限 0o600）。
 - Run 出错（LLM 失败/取消）不写回——失败轮的半成品历史不固化，但工具副作用可能已发生且无记录，消费方需知悉。
-- 文件损坏（非法 JSON、未知 role、tool 消息缺 `tool_call_id`）→ stderr 报错 + 退出码 1，不静默丢弃历史。
+- 文件损坏（非法 JSON、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 4 MiB 大小上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
+- **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
 - 思考内容（reasoning/thinking）不进入上下文也不落盘：`Message` 类型没有 reasoning 字段，序列化历史天然不含思考内容。
 - system prompt 不入 session 文件，每轮由 `-system` 提供；各轮应保持一致。
 - 历史只增不减，不做自动修剪/摘要；长会话请自行归档或换新 session 文件。同一文件同时只跑一个进程（并发写不会损坏文件，但后到者覆盖先到者）。

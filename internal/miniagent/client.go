@@ -94,6 +94,8 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		return Response{}, false, 0, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	// 重定向安全：依赖标准库默认 CheckRedirect——跨域重定向前自动剥离
+	// Authorization 等敏感头。若未来自定义 CheckRedirect，必须保留该语义。
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	callStart := time.Now()
@@ -223,17 +225,20 @@ func parseChatResponse(raw []byte) (Response, error) {
 		return Response{}, fmt.Errorf("parse response: %w", err)
 	}
 	out := Response{}
-	if len(v.Choices) > 0 {
-		ch := v.Choices[0]
-		out.Text = ch.Message.Content
-		out.FinishReason = ch.FinishReason
-		for _, tc := range ch.Message.ToolCalls {
-			out.ToolCalls = append(out.ToolCalls, ToolCall{
-				ID:   tc.ID,
-				Name: tc.Function.Name,
-				Args: tc.Function.Arguments,
-			})
-		}
+	if len(v.Choices) == 0 {
+		// 空 choices 是端点异常（内容过滤/代理故障），静默零值会让上层把
+		// 它当作"成功的空回答"（退出码 0、text 为空），必须报错。
+		return Response{}, errors.New("llm response has no choices")
+	}
+	ch := v.Choices[0]
+	out.Text = ch.Message.Content
+	out.FinishReason = ch.FinishReason
+	for _, tc := range ch.Message.ToolCalls {
+		out.ToolCalls = append(out.ToolCalls, ToolCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: tc.Function.Arguments,
+		})
 	}
 	if v.Usage != nil {
 		out.Usage = Usage{InputTokens: v.Usage.PromptTokens, OutputTokens: v.Usage.CompletionTokens}

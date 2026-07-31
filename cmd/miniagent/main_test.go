@@ -188,3 +188,23 @@ func TestCLI_CorruptSessionExits1(t *testing.T) {
 		t.Errorf("missing error: %s", out)
 	}
 }
+
+// http（非 loopback）BaseURL 应警告明文传 key；loopback/https 不警告。
+func TestWarnInsecureBaseURL(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	warnInsecureBaseURL("http://llm.internal:8000")
+	warnInsecureBaseURL("http://localhost:8080")
+	warnInsecureBaseURL("http://127.0.0.1:11434")
+	warnInsecureBaseURL("https://api.openai.com")
+	_ = w.Close()
+	os.Stderr = old
+	out, _ := io.ReadAll(r)
+	if got := strings.Count(string(out), "warning"); got != 1 {
+		t.Errorf("warnings = %d, want 1: %s", got, out)
+	}
+}
