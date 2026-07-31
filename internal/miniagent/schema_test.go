@@ -60,7 +60,7 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 		ReadFileTool(workdir),
 		WriteFileTool(workdir),
 		EditFileTool(workdir),
-		ShellTool(workdir),
+		ShellTool(workdir, 0),
 	}
 
 	for _, tk := range tools {

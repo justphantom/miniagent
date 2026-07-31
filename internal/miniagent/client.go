@@ -119,6 +119,10 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		return Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// context 超限（400 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
+		if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
+			return Response{}, false, 0, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
+		}
 		msg := fmt.Sprintf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…"))
 		if shouldRetryStatus(resp.StatusCode) {
 			return Response{}, true, parseRetryAfter(resp.Header), errors.New(msg)
@@ -143,6 +147,20 @@ func shouldRetryStatus(code int) bool {
 		http.StatusServiceUnavailable,  // 503
 		http.StatusGatewayTimeout:      // 504
 		return true
+	}
+	return false
+}
+
+// isContextLengthError 启发式识别 context 超限的 400 响应：不同厂商措辞不一
+// （OpenAI: "maximum context length" / "context_length_exceeded"；其他:
+// "context window"）。小写匹配命中任一即认定。误判的最坏后果是触发一次无谓的
+// 历史收紧重试，可接受。
+func isContextLengthError(raw []byte) bool {
+	lower := strings.ToLower(string(raw))
+	for _, marker := range []string{"context_length", "context length", "maximum context", "context window"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
 	}
 	return false
 }
@@ -206,8 +224,10 @@ func (c *HTTPClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, err
 type chatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			ToolCalls        []struct {
 				ID       string `json:"id"`
 				Type     string `json:"type"`
 				Function struct {
@@ -237,6 +257,11 @@ func parseChatResponse(raw []byte) (Response, error) {
 	}
 	ch := v.Choices[0]
 	out.Text = ch.Message.Content
+	// 双兼容：DeepSeek 系用 reasoning_content，OpenAI o 系用 reasoning；前者优先。
+	out.Reasoning = ch.Message.ReasoningContent
+	if out.Reasoning == "" {
+		out.Reasoning = ch.Message.Reasoning
+	}
 	out.FinishReason = ch.FinishReason
 	for _, tc := range ch.Message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, ToolCall{

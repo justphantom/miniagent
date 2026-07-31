@@ -17,12 +17,15 @@ const maxShellOutputChars = 20000
 const maxShellOutputBytes = maxShellOutputChars * 4
 const shellTimeout = 60 * time.Second
 
-// ShellTool returns a shell tool bound to workspaceRoot.
-// workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。
-func ShellTool(workspaceRoot string) Tool {
+// ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 用默认
+// shellTimeout。workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。
+func ShellTool(workspaceRoot string, timeout time.Duration) Tool {
+	if timeout <= 0 {
+		timeout = shellTimeout
+	}
 	return Tool{
 		Name:        "shell",
-		Description: "通过 sh -c 执行一条 shell 命令。返回 stdout+stderr 合并输出。命令最长运行 " + shellTimeout.String() + "；输出超过 " + strconv.Itoa(maxShellOutputChars) + " 字符会被截断。",
+		Description: "通过 sh -c 执行一条 shell 命令。返回 stdout+stderr 合并输出。命令最长运行 " + timeout.String() + "；输出超过 " + strconv.Itoa(maxShellOutputChars) + " 字符会被截断。",
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令"},
 		}, "command"),
@@ -36,7 +39,7 @@ func ShellTool(workspaceRoot string) Tool {
 			if strings.TrimSpace(a.Command) == "" {
 				return ToolResult{IsError: true, Output: "参数缺失：command"}
 			}
-			runCtx, cancel := context.WithTimeout(ctx, shellTimeout)
+			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command)
 			cmd.Dir = workspaceRoot

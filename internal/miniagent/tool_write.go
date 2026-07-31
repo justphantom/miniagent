@@ -19,7 +19,7 @@ type writeFileArgs struct {
 func WriteFileTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "write",
-		Description: "把 content 写入文件（覆盖已有内容；自动创建父目录）。path 可相对 workdir 或绝对。",
+		Description: "整体覆盖写入文件（自动建父目录、保留原文件权限）。content 上限 10MiB。path 相对 workdir 或绝对。仅用于新建文件或完整重写；局部改动用 edit。",
 		Parameters: object(map[string]any{
 			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workdir 或绝对路径"},
 			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},

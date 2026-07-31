@@ -9,10 +9,11 @@ import (
 )
 
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []chatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
 }
 
 type chatToolCall struct {
@@ -30,7 +31,8 @@ func buildChatBody(req Request) ([]byte, error) {
 		msgs = append(msgs, chatMessage{Role: roleSystem, Content: req.System})
 	}
 	for _, m := range req.Messages {
-		cm := chatMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
+		// 回灌 reasoning：assistant 的思考链以 reasoning_content 发回（DeepSeek 兼容）。
+		cm := chatMessage{Role: m.Role, Content: m.Content, ReasoningContent: m.Reasoning, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			ctc := chatToolCall{ID: tc.ID, Type: "function"}
 			ctc.Fn.Name = tc.Name

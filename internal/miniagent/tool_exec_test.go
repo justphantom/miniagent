@@ -10,7 +10,7 @@ import (
 )
 
 func TestShell_RunsCommand(t *testing.T) {
-	s := ShellTool(t.TempDir())
+	s := ShellTool(t.TempDir(), 0)
 	res := s.Call(context.Background(), `{"command":"echo hello"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
@@ -22,7 +22,7 @@ func TestShell_RunsCommand(t *testing.T) {
 
 func TestShell_CwdIsWorkspaceRoot(t *testing.T) {
 	dir := t.TempDir()
-	s := ShellTool(dir)
+	s := ShellTool(dir, 0)
 	res := s.Call(context.Background(), `{"command":"pwd"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
@@ -34,7 +34,7 @@ func TestShell_CwdIsWorkspaceRoot(t *testing.T) {
 }
 
 func TestShell_NonZeroExitIsError(t *testing.T) {
-	s := ShellTool(t.TempDir())
+	s := ShellTool(t.TempDir(), 0)
 	res := s.Call(context.Background(), `{"command":"echo out; exit 3"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
@@ -59,7 +59,7 @@ func TestShell_KillsGrandchildOnTimeout(t *testing.T) {
 		defer cancel()
 		_ = exec.CommandContext(ctx, "pkill", "-9", "-f", marker).Run()
 	})
-	s := ShellTool(t.TempDir())
+	s := ShellTool(t.TempDir(), 0)
 	// exec -a 让 sleep 进程名带 marker，pgrep -f 才能精确匹配。
 	start := time.Now()
 	res := s.Call(context.Background(), `{"command":"exec -a `+marker+` sleep 600"}`)
@@ -81,7 +81,7 @@ func TestShell_KillsGrandchildOnTimeout(t *testing.T) {
 
 // workdir 为空：cmd.Dir 留空，exec 继承父进程 cwd。
 func TestShell_EmptyWorkdirInheritsCwd(t *testing.T) {
-	s := ShellTool("")
+	s := ShellTool("", 0)
 	res := s.Call(context.Background(), `{"command":"echo ok-empty"}`)
 	if res.IsError {
 		t.Fatalf("empty workdir should not fail: %s", res.Output)
@@ -94,7 +94,7 @@ func TestShell_EmptyWorkdirInheritsCwd(t *testing.T) {
 // 子进程继承父进程全量环境（MINIAGENT_* 前缀除外），其他变量原样透传。
 func TestShell_InheritsFullEnv(t *testing.T) {
 	t.Setenv("MINIAGENT_TEST_INHERIT", "inherited")
-	s := ShellTool(t.TempDir())
+	s := ShellTool(t.TempDir(), 0)
 	res := s.Call(context.Background(), `{"command":"echo $MINIAGENT_TEST_INHERIT"}`)
 	if res.IsError {
 		t.Fatalf("shell failed: %s", res.Output)
@@ -116,7 +116,7 @@ func TestShell_InheritsFullEnv(t *testing.T) {
 // MINIAGENT_API_KEY 必须被剥离，避免 LLM 通过 shell 读取宿主密钥。
 func TestShell_ScrubsAPIKey(t *testing.T) {
 	t.Setenv("MINIAGENT_API_KEY", "sk-secret-leak")
-	s := ShellTool(t.TempDir())
+	s := ShellTool(t.TempDir(), 0)
 	res := s.Call(context.Background(), `{"command":"echo [$MINIAGENT_API_KEY]"}`)
 	if res.IsError {
 		t.Fatalf("shell failed: %s", res.Output)
@@ -130,7 +130,7 @@ func TestShell_ScrubsAPIKey(t *testing.T) {
 func TestShell_ScrubsAllMiniagentVars(t *testing.T) {
 	t.Setenv("MINIAGENT_API_KEY", "sk-leak")
 	t.Setenv("MINIAGENT_BASE_URL", "https://private.example.internal")
-	s := ShellTool(t.TempDir())
+	s := ShellTool(t.TempDir(), 0)
 	res := s.Call(context.Background(), `{"command":"env | grep MINIAGENT_ | wc -l"}`)
 	if res.IsError {
 		t.Fatalf("shell failed: %s", res.Output)
@@ -142,9 +142,38 @@ func TestShell_ScrubsAllMiniagentVars(t *testing.T) {
 
 // 空命令：参数校验失败。
 func TestShell_EmptyCommandRejected(t *testing.T) {
-	s := ShellTool(t.TempDir())
+	s := ShellTool(t.TempDir(), 0)
 	res := s.Call(context.Background(), `{"command":"   "}`)
 	if !res.IsError {
 		t.Fatal("expected error")
+	}
+}
+
+// 自定义超时：sleep 5 在 200ms 后被杀，返回 IsError 且含「超时」，1s 内返回。
+func TestShellTool_CustomTimeout(t *testing.T) {
+	s := ShellTool(t.TempDir(), 200*time.Millisecond)
+	start := time.Now()
+	res := s.Call(context.Background(), `{"command":"sleep 5"}`)
+	elapsed := time.Since(start)
+	if !res.IsError {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(res.Output, "超时") {
+		t.Errorf("Output = %q", res.Output)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("timeout not enforced: elapsed=%v", elapsed)
+	}
+}
+
+// timeout=0 用默认路径（不实际等 60s，只验正常执行）。
+func TestShellTool_ZeroTimeoutUsesDefault(t *testing.T) {
+	s := ShellTool(t.TempDir(), 0)
+	res := s.Call(context.Background(), `{"command":"echo ok"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "ok") {
+		t.Errorf("Output = %q", res.Output)
 	}
 }

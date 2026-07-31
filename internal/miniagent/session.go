@@ -91,8 +91,9 @@ func validateToolPairing(msgs []Message) error {
 }
 
 // SaveSession 把完整 transcript 原子写回 path（temp+rename），权限 0o600
-// （对话内容属敏感数据）。思考内容不入上下文由类型层保证：Message 没有
-// reasoning 字段，序列化结果天然不含思考内容，无需剥离逻辑。
+// （对话内容属敏感数据）。思考内容（reasoning）随 Message.Reasoning 序列化落盘
+// （与 Content 同级、对称），支持 reasoning 模型跨会话续跑；属敏感数据但文件已
+// 0o600。若不希望落盘，需在调用前显式清零各 Message.Reasoning。
 func SaveSession(path string, msgs []Message) error {
 	if len(msgs) == 0 {
 		// nil 会被序列化成 "null"，回读得到 nil，"空会话"与"新会话"无法

@@ -3,6 +3,40 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Added
+- `-max-iterations` flag：单轮 LLM 调用上限（0=默认 20）。原 `maxIterations`
+  硬编码提升为 `LoopConfig.MaxIterations` 可配置，否则稍复杂任务必撞顶。
+- `-shell-timeout` flag：单条 shell 命令超时（0=默认 60s），仍受 `-max-duration`
+  总上限约束。覆盖大仓库 `go test` / `npm install` 等长命令。
+- `-max-tokens-total` flag：单轮累计 token（输入+输出）预算上限；超限以
+  `ErrBudgetExceeded`（error 事件 + 退出码 1）终止。判定用端点返回的真实 usage。
+- `Tool.ResultLimit` 字段：工具结果入历史字符上限按工具区分。read/edit 取
+  `maxFileResultInHistory=8000`——原统一 2000 截断会把读到的代码尾部丢掉（代码
+  场景头号问题）；shell/grep/glob 仍默认 2000。
+- reasoning 模型支持：`Message.Reasoning` 字段，wire 解析 `reasoning_content`/
+  `reasoning`（双兼容），assistant 消息携带思考链并以 `reasoning_content` 回灌，
+  随 session 落盘。
+- context 超限降级：端点 400（context_length）返回 `ErrContextLength`，Run
+  收紧历史（清 reasoning + 把 tool content 压到 `contextTrimToolChars`）后对
+  本步重试一次（新增 `history.go`），仍超则上抛。只降级一次，避免循环烧请求。
+- `grep` 工具：递归正则搜索文本文件，输出 `path:lineno:line`，命中 200 行封顶，
+  跳过 `.git`/符号链接/二进制。
+- `glob` 工具：递归列举匹配 filepath.Match 通配的路径，命中 500 条封顶。
+- `edit` 加 `replace_all` 参数：替换全部匹配处。
+- `-key-file` flag：从文件读取 API key（首尾空白截断），优先于
+  `$MINIAGENT_API_KEY`。规避环境变量经 `/proc/$PPID/environ` 泄漏给 shell 子进程；
+  文件 loose 权限（group/other 可读）时 stderr 警告。隔离不在代码层控制，由运行
+  用户 OS 权限决定（见 README「运行隔离」）。
+- 代码向默认 system prompt（ReAct 工作流：先观察→后修改→改后验证→失败复盘）；
+  read/write 工具描述补全。
+
+### Changed
+- `ShellTool` 签名 breaking：新增 `timeout time.Duration` 参数。
+- 默认 system prompt 从「简洁助手」改为代码向工程 prompt（可用 `-system` 覆盖）。
+- 工具数 4 → 6（新增 grep/glob）；`buildTools` 签名 breaking（新增 `shellTimeout`）。
+
 ## [1.1.0] - 2026-08-01
 
 ### Added

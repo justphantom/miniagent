@@ -138,6 +138,28 @@ func TestEditFile_MultipleMatchesFails(t *testing.T) {
 	}
 }
 
+// B-3：replace_all=true 替换全部匹配处。
+func TestEditFile_ReplaceAll(t *testing.T) {
+	dir := writeTemp(t, "e.txt", "xx yy xx")
+	res := EditFileTool(dir).Call(context.Background(), `{"path":"e.txt","old_string":"xx","new_string":"z","replace_all":true}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "e.txt"))
+	if string(got) != "z yy z" {
+		t.Errorf("content = %q, want %q", got, "z yy z")
+	}
+}
+
+// replace_all=true 但无匹配仍报错。
+func TestEditFile_ReplaceAllZeroMatchFails(t *testing.T) {
+	dir := writeTemp(t, "e.txt", "hello")
+	res := EditFileTool(dir).Call(context.Background(), `{"path":"e.txt","old_string":"zz","new_string":"z","replace_all":true}`)
+	if !res.IsError {
+		t.Fatal("expected error for zero matches")
+	}
+}
+
 // edit 通过 openNoFollow 拒绝最终路径是符号链接的情形。
 func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	dir := t.TempDir()

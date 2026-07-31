@@ -9,8 +9,8 @@ import (
 	"log/slog"
 )
 
-// 单轮对话的 LLM 调用上限：防止模型陷入工具循环烧 token，按典型工具链
-// （读→改→测→答）所需步骤数 + 适度余量设定。
+// 单轮对话的 LLM 调用上限（默认值）：防止模型陷入工具循环烧 token，按典型
+// 工具链（读→改→测→答）所需步骤数 + 适度余量设定。可经 LoopConfig.MaxIterations 覆盖。
 const maxIterations = 20
 
 // 单条 tool 结果进入历史的字符上限：超长输出会稀释上下文预算，2k 字符
@@ -55,21 +55,42 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	msgs = append(msgs, cfg.History...)
 	msgs = append(msgs, Message{Role: roleUser, Content: userPrompt})
 	total := Usage{}
+	// 调用方可经 cfg.MaxIterations 覆盖默认上限；<=0 回退到包默认 maxIterations。
+	iterLimit := cfg.MaxIterations
+	if iterLimit <= 0 {
+		iterLimit = maxIterations
+	}
 
-	for step := 1; step <= maxIterations; step++ {
+	for step := 1; step <= iterLimit; step++ {
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
 		}
 		resp, err := callLLM(ctx, llm, cfg, step, msgs, logger)
+		if errors.Is(err, ErrContextLength) {
+			// 撞端点 context 上限：收紧历史（先清 reasoning，再压 tool content）后
+			// 对本步重试一次；仍超则由下方 err 分支上抛。只降级一次，避免循环烧请求。
+			msgs = trimHistoryForContext(msgs)
+			if logger != nil {
+				logger.Warn("context length exceeded; trimmed history; retrying step", "step", step)
+			}
+			resp, err = callLLM(ctx, llm, cfg, step, msgs, logger)
+		}
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
 		}
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
+		// 预算熔断：以端点返回的真实 usage 累计判定，超限即停（error 路径 + 退出码 1）。
+		if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
+			return Result{Usage: total, Steps: step, Messages: msgs}, fmt.Errorf(
+				"%w: input=%d output=%d（累计超 MaxTotalTokens %d）",
+				ErrBudgetExceeded, total.InputTokens, total.OutputTokens, cfg.MaxTotalTokens,
+			)
+		}
 
 		if len(resp.ToolCalls) == 0 {
 			// 最终文本入历史：接续对话需要看到上一轮的回答。
-			msgs = append(msgs, Message{Role: roleAssistant, Content: resp.Text})
+			msgs = append(msgs, Message{Role: roleAssistant, Content: resp.Text, Reasoning: resp.Reasoning})
 			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs}, nil
 		}
 
@@ -80,7 +101,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	}
 	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。
 	// Finish=finishMaxIterations 是终止信号（无最终 Text）。
-	return Result{Usage: total, Steps: maxIterations, Finish: finishMaxIterations, Messages: msgs}, nil
+	return Result{Usage: total, Steps: iterLimit, Finish: finishMaxIterations, Messages: msgs}, nil
 }
 
 func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
@@ -131,7 +152,8 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 			calls[i].ID = fmt.Sprintf("synth_%d_%d", step, i)
 		}
 	}
-	msgs = append(msgs, Message{Role: roleAssistant, ToolCalls: calls})
+	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。
+	msgs = append(msgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls})
 
 	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
 	if onToolUse != nil {
@@ -152,7 +174,11 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 		if logger != nil {
 			logger.Info("tool executed", "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
 		}
-		msgs = append(msgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: truncateToolResult(tres.Output)})
+		limit := 0
+		if t, ok := toolByName[tc.Name]; ok {
+			limit = t.ResultLimit
+		}
+		msgs = append(msgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit)})
 	}
 	return msgs, nil
 }
@@ -190,6 +216,12 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 	return results
 }
 
-func truncateToolResult(s string) string {
-	return truncate(s, maxToolResultInHistory, "…[tool_result 已截断]")
+// trimForHistory 把工具结果裁到 limit 字符后入历史；limit<=0 用默认上限。
+// read/edit 等代码类工具经 Tool.ResultLimit 传高限，避免截断丢准确性。
+// C-2 的 context 降级复用同一裁剪语义（对更早的 tool content 用更小 limit 再裁）。
+func trimForHistory(s string, limit int) string {
+	if limit <= 0 {
+		limit = maxToolResultInHistory
+	}
+	return truncate(s, limit, "…[tool_result 已截断]")
 }

@@ -9,7 +9,7 @@
 - 无路径边界约束：工具不约束路径（绝对路径可读写任意位置），shell 无黑名单；仅对 `read`/`edit` 的最终路径做符号链接拒绝（`O_NOFOLLOW`），不构成完整安全边界。隔离责任完全交给调用方（容器/cgroup 等）
 - 平台：仅 Linux/macOS（Unix）。`platform.go` 用 `//go:build !windows` 隔离 setpgid/killpg/O_NOFOLLOW，未提供 Windows fallback
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：`read` / `write` / `edit` / `shell`（全部 free 模式）
+- 工具：`read` / `write` / `edit` / `grep` / `glob` / `shell`（全部 free 模式）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行
 
 ## 构建
@@ -23,19 +23,23 @@ make test       # go test -race ./...
 
 | 变量 | 用途 |
 |------|------|
-| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。必需 |
+| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。必需（或用 `-key-file` 从文件注入） |
 | `MINIAGENT_BASE_URL` | endpoint 根地址（**不含** `/v1` 后缀），作为 `-base-url` 的默认值 |
 
 ## CLI 参数
 
 ```
 -base-url string         endpoint 根地址（不含 /v1），或 $MINIAGENT_BASE_URL
+-key-file string         从文件读 API key（首尾空白截断）；优先于 $MINIAGENT_API_KEY，规避 /proc 泄漏
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-duration duration   整体墙钟上限（覆盖所有 LLM 调用 + 工具执行），0 表示不限（默认 0）
+-max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
+-max-tokens-total int    单轮累计 token（输入+输出）上限（0=不限）；超限以 error 事件 + 退出码 1 终止
 -model string            LLM 模型 id（必需）
 -session string          会话文件路径（JSON 历史）：存在则加载作为上下文，结束后写回完整 transcript；缺省则无状态
--system string           系统提示词（默认 "你是一个简洁的助手，回答通常不超过 500 字。"）
+-shell-timeout duration  单条 shell 命令超时（0=默认 60s）；仍受 -max-duration 总上限约束
+-system string           系统提示词（默认为面向工程代码开发的代码向 prompt）
 -version                 显示版本号并退出
 -workdir string          工作目录（工具相对路径基准 + shell 的 cwd；空则继承进程 cwd，工具不做越界校验）
 ```
@@ -101,7 +105,7 @@ make test       # go test -race ./...
 
 ## 工具清单
 
-4 个工具全部为 free 模式：无路径边界约束、无 shell 黑名单。工具参数为 JSON 对象。
+6 个工具全部为 free 模式：无路径边界约束、无 shell 黑名单。工具参数为 JSON 对象。
 
 ### `read`
 
@@ -128,15 +132,39 @@ make test       # go test -race ./...
 
 ### `edit`
 
-精确替换文件中的一段文本。`old_string` 必须在文件中唯一出现（出现 0 次或多次都失败）。拒绝编辑符号链接。
+精确替换文件中的一段文本。`old_string` 须与文件精确匹配（含缩进和换行）。缺省要求唯一出现（出现 0 次或多次均失败）；设 `replace_all=true` 则替换全部匹配。拒绝编辑符号链接与非普通文件。
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
 | `path` | string | 是 | 相对 `-workdir` 或绝对路径 |
 | `old_string` | string | 是 | 原文（精确匹配，含缩进和换行） |
 | `new_string` | string | 是 | 新文本 |
+| `replace_all` | bool | 否 | true 时替换全部匹配处；缺省要求 old_string 唯一 |
 
 约束：文件最大 10 MiB；保留原文件权限。
+
+### `grep`
+
+递归正则搜索文本文件内容，输出 `path:lineno:line`（与 `grep -n` 一致）。跳过 `.git`、符号链接与二进制文件。
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | 正则表达式（Go regexp 语法，如 `foo`、`(?i)error`） |
+| `path` | string | 否 | 搜索根目录，默认 `-workdir` |
+| `glob` | string | 否 | 文件名 include 过滤（filepath.Match，如 `*.go`） |
+
+约束：命中行上限 200、输出超 20000 字符截断；操作超时 30s。
+
+### `glob`
+
+递归列举匹配通配的文件路径，每行一个（相对 `-workdir`）。排除 `.git` 与符号链接。
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | filepath.Match 通配（`*` `?` `[...]`，不跨 `/`、无 `**`） |
+| `path` | string | 否 | 根目录，默认 `-workdir` |
+
+约束：命中上限 500 条；操作超时 30s。
 
 ### `shell`
 
@@ -149,7 +177,7 @@ make test       # go test -race ./...
 约束：
 - 命令超时 60 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
 - 输出超过 20000 字符截断
-- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或不经环境变量传 key；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
+- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或用 `-key-file` 不经环境变量传 key（key 不在进程 env，`/proc/$PPID/environ` 读不到）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
 ## 会话接续（-session）
 
@@ -160,7 +188,7 @@ make test       # go test -race ./...
 - Run 出错（LLM 失败/取消）不写回——失败轮的半成品历史不固化，但工具副作用可能已发生且无记录，消费方需知悉。
 - 文件损坏（非法 JSON、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 4 MiB 大小上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
 - **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
-- 思考内容（reasoning/thinking）不进入上下文也不落盘：`Message` 类型没有 reasoning 字段，序列化历史天然不含思考内容。
+- 思考内容（reasoning）：wire 解析响应里的 `reasoning_content` / `reasoning`（双兼容），随 assistant 消息进入上下文并以 `reasoning_content` 回灌；**随 session 落盘**（与 content 同级）。若不希望落盘，需在传入前清零 `Message.Reasoning`。
 - system prompt 不入 session 文件，每轮由 `-system` 提供；各轮应保持一致。
 - 历史只增不减，不做自动修剪/摘要；长会话请自行归档或换新 session 文件。同一文件同时只跑一个进程（并发写不会损坏文件，但后到者覆盖先到者）。
 
@@ -171,18 +199,31 @@ make test       # go test -race ./...
 | 0 | 正常结束（含达到 `maxIterations` 上限、最终文本为空的场景） |
 | 1 | 参数错误、API key 缺失、stdin 为空、session 加载/写回失败、主流程 `error` 事件 |
 
+## 运行隔离（工程实践）
+
+miniagent **不在代码层做任何隔离**：`read`/`write`/`edit`/`grep`/`glob` 接受绝对路径、`shell` 是完整 `sh -c`、无路径边界与命令黑名单。隔离**完全由运行用户的 OS 权限决定**，调用方负责：
+
+- 用**专用低权限用户**运行；workdir 属该用户（或只读挂载），无关路径靠文件系统权限隔离。
+- 密钥**用 `-key-file` 从文件注入**（只读挂载、`0600`），而非环境变量——这样 key 不在进程 env，shell 子进程经 `/proc/$PPID/environ` 读不到它。`-key-file` 文件若可被 group/other 读会 stderr 警告。
+- 需要更强隔离时自行叠加容器 / 独立 UID / `hidepid` / 网络出口白名单等——这些**不在 miniagent 职责内**，由运行环境提供。
+
+> 一句话：miniagent 信任其运行用户的权限边界；越权访问的唯一闸门是 OS 用户与文件权限。
+
 ## 内部约束（常量）
 
 | 常量 | 值 | 含义 |
 |------|----|------|
-| `maxIterations` | 20 | 单轮 LLM 调用上限 |
+| `maxIterations` | 20 | 单轮 LLM 调用上限（默认值，可被 `-max-iterations` 覆盖） |
 | `maxParallelTools` | 8 | 单步内并行工具并发上限 |
-| `maxToolResultInHistory` | 2000 | 单条 tool 结果进入历史消息的字符数 |
+| `maxToolResultInHistory` | 2000 | tool 结果进入历史消息的默认字符数（shell/grep/glob） |
+| `maxFileResultInHistory` | 8000 | read/edit 结果进入历史消息的字符数（代码内容，截断丢准确性） |
+| `contextTrimToolChars` | 1000 | context 超限降级时把 tool 结果压到的字符数 |
+| `maxGrepMatches` / `maxGlobEntries` | 200 / 500 | grep 命中行 / glob 命中条数上限 |
 | `maxReadFileBytes` / `maxReadFileChars` | 80000 / 20000 | 读文件字节 / 输出字符上限 |
 | `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
 | `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | 写 / 编辑文件字节上限 |
 | `maxShellOutputChars` | 20000 | shell 输出字符上限 |
-| `shellTimeout` | 60s | shell 命令超时 |
+| `shellTimeout` | 60s | shell 命令超时（默认值，可被 `-shell-timeout` 覆盖） |
 | `maxChatBodyBytes` | 4 MiB | chat completions 响应 body 上限 |
 | `maxRetries` | 2 | LLM 调用最大重试次数（仅 429/500/502/503/504 + 网络错） |
 | `retryBaseDelay` / `retryMaxDelay` | 500ms / 8s | 重试指数退火基线 / 单次封顶 |

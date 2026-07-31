@@ -23,27 +23,35 @@ import (
 var version = "dev"
 
 type cliFlags struct {
-	model       *string
-	baseURL     *string
-	system      *string
-	maxTokens   *int
-	maxDuration *time.Duration
-	workdir     *string
-	session     *string
-	logLevel    *string
-	showVer     *bool
+	model          *string
+	baseURL        *string
+	keyFile        *string
+	system         *string
+	maxTokens      *int
+	maxDuration    *time.Duration
+	workdir        *string
+	session        *string
+	logLevel       *string
+	showVer        *bool
+	maxIterations  *int
+	shellTimeout   *time.Duration
+	maxTokensTotal *int
 }
 
 func parseFlags() *cliFlags {
 	f := &cliFlags{}
 	f.model = flag.String("model", "", "LLM model id (required)")
 	f.baseURL = flag.String("base-url", os.Getenv("MINIAGENT_BASE_URL"), "LLM endpoint root, no /v1 suffix (or $MINIAGENT_BASE_URL)")
-	f.system = flag.String("system", "你是一个简洁的助手，回答通常不超过 500 字。", "system prompt")
+	f.keyFile = flag.String("key-file", "", "从文件读取 API key（首尾空白截断）；规避环境变量经 /proc/$PPID/environ 泄漏给 shell 子进程；优先于 $MINIAGENT_API_KEY")
+	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
 	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
 	f.maxDuration = flag.Duration("max-duration", 0, "overall wall-clock limit (0 = unlimited); covers all LLM calls + tool runs")
 	f.workdir = flag.String("workdir", "", "working directory (tool path prefix + shell cwd)")
 	f.session = flag.String("session", "", "session file for continuing conversation (JSON history, created if missing)")
 	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
+	f.maxIterations = flag.Int("max-iterations", 0, "单轮 LLM 调用上限（0=默认 20）")
+	f.shellTimeout = flag.Duration("shell-timeout", 0, "单条 shell 命令超时（0=默认 60s）；仍受 -max-duration 总上限约束")
+	f.maxTokensTotal = flag.Int("max-tokens-total", 0, "单轮累计 token（输入+输出）上限（0=不限）；超限以 error 事件 + 退出码 1 终止")
 	f.showVer = flag.Bool("version", false, "show version")
 	flag.Parse()
 	return f
@@ -57,7 +65,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	apiKey := os.Getenv("MINIAGENT_API_KEY")
+	apiKey := mustLoadAPIKey(f)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: mustParseLogLevel(*f.logLevel)}))
 
 	validateConversationFlags(f, apiKey)
@@ -65,7 +73,7 @@ func main() {
 	prompt := mustReadPrompt()
 	history := mustLoadSession(*f.session)
 	llm := buildLLM(apiKey, *f.baseURL, logger)
-	tools := buildTools(*f.workdir)
+	tools := buildTools(*f.workdir, *f.shellTimeout)
 	onToolUse := miniagent.ToolUseWriter(os.Stdout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -77,11 +85,13 @@ func main() {
 	}
 
 	result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
-		Model:     *f.model,
-		System:    *f.system,
-		MaxTokens: *f.maxTokens,
-		Tools:     tools,
-		History:   history,
+		Model:          *f.model,
+		System:         *f.system,
+		MaxTokens:      *f.maxTokens,
+		Tools:          tools,
+		History:        history,
+		MaxIterations:  *f.maxIterations,
+		MaxTotalTokens: *f.maxTokensTotal,
 	}, string(prompt), onToolUse, logger)
 	if err != nil {
 		// Run 出错时不写回 session：不把失败轮的半成品历史固化（工具的
@@ -125,8 +135,47 @@ func validateConversationFlags(f *cliFlags, apiKey string) {
 		os.Exit(1)
 	}
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: $MINIAGENT_API_KEY is required")
+		fmt.Fprintln(os.Stderr, "miniagent: $MINIAGENT_API_KEY is required (or use -key-file)")
 		os.Exit(1)
+	}
+}
+
+// resolveAPIKey 解析 API key：-key-file 非空时从文件读（首尾空白截断），否则回退
+// 到 env。-key-file 优先于 env。文件读失败返回 error（不由调用方静默吞）。
+func resolveAPIKey(keyFile, envKey string) (string, error) {
+	if keyFile == "" {
+		return envKey, nil
+	}
+	data, err := os.ReadFile(keyFile)
+	if err != nil {
+		return "", fmt.Errorf("read key-file %q: %w", keyFile, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// mustLoadAPIKey 是 resolveAPIKey 的退出包装：读失败即 stderr + 退出码 1。
+// 用 -key-file 时顺带校验文件权限（loose 则警告）。
+func mustLoadAPIKey(f *cliFlags) string {
+	key, err := resolveAPIKey(*f.keyFile, os.Getenv("MINIAGENT_API_KEY"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
+		os.Exit(1)
+	}
+	if *f.keyFile != "" {
+		warnKeyFilePerm(*f.keyFile)
+	}
+	return key
+}
+
+// warnKeyFilePerm：key 文件若可被 group/other 读，stderr 警告（不强制——文件权限
+// 与运行用户隔离由调用方保证）。
+func warnKeyFilePerm(path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(os.Stderr, "miniagent: warning: key-file %s readable by group/other (mode=%o); recommend 0600\n", path, info.Mode().Perm())
 	}
 }
 
@@ -193,13 +242,16 @@ func buildLLM(apiKey, baseURL string, logger *slog.Logger) *miniagent.HTTPClient
 	}
 }
 
-// buildTools 无条件注册 4 个工具。workdir 为空时工具内部按各自规则处理
-// （read/write/edit 走 resolveToolPath，shell 把 cmd.Dir 留空继承 cwd）。
-func buildTools(workdir string) []miniagent.Tool {
+// buildTools 无条件注册 6 个工具。workdir 为空时工具内部按各自规则处理
+// （read/write/edit/grep/glob 走 resolveToolPath，shell 把 cmd.Dir 留空继承 cwd）。
+// shellTimeout<=0 时 ShellTool 用默认 60s。
+func buildTools(workdir string, shellTimeout time.Duration) []miniagent.Tool {
 	return []miniagent.Tool{
 		miniagent.ReadFileTool(workdir),
 		miniagent.WriteFileTool(workdir),
 		miniagent.EditFileTool(workdir),
-		miniagent.ShellTool(workdir),
+		miniagent.GrepTool(workdir),
+		miniagent.GlobTool(workdir),
+		miniagent.ShellTool(workdir, shellTimeout),
 	}
 }

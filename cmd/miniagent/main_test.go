@@ -33,12 +33,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestBuildTools_AlwaysRegisters4(t *testing.T) {
-	tools := buildTools(t.TempDir())
-	if len(tools) != 4 {
-		t.Fatalf("got %d tools, want 4", len(tools))
+func TestBuildTools_AlwaysRegisters6(t *testing.T) {
+	tools := buildTools(t.TempDir(), 0)
+	if len(tools) != 6 {
+		t.Fatalf("got %d tools, want 6", len(tools))
 	}
-	expect := map[string]bool{"read": true, "write": true, "edit": true, "shell": true}
+	expect := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true}
 	for _, tk := range tools {
 		if !expect[tk.Name] {
 			t.Errorf("unexpected tool %q", tk.Name)
@@ -47,9 +47,9 @@ func TestBuildTools_AlwaysRegisters4(t *testing.T) {
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
-	tools := buildTools("")
-	if len(tools) != 4 {
-		t.Fatalf("got %d tools, want 4", len(tools))
+	tools := buildTools("", 0)
+	if len(tools) != 6 {
+		t.Fatalf("got %d tools, want 6", len(tools))
 	}
 }
 
@@ -231,5 +231,79 @@ func TestWarnInsecureBaseURL(t *testing.T) {
 	out, _ := io.ReadAll(r)
 	if got := strings.Count(string(out), "warning"); got != 1 {
 		t.Errorf("warnings = %d, want 1: %s", got, out)
+	}
+}
+
+// resolveAPIKey：-key-file 优先于 env，首尾空白截断；缺省回退 env；读失败报错。
+func TestResolveAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	kf := filepath.Join(dir, "k")
+	if err := os.WriteFile(kf, []byte("  sk-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveAPIKey(kf, "sk-env")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got != "sk-file" {
+		t.Errorf("got %q, want sk-file (file trims + overrides env)", got)
+	}
+	got2, err := resolveAPIKey("", "sk-env2")
+	if err != nil || got2 != "sk-env2" {
+		t.Errorf("got (%q,%v), want sk-env2 (env fallback)", got2, err)
+	}
+	if _, err := resolveAPIKey(filepath.Join(dir, "nope"), ""); err == nil {
+		t.Error("expected error for missing key-file")
+	}
+}
+
+// key 文件权限 loose 警告，tight 不警告。
+func TestWarnKeyFilePerm(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	dir := t.TempDir()
+	loose := filepath.Join(dir, "loose")
+	_ = os.WriteFile(loose, []byte("x"), 0o644)
+	tight := filepath.Join(dir, "tight")
+	_ = os.WriteFile(tight, []byte("x"), 0o600)
+	warnKeyFilePerm(loose) // 应警告
+	warnKeyFilePerm(tight) // 不警告
+	_ = w.Close()
+	os.Stderr = old
+	out, _ := io.ReadAll(r)
+	if c := strings.Count(string(out), "warning"); c != 1 {
+		t.Errorf("warnings = %d, want 1: %s", c, out)
+	}
+}
+
+// e2e：仅靠 -key-file 提供 key（不设 MINIAGENT_API_KEY env），key 进入请求 Authorization。
+func TestCLI_KeyFileAuth(t *testing.T) {
+	var mu sync.Mutex
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	keyFile := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(keyFile, []byte("sk-from-config-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// runMainBin 已剥离 MINIAGENT_API_KEY，key 仅来自 -key-file。
+	code, out := runMainBin(t, "ping", []string{"-model", "m", "-base-url", srv.URL, "-key-file", keyFile})
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "Bearer sk-from-config-file" {
+		t.Errorf("Authorization = %q, want Bearer sk-from-config-file", gotAuth)
 	}
 }

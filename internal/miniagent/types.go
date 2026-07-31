@@ -1,6 +1,9 @@
 package miniagent
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // 消息 role 常量：loop/session/wire 多处匹配同一组取值，抽常量防拼写漂移。
 const (
@@ -13,6 +16,7 @@ const (
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
@@ -37,12 +41,16 @@ type Tool struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
+	// ResultLimit 是该工具结果进入历史消息的字符上限（<=0 用 maxToolResultInHistory
+	// 默认）。read/edit 等代码类工具设高限，避免截断丢准确性。不参与工具 schema 序列化。
+	ResultLimit int
 	// Call 加 json:"-"：防未来误 json.Marshal(Tool) 时报 unsupported type。
-	Call        func(ctx context.Context, args string) ToolResult `json:"-"`
+	Call func(ctx context.Context, args string) ToolResult `json:"-"`
 }
 
 type Response struct {
 	Text         string
+	Reasoning    string // 思考链（reasoning_content / reasoning），按需入历史回灌
 	ToolCalls    []ToolCall
 	Usage        Usage
 	FinishReason string // stop|length|tool_calls|content_filter|null；非 stop 表示回答被截断/过滤
@@ -80,6 +88,14 @@ const (
 	finishMaxIterations = "max_iterations"
 )
 
+// ErrBudgetExceeded 由 Run 在累计 token（输入+输出）超过 LoopConfig.MaxTotalTokens
+// 时返回。走 error 路径（CLI 退出码 1），调用方可 errors.Is 判定熔断 vs 真故障。
+var ErrBudgetExceeded = errors.New("miniagent: token budget exceeded")
+
+// ErrContextLength 由 HTTPClient 在端点返回 context 超限的 400 时返回。Run 据此
+// 做一次历史收紧重试（见 trimHistoryForContext）；调用方亦可 errors.Is 判定。
+var ErrContextLength = errors.New("miniagent: context length exceeded")
+
 // LoopConfig carries the per-turn LLM parameters.
 type LoopConfig struct {
 	Model     string
@@ -89,4 +105,9 @@ type LoopConfig struct {
 	// History 是本轮之前的会话历史，按序拼在新 user prompt 之前。
 	// Run 不修改其内容。
 	History []Message
+	// MaxIterations 覆盖单轮 LLM 调用上限；<=0 用 maxIterations 默认值。
+	MaxIterations int
+	// MaxTotalTokens 单轮累计 token（输入+输出）上限；<=0 不限。超限 Run 返回
+	// ErrBudgetExceeded（走 error 事件 + 退出码 1）。
+	MaxTotalTokens int
 }

@@ -3,6 +3,7 @@ package miniagent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -201,6 +202,53 @@ func TestBuildChatBody_NoStream(t *testing.T) {
 	}
 	if contains(string(body), `"stream"`) || contains(string(body), `"stream_options"`) {
 		t.Errorf("body should not include stream fields: %s", body)
+	}
+}
+
+// ResultLimit 是内部字段，不得泄进工具 schema（buildChatBody 只序列化
+// name/description/parameters）。
+func TestBuildChatBody_ResultLimitNotSerialized(t *testing.T) {
+	body, err := buildChatBody(Request{
+		Model: "m",
+		Tools: []Tool{{Name: "read", Description: "d", Parameters: map[string]any{"type": "object"}, ResultLimit: 8000}},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(body)), "resultlimit") {
+		t.Errorf("ResultLimit leaked into schema: %s", body)
+	}
+}
+
+// reasoning 解析双兼容：reasoning_content 优先，缺失时回退 reasoning。
+func TestParseChatResponse_Reasoning(t *testing.T) {
+	resp, err := parseChatResponse([]byte(`{"choices":[{"message":{"role":"assistant","content":"ans","reasoning_content":"rc"},"finish_reason":"stop"}]}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if resp.Reasoning != "rc" {
+		t.Errorf("Reasoning = %q, want rc", resp.Reasoning)
+	}
+	resp2, err := parseChatResponse([]byte(`{"choices":[{"message":{"role":"assistant","content":"ans","reasoning":"r2"},"finish_reason":"stop"}]}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if resp2.Reasoning != "r2" {
+		t.Errorf("Reasoning = %q, want r2 (fallback)", resp2.Reasoning)
+	}
+}
+
+// 400 + context_length 特征 → ErrContextLength（供上层单次历史收紧重试）。
+func TestHTTPClient_Do_ContextLength400(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"This model maximum context length is 8192 tokens"}}`)
+	}))
+	defer srv.Close()
+	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.Do(context.Background(), Request{Model: "m"})
+	if !errors.Is(err, ErrContextLength) {
+		t.Fatalf("err = %v, want ErrContextLength", err)
 	}
 }
 

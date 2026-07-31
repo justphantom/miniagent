@@ -137,20 +137,23 @@ func TestSaveSession_FileMode0600(t *testing.T) {
 	}
 }
 
-// 回归锁：思考内容不入上下文。Message 无 reasoning 字段，序列化结果
-// 不得出现 reasoning 字样——未来若有人给 Message 加 reasoning 字段，
-// 此测试会立刻失败。
-func TestSaveSession_NoReasoningLeak(t *testing.T) {
+// C-3：reasoning 随 Message.Reasoning 落盘（与 Content 同级、对称），支持
+// reasoning 模型跨会话续跑。
+func TestSaveSession_ReasoningPersisted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	if err := SaveSession(path, sampleTranscript()); err != nil {
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "a", Reasoning: "thought chain"},
+	}
+	if err := SaveSession(path, msgs); err != nil {
 		t.Fatalf("SaveSession: %v", err)
 	}
-	data, err := os.ReadFile(path)
+	got, err := LoadSession(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("LoadSession: %v", err)
 	}
-	if strings.Contains(strings.ToLower(string(data)), "reasoning") {
-		t.Errorf("session file leaks reasoning content: %s", data)
+	if len(got) != 2 || got[1].Reasoning != "thought chain" {
+		t.Errorf("reasoning not persisted: %+v", got)
 	}
 }
 

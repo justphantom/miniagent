@@ -14,6 +14,11 @@ func resolveToolPath(workspaceRoot, p string) string {
 	return filepath.Join(workspaceRoot, p)
 }
 
+// maxFileResultInHistory 是 read/edit 这类代码内容工具的结果入历史字符上限：
+// 代码截断即丢准确性，给高于默认 maxToolResultInHistory 的额度（仍受 read 自身
+// maxReadFileChars 输出上限约束）。Tool.ResultLimit 取此值。
+const maxFileResultInHistory = 8000
+
 // truncate clamps s to n runes and appends marker when it truncated.
 func truncate(s string, n int, marker string) string {
 	if n <= 0 {
