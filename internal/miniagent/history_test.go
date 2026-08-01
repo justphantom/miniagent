@@ -36,17 +36,36 @@ func TestTrimHistoryForContext(t *testing.T) {
 }
 
 func TestEstimateTokens(t *testing.T) {
-	// 纯 ASCII：4 字符 ≈ 1 token
-	if n := estimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}); n != 2 {
-		t.Errorf("ascii 8 chars = %d, want 2", n)
+	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时仅加 systemOverheadTokens 固定开销。
+	if n := estimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+systemOverheadTokens {
+		t.Errorf("ascii 8 chars = %d, want %d", n, 2+systemOverheadTokens)
 	}
 	// 纯中文：2 字符 ≈ 1 token
-	if n := estimateTokens([]Message{{Role: "user", Content: "四个汉字"}}); n != 2 {
-		t.Errorf("cjk 4 chars = %d, want 2", n)
+	if n := estimateTokens([]Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+systemOverheadTokens {
+		t.Errorf("cjk 4 chars = %d, want %d", n, 2+systemOverheadTokens)
 	}
 	// tool_calls.Args 计入估算
-	if n := estimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}); n != 1 {
-		t.Errorf("args 4 chars = %d, want 1", n)
+	if n := estimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+systemOverheadTokens {
+		t.Errorf("args 4 chars = %d, want %d", n, 1+systemOverheadTokens)
+	}
+}
+
+// P2 estimateTokens 失明：system prompt 内容 + 工具 schema 固定开销须计入，否则压缩触发偏晚。
+// 用 delta 断言，使测试不依赖具体常量取值（常量凭经验可调）。
+func TestEstimateTokens_Overhead(t *testing.T) {
+	msgs := []Message{{Role: "user", Content: "abcdefgh"}}
+	base := estimateTokens(msgs, "", nil) // 2 内容 + systemOverheadTokens
+	// system prompt 文本计入：4 ASCII 字符 = 1 token。
+	if got := estimateTokens(msgs, "abcd", nil) - base; got != 1 {
+		t.Errorf("system 4 chars should add 1 token, got delta %d", got)
+	}
+	// 每个工具 schema 加 perToolSchemaTokens。
+	if got := estimateTokens(msgs, "", []Tool{{}, {}}) - base; got != 2*perToolSchemaTokens {
+		t.Errorf("2 tools should add %d tokens, got delta %d", 2*perToolSchemaTokens, got)
+	}
+	// system 内容随长度增长（防回归成纯常量）。
+	if got := estimateTokens(msgs, strings.Repeat("a", 40), nil) - base; got != 10 {
+		t.Errorf("system 40 chars should add 10 tokens, got delta %d", got)
 	}
 }
 
@@ -103,7 +122,9 @@ func TestRun_SummaryReducesAndPersists(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: []string{textResponse("ok"), textResponse("done")}}
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{ContextWindow: 256, History: hist}, "now", LoopHooks{}, nil)
+	// ContextWindow 取在「压缩前 > 80%、压缩后 ≤ 80%」之间；estimateTokens 现计入 system/tools
+	// 固定开销（systemOverheadTokens=400），256 的小窗口会使压缩后仍超 → 误报失败，故放到 750。
+	res, err := Run(context.Background(), llm, LoopConfig{ContextWindow: 750, History: hist}, "now", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -115,6 +136,15 @@ func TestRun_SummaryReducesAndPersists(t *testing.T) {
 	}
 	if !hasSummary {
 		t.Errorf("NewMessages missing persisted summary: %+v", res.NewMessages)
+	}
+	// Fix 6：摘要压缩成功 → result.Compacted=true（交互层据此 rewrite session）。
+	if !res.Compacted {
+		t.Errorf("Compacted should be true after summary compaction")
+	}
+	// Fix 3：摘要调用 usage 须计入 total。摘要与主调用各回 prompt=1/completion=1（textResponse），
+	// 摘要 usage 入 total 后 InputTokens ≥ 2（不计则仅主调用 1）。
+	if res.Usage.InputTokens < 2 || res.Usage.OutputTokens < 2 {
+		t.Errorf("summary usage not counted in total: %+v", res.Usage)
 	}
 }
 

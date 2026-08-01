@@ -3,9 +3,13 @@
 package miniagent
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // setPGID puts the child in a new process group so kill(-pgid) can reach
@@ -41,15 +45,51 @@ func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 	return os.NewFile(uintptr(fd), path), nil
 }
 
-// lockSession 对 session 文件加排他 advisory 锁（LOCK_EX），防两个 miniagent 进程
-// 并发 append 同一 session 致 bufio.Flush 的多次 write(2) 在行边界交织产生中间非法
-// JSON 行（LoadSession 把中间损坏当硬错误，整文件不可用）（审查 P2-13）。Linux/macOS
-// 通用；flock 是 inode 级 advisory lock，跨进程互斥，同进程内不互斥。
+// lockSession 对 session 文件加排他 advisory 锁。LOCK_EX|LOCK_NB 非阻塞 + 短轮询：
+// 持锁进程挂死时不会让本进程永久阻塞（审查 P2 flock 阻塞），5s 内 100ms 一次容忍跨进程
+// 瞬时竞争，超时返回明确 error 让 AppendMessages/RewriteMessages 处理。用 deadline 判定
+// （非固定 retry 次数）避免 time.Sleep 粒度累积致实际远超 5s。flock 是 inode 级 advisory
+// lock，跨进程互斥；同进程内不互斥（POSIX 语义，单进程多 goroutine 并发写仍靠 O_APPEND
+// 单次 write 原子性兜底，不依赖此锁）。
 func lockSession(f *os.File) error {
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+	deadline := time.Now().Add(lockSessionTotal)
+	for time.Now().Before(deadline) {
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			return nil
+		}
+		time.Sleep(lockSessionInterval)
+	}
+	return errors.New("session 锁繁忙：另一进程持有且 5s 内未释放")
 }
+
+const (
+	lockSessionTotal    = 5 * time.Second // 跨进程持锁竞争的等待上限
+	lockSessionInterval = 100 * time.Millisecond
+)
 
 // unlockSession 释放 lockSession 持有的锁，须在 Close 前调用。
 func unlockSession(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+}
+
+// withSessionLock 打开 path（O_NOFOLLOW + 0o600）并加 flock，执行 fn 后解锁关闭。AppendMessages
+// （O_APPEND）与 RewriteMessages（O_WRONLY 持锁期间 rename）共用：统一 lockSession 失败处理
+// （非阻塞轮询超时返回明确 error）+ MkdirAll 0o700 防 group-writable 目录 + O_NOFOLLOW 拒最终
+// 分量 symlink（审查 P3 session 硬化 + P2 flock 阻塞）。
+func withSessionLock(path string, flag int, fn func(*os.File) error) error {
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("创建 session 目录：%w", err)
+		}
+	}
+	f, err := openNoFollow(path, flag, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	if err := lockSession(f); err != nil {
+		return fmt.Errorf("lock session %q: %w", path, err)
+	}
+	defer func() { _ = unlockSession(f) }()
+	return fn(f)
 }

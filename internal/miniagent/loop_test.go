@@ -583,6 +583,10 @@ func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
 			t.Errorf("body[%d] 不应带 thinking（降级应已固化）: %s", i, b)
 		}
 	}
+	// Fix 5：降级发生 → result.ThinkingDowngraded=true（交互层据此清 baseCfg，审查 P2 跨轮固化）。
+	if !res.ThinkingDowngraded {
+		t.Errorf("ThinkingDowngraded should be true after a downgrade occurred")
+	}
 }
 
 // P3-4：未知工具的 ToolResult.ExitCode 应为 exitCodeNotSet（与被拒工具一致），
@@ -609,5 +613,31 @@ func TestRun_UnknownToolExitCodeNotSet(t *testing.T) {
 	}
 	if *got != exitCodeNotSet {
 		t.Errorf("unknown tool ExitCode = %d, want %d (exitCodeNotSet)", *got, exitCodeNotSet)
+	}
+}
+
+// panicTransport 在 RoundTrip 内 panic，模拟 Do/DoStream 响应解析路径（parseChatResponse /
+// parseSSE）在畸形 payload 上 panic 的现实情形。
+type panicTransport struct{ called bool }
+
+func (p *panicTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	p.called = true
+	panic("boom")
+}
+
+// P3 LLM panic 兜底：callLLMOnce 的 recover 把 LLM 调用路径的 panic 转为 error，避免单次
+// 坏响应崩进程（与防 tool panic 的 safeCall 对称）。无兜底则本用例会 panic 掉整个测试进程。
+func TestRun_LLMCallPanicRecovered(t *testing.T) {
+	tr := &panicTransport{}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	_, err := Run(context.Background(), llm, LoopConfig{Model: "m"}, "x", LoopHooks{}, nil)
+	if err == nil {
+		t.Fatal("expected error from recovered LLM panic, got nil")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("error should surface panic: %v", err)
+	}
+	if !tr.called {
+		t.Error("transport was not invoked")
 	}
 }

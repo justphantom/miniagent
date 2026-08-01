@@ -36,10 +36,18 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 // Result.Messages 是截至返回的全量 transcript，所有 return 路径均带回。配对：OnToolUse 非
 // denied 的 error 路径尾部可能留下"有 tool_calls、无 tool 结果"的 assistant 消息（不可续跑）；
 // OnToolResult error 路径已补占位 tool 消息保配对完整（P2-1）。出错分支不应持久化。
-func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (Result, error) {
+func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (result Result, err error) {
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")
 	}
+	// thinkingDowngraded/compacted 跨循环累积，统一经 defer 写入命名返回 result 的对应字段，
+	// 避免在多个 return 点逐一展开赋值（loop.go 行数受限）。Compacted 任一步摘要成功即置位；
+	// ThinkingDowngraded 任一次降级即置位。
+	var thinkingDowngraded, compacted bool
+	defer func() {
+		result.ThinkingDowngraded = thinkingDowngraded
+		result.Compacted = compacted
+	}()
 	toolByName := buildToolIndex(cfg.Tools, logger)
 
 	// 复制 History：接续对话时调用方可能复用同一 slice，原地 append 会越界写其数据。
@@ -62,13 +70,24 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
 		}
 		// 阶段 2（loop 每 step 前）：超 window 摘要中段 + 有损 fallback + 终止（见 compactIfOverWindow）。
-		if cerr := compactIfOverWindow(ctx, llm, cfg, &msgs, &newMsgs, logger); cerr != nil {
+		// 摘要调用的 usage 累加入 total（MaxTotalTokens 预算含摘要调用——审查 P2 摘要 token 不入预算）；
+		// summarized=true 时记 compacted，供 defer 写 result.Compacted（交互层据此 rewrite session）。
+		summarized, sumUsage, cerr := compactIfOverWindow(ctx, llm, cfg, &msgs, &newMsgs, logger)
+		if cerr != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, cerr
 		}
+		if summarized {
+			compacted = true
+		}
+		total.InputTokens += sumUsage.InputTokens
+		total.OutputTokens += sumUsage.OutputTokens
 		// downgraded=true 时固化 cfg（P2-2：thinking 降级跨步生效，避免每步重撞 400）。
 		resp, downgraded, err := callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
 		if downgraded {
 			cfg.ThinkingLevel, cfg.Thinking = "", nil
+			// 记录降级供 defer 写 result.ThinkingDowngraded：交互层据此清 baseCfg，
+			// 避免下一轮重传原 thinking 值再撞 400（审查 P2 thinking 跨轮固化）。
+			thinkingDowngraded = true
 		}
 		if errors.Is(err, ErrContextLength) {
 			// 撞 context 上限：收紧历史（清 reasoning + 压 tool content）后重试一次，仍超则上抛。
@@ -170,27 +189,6 @@ func callLLMWithDowngrade(ctx context.Context, llm *HTTPClient, cfg LoopConfig, 
 		logger.Warn("llm response truncated", "step", step, "finish_reason", resp.FinishReason)
 	}
 	return resp, downgraded, nil
-}
-
-// callLLMOnce 构造 Request（含 thinking）并单次调用 Do/DoStream，不含降级/重试逻辑。
-func callLLMOnce(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks) (Response, error) {
-	req := Request{
-		Model:         cfg.Model,
-		System:        cfg.System,
-		Messages:      msgs,
-		MaxTokens:     cfg.MaxTokens,
-		Tools:         cfg.Tools,
-		ThinkingLevel: cfg.ThinkingLevel,
-		Thinking:      cfg.Thinking,
-	}
-	if cfg.Stream {
-		return llm.DoStream(ctx, req, func(d Delta) {
-			if hooks.OnDelta != nil {
-				_ = hooks.OnDelta(step, d.Kind, d.Text)
-			}
-		})
-	}
-	return llm.Do(ctx, req)
 }
 
 func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, newMsgs *[]Message, hooks LoopHooks, logger *slog.Logger) ([]Message, error) {

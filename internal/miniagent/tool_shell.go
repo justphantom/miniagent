@@ -19,11 +19,13 @@ const maxShellOutputChars = 20000
 const maxShellOutputBytes = maxShellOutputChars * 4
 const shellTimeout = 60 * time.Second
 
-// sudoSuRe 词边界匹配常见特权提升器（sudo/su/doas/pkexec/gsudo/run0）：
-// 覆盖 "cd /x && sudo ..." 等中段命令。仍可被变量拼接/拆分/未列出的提权器绕过——
-// default 是薄软约束，不构成安全边界（审查 v2 #10、P2-12）。
+// sudoSuRe 词边界匹配常见特权提升器（sudo/su/doas/pkexec/gsudo/run0）与专有特权/
+// 命名空间工具（setpriv/nsenter/unshare/chroot/machinectl）：覆盖 "cd /x && sudo ..."
+// 等中段命令。setpriv 等是低频专有工具，误伤远小于作为提权/逃逸工具的收益。仍可被
+// 变量拼接/拆分/未列出的提权器绕过——default 是薄软约束，不构成安全边界
+// （审查 v2 #10、P2-12、三轮 P3）。
 // 不含 please：它是英文常用词（commit message/文件名常见），误伤远大于作为提权器的收益。
-var sudoSuRe = regexp.MustCompile(`\b(sudo|su|doas|pkexec|gsudo|run0)\b`)
+var sudoSuRe = regexp.MustCompile(`\b(sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl)\b`)
 
 // ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 用默认 shellTimeout。
 // workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。mode=default 时拒绝 sudo/su。
@@ -48,7 +50,7 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 				return ToolResult{IsError: true, Output: "参数缺失：command"}
 			}
 			if mode == ModeDefault && sudoSuRe.MatchString(a.Command) {
-				return ToolResult{IsError: true, Output: "default 模式禁止特权提升器 sudo/su/doas/pkexec/gsudo/run0（用 -mode auto 放行）"}
+				return ToolResult{IsError: true, Output: "default 模式禁止特权提升器 sudo/su/doas/pkexec/gsudo/run0/setpriv/nsenter/unshare/chroot/machinectl（用 -mode auto 放行）"}
 			}
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
@@ -119,10 +121,12 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 }
 
 // scrubEnv 复制 env 并移除：所有 MINIAGENT_* 前缀条目，以及变量名（大写后）含
-// KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL 的条目。后者覆盖 config 模式 ${MAIN_API_KEY}
-// 注入的来源变量（非 MINIAGENT_ 前缀但同样承载真实 key），以及 AWS_ACCESS_KEY_ID、
-// GH_TOKEN、DATABASE_PASSWORD 等宿主凭证，降低非 -key-file 模式下 LLM echo 出密钥的
-// 概率。会误伤含这些子串的普通变量（如 MONKEY/TOKEN_BUCKET）——倾向过度剥离而非泄漏。
+// KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH 的条目。后者覆盖 config
+// 模式 ${MAIN_API_KEY} 注入的来源变量（非 MINIAGENT_ 前缀但同样承载真实 key），以及
+// AWS_ACCESS_KEY_ID、GH_TOKEN、DATABASE_PASSWORD、MYSQL_PWD、DB_PASS/REDIS_PASS、
+// GPG_PASSPHRASE、BASIC_AUTH/AUTH_HEADER 等高频宿主凭证，降低非 -key-file 模式下 LLM
+// echo 出密钥的概率。PWD/PASS/AUTH 等短关键字会扩大误伤面（如 AUTHPROXY、PASSWORDLESS
+// 中含 PASS/PASSWORD）——安全侧倾斜的已知取舍，倾向过度剥离而非泄漏。
 //
 // 这不是密钥隔离边界：未列出的凭证名仍继承，且子进程可经 /proc/$PPID/environ 读到
 // exec 前的完整环境快照。彻底方案是 -key-file（key 不进 env）。free 模式下隔离依赖
@@ -147,8 +151,10 @@ func scrubEnv(env []string) []string {
 
 // hasSecretKeyword 报告大写变量名是否含密钥相关关键字。仅服务于 scrubEnv，
 // 与 MINIAGENT_ 前缀剥离互补；不构成完整凭证发现（见 scrubEnv 注释的隔离边界说明）。
+// PWD/PASS/PASSPHRASE/AUTH 补全高频凭证名（MYSQL_PWD/DB_PASS/GPG_PASSPHRASE/BASIC_AUTH），
+// 短关键字接受更大误伤面换安全侧倾斜（如 AUTHPROXY 被剥，可接受）。
 func hasSecretKeyword(upperName string) bool {
-	for _, kw := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"} {
+	for _, kw := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PWD", "PASS", "PASSPHRASE", "AUTH"} {
 		if strings.Contains(upperName, kw) {
 			return true
 		}

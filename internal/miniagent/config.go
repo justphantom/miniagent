@@ -122,6 +122,27 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// thinkingFieldBlacklist 列出 buildChatBody 写入的标准 payload key（wire.go）。
+// ThinkingMapping.Field 若指向这些 key，payload[field]=val 会 clobber 标准字段
+// （如 field:"max_tokens" 覆盖 max_tokens 限额、field:"tools" 覆盖工具表）；
+// reasoning_effort 是默认 field（wire.go），无需显式 mapping，显式写视同误配
+// （审查 v3 P3）。
+var thinkingFieldBlacklist = map[string]bool{
+	"messages":          true,
+	"tools":             true,
+	"stream":            true,
+	"max_tokens":        true,
+	"temperature":       true,
+	"model":             true,
+	"top_p":             true,
+	"frequency_penalty": true,
+	"presence_penalty":  true,
+	"reasoning_effort":  true,
+	"stop":              true,
+	"n":                 true,
+	"seed":              true,
+}
+
 func validateConfig(cfg *Config) error {
 	if len(cfg.Providers) == 0 {
 		return errors.New("providers 为空")
@@ -147,6 +168,13 @@ func validateConfig(cfg *Config) error {
 		// 用法），仅 stderr 告警引导用 ${VAR} 注入（审查 P3-11）。
 		if p.Key != "" && !envVarRe.MatchString(p.Key) {
 			fmt.Fprintf(os.Stderr, "miniagent: warning: provider %q 的 key 明文写入 config，建议用 ${VAR} 注入避免机密入文件\n", p.Name)
+		}
+		// thinking.field 不得指向 buildChatBody 的保留 payload key：buildChatBody 用
+		// payload[field]=val 写思考级别（wire.go），命中保留 key 会 clobber 标准字段
+		// （如 max_tokens/tools）。reasoning_effort 是默认 field，无需显式 mapping
+		// （审查 v3 P3）。
+		if p.Thinking != nil && p.Thinking.Field != "" && thinkingFieldBlacklist[p.Thinking.Field] {
+			return fmt.Errorf("provider %q thinking.field %q 是保留 payload key，会覆盖标准字段", p.Name, p.Thinking.Field)
 		}
 	}
 	if cfg.Defaults.Model != "" {

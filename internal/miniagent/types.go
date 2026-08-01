@@ -123,6 +123,13 @@ type Result struct {
 	// NewMessages 是本轮 Run 新增的消息（不含 History）：main 据此 append-only
 	// 追加到 session jsonl，避免每次重写全量。出错轮可能为空/不完整，main 不落盘。
 	NewMessages []Message
+	// Compacted 标记本轮是否触发过摘要压缩（compactWithSummary 成功）。交互/入口层据此
+	// 决定是否 rewrite session 文件——append-only 落盘的 newMsgs 含被屏障的旧 summary 与
+	// 被压中段，长会话需机会性 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。
+	Compacted bool
+	// ThinkingDowngraded 标记本轮 callLLM 是否发生过 thinking 降级。交互层据此清
+	// baseCfg.ThinkingLevel，避免下一轮重传原值再撞一次 400（审查 P2 thinking 跨轮固化）。
+	ThinkingDowngraded bool
 }
 
 const (

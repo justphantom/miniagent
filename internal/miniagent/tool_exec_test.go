@@ -233,27 +233,37 @@ func TestShell_ParentCancelNotReportedAsShellTimeout(t *testing.T) {
 	}
 }
 
-// scrubEnv 除 MINIAGENT_ 前缀外，还需剥离变量名含 KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL
-// 的条目（P2-8）：覆盖 config ${MAIN_API_KEY} 注入来源、AWS_ACCESS_KEY_ID、GH_TOKEN 等。
-// DATABASE_URL/PATH 等无关键字变量保留；含关键字子串的普通变量（MONKEY/TOKEN_BUCKET）
-// 会过度剥离——安全侧倾斜的已知取舍，由 scrubEnv 注释明示。
+// scrubEnv 除 MINIAGENT_ 前缀外，还需剥离变量名含 KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/
+// PWD/PASS/PASSPHRASE/AUTH 的条目（P2-8 + 三轮 P2 关键字表补）：覆盖 config ${MAIN_API_KEY}
+// 注入来源、AWS_ACCESS_KEY_ID、GH_TOKEN、MYSQL_PWD、DB_PASS/REDIS_PASS、GPG_PASSPHRASE、
+// BASIC_AUTH/AUTH_HEADER 等。DATABASE_URL 等无关键字变量保留；含关键字子串的普通变量
+// （MONKEY/TOKEN_BUCKET/KEYMAP/AUTHPROXY）会过度剥离——安全侧倾斜的已知取舍，由 scrubEnv 注释明示。
 func TestScrubEnv(t *testing.T) {
 	cases := []struct {
 		kv   string
 		keep bool
 	}{
-		{"MINIAGENT_API_KEY=sk-mini", false}, // 前缀剥离
-		{"MAIN_API_KEY=sk-injected", false},  // ${MAIN_API_KEY} 注入来源，含 KEY
-		{"GH_TOKEN=ghp_xxx", false},          // 含 TOKEN
-		{"AWS_ACCESS_KEY_ID=AKIAxxx", false}, // 含 KEY
-		{"DB_PASSWORD=pw", false},            // 含 PASSWORD
-		{"MY_CREDENTIAL_FILE=/x", false},     // 含 CREDENTIAL
-		{"TOPSECRET=v", false},               // 含 SECRET
-		{"TOKEN_BUCKET=100", false},          // 含 TOKEN → 误伤（过度剥离）
-		{"MONKEY_COUNT=5", false},            // 含 KEY → 误伤（过度剥离）
-		{"DATABASE_URL=postgres://db", true}, // 无关键字 → 保留
-		{"PATH=/usr/bin:/bin", true},         // 保留
-		{"HOME=/root", true},                 // 保留
+		{"MINIAGENT_API_KEY=sk-mini", false},  // 前缀剥离
+		{"MAIN_API_KEY=sk-injected", false},   // ${MAIN_API_KEY} 注入来源，含 KEY
+		{"GH_TOKEN=ghp_xxx", false},           // 含 TOKEN
+		{"AWS_ACCESS_KEY_ID=AKIAxxx", false},  // 含 KEY
+		{"DB_PASSWORD=pw", false},             // 含 PASSWORD（亦含 PASS）
+		{"MY_CREDENTIAL_FILE=/x", false},      // 含 CREDENTIAL
+		{"TOPSECRET=v", false},                // 含 SECRET
+		{"MYSQL_PWD=secret", false},           // 含 PWD（三轮 P2 关键字表补）
+		{"DB_PASS=secret", false},             // 含 PASS
+		{"REDIS_PASS=secret", false},          // 含 PASS
+		{"GPG_PASSPHRASE=secret", false},      // 含 PASSPHRASE（亦含 PASS）
+		{"BASIC_AUTH=secret", false},          // 含 AUTH
+		{"AUTH_HEADER=Bearer x", false},       // 含 AUTH
+		{"TOKEN_BUCKET=100", false},           // 含 TOKEN → 误伤（过度剥离）
+		{"MONKEY_COUNT=5", false},             // 含 KEY → 误伤（过度剥离）
+		{"KEYMAP=us", false},                  // 含 KEY → 误伤（键盘布局，非密钥）
+		{"AUTHPROXY=http://corp:3128", false}, // 含 AUTH → 误伤（短关键字扩大误伤面，已知取舍）
+		{"DATABASE_URL=postgres://db", true},  // 无关键字 → 保留
+		{"PATH=/usr/bin:/bin", true},          // 保留
+		{"HOME=/root", true},                  // 保留
+		{"LANG=en_US.UTF-8", true},            // 保留
 	}
 	in := make([]string, len(cases))
 	for i, c := range cases {
@@ -274,7 +284,8 @@ func TestScrubEnv(t *testing.T) {
 	}
 }
 
-// default 模式拦截常见特权提升器（P2-12）：sudo/su/doas/pkexec/gsudo/run0。
+// default 模式拦截常见特权提升器（P2-12 + 三轮 P3）：sudo/su/doas/pkexec/gsudo/run0，
+// 以及专有特权/命名空间工具 setpriv/nsenter/unshare/chroot/machinectl（低频专有，误伤小）。
 // please 不在列：英文常用词，误伤合法命令（二次审查回归）。
 // auto 模式不拦，此处仅验 default 模式前置拒绝（不实际执行，无环境依赖）。
 func TestShellTool_DefaultRejectsPrivilegeEscalators(t *testing.T) {
@@ -286,7 +297,15 @@ func TestShellTool_DefaultRejectsPrivilegeEscalators(t *testing.T) {
 		"pkexec ls /",
 		"gsudo whoami",
 		"run0 id",
+		"setpriv --reuid 0 sh",
+		"nsenter -t 1 -u sh",
+		"unshare -r sh",
+		"chroot / sh",
+		"machinectl shell",
+		// 中段命令（cd /tmp && <escalator>）也必须拦——词边界正则覆盖复合命令。
 		"cd /tmp && doas touch x",
+		"cd /tmp && setpriv ls",
+		"cd /var && unshare -r cat /etc/shadow",
 	} {
 		res := s.Call(context.Background(), `{"command":"`+cmd+`"}`)
 		if !res.IsError {

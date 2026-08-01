@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -133,7 +134,7 @@ func main() {
 	}
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
 	sessPath, meta, history := resolveSessionForRun(*f.session, sessionDir, modelSpec, effectiveWorkdir(resolved, f))
-	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath, cfg), meta.ID)
+	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath, cfg), meta.ID, resolved.Mode)
 
 	workdir := effectiveWorkdir(resolved, f)
 	llm := buildLLM(apiKey, resolved.Provider, logger)
@@ -151,20 +152,31 @@ func main() {
 	}
 
 	if *f.interactive {
-		runInteractive(ctx, llm, baseCfg, sessPath, meta, hooks, logger, reader)
-		return
+		os.Exit(runInteractive(ctx, llm, baseCfg, sessPath, meta, hooks, logger, reader))
 	}
 
 	prompt := mustReadPrompt(reader)
 	result, err := miniagent.Run(ctx, llm, baseCfg, string(prompt), hooks, logger)
 	if err != nil {
+		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。
+		if errors.Is(err, context.Canceled) {
+			os.Exit(130)
+		}
 		emitRunError(err, *f.resultOnly, logger)
 		os.Exit(1)
 	}
 	emitRunResult(result, resolved.ModelID, *f.resultOnly, logger)
 	if sessPath != "" {
-		if err := miniagent.AppendMessages(sessPath, meta, result.NewMessages); err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", err)
+		// Compacted 时 rewrite 全量 transcript 丢弃被屏障中段（审查 P2 session 文件永不压缩）；
+		// 否则 append-only 追加 NewMessages。
+		var saveErr error
+		if result.Compacted {
+			saveErr = miniagent.RewriteMessages(sessPath, meta, result.Messages)
+		} else {
+			saveErr = miniagent.AppendMessages(sessPath, meta, result.NewMessages)
+		}
+		if saveErr != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", saveErr)
 			os.Exit(1)
 		}
 	}

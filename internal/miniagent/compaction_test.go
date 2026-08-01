@@ -39,7 +39,7 @@ func TestCompactWithSummary_Success(t *testing.T) {
 		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	var newMsgs []Message
-	summarized, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
 	if err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 		{Role: roleUser, Content: "u4"},
 	}
 	var newMsgs []Message
-	_, err := compactWithSummary(context.Background(), llm, "m", &msgs, 1, &newMsgs)
+	_, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 1, &newMsgs)
 	if err == nil {
 		t.Fatal("expected pairing-break error")
 	}
@@ -87,7 +87,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 	msgs := []Message{{Role: roleUser, Content: "u1"}, {Role: roleUser, Content: "u2"}}
 	before := len(msgs)
 	var newMsgs []Message
-	summarized, err := compactWithSummary(context.Background(), llm, "m", &msgs, 6, &newMsgs)
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 6, &newMsgs)
 	if err != nil || summarized {
 		t.Fatalf("expected (false,nil), got (%v,%v)", summarized, err)
 	}
@@ -103,8 +103,22 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err == nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
+	}
+}
+
+// P2 摘要 token 入预算：summarizeMiddle 回传 LLM usage，供上游累加进 MaxTotalTokens 预算。
+func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
+	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
+	tr := &fakeTransport{responses: []string{body}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	_, usage, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}})
+	if err != nil {
+		t.Fatalf("summarizeMiddle: %v", err)
+	}
+	if usage.InputTokens != 50 || usage.OutputTokens != 30 {
+		t.Errorf("usage = %+v, want {50,30}", usage)
 	}
 }
 
@@ -112,7 +126,7 @@ func TestSummarizeMiddle_LLMError(t *testing.T) {
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
@@ -133,7 +147,7 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	// 模拟 loop.go Run：入口已把本轮 user_prompt 加入 newMsgs 与 msgs。
 	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
 	msgs = append(msgs, newMsgs...)
-	summarized, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
 	if err != nil || !summarized {
 		t.Fatalf("compactWithSummary: summarized=%v err=%v", summarized, err)
 	}
@@ -161,7 +175,7 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	}
 	newMsgs := []Message{{Role: roleUser, Content: "上一轮问题"}}
 	msgs = append(msgs, newMsgs...)
-	if _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil {
+	if _, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
 	// 模拟上一轮 Run 末尾把 assistant 最终回答加入 newMsgs（接续对话依赖上一轮答案）。
@@ -193,5 +207,55 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	}
 	if !hasAnswer {
 		t.Errorf("barrier 后本轮 assistant 回答丢失：barrier=%+v", barrier)
+	}
+}
+
+// P2 单轮多次压缩反转：单轮内 compactWithSummary 触发 ≥2 次时，第二次的中段含第一次写入的
+// 旧 summary（已被进一步压进新 summary）。若前插前不剔旧 summary，newMsgs 变成
+// [summary_new, summary_old, ...]，applyCompactionBarrier 反向找最后 summary 命中旧的 summary_old，
+// 最新 summary_new 被屏障——压缩的「保最近轮」承诺失效。本用例验证：剔旧再前插后 newMsgs 只有
+// 一个 KindSummary（最新）、排在最前，且 applyCompactionBarrier 命中它。
+func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("摘要1"), textResponse("摘要2")}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	// 构造足够多轮的 msgs 使两次压缩都有中段。模拟 Run：入口已把本轮 user_prompt 加入 msgs/newMsgs。
+	var msgs []Message
+	for i := range 20 {
+		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
+	}
+	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
+	msgs = append(msgs, newMsgs...)
+
+	// 第一次摘要压缩。
+	if summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil || !summarized {
+		t.Fatalf("1st compactWithSummary: summarized=%v err=%v", summarized, err)
+	}
+	// 模拟步进：追加更多轮使再次超窗触发第二次压缩（Run 的 appendMsg 同时写 msgs/newMsgs）。
+	for i := range 10 {
+		m := Message{Role: roleUser, Content: "more" + strconv.Itoa(i)}
+		msgs = append(msgs, m)
+		newMsgs = append(newMsgs, m)
+	}
+	if summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil || !summarized {
+		t.Fatalf("2nd compactWithSummary: summarized=%v err=%v", summarized, err)
+	}
+
+	// newMsgs 应只剩一条 KindSummary（最新），且排在最前。
+	count := 0
+	for _, m := range newMsgs {
+		if m.Kind == KindSummary {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 summary after two compactions (old must be dropped), got %d: %+v", count, newMsgs)
+	}
+	if newMsgs[0].Kind != KindSummary || !strings.Contains(newMsgs[0].Content, "摘要2") {
+		t.Errorf("newest summary must be first: %+v", newMsgs[0])
+	}
+	// applyCompactionBarrier 必须命中最新摘要（无旧 summary 残留导致反向命中错位）。
+	barrier := applyCompactionBarrier(newMsgs)
+	if len(barrier) == 0 || barrier[0].Kind != KindSummary || !strings.Contains(barrier[0].Content, "摘要2") {
+		t.Errorf("barrier should start at newest summary: %+v", barrier)
 	}
 }

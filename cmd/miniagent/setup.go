@@ -158,7 +158,10 @@ func warnInsecureURL(rawURL string) {
 }
 
 func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger) *miniagent.HTTPClient {
-	llm, err := miniagent.NewHTTPClient(apiKey, p.ChatURL, p.ModelsURL, &http.Client{Timeout: 120 * time.Second}, logger)
+	// 注入带总 Timeout 的 client：非流式 Do 需总超时兜底防单次调用挂死（#3）；流式 DoStream
+	// 经 streamHTTPClient 改用其 Transport 另造无 Timeout client（P2-5/P1-A：body 不被砍，#2）。
+	httpClient := &http.Client{Timeout: 120 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second}}
+	llm, err := miniagent.NewHTTPClient(apiKey, p.ChatURL, p.ModelsURL, httpClient, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)

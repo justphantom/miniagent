@@ -5,6 +5,14 @@ import (
 	"unicode"
 )
 
+// systemOverheadTokens 粗估请求信封的固定 token 开销：role/结构标签、分隔符、common wrapper。
+// 凭经验取值（无标准库 tokenizer 无法精确）；宁高勿低，使压缩早触发而非晚触发。
+const systemOverheadTokens = 400
+
+// perToolSchemaTokens 粗估单个工具的 schema（name+description+parameters JSON）入请求的 token 数。
+// 九件套工具完整 schema 实测约 2-5K tokens，平均约 60/工具。仅用于压缩触发时机的启发式估算。
+const perToolSchemaTokens = 60
+
 // contextTrimToolChars 是 context 超限时把每条 tool 结果 content 压到的字符上限：
 // 远小于常规上限（maxToolResultInHistory / read 的 ResultLimit），确保单次收紧足以让
 // 重试通过。字符数是 token 的启发式近似（标准库无 tokenizer），仅用于「砍多少」估算。
@@ -26,9 +34,11 @@ func trimHistoryForContext(msgs []Message) []Message {
 	return out
 }
 
-// estimateTokens 估算 msgs 的 token 数，仅用于历史裁剪决策。启发式：CJK ≈ 1 token/2 字符，
-// 其他 ≈ 1 token/4 字符。精确计费仍以端点 usage 为准。
-func estimateTokens(msgs []Message) int {
+// estimateTokens 估算一次请求的 token 数，仅用于历史裁剪决策。启发式：CJK ≈ 1 token/2 字符，
+// 其他 ≈ 1 token/4 字符。除 msgs 内容外，计入 system prompt 文本 + 固定请求开销（信封 + 工具 schema）：
+// 之前仅看 msgs 内容、不计 system 与 tools schema（~2-5K tokens），导致压缩触发偏晚（审查 P2 失明）。
+// 精确计费仍以端点 usage 为准；常量凭经验取值。
+func estimateTokens(msgs []Message, system string, tools []Tool) int {
 	var nonCJK, cjk int
 	add := func(s string) {
 		for _, r := range s {
@@ -47,7 +57,9 @@ func estimateTokens(msgs []Message) int {
 			add(tc.Args)
 		}
 	}
-	return nonCJK/4 + cjk/2
+	// system prompt 之前完全忽略；工具 schema 是固定开销，按工具数线性估。
+	add(system)
+	return nonCJK/4 + cjk/2 + systemOverheadTokens + perToolSchemaTokens*len(tools)
 }
 
 // contextKeepRecent 是 compactHistory/compactWithSummary 默认保留的最近轮数。

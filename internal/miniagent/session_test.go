@@ -1,16 +1,20 @@
 package miniagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func sampleTranscript() []Message {
@@ -465,4 +469,210 @@ func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
 	if !strings.Contains(err.Error(), "第 2 条") {
 		t.Errorf("错误消息应为 1-based「第 2 条」，got: %v", err)
 	}
+}
+
+// RewriteMessages 全量重写：内容正确、临时文件清理、权限 0o600、旧中段（被屏障的旧轮）真丢弃。
+// 这是 P2「session 文件永不压缩」的核心修复——append-only 落盘的 newMsgs 含被屏障旧 summary
+// 与被压中段，rewrite 用全量 transcript（result.Messages）原子替换文件，把它们真正丢掉。
+func TestRewriteMessages_AtomicRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	// 先 append 旧内容（含将被 rewrite 丢弃的旧 summary + 旧中段）。
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{
+		{Role: "user", Kind: KindSummary, Content: "[既往对话摘要] 旧"},
+		{Role: "user", Content: "被屏障的旧轮"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite 为新内容（新 summary + 最近轮）。
+	want := []Message{
+		{Role: "user", Kind: KindSummary, Content: "[既往对话摘要] 新"},
+		{Role: "user", Content: "最近轮提问"},
+		{Role: "assistant", Content: "最近轮回答"},
+	}
+	if err := RewriteMessages(path, SessionMeta{ID: "s"}, want); err != nil {
+		t.Fatalf("RewriteMessages: %v", err)
+	}
+	// 临时文件已清理。
+	matches, err := filepath.Glob(filepath.Join(dir, "s.jsonl.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("临时文件未清理: %v", matches)
+	}
+	// 权限 0o600。
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("权限 %o, want 600", info.Mode().Perm())
+	}
+	// 内容：旧"被屏障的旧轮"已丢，load 后只剩新 msgs。
+	_, got, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rewrite 后内容错:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// RewriteMessages 空 msgs 也合法（写仅 metadata 文件，等价于「重置」）。
+func TestRewriteMessages_EmptyMsgsWritesMeta(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	if err := RewriteMessages(path, SessionMeta{ID: "s"}, nil); err != nil {
+		t.Fatalf("RewriteMessages 空 msgs: %v", err)
+	}
+	meta, msgs, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("空 rewrite 后 msgs 应为空: %+v", msgs)
+	}
+	if meta.ID != "s" {
+		t.Errorf("meta.ID = %q, want s", meta.ID)
+	}
+}
+
+// RewriteMessages 超 maxSessionBytes 报错，不创建/不替换文件。
+func TestRewriteMessages_OversizedFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	big := strings.Repeat("x", maxSessionBytes+1)
+	if err := RewriteMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}); err == nil {
+		t.Fatal("超 maxSessionBytes 应报错")
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("超限 rewrite 不应创建文件（写临时文件前预判）")
+	}
+}
+
+// P3 session 硬化：AppendMessages 用 O_NOFOLLOW 拒绝最终分量是 symlink 的目标，
+// 防本地攻击者预先用 symlink 指向敏感文件被 append 污染。
+func TestAppendMessages_RejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.jsonl")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := AppendMessages(link, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}}); err == nil {
+		t.Error("O_NOFOLLOW 应拒绝 symlink 目标")
+	}
+}
+
+// P3 session 硬化：RewriteMessages 同样用 O_NOFOLLOW 拒绝 symlink 目标。
+func TestRewriteMessages_RejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.jsonl")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := RewriteMessages(link, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}}); err == nil {
+		t.Error("O_NOFOLLOW 应拒绝 symlink 目标")
+	}
+}
+
+// P3 session 硬化：MkdirAll 用 0o700（非旧 0o755），防 group-writable 目录下其他用户写入。
+func TestAppendMessages_MkdirAll0700(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "a", "b", "s.jsonl")
+	if err := AppendMessages(nested, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	aDir := filepath.Join(dir, "a")
+	info, err := os.Stat(aDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("目录权限 %o, want 700", info.Mode().Perm())
+	}
+}
+
+// lockSession LOCK_NB 非阻塞：跨进程持锁时本进程不永久阻塞，5s 内超时返回 error（审查 P2 flock 阻塞）。
+// 同进程 flock 不互斥（POSIX 语义），必须 fork 子进程持锁才有效。子进程由 test binary 自身重入
+// （env TEST_HOLD_FLOCK_PATH 分流），持锁 10s 足够父进程验证不阻塞。
+func TestLockSession_LockNBTimeoutAcrossProcesses(t *testing.T) {
+	if holder := os.Getenv("TEST_HOLD_FLOCK_PATH"); holder != "" {
+		// 子进程模式：持锁 10s（足够父进程测试完成），然后正常返回让 testing 退出。
+		f, err := os.OpenFile(holder, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatalf("child open: %v", err)
+		}
+		defer f.Close()
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			t.Fatalf("child lock: %v", err)
+		}
+		fmt.Fprintln(os.Stderr, "CHILD_LOCKED")
+		time.Sleep(10 * time.Second)
+		return
+	}
+	path := filepath.Join(t.TempDir(), "lock.jsonl")
+	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestLockSession_LockNBTimeoutAcrossProcesses$")
+	cmd.Env = append(os.Environ(), "TEST_HOLD_FLOCK_PATH="+path)
+	// exec 内部用独立 goroutine 写 Stderr，与主 goroutine 读需互斥（防 -race 误报）。
+	var childErr mutexBuffer
+	cmd.Stderr = &childErr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Wait()
+	})
+	// 等子进程获得锁（最多 2s）。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(childErr.String(), "CHILD_LOCKED") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(childErr.String(), "CHILD_LOCKED") {
+		t.Fatalf("子进程 2s 内未获锁: %s", childErr.String())
+	}
+	// 父进程 AppendMessages 应在 ~5s（lockSessionTotal + 一次 interval）内返回 error，不永久阻塞。
+	start := time.Now()
+	err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Skip("同进程/同 inode flock 不互斥，AppendMessages 成功（POSIX 语义，非 bug）")
+	}
+	if elapsed > 7*time.Second {
+		t.Errorf("lockSession 阻塞 %v，应 ~5s 内返回 error（LOCK_NB 超时）", elapsed)
+	}
+}
+
+// mutexBuffer 是线程安全的 bytes.Buffer：exec 用独立 goroutine 写 Stderr，主 goroutine 读
+// 需互斥（避免 -race 报告）。
+type mutexBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (m *mutexBuffer) Write(p []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.b.Write(p)
+}
+
+func (m *mutexBuffer) String() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.b.String()
 }

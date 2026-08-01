@@ -39,8 +39,7 @@ type sessionLine struct {
 	Message
 }
 
-// ResolveSessionPath 解析 -session 入参：含路径分隔符或「.」或绝对路径 → 视为路径（双语义，
-// 向后兼容老的 .json/.jsonl 路径）；纯 id → {dir}/{id}.jsonl。dir 空且是 id 时报错。
+// ResolveSessionPath 解析 -session：含路径分隔符/「.」/绝对路径→视为路径（双语义兼容老 .json/.jsonl）；纯 id → {dir}/{id}.jsonl。dir 空且是 id 报错。
 func ResolveSessionPath(arg, dir string) (string, error) {
 	if arg == "" {
 		return "", errors.New("session 参数为空")
@@ -77,8 +76,7 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 	var meta SessionMeta
 	var msgs []Message
 	sc := bufio.NewScanner(bytes.NewReader(data))
-	// 单行上限对齐文件总上限 maxSessionBytes：单条大消息（巨输出 tool 结果或手工拼装）
-	// 不应让 Scan 返回 ErrTooLong 致整会话不可读、append-only 无法修复（审查 P2-7）。
+	// 单行上限对齐 maxSessionBytes：避免单条大消息触发 ErrTooLong 致整会话不可读、append-only 无法修复（P2-7）。
 	sc.Buffer(make([]byte, 64*1024), maxSessionBytes+1)
 	var corruptLine int // 挂起的非法 JSON 行号（1-based），0=无
 	var corruptErr error
@@ -91,8 +89,7 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(line, &probe); err != nil {
-			// 非法 JSON 行：append-only 下崩溃仅污染最后写入的行。先挂起而非立即报错，
-			// 待确认是否尾行（见循环后 corruptLine 处置）。若此前已有挂起行 → 中间损坏。
+			// 非法 JSON 行：append-only 崩溃仅污染末行，先挂起待确认是否尾行；此前已有挂起行则中间损坏。
 			if corruptLine != 0 {
 				return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行非法 JSON：%w", path, corruptLine, corruptErr)
 			}
@@ -145,8 +142,7 @@ func validateSessionMessage(m Message) error {
 	}
 }
 
-// validateToolPairing 校验 assistant.tool_calls 与 tool 消息的一一配对。配对断裂会被
-// OpenAI 兼容端点 400，且报错指向 LLM 端而非 session 文件，这里提前拦截并指明位置。
+// validateToolPairing 校验 assistant.tool_calls 与 tool 消息一一配对；断裂会被端点 400，提前拦截指明位置。
 func validateToolPairing(msgs []Message) error {
 	pending := map[string]bool{}
 	for i, m := range msgs {
@@ -171,48 +167,69 @@ func validateToolPairing(msgs []Message) error {
 	return nil
 }
 
-// AppendMessages append-only 追加 msgs 到 jsonl：文件新建/空时先写 metadata 行，再写每条
-// message 行，Flush 后 f.Sync 落盘缩小崩溃残行窗口（LoadSession 兜底容忍尾行半写）。
-// 写侧两道护栏：(1) flock 跨进程排他锁防行边界交织产生中间非法 JSON（审查 P2-13）；
-// (2) 预序列化待写内容，按 info.Size()+待写 超限拒绝，避免写入成功而把失败延后到
-// LoadSession 致会话永久卡死（审查 P1-4）。失败轮由调用方决定是否落盘（main 仅成功
-// 轮调用）。权限 0o600（对话属敏感数据）。
+// AppendMessages append-only 追加 msgs 到 jsonl（新建/空时先写 metadata 行）。写侧护栏：flock
+// 跨进程锁防行边界交织非法 JSON（P2-13）；预序列化按 info.Size()+待写 超限拒绝，避免写入成功
+// 延后失败到 LoadSession 致永久卡死（P1-4）。withSessionLock 统一 O_NOFOLLOW + MkdirAll 0o700 + flock（P3）。
 func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("创建 session 目录：%w", err)
-		}
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	// flock 排他锁：defer 顺序保证 unlock 先于 Close 执行。
-	if err := lockSession(f); err != nil {
-		return fmt.Errorf("lock session %q: %w", path, err)
-	}
-	defer func() { _ = unlockSession(f) }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	// 预序列化待写内容：既精确估算大小做写侧预判，又复用一次 marshal 避免重复劳动。
-	var buf bytes.Buffer
-	if info.Size() == 0 {
-		if meta.Type == "" {
-			meta.Type = sessionTypeSession
-		}
-		b, err := json.Marshal(meta)
+	return withSessionLock(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, func(f *os.File) error {
+		info, err := f.Stat()
 		if err != nil {
 			return err
 		}
-		buf.Write(b)
-		buf.WriteByte('\n')
+		// 预序列化待写内容：既精确估算大小做写侧预判，又复用一次 marshal 避免重复劳动。
+		var buf bytes.Buffer
+		if info.Size() == 0 {
+			if meta.Type == "" {
+				meta.Type = sessionTypeSession
+			}
+			b, err := json.Marshal(meta)
+			if err != nil {
+				return err
+			}
+			buf.Write(b)
+			buf.WriteByte('\n')
+		}
+		for _, m := range msgs {
+			b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
+			if err != nil {
+				return err
+			}
+			buf.Write(b)
+			buf.WriteByte('\n')
+		}
+		if info.Size()+int64(buf.Len()) > maxSessionBytes {
+			return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, info.Size()+int64(buf.Len()), maxSessionBytes)
+		}
+		w := bufio.NewWriter(f)
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			return err
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		// Sync 落盘缩小「已写残行 + 未落盘」崩溃窗口（配合 LoadSession 尾行容忍）。
+		return f.Sync()
+	})
+}
+
+// RewriteMessages 全量重写 session 文件（写临时文件 → os.Rename 原子替换）。仅 Run 成功且
+// result.Compacted 时调用：append-only 落盘的 newMsgs 含被屏障的旧 summary 与被压中段，长会话
+// 需 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。msgs 是全量 transcript；锁与临时文件策略
+// 见 withSessionLock；write/rename 失败都清理临时文件。rename 后下轮 LoadSession 读精简文件。
+func RewriteMessages(path string, meta SessionMeta, msgs []Message) error {
+	var buf bytes.Buffer
+	if meta.Type == "" {
+		meta.Type = sessionTypeSession
 	}
+	mb, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	buf.Write(mb)
+	buf.WriteByte('\n')
 	for _, m := range msgs {
 		b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 		if err != nil {
@@ -221,23 +238,32 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 		buf.Write(b)
 		buf.WriteByte('\n')
 	}
-	if info.Size()+int64(buf.Len()) > maxSessionBytes {
-		return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, info.Size()+int64(buf.Len()), maxSessionBytes)
+	if int64(buf.Len()) > maxSessionBytes {
+		return fmt.Errorf("session rewrite 后 %d 字节超上限 %d", buf.Len(), maxSessionBytes)
 	}
-	w := bufio.NewWriter(f)
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		return err
-	}
-	if err := w.Flush(); err != nil {
-		return err
-	}
-	// Sync 落盘：把已 Flush 到内核缓冲的数据 fsync 到磁盘，缩小「已写残行 + 未落盘」
-	// 的崩溃窗口（配合 LoadSession 的尾行容忍，见该函数 corruptLine 逻辑）。
-	return f.Sync()
+	dir := filepath.Dir(path)
+	return withSessionLock(path, os.O_WRONLY|os.O_CREATE, func(*os.File) error {
+		// 临时文件与 path 同目录（保证 rename 同文件系统原子）；os.CreateTemp 默认 0o600。
+		tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+		if err != nil {
+			return err
+		}
+		tmpPath := tmp.Name()
+		_, writeErr := tmp.Write(buf.Bytes())
+		if writeErr == nil {
+			writeErr = tmp.Sync()
+		}
+		_ = tmp.Close()
+		if writeErr != nil {
+			_ = os.Remove(tmpPath)
+			return writeErr
+		}
+		// rename 原子替换 path：withSessionLock 持的 fd 此刻指向 unlinked 旧 inode，defer unlock/close 仍正确（fd 关闭释放锁）；下轮拿新 inode 的锁。
+		return os.Rename(tmpPath, path)
+	})
 }
 
-// MigrateSession 把 v2 的 JSON 数组 session（[]Message）转为 jsonl：写到 {dstDir}/{base}.jsonl，
-// metadata 仅含 id（base 名）+ type，无 summary kind（纯历史）。返回写入路径。
+// MigrateSession 把 v2 JSON 数组 session 转为 jsonl，写到 {dstDir}/{base}.jsonl（metadata 仅含 id+type）。
 func MigrateSession(srcPath, dstDir string) (string, error) {
 	msgs, err := loadLegacySession(srcPath)
 	if err != nil {

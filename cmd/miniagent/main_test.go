@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -548,5 +550,128 @@ func TestCheckConfine_RejectsWorkdirRoot(t *testing.T) {
 	}
 	if err := checkConfine(dir, dir); err == nil {
 		t.Error("absolute path equal to workdir root should be rejected")
+	}
+}
+
+// P2 交互无跨轮预算：-interactive 模式跨轮累计 usage 超 -max-tokens-total 时停止交互循环
+// （emit error + exit 1，与单轮 ErrBudgetExceeded 语义对齐）。单轮上限仍由 Run 管。
+func TestCLI_InteractiveCrossTurnBudgetStops(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		// 每轮 prompt=8 completion=2 共 10；-max-tokens-total=15 → 第二轮累计 20>15 停止。
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"a"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":2}}`)
+	}))
+	defer srv.Close()
+	code, out := runMainBin(t, "q1\nq2\nq3\n", chatArgs(srv.URL, "-interactive", "-max-tokens-total", "15"), "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1（跨轮预算超限 exit 1）; out=%s", code, out)
+	}
+	if !strings.Contains(out, "跨轮累计") {
+		t.Errorf("missing 跨轮累计 error: %s", out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// 应在第二轮后停止（第三轮 q3 不应再发请求）。
+	if len(bodies) > 2 {
+		t.Errorf("应在第二轮后停止，但发了 %d 请求", len(bodies))
+	}
+}
+
+// P2 thinking 跨轮固化（interact 侧）：第一轮 thinking 不支持降级后，第二轮请求不再含
+// reasoning_effort 字段。阶段 1 在 Run 内已固化（同轮多步不重撞 400），此测试覆盖跨轮：
+// interact 据 result.ThinkingDowngraded 清 baseCfg.ThinkingLevel。
+func TestCLI_InteractiveThinkingDowngradePersists(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		idx := callCount.Add(1)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		// 首次请求含 thinking → 返 400 reasoning_effort not supported。
+		if idx == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"reasoning_effort not supported","type":"invalid_request_error"}}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"a"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+	code, out := runMainBin(t, "q1\nq2\n", chatArgs(srv.URL, "-interactive", "-thinking", "medium"), "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// bodies[0]=q1 thinking(400), bodies[1]=q1 retry no thinking, bodies[2]=q2 no thinking。
+	if len(bodies) < 3 {
+		t.Fatalf("bodies=%d: %s", len(bodies), bodies)
+	}
+	if !strings.Contains(bodies[2], "q2") {
+		t.Fatalf("bodies[2] 应为 q2 请求: %s", bodies[2])
+	}
+	if strings.Contains(bodies[2], "reasoning_effort") {
+		t.Errorf("第二轮仍含 reasoning_effort（thinking 跨轮未固化）: %s", bodies[2])
+	}
+}
+
+// P3 SIGINT 退出码：SIGINT 走码 130（128+SIGINT POSIX），不 emit error 事件（干净退出）。
+// 非流式 Do 在 ctx cancel 后返回 context.Canceled，main 据此 os.Exit(130)。
+func TestCLI_SIGINTExits130(t *testing.T) {
+	var hitOnce sync.Once
+	serverHit := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitOnce.Do(func() { close(serverHit) }) // 子进程已进入 Run 并发出 HTTP
+		time.Sleep(5 * time.Second)             // 慢响应让 SIGINT 在响应前到达
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], chatArgs(srv.URL)...)
+	cmd.Stdin = strings.NewReader("prompt")
+	env := []string{entrypointEnv}
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "MINIAGENT_API_KEY=") || strings.HasPrefix(kv, "MINIAGENT_TEST_ENTRYPOINTS=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "MINIAGENT_API_KEY=sk-test")
+	cmd.Env = env
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// 等 srv 收到请求（子进程已进入 Run 的 HTTP 阻塞）再发 SIGINT：固定 sleep 在 -race
+	// 负载下不可靠——子进程可能尚未注册 signal handler，SIGINT 被默认 disposition 杀死（exit -1）。
+	select {
+	case <-serverHit:
+	case <-ctx.Done():
+		t.Fatalf("子进程未在超时内打 srv: %s", out.String())
+	}
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	err := cmd.Wait()
+	var ee *exec.ExitError
+	code := 0
+	if errors.As(err, &ee) {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("cmd.Wait err=%v out=%s", err, out.String())
+	}
+	if code != 130 {
+		t.Errorf("SIGINT 应退出 130, got %d (out=%s)", code, out.String())
+	}
+	// SIGINT 不应 emit error NDJSON 事件（干净退出，区别于真故障）。
+	if strings.Contains(out.String(), `"type":"error"`) {
+		t.Errorf("SIGINT 不应 emit error 事件: %s", out.String())
 	}
 }

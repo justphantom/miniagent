@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -100,4 +101,76 @@ func TestFetch_HeaderTimeoutCutsHungResponse(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Errorf("ResponseHeaderTimeout not enforced: elapsed=%v", elapsed)
 	}
+}
+
+// P2[DNS rebinding 闭合]：validateDialIP 是 custom DialContext 的 Control 钩子校验函数。
+// 端到端 rebinding 需 DNS 控制（难测），此处单测校验函数本身：批准集非空时，拨号 IP 必须
+// ∈ 批准集，否则拒绝（rebinding 命中）；空集放行（checkSSRF 旁路，如测试 noop）。
+func TestValidateDialIP(t *testing.T) {
+	ip := net.ParseIP
+	cases := []struct {
+		name     string
+		approved []net.IP
+		address  string
+		wantErr  bool
+		wantMsg  string // wantErr=true 时 err.Error() 须包含的子串
+	}{
+		{"match v4", []net.IP{ip("1.1.1.1")}, "1.1.1.1:80", false, ""},
+		{"no match v4 (rebinding)", []net.IP{ip("1.1.1.1")}, "2.2.2.2:80", true, "rebinding"},
+		{"match v6", []net.IP{ip("2001:db8::1")}, "[2001:db8::1]:443", false, ""},
+		{"no match v6", []net.IP{ip("2001:db8::1")}, "[2001:db8::2]:443", true, "rebinding"},
+		{"empty set bypass", nil, "2.2.2.2:80", false, ""},
+		{"empty set bypass v6", []net.IP{}, "[::1]:80", false, ""},
+		// IPv4-mapped IPv6 归一化：net.IP.Equal 内部 To4，::ffff:1.1.1.1 == 1.1.1.1。
+		{"ipv4-mapped equality", []net.IP{ip("::ffff:1.1.1.1")}, "1.1.1.1:80", false, ""},
+		{"multi-ip set, one matches", []net.IP{ip("1.1.1.1"), ip("8.8.8.8")}, "8.8.8.8:80", false, ""},
+		{"bad address (no port)", []net.IP{ip("1.1.1.1")}, "no-port", true, "拨号地址非法"},
+		{"non-IP host", []net.IP{ip("1.1.1.1")}, "example.com:80", true, "不是 IP"},
+	}
+	for _, c := range cases {
+		err := validateDialIP(c.approved, c.address)
+		switch {
+		case c.wantErr && err == nil:
+			t.Errorf("%s: expected error, got nil", c.name)
+		case c.wantErr && !strings.Contains(err.Error(), c.wantMsg):
+			t.Errorf("%s: err=%q, want containing %q", c.name, err.Error(), c.wantMsg)
+		case !c.wantErr && err != nil:
+			t.Errorf("%s: unexpected error: %v", c.name, err)
+		}
+	}
+}
+
+// P2[DNS rebinding 闭合]：checkSSRF 解析通过后把批准 IP 记入 ctx 的 approvedSet，
+// 供 Control 钩子 pin。用字面公网 IP（8.8.8.8）避免 DNS 网络依赖——LookupIPAddr 对
+// 字面 IP 不走网络，直接返回。
+func TestCheckSSRF_RecordsApprovedIPs(t *testing.T) {
+	approved := &approvedSet{ips: make(map[string][]net.IP)}
+	ctx := context.WithValue(context.Background(), approvedIPsKey{}, approved)
+	u, err := url.Parse("http://8.8.8.8/")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := checkSSRF(ctx, u); err != nil {
+		t.Fatalf("checkSSRF public literal IP: %v", err)
+	}
+	approved.mu.Lock()
+	got := approved.ips["8.8.8.8"]
+	approved.mu.Unlock()
+	if len(got) != 1 || !got[0].Equal(net.ParseIP("8.8.8.8")) {
+		t.Errorf("approvedSet not populated for 8.8.8.8: %+v", got)
+	}
+
+	// 私网/loopback 目标在记录前被拒，不会污染 approvedSet。
+	loopback, _ := url.Parse("http://127.0.0.1/")
+	if err := checkSSRF(ctx, loopback); err == nil {
+		t.Fatal("loopback should be rejected")
+	}
+	approved.mu.Lock()
+	_, present := approved.ips["127.0.0.1"]
+	approved.mu.Unlock()
+	if present {
+		t.Error("rejected loopback IP should not be recorded in approvedSet")
+	}
+
+	// approvedSet 缺失时 checkSSRF 仍正常（不 panic、不记录）——TestCheckSSRF 已覆盖。
 }

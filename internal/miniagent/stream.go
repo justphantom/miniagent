@@ -102,19 +102,19 @@ func (c *HTTPClient) DoStream(ctx context.Context, req Request, onDelta func(Del
 		if resp.StatusCode != http.StatusOK {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxChatBodyBytes+1))
 			_ = resp.Body.Close()
-			// context 超限 / thinking 不支持在首 chunk 前以 400 返回：沿用非流式判定供 Run 降级，不重试。
+			// 400 context 超限 / thinking：沿用非流式判定供 Run 降级，不重试；attempt>0 加 "after N retries" 前缀（P3 排错）。
+			prefix := ""
+			if attempt > 0 {
+				prefix = fmt.Sprintf("after %d retries: ", attempt)
+			}
 			if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
-				return Response{}, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
+				return Response{}, fmt.Errorf("%s%w: %s", prefix, ErrContextLength, truncate(string(raw), 500, "…"))
 			}
 			if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
-				return Response{}, fmt.Errorf("%w: %s", ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
+				return Response{}, fmt.Errorf("%s%w: %s", prefix, ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
 			}
 			if !shouldRetryStatus(resp.StatusCode) || attempt == maxRetries {
-				msg := fmt.Sprintf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…"))
-				if attempt > 0 {
-					return Response{}, fmt.Errorf("after %d retries: %s", attempt, msg)
-				}
-				return Response{}, errors.New(msg)
+				return Response{}, errors.New(prefix + fmt.Sprintf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…")))
 			}
 			if c.Logger != nil {
 				c.Logger.Warn("llm stream non-200, retrying", "status", resp.StatusCode, "failed_attempt", attempt+1)
@@ -133,8 +133,7 @@ func (c *HTTPClient) DoStream(ctx context.Context, req Request, onDelta func(Del
 	return Response{}, errors.New("llm stream retry loop exited unexpectedly")
 }
 
-// client 返回非流式 http.Client。c.HTTP!=nil 沿用注入；否则懒构造并缓存带 defaultTimeout
-// 的 client（P3-5：稳定资源 + 避免重复构造）。
+// client 返回非流式 http.Client。c.HTTP!=nil 沿用注入；否则懒构造并缓存带 defaultTimeout 的 client（P3-5）。
 func (c *HTTPClient) client(defaultTimeout time.Duration) *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
@@ -143,10 +142,12 @@ func (c *HTTPClient) client(defaultTimeout time.Duration) *http.Client {
 	return c.defaultClient
 }
 
-// streamHTTPClient 返回流式 http.Client。c.HTTP!=nil 沿用注入；否则懒构造并缓存一个不设
-// Timeout 的 client——http.Client.Timeout 覆盖 body 读取会砍断长流，流式改由 ctx 控时长（P2-5）。
+// streamHTTPClient 流式 client：注入的若有总 Timeout 会砍断 body（P2-5/P1-A），改用其 Transport 另造无 Timeout client（保留代理，#2）；未注入则缓存。
 func (c *HTTPClient) streamHTTPClient() *http.Client {
 	if c.HTTP != nil {
+		if c.HTTP.Timeout > 0 {
+			return &http.Client{Transport: c.HTTP.Transport}
+		}
 		return c.HTTP
 	}
 	c.streamClientOnce.Do(func() { c.streamClient = &http.Client{} })

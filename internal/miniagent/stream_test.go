@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +117,37 @@ func TestDoStream_NonOKErrors(t *testing.T) {
 	}
 }
 
+// P3：DoStream 在 attempt>0 收到 context-length 400 时，错误带 "after N retries" 前缀（与
+// 通用非 200 路径一致，排错信息）；哨兵 ErrContextLength 链仍可被 errors.Is 命中供 Run 降级。
+// 流程：首次 503 触发一次重试 → 第二次返 400 context-length（在 attempt=1，即 after 1 retries）。
+func TestDoStream_ContextLengthAfterRetry(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "busy")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"message":"This model's maximum context length is 8192 tokens."}}`)
+	}))
+	defer srv.Close()
+	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL}
+	_, err := llm.DoStream(context.Background(), Request{Model: "m"}, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrContextLength) {
+		t.Errorf("err = %v, want ErrContextLength in chain", err)
+	}
+	if !strings.Contains(err.Error(), "after 1 retries") {
+		t.Errorf("err = %q, want \"after 1 retries\" prefix", err.Error())
+	}
+}
+
 // P1-2：流直接以 [DONE] 开始/无 choices/仅 usage，必须报错而非返回空 Response 伪装成功。
 func TestParseSSE_EmptyStreamErrors(t *testing.T) {
 	cases := []struct {
@@ -175,8 +207,10 @@ func TestParseSSE_LongLine(t *testing.T) {
 	}
 }
 
-// P2-5：c.HTTP==nil 时 streamHTTPClient 返回无 Timeout 的 client（流式总时长由 ctx 控制，
+// P2-5/P1-A：c.HTTP==nil 时 streamHTTPClient 返回无 Timeout 的 client（流式总时长由 ctx 控制，
 // http.Client.Timeout 覆盖 body 读取会砍断长流）；缓存同一实例；注入时沿用注入。
+// 注入契约（buildLLM 注入带 120s Timeout 的 client）：streamHTTPClient 须把注入 client 的
+// 总 Timeout 清零（P1-A：流式 body 不被砍），但保留其 Transport（代理/连接配置，#2）。
 func TestHTTPClient_StreamClientNoTimeout(t *testing.T) {
 	c := &HTTPClient{APIKey: "sk", ChatURL: "http://x"}
 	sc := c.streamHTTPClient()
@@ -186,10 +220,15 @@ func TestHTTPClient_StreamClientNoTimeout(t *testing.T) {
 	if c.streamHTTPClient() != sc {
 		t.Error("stream client not cached")
 	}
-	inj := &http.Client{Timeout: 30 * time.Second}
+	// 模拟新 buildLLM 注入：带 120s 总 Timeout + 自定义 Transport 的 client。
+	inj := &http.Client{Timeout: 120 * time.Second, Transport: &http.Transport{}}
 	c2 := &HTTPClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
-	if c2.streamHTTPClient() != inj {
-		t.Error("injected client not used")
+	got := c2.streamHTTPClient()
+	if got.Timeout != 0 {
+		t.Errorf("stream client Timeout = %v, want 0（流式清零总 Timeout）", got.Timeout)
+	}
+	if got.Transport != inj.Transport {
+		t.Error("stream client 须保留注入的 Transport（代理/连接配置）")
 	}
 }
 

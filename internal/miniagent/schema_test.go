@@ -142,3 +142,54 @@ func TestValidateConfig_InjectedKeyNoWarn(t *testing.T) {
 		t.Errorf("injected ${VAR} key should not warn, got: %s", out)
 	}
 }
+
+// validateConfig 拒绝 ThinkingMapping.Field 指向保留 payload key：buildChatBody 用
+// payload[field]=val 写思考级别（wire.go），命中保留 key（如 max_tokens）会 clobber
+// 标准字段（审查 v3 P3）。
+func TestValidateConfig_ThinkingFieldBlacklisted(t *testing.T) {
+	for _, bad := range []string{"max_tokens", "tools", "messages", "temperature", "model"} {
+		cfg := &Config{
+			Providers: []ProviderConfig{{
+				Name:     "main",
+				ChatURL:  "https://api/v1/chat/completions",
+				Thinking: &ThinkingMapping{Field: bad},
+			}},
+		}
+		err := validateConfig(cfg)
+		if err == nil {
+			t.Errorf("field %q: expected error, got nil", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), bad) || !strings.Contains(err.Error(), "保留") {
+			t.Errorf("field %q: error should mention reserved key, got: %v", bad, err)
+		}
+	}
+}
+
+// 非保留 key（reasoning/thinking/extended_thinking）通过；reasoning_effort 虽是默认
+// field 但属保留（显式 mapping 视同误配），应拒绝。
+func TestValidateConfig_ThinkingFieldValid(t *testing.T) {
+	for _, ok := range []string{"reasoning", "thinking", "extended_thinking"} {
+		cfg := &Config{
+			Providers: []ProviderConfig{{
+				Name:     "main",
+				ChatURL:  "https://api/v1/chat/completions",
+				Thinking: &ThinkingMapping{Field: ok},
+			}},
+		}
+		if err := validateConfig(cfg); err != nil {
+			t.Errorf("field %q should pass, got: %v", ok, err)
+		}
+	}
+	// reasoning_effort 是默认 field（wire.go），显式 mapping 视同误配，应拒绝。
+	cfg := &Config{
+		Providers: []ProviderConfig{{
+			Name:     "main",
+			ChatURL:  "https://api/v1/chat/completions",
+			Thinking: &ThinkingMapping{Field: "reasoning_effort"},
+		}},
+	}
+	if err := validateConfig(cfg); err == nil {
+		t.Errorf("reasoning_effort is reserved (default field), should reject explicit mapping")
+	}
+}
