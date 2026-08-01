@@ -67,3 +67,17 @@ func TestResolveAPIKey_RejectsSymlinkAndReadsRegular(t *testing.T) {
 		t.Fatal("symlink key-file: want error (O_NOFOLLOW 拒最终分量 symlink)，got nil")
 	}
 }
+
+// P3-5：key-file 超过 64KiB 上限应报错（API key 远小于此，防误读/被构造成巨型文件）。
+func TestResolveAPIKey_RejectsOversizedKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.key")
+	// 写 maxKeyFileSize+1 字节，刚好越过上限。
+	oversized := make([]byte, maxKeyFileSize+1)
+	if err := os.WriteFile(big, oversized, 0o600); err != nil {
+		t.Fatalf("write oversized key-file: %v", err)
+	}
+	if _, err := resolveAPIKey(big, ""); err == nil {
+		t.Fatal("oversized key-file: want error（超过 64KiB 上限），got nil")
+	}
+}

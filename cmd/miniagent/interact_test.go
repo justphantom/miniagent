@@ -82,3 +82,52 @@ func TestCLI_InteractiveMaxDurationExits1(t *testing.T) {
 		t.Errorf("-max-duration 到期不应 emit error 事件: %s", out)
 	}
 }
+
+// P3-1：管道灌入超过 maxPromptBytes 的无换行输入——readTurn 必须在读取过程中封顶，
+// emit 拒绝信号并跳过该轮，绝不当作 prompt 喂给 Run（防无界分配 OOM）。修复前 readTurn 用
+// ReadString('\n') 无界读取，会把整段超长内容当 prompt 喂给 Run（旧实现本测试必失败：
+// 既无「超过大小上限」拒绝信号，又会产生 result/error 事件）。
+func TestCLI_InteractiveOversizedLineRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// 超限输入不应到达 LLM；若到达则返回 200 让旧实现产生 result 事件，便于断言判别。
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	// 超过 maxPromptBytes 的无换行输入：触发读取过程中封顶（drain 到行尾即 EOF）。
+	big := strings.Repeat("a", maxPromptBytes+1)
+	code, out := runMainBin(t, big, chatArgs(srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
+	// 不 panic：超限行被丢弃 + 干净 EOF，无 Run 失败轮 → exit 0。
+	if code != 0 {
+		t.Errorf("code = %d, want 0（超限行跳过 + 干净 EOF）; out=%s", code, out)
+	}
+	// 拒绝信号：NDJSON error 事件含上限提示（新实现独有，旧实现无此串）。
+	if !strings.Contains(out, "超过大小上限") {
+		t.Errorf("超限行应 emit 含上限提示的 error 事件: %s", out)
+	}
+	// 不当作 prompt 喂给 Run：不应出现 result 事件（旧实现会喂给 Run 产生 result/error）。
+	if strings.Contains(out, `"type":"result"`) {
+		t.Errorf("超限行不应产生 result 事件（不该被当 prompt 喂给 Run）: %s", out)
+	}
+}
+
+// P3-1 回归守卫：正常短输入不受单行封顶影响，仍被当作 prompt 喂给 Run。
+// 与 TestCLI_InteractiveErrorThenEOFExits1 互补：聚焦「短输入不被误判为超限」。
+func TestCLI_InteractiveShortLineStillProcessed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	// "hi\n"：readTurn 返 ("hi", false, false)，喂给 Run → LLM 500 → emit Run 错误。
+	code, out := runMainBin(t, "hi\n", chatArgs(srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
+	// 短输入不应触发 oversized 拒绝信号。
+	if strings.Contains(out, "超过大小上限") {
+		t.Errorf("短输入不应触发 oversized 拒绝: %s", out)
+	}
+	// 短输入应被当 prompt 处理（Run 调 LLM 500 emit error），证明未误判。
+	if !strings.Contains(out, `"type":"error"`) {
+		t.Errorf("短输入应被当 prompt 处理（Run 失败 emit error）: %s", out)
+	}
+	if code != 1 {
+		t.Errorf("code = %d, want 1（EOF 前有 Run 失败轮）", code)
+	}
+}

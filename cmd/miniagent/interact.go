@@ -31,7 +31,20 @@ func runInteractive(ctx context.Context, llm *miniagent.HTTPClient, baseCfg mini
 		if code, ok := ctxExitCode(ctx.Err()); ok {
 			return code
 		}
-		prompt, eof := readTurn(reader)
+		prompt, eof, oversized := readTurn(reader)
+		// P3-1：单行超 maxPromptBytes（无界读取 OOM 防护）—— emit 拒绝信号并跳过该轮，
+		// 不把超长内容当 prompt 喂给 Run，不污染 session。对齐 LoadSession 失败的
+		// error/continue 路径：emit NDJSON error 后 eof 则退出，否则 continue。
+		if oversized {
+			msg := fmt.Sprintf("交互输入单行超过大小上限 %d 字节（已跳过该轮）", maxPromptBytes)
+			if eerr := miniagent.EmitError(os.Stdout, msg); eerr != nil {
+				logger.Warn("emit error failed", "error", eerr)
+			}
+			if eof {
+				return eofExitCode(hadErr)
+			}
+			continue
+		}
 		if prompt == "" && eof {
 			return eofExitCode(hadErr)
 		}
@@ -112,17 +125,49 @@ func runInteractive(ctx context.Context, llm *miniagent.HTTPClient, baseCfg mini
 
 // readTurn 按行读取一个 prompt：非空行即作为一个 turn 返回，空行跳过；EOF 时 eof=true。
 // 每行一 prompt 的简模型，便于管道驱动与测试；长 prompt 可用 -session 接续。
-func readTurn(r *bufio.Reader) (string, bool) {
+//
+// 单行长度读取过程中封顶 maxPromptBytes（与 mustReadPrompt 的 stdin 上限对称）：用
+// (*bufio.Reader).ReadByte 逐字节累计进 strings.Builder，达上限仍未换行则置 oversized=true。
+// 复用 maxPromptBytes 常量，不引入新魔数。必须在「读取过程中」封顶——先读完再查 len 则
+// OOM 已发生（审查 P3-1：管道灌入超大无换行输入可致无界分配 OOM）。oversized=true 时该行
+// 内容被丢弃（绝不当作 prompt 喂给 Run、不污染 session），由调用方 emit 拒绝信号并 continue。
+func readTurn(r *bufio.Reader) (prompt string, eof bool, oversized bool) {
 	for {
-		line, err := r.ReadString('\n')
-		eof := err == io.EOF
-		line = strings.TrimRight(line, "\n")
+		// 逐字节读单行：遇 '\n' 结束；任何读错误（含 io.EOF）均视作读取终止。
+		var sb strings.Builder
+		over := false
+		hitEOF := false
+		for {
+			b, err := r.ReadByte()
+			if err != nil {
+				hitEOF = true
+				break
+			}
+			if b == '\n' {
+				break
+			}
+			// 达上限仍未换行：置 over 停止写入 sb 防 OOM，但继续消费到行尾，
+			// 丢弃超限字节以保持下一轮起点干净（避免残留被当成下一轮 prompt）。
+			if !over && sb.Len() >= maxPromptBytes {
+				over = true
+			}
+			if !over {
+				sb.WriteByte(b)
+			}
+		}
+		if over {
+			// 超限行已读完丢弃；eof 反映是否在丢弃过程中同时触底，供调用方决定退出还是 continue。
+			return "", hitEOF, true
+		}
+		line := sb.String()
 		if line != "" {
-			return line, eof
+			return line, hitEOF, false
 		}
-		if eof {
-			return "", true
+		if hitEOF {
+			// 空行 + EOF（或读取起始即 EOF）：clean EOF。
+			return "", true, false
 		}
+		// 空行：跳过继续读下一行。
 	}
 }
 
