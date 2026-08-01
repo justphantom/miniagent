@@ -27,7 +27,7 @@
   `reasoning_effort`；provider `ThinkingMapping` 可覆盖字段名与取值映射。一次性降级：识别 thinking
   致 400（启发式 body 特征）→ 去字段重试一次 + warn（审查 v2 #7）。
 - **权限模式**（`-mode default|auto`）：default（默认）= 写工具限 workdir 子树（薄版 `checkConfine`，
-  去 EvalSymlinks）、shell 词边界拒 sudo/su（`\b(sudo|su)\b`）；auto 无限制。default 不构成安全边界
+  去 EvalSymlinks）、shell 词边界拒 11 个提权器（`\b(sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl)\b`）；auto 无限制。default 不构成安全边界
   （审查 v3 §6）。`buildTools(workdir, timeout, mode)`。
 - **subagent fork**（`-result-only`）：仅输出 result.text（与 `-stream` 互斥），失败输出 `error: <msg>`
   + 退出码 1。system prompt 注入 subagent 引导（config 绝对路径 + 父 session id + 嵌套≤2 层约束，
@@ -49,6 +49,20 @@
 - `-base-url`、`-approve`、`-confine` flag 与 `$MINIAGENT_BASE_URL` env。
 - session 旧 JSON 数组格式（用 `-migrate-session` 迁移）。
 - `SaveSession` / `checkApprove` / `HTTPClient.BaseURL` / `endpoint()`。
+
+### Fixed（七轮「审查-修复-对抗复核」加固，用户可观察项）
+- shell default 模式词边界拒提权器从 `sudo|su` 扩到 **11 个**（追加 doas/pkexec/gsudo/run0/setpriv/nsenter/unshare/chroot/machinectl），覆盖更多 Linux/BSD 提权路径。
+- shell 子进程 env 在剥离 `MINIAGENT_*` 前缀基础上，追加剥离变量名含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT，PAT 排除 PATH）的第三方凭证变量，收窄泄漏面（非隔离边界，`/proc/$PPID/environ` 仍可读，彻底方案 `-key-file`）。
+- 交互输入 `readTurn` 改逐字节封顶 `maxPromptBytes`，防管道灌入超长无换行输入致无界分配 OOM（超限行 emit error 跳过、不喂给 Run）。
+- SIGINT/SIGTERM 走退出码 **130**（128+SIGINT）干净退出，不再 emit `error` 事件（区别于真故障）。
+- `-max-duration` 到期走 `DeadlineExceeded` 干净退出码 1，不 emit `error`（与信号取消语义对齐）。
+- 流式 `DoStream` 端点断流（连接中断/非 200）改为透明重试（复用非流式重试策略），流式用法不再因瞬时断流失败。
+- 交互模式本轮触发摘要压缩（`Result.Compacted`）时机会性 rewrite session 文件，真正丢弃被屏障的旧 summary，长会话 session 文件不再永不压缩。
+- 摘要消息的 token 计入 `-max-tokens-total` 预算（跨轮预算可靠性）。
+- thinking 致 400 降级后清 `baseCfg.ThinkingLevel`，交互模式下一轮不再重传原值重复撞 400。
+- session jsonl append 经 `flock` 跨进程互斥（`withSessionLock`，单进程交互主用法不受影响；跨进程并发仍建议单写者）。
+- key-file 读取加 `O_NOFOLLOW`（拒最终分量符号链接，防被换为指向 `/etc/shadow` 的软链）+ 64KiB 上限（防误读/构造巨型文件），并按平台拆分（Windows 回退 `os.Open`）。
+- `-max-tokens-total` 预算熔断依赖端点 `resp.Usage`：端点不 honor `stream_options.include_usage` 时熔断静默失效（仅 slog warn），见 README。
 
 ## [2.0.0] - 2026-08-01
 

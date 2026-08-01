@@ -6,7 +6,7 @@
 - 默认非流式：每次 LLM 调用是普通 POST，等完整响应返回；传 `-stream` 改走 SSE，增量发 `text_delta`/`reasoning_delta` 事件
 - 会话：默认无状态；传 `-session <id|path>` 时以 jsonl append-only 落盘（首行 metadata + 每条 message），跨进程接续对话
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
-- 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
+- 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：仅 Linux/macOS（Unix）。`platform.go` 用 `//go:build !windows` 隔离 setpgid/killpg/O_NOFOLLOW，未提供 Windows fallback
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
 - 工具：`read` / `write` / `edit` / `multi_edit` / `grep` / `glob` / `shell` / `fetch` + `todo`（进程内任务管理，不落盘）
@@ -18,6 +18,8 @@
 make build      # 产出 bin/miniagent，version 来自 git describe
 make test       # go test -race ./...
 ```
+
+> `-version` 取 `git describe`（仅命中 annotated tag）。发版须用 `git tag -a v3.0.0 -m "..."`（annotated）且工作树干净；轻量 tag（`git tag v3.0.0`）或未提交改动会令 version 回落为短 sha。
 
 ## 环境变量
 
@@ -43,9 +45,9 @@ make test       # go test -race ./...
 -max-duration duration   整体墙钟上限（覆盖所有 LLM 调用 + 工具执行），0 表示不限（默认 0）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
--max-tokens-total int    单轮累计 token（输入+输出）上限（0=不限）；超限以 error 事件 + 退出码 1 终止
+-max-tokens-total int    单轮累计 token（输入+输出）上限（0=不限）；超限以 error 事件 + 退出码 1 终止。判定依赖端点返回的真实 usage（流式需端点 honor stream_options.include_usage，否则熔断静默失效仅 slog warn）
 -migrate-session string  把 v2 JSON 会话转为 jsonl 后退出（传入旧 .json 路径）
--mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su；auto 无限制
+-mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
 -model string            LLM 模型（config 模式 provider/id；裸模式裸 id）
 -models-url string       裸模式 models 完整 URL（可选）
 -result-only             仅输出 result.text（subagent fork 用）；与 -stream 互斥。失败输出 "error: <msg>" + 退出码 1
@@ -128,7 +130,7 @@ make test       # go test -race ./...
 
 ## 工具清单
 
-文件与 shell 工具的约束取决于 `-mode`：default 模式下写工具（write/edit/multi_edit）限定在 workdir 子树、shell 拒 sudo/su；auto 模式无任何约束。`todo` 为进程内任务管理（不落盘）。工具参数为 JSON 对象。
+文件与 shell 工具的约束取决于 `-mode`：default 模式下写工具（write/edit/multi_edit）限定在 workdir 子树、shell 拒 sudo/su 等 11 个提权器；auto 模式无任何约束。`todo` 为进程内任务管理（不落盘）。工具参数为 JSON 对象。
 
 ### `read`
 
@@ -212,7 +214,7 @@ make test       # go test -race ./...
 - 命令超时 60 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
 - 输出超过 20000 字符截断
 - 退出码：成功 `ExitCode=0`；命令非 0 退出 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；超时/启动失败 `IsError=true` + `ExitCode=-1`（`exitCodeNotSet`）。LLM 据 `ExitCode` 判命令成败
-- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或用 `-key-file` 不经环境变量传 key（key 不在进程 env，`/proc/$PPID/environ` 读不到）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
+- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；另剥离变量名（大写后）含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT）的第三方凭证变量（PAT 排除含 PATH 的路径类变量如 `PATH`/`GITHUB_PATH`）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或用 `-key-file` 不经环境变量传 key（key 不在进程 env，`/proc/$PPID/environ` 读不到）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
 ### `fetch`
 
@@ -245,6 +247,7 @@ make test       # go test -race ./...
 - 文件存在则加载其中消息作为历史前缀；不存在则视为新会话，首次落盘时补 metadata 行。
 - Run 成功后 **append-only 追加本轮 NewMessages**（user prompt + assistant/tool 往返 + 最终回答 + 可能的 summary），不重写全量（权限 0o600）。
 - Run 出错（LLM 失败/取消/超 window 终止）不追加——失败轮不固化，但工具副作用可能已发生且无记录。
+- **并发**：同一 session 文件同一时刻仅单写者。append 经 `flock` 跨进程互斥，但 rename 换 inode 场景（机会性 rewrite）下跨进程并发不保证；多进程同写同一 session 应避免。
 - **摘要压缩**（`-context-window > 0`）：Run 入口先用 `applyCompactionBarrier` 屏障掉最新 `kind=summary` 之前的旧历史（仍留 session 文件）；loop 每步前估算超 window 80% 时，把中段摘要为单条 `kind=summary` 消息（既进 context 又 append 落盘）。摘要失败/无中段回落有损 `compactHistory`，仍超则裁到最近轮，再超则报错终止（避免循环烧请求）。
 - 文件损坏（非法 JSON 行、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 4 MiB 上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
 - **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
@@ -258,10 +261,11 @@ make test       # go test -race ./...
 |----|------|
 | 0 | 正常结束（含达到 `maxIterations` 上限、最终文本为空的场景） |
 | 1 | 参数错误、API key 缺失、default 模式缺 workdir、stdin 为空、session 加载/追加失败、`-list-models` 失败、主流程 `error` 事件 |
+| 130 | SIGINT/SIGTERM 取消的干净退出（128+SIGINT，POSIX 习惯；不 emit `error` 事件，区别于真故障） |
 
 ## 运行隔离（工程实践）
 
-miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、shell 词边界拒 sudo/su（仍可被变量拼接/拆分绕过）。shell 可经 `cd`/绝对路径访问 workdir 外、读工具无约束。`-mode auto` 无任何限制。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
+miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、shell 词边界拒 11 个提权器（sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl，仍可被变量拼接/拆分绕过）。shell 可经 `cd`/绝对路径访问 workdir 外、读工具无约束。`-mode auto` 无任何限制。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
 
 - 用**专用低权限用户**运行；workdir 属该用户（或只读挂载），无关路径靠文件系统权限隔离。
 - 密钥**用 `-key-file` 从文件注入**或 config `provider.key` 经 `${VAR}` 展开（只读挂载、`0600`），而非环境变量——这样 key 不在进程 env，shell 子进程经 `/proc/$PPID/environ` 读不到它。`-key-file` 文件若可被 group/other 读会 stderr 警告。
