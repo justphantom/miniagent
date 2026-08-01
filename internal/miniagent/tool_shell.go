@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +19,13 @@ const maxShellOutputChars = 20000
 const maxShellOutputBytes = maxShellOutputChars * 4
 const shellTimeout = 60 * time.Second
 
-// ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 用默认
-// shellTimeout。workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。
-func ShellTool(workspaceRoot string, timeout time.Duration) Tool {
+// sudoSuRe 词边界匹配 sudo/su：覆盖 "cd /x && sudo ..." 等中段命令。仍可被变量拼接/
+// 拆分绕过——default 是薄软约束，不构成安全边界（审查 v2 #10）。
+var sudoSuRe = regexp.MustCompile(`\b(sudo|su)\b`)
+
+// ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 用默认 shellTimeout。
+// workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。mode=default 时拒绝 sudo/su。
+func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}
@@ -39,6 +44,9 @@ func ShellTool(workspaceRoot string, timeout time.Duration) Tool {
 			}
 			if strings.TrimSpace(a.Command) == "" {
 				return ToolResult{IsError: true, Output: "参数缺失：command"}
+			}
+			if mode == ModeDefault && sudoSuRe.MatchString(a.Command) {
+				return ToolResult{IsError: true, Output: "default 模式禁止 sudo/su（用 -mode auto 放行）"}
 			}
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()

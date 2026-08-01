@@ -19,6 +19,9 @@ type Message struct {
 	Reasoning  string     `json:"reasoning,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Kind 是 session 层标记（如 KindSummary），仅持久化与上下文屏障识别用；
+	// wire 的 chatMessage 不含此字段——buildChatBody 独立构造，绝不泄漏给 LLM。
+	Kind string `json:"kind,omitempty"`
 }
 
 type ToolCall struct {
@@ -33,6 +36,11 @@ type Request struct {
 	Messages  []Message
 	MaxTokens int
 	Tools     []Tool
+	// ThinkingLevel 是请求侧思考级别（off/minimal/low/medium/high/xhigh/max）。
+	// 空串或 ThinkingOff 不写入 wire。具体字段名/取值映射由 Thinking 覆盖（跨供应商兼容）。
+	ThinkingLevel string
+	// Thinking 覆盖默认 wire 字段名（reasoning_effort）与级别取值映射；nil 用默认。
+	Thinking *ThinkingMapping
 	// Stream 决定 buildChatBody 是否生成 stream:true；由 prepareDo（false）/prepareStream
 	// （true）强制设置，Do/DoStream 行为据此确定，不暴露给调用方决策。
 	Stream bool
@@ -112,6 +120,9 @@ type Result struct {
 	// Messages 是截至返回时的全量 transcript（History + 本轮新增），
 	// 所有 return 路径（含出错、撞 maxIterations）都带回，供会话持久化。
 	Messages []Message
+	// NewMessages 是本轮 Run 新增的消息（不含 History）：main 据此 append-only
+	// 追加到 session jsonl，避免每次重写全量。出错轮可能为空/不完整，main 不落盘。
+	NewMessages []Message
 }
 
 const (
@@ -126,6 +137,10 @@ var ErrBudgetExceeded = errors.New("miniagent: token budget exceeded")
 // ErrContextLength 由 HTTPClient 在端点返回 context 超限的 400 时返回。Run 据此
 // 做一次历史收紧重试（见 trimHistoryForContext）；调用方亦可 errors.Is 判定。
 var ErrContextLength = errors.New("miniagent: context length exceeded")
+
+// ErrThinkingUnsupported 由 HTTPClient 在端点返回疑似 thinking 参数不被支持的 400 时返回。
+// callLLM 据此一次性去 thinking 字段重试（审查 v2 #7）；误判无害（重试仍失败则上抛）。
+var ErrThinkingUnsupported = errors.New("miniagent: thinking parameter unsupported")
 
 // ErrToolDenied 由 OnToolUse 返回表示拒绝执行该工具（如危险命令未获确认）。
 // handleToolCalls 据此跳过该工具（回填拒绝结果）、不终止循环；其他 error 仍终止。
@@ -152,4 +167,20 @@ type LoopConfig struct {
 	// estimateTokens 判定是否主动裁剪历史（见 compactHistory）；0=未知，不主动管理
 	// （仅 ErrContextLength 被动降级），保持兼容。
 	ContextWindow int
+	// ThinkingLevel / Thinking 透传到每次 callLLM 的 Request（思考级别 + 供应商映射）。
+	ThinkingLevel string
+	Thinking      *ThinkingMapping
+	// CompactionModel 是摘要压缩用的模型 id（同 provider）；空则回落 cfg.Model。
+	CompactionModel string
 }
+
+// ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。
+// 其余级别（minimal/low/medium/high/xhigh/max）由 CLI/config 校验取值，wire 透传。
+const ThinkingOff = "off"
+
+// 权限模式（审查 v3 需求 §4）：default=薄软约束（写工具限 workdir、shell 拒 sudo/su），
+// auto=无限制。default 不构成安全边界（shell 可 cd/绝对路径越界，写工具可符号链接逃逸）。
+const (
+	ModeDefault = "default"
+	ModeAuto    = "auto"
+)

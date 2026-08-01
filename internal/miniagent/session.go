@@ -1,52 +1,117 @@
 package miniagent
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
-// maxSessionBytes 是 session 文件的大小上限：超大文件既撑内存，又会被完整
-// 拼进下次请求的 messages 烧 token 或触发端点 400。对齐 maxChatBodyBytes。
 const maxSessionBytes = 4 << 20
 
-// LoadSession 读取 path 处的会话历史（JSON 数组的 []Message）。文件不存在
-// 返回 (nil, nil)，等同无历史的新会话。文件存在但损坏（JSON 非法、role
-// 未知、tool 消息缺 tool_call_id、超过大小上限）返回 error：调用方应直接
-// 报错退出，不静默丢弃历史。
-func LoadSession(path string) ([]Message, error) {
+const (
+	sessionTypeSession = "session"
+	sessionTypeMessage = "message"
+	// KindSummary 标记 summary 消息：结构化识别（applyCompactionBarrier 用），替代脆弱的
+	// 内容前缀嗅探（审查 v3 #2）。role=user 合法可持久化。
+	KindSummary = "summary"
+)
+
+// SessionMeta 是 jsonl 首行 metadata（type=session），便于会话列举与多 provider 溯源。
+type SessionMeta struct {
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	Model    string `json:"model"`
+	Workdir  string `json:"workdir"`
+	Provider string `json:"provider"`
+	Created  string `json:"created"`
+}
+
+// sessionLine 是 message 行的写入包装：嵌入 Message 提升 role/content/kind 等字段，
+// 并补 type=message 判别（读侧按 type 分流到 SessionMeta 或 Message）。
+type sessionLine struct {
+	Type string `json:"type"`
+	Message
+}
+
+// ResolveSessionPath 解析 -session 入参：含路径分隔符或「.」或绝对路径 → 视为路径（双语义，
+// 向后兼容老的 .json/.jsonl 路径）；纯 id → {dir}/{id}.jsonl。dir 空且是 id 时报错。
+func ResolveSessionPath(arg, dir string) (string, error) {
+	if arg == "" {
+		return "", errors.New("session 参数为空")
+	}
+	if filepath.IsAbs(arg) || strings.ContainsAny(arg, "/."+string(filepath.Separator)) {
+		return arg, nil
+	}
+	if dir == "" {
+		return "", fmt.Errorf("session %q 是 id 但未配置 session.dir（或传完整路径）", arg)
+	}
+	return filepath.Join(dir, arg+".jsonl"), nil
+}
+
+// LoadSession 读取 jsonl：首行 session metadata（若无则零值 meta），其余为 message 行。
+// 文件不存在返回 (零 meta, nil, nil) 等同新会话。损坏（非法 JSON 行、role 未知、tool 消息
+// 缺 tool_call_id、配对断裂、超大小上限）返回 error，调用方应报错退出而非静默丢历史。
+func LoadSession(path string) (SessionMeta, []Message, error) {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return SessionMeta{}, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return SessionMeta{}, nil, err
 	}
 	defer func() { _ = f.Close() }()
-	// 单次 open + LimitReader：消除 Stat/ReadFile 之间的 TOCTOU，并把读取量硬封顶，
-	// 防文件被并发替换为超大内容撑爆内存（maxSessionBytes 的原始意图）。
+	// 单次 open + LimitReader：消除 Stat/ReadFile 间 TOCTOU，并硬封顶读取量防撑爆内存。
 	data, err := io.ReadAll(io.LimitReader(f, maxSessionBytes+1))
 	if err != nil {
-		return nil, err
+		return SessionMeta{}, nil, err
 	}
 	if int64(len(data)) > maxSessionBytes {
-		return nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, maxSessionBytes)
+		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, maxSessionBytes)
 	}
+	var meta SessionMeta
 	var msgs []Message
-	if err := json.Unmarshal(data, &msgs); err != nil {
-		return nil, fmt.Errorf("session 文件 %q 不是合法 JSON：%w", path, err)
-	}
-	for i, m := range msgs {
-		if err := validateSessionMessage(m); err != nil {
-			return nil, fmt.Errorf("session 文件 %q 第 %d 条消息非法：%w", path, i, err)
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	for i := 0; sc.Scan(); i++ {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
 		}
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &probe); err != nil {
+			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行非法 JSON：%w", path, i+1, err)
+		}
+		if probe.Type == sessionTypeSession {
+			if err := json.Unmarshal(line, &meta); err != nil {
+				return SessionMeta{}, nil, fmt.Errorf("session 文件 %q metadata 行解析失败：%w", path, err)
+			}
+			continue
+		}
+		// message 行（type=message 或历史无 type）：反序列化进 Message，未知字段忽略。
+		var m Message
+		if err := json.Unmarshal(line, &m); err != nil {
+			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行解析失败：%w", path, i+1, err)
+		}
+		if err := validateSessionMessage(m); err != nil {
+			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 条消息非法：%w", path, i+1, err)
+		}
+		msgs = append(msgs, m)
+	}
+	if err := sc.Err(); err != nil {
+		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 读取失败：%w", path, err)
 	}
 	if err := validateToolPairing(msgs); err != nil {
-		return nil, fmt.Errorf("session 文件 %q：%w", path, err)
+		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q：%w", path, err)
 	}
-	return msgs, nil
+	return meta, msgs, nil
 }
 
 func validateSessionMessage(m Message) error {
@@ -63,9 +128,8 @@ func validateSessionMessage(m Message) error {
 	}
 }
 
-// validateToolPairing 校验 assistant.tool_calls 与 tool 消息的一一配对。
-// 配对断裂（手改/截断的 session）会被 OpenAI 兼容端点 400 拒绝，且报错指向
-// LLM 端而非 session 文件，这里提前拦截并指明位置。
+// validateToolPairing 校验 assistant.tool_calls 与 tool 消息的一一配对。配对断裂会被
+// OpenAI 兼容端点 400，且报错指向 LLM 端而非 session 文件，这里提前拦截并指明位置。
 func validateToolPairing(msgs []Message) error {
 	pending := map[string]bool{}
 	for i, m := range msgs {
@@ -90,19 +154,90 @@ func validateToolPairing(msgs []Message) error {
 	return nil
 }
 
-// SaveSession 把完整 transcript 原子写回 path（temp+rename），权限 0o600
-// （对话内容属敏感数据）。思考内容（reasoning）随 Message.Reasoning 序列化落盘
-// （与 Content 同级、对称），支持 reasoning 模型跨会话续跑；属敏感数据但文件已
-// 0o600。若不希望落盘，需在调用前显式清零各 Message.Reasoning。
-func SaveSession(path string, msgs []Message) error {
+// AppendMessages append-only 追加 msgs 到 jsonl：文件新建/空时先写 metadata 行，再写每条
+// message 行。失败轮由调用方决定是否落盘（main 仅成功轮调用）。权限 0o600（对话属敏感数据）。
+func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 	if len(msgs) == 0 {
-		// nil 会被序列化成 "null"，回读得到 nil，"空会话"与"新会话"无法
-		// 区分。当前调用链不会产生空 transcript，拒写是防御缺口。
-		return errors.New("session: 空 transcript 拒绝写盘")
+		return nil
 	}
-	data, err := json.MarshalIndent(msgs, "", "  ")
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("创建 session 目录：%w", err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, append(data, '\n'), 0o600)
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriter(f)
+	if info.Size() == 0 {
+		if meta.Type == "" {
+			meta.Type = sessionTypeSession
+		}
+		b, err := json.Marshal(meta)
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return err
+		}
+	}
+	for _, m := range msgs {
+		b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+// MigrateSession 把 v2 的 JSON 数组 session（[]Message）转为 jsonl：写到 {dstDir}/{base}.jsonl，
+// metadata 仅含 id（base 名）+ type，无 summary kind（纯历史）。返回写入路径。
+func MigrateSession(srcPath, dstDir string) (string, error) {
+	msgs, err := loadLegacySession(srcPath)
+	if err != nil {
+		return "", err
+	}
+	base := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+	dst := filepath.Join(dstDir, base+".jsonl")
+	meta := SessionMeta{Type: sessionTypeSession, ID: base}
+	if err := AppendMessages(dst, meta, msgs); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+// loadLegacySession 读 v2 JSON 数组 session（向后兼容迁移用）。
+func loadLegacySession(path string) ([]Message, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读 legacy session %q: %w", path, err)
+	}
+	var msgs []Message
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		return nil, fmt.Errorf("legacy session %q 不是合法 JSON 数组：%w", path, err)
+	}
+	for i, m := range msgs {
+		if err := validateSessionMessage(m); err != nil {
+			return nil, fmt.Errorf("legacy session %q 第 %d 条消息非法：%w", path, i, err)
+		}
+	}
+	if err := validateToolPairing(msgs); err != nil {
+		return nil, fmt.Errorf("legacy session %q：%w", path, err)
+	}
+	return msgs, nil
 }

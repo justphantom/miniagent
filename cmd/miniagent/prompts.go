@@ -1,5 +1,9 @@
 package main
 
+import (
+	"fmt"
+)
+
 // defaultSystemPrompt 是面向工程代码开发的默认系统提示词：约束 ReAct 工作流
 // （先观察 → 后修改 → 改后验证 → 失败复盘），降低模型盲改/臆测的概率。用户可用
 // -system 覆盖。prompt 只写"为什么/怎么做"的约束，工具语法在各工具描述里。
@@ -12,3 +16,23 @@ const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真
 - 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。
 - 简洁输出：最终回答直说结论、关键改动与验证结果，不灌水。
 - 复杂任务拆解：多步工程任务先用 todo 工具拆成可勾选项，逐步 complete 推进。`
+
+// injectSubagentGuidance 把 subagent fork 引导附加到 system prompt：注入 config 绝对路径
+// 与父 session id（审查 v1 #12 + v2 #9 + v3 #6/#8）。configAbsPath 空（裸模式）则不注入——
+// subagent fork 依赖 -config。
+func injectSubagentGuidance(system, configAbsPath, parentSessionID string) string {
+	if configAbsPath == "" {
+		return system
+	}
+	if parentSessionID == "" {
+		parentSessionID = "<父session>"
+	}
+	return system + "\n\n" + subagentGuidance(configAbsPath, parentSessionID)
+}
+
+// subagentGuidance 构造 fork 命令模板与递归约束文案。
+func subagentGuidance(configAbsPath, parentSessionID string) string {
+	return fmt.Sprintf(`- 子任务委派：可并行的子任务用 shell 再调一次 miniagent（仅在必要时 fork，建议嵌套≤2 层）：
+  echo "<子任务>" | miniagent -config %s -session %s-sub-<n> -workdir . -mode default -result-only
+  session id 用「%s-sub-<序号>」，勿复用父 id；stdout 纯文本即结果。`, configAbsPath, parentSessionID, parentSessionID)
+}

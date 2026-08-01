@@ -79,7 +79,7 @@ data: [DONE]
 		fmt.Fprint(w, sse)
 	}))
 	defer srv.Close()
-	llm := &HTTPClient{APIKey: "sk", BaseURL: srv.URL}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL}
 	var deltas []Delta
 	resp, err := llm.DoStream(context.Background(), Request{Model: "m"}, func(d Delta) { deltas = append(deltas, d) })
 	if err != nil {
@@ -106,7 +106,7 @@ func TestDoStream_NonOKErrors(t *testing.T) {
 		fmt.Fprint(w, "busy")
 	}))
 	defer srv.Close()
-	llm := &HTTPClient{APIKey: "sk", BaseURL: srv.URL}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL}
 	_, err := llm.DoStream(context.Background(), Request{Model: "m"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v, want 503", err)
@@ -120,7 +120,7 @@ data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
 data: [DONE]
 `
 	tr := &fakeTransport{responses: []string{sse}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var deltas []string
 	hooks := LoopHooks{OnDelta: func(step int, kind DeltaKind, text string) error {
 		deltas = append(deltas, text)

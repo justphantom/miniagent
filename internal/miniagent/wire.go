@@ -2,10 +2,13 @@
 // chatMessage / chatToolCall 与 types.go 的 Message / ToolCall 字段刻意重复：
 // 上层 domain 类型不绑死特定厂商的 JSON 形状（嵌套 function 对象、snake_case
 // 字段名），新增字段时需同步两处并保持与 OpenAI API 字段顺序、命名一致。
+// chatMessage 不含 Kind：session 层标记不泄漏给 LLM（buildChatBody 独立构造）。
 package miniagent
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 )
 
 type chatMessage struct {
@@ -48,6 +51,20 @@ func buildChatBody(req Request) ([]byte, error) {
 	if req.MaxTokens > 0 {
 		payload["max_tokens"] = req.MaxTokens
 	}
+	// 思考级别：空/ThinkingOff 不写入；默认字段 reasoning_effort，provider 的 ThinkingMapping
+	// 可覆盖字段名与级别取值映射（跨供应商兼容，审查 v2 #7）。
+	if req.ThinkingLevel != "" && req.ThinkingLevel != ThinkingOff {
+		field, val := "reasoning_effort", req.ThinkingLevel
+		if req.Thinking != nil {
+			if req.Thinking.Field != "" {
+				field = req.Thinking.Field
+			}
+			if mapped, ok := req.Thinking.Map[req.ThinkingLevel]; ok {
+				val = mapped
+			}
+		}
+		payload[field] = val
+	}
 	if req.Stream {
 		// stream_options.include_usage：让末 chunk 携带 usage（计费/熔断仍以它为准）。
 		payload["stream"] = true
@@ -68,4 +85,61 @@ func buildChatBody(req Request) ([]byte, error) {
 		payload["tools"] = funcs
 	}
 	return json.Marshal(payload)
+}
+
+// chatCompletionResponse 只摘出循环需要的字段：首条 choice 的 message
+// （content + tool_calls）、finish_reason、usage。
+type chatCompletionResponse struct {
+	Choices []struct {
+		Message struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			ToolCalls        []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
+}
+
+func parseChatResponse(raw []byte) (Response, error) {
+	var v chatCompletionResponse
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return Response{}, fmt.Errorf("parse response: %w", err)
+	}
+	out := Response{}
+	if len(v.Choices) == 0 {
+		// 空 choices 是端点异常（内容过滤/代理故障），静默零值会让上层把
+		// 它当作"成功的空回答"（退出码 0、text 为空），必须报错。
+		return Response{}, errors.New("llm response has no choices")
+	}
+	ch := v.Choices[0]
+	out.Text = ch.Message.Content
+	// 双兼容：DeepSeek 系用 reasoning_content，OpenAI o 系用 reasoning；前者优先。
+	out.Reasoning = ch.Message.ReasoningContent
+	if out.Reasoning == "" {
+		out.Reasoning = ch.Message.Reasoning
+	}
+	out.FinishReason = ch.FinishReason
+	for _, tc := range ch.Message.ToolCalls {
+		out.ToolCalls = append(out.ToolCalls, ToolCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: tc.Function.Arguments,
+		})
+	}
+	if v.Usage != nil {
+		out.Usage = Usage{InputTokens: v.Usage.PromptTokens, OutputTokens: v.Usage.CompletionTokens}
+	}
+	return out, nil
 }

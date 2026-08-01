@@ -12,27 +12,33 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// runInteractive 在交互模式下循环读取 prompt（每行一个，空行跳过，EOF 退出），每轮
-// Run 并把返回的 Messages 作为下轮 History 累积；每轮成功后增量写回 session。单轮
-// 错误不退出会话（emit error 后继续），仅 EOF/空输入退出。reader 由调用方传入，与
-// checkApprove 共享，避免两 reader 竞争 stdin。
-func runInteractive(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader) {
+// runInteractive 在交互模式下循环读取 prompt（每行一个，空行跳过，EOF 退出）。有 -session
+// 时以 session 文件为唯一真源：每轮 LoadSession → 单轮 Run → AppendNewMessages，不在内存
+// 累积、不在外层过滤（过滤统一在 Run 入口，审查 v2 #3 + v3 #3）。无 -session 退化为内存累积。
+// 单轮错误不退出会话（emit error 后继续），仅 EOF/空输入退出。
+func runInteractive(ctx context.Context, llm *miniagent.HTTPClient, baseCfg miniagent.LoopConfig, sessPath string, meta miniagent.SessionMeta, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader) {
+	var memHistory []miniagent.Message // 仅无 session 时用
 	for {
 		prompt, eof := readTurn(reader)
 		if prompt == "" && eof {
 			return
 		}
-		result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
-			Model:          *f.model,
-			System:         *f.system,
-			MaxTokens:      *f.maxTokens,
-			Tools:          tools,
-			History:        history,
-			MaxIterations:  *f.maxIterations,
-			MaxTotalTokens: *f.maxTokensTotal,
-			Stream:         *f.stream,
-			ContextWindow:  *f.contextWindow,
-		}, prompt, hooks, logger)
+		if sessPath != "" {
+			_, h, err := miniagent.LoadSession(sessPath)
+			if err != nil {
+				if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
+					logger.Warn("emit error failed", "error", eerr)
+				}
+				if eof {
+					return
+				}
+				continue
+			}
+			baseCfg.History = h
+		} else {
+			baseCfg.History = memHistory
+		}
+		result, err := miniagent.Run(ctx, llm, baseCfg, prompt, hooks, logger)
 		if err != nil {
 			if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
 				logger.Warn("emit error failed", "error", eerr)
@@ -42,14 +48,15 @@ func runInteractive(ctx context.Context, llm *miniagent.HTTPClient, f *cliFlags,
 			}
 			continue
 		}
-		if err := miniagent.EmitResult(os.Stdout, result, *f.model); err != nil {
+		if err := miniagent.EmitResult(os.Stdout, result, baseCfg.Model); err != nil {
 			logger.Warn("emit result failed", "error", err)
 		}
-		history = result.Messages
-		if *f.session != "" {
-			if err := miniagent.SaveSession(*f.session, history); err != nil {
+		if sessPath != "" {
+			if err := miniagent.AppendMessages(sessPath, meta, result.NewMessages); err != nil {
 				fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", err)
 			}
+		} else {
+			memHistory = result.Messages
 		}
 		if eof {
 			return
@@ -71,29 +78,6 @@ func readTurn(r *bufio.Reader) (string, bool) {
 			return "", true
 		}
 	}
-}
-
-// checkApprove 按 mode 决定是否放行工具：all（默认）全放行；dangerous 仅 shell/write/edit
-// 需确认；always 全部确认。确认从共享 reader 读一行（"y" 放行，其他/EOF 拒绝）——交互
-// 模式用户输入，非交互（stdin 已被 prompt 读光）EOF 即拒绝危险工具，不静默放行。
-func checkApprove(mode, name, input string, r *bufio.Reader) error {
-	switch mode {
-	case "", "all":
-		return nil
-	case "dangerous":
-		if name != "shell" && name != "write" && name != "edit" {
-			return nil
-		}
-	case "always":
-	default:
-		return nil
-	}
-	fmt.Fprintf(os.Stderr, "miniagent: approve %s %s? [y/N] ", name, input)
-	line, err := r.ReadString('\n')
-	if err != nil || strings.TrimSpace(strings.ToLower(line)) != "y" {
-		return miniagent.ErrToolDenied
-	}
-	return nil
 }
 
 // maxPromptBytes 是 stdin prompt 的大小上限：无上限读取既撑内存，写回 session 后又会

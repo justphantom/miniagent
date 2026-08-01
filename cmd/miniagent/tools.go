@@ -6,16 +6,22 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// buildTools 注册 9 个工具。workdir 为空时工具内部按各自规则处理（文件工具走
-// resolveToolPath，shell 把 cmd.Dir 留空继承 cwd）。shellTimeout<=0 时 ShellTool 用默认 60s。
-func buildTools(workdir string, shellTimeout time.Duration, confine string) []miniagent.Tool {
+// buildTools 注册 9 个工具，按 mode 调整约束（审查 v3 §6）：
+//   - default：写工具（write/edit/multi_edit）经 confineWrap 限定在 workdir 子树；
+//     shell 以 mode=default 注册（拒 sudo/su）。workdir 必填（main 入口校验）。
+//   - auto：无任何约束（shell mode=auto，写工具不包装）。
+//
+// workdir 为空时文件工具走 resolveToolPath、shell 的 cmd.Dir 留空。shellTimeout<=0 用默认 60s。
+func buildTools(workdir string, shellTimeout time.Duration, mode string) []miniagent.Tool {
 	tasks := &miniagent.TaskList{}
+	shellMode := mode
+	if shellMode == "" {
+		shellMode = miniagent.ModeDefault
+	}
 	write := miniagent.WriteFileTool(workdir)
 	edit := miniagent.EditFileTool(workdir)
 	multiEdit := miniagent.MultiEditTool(workdir)
-	// confine=workdir 时包装写工具，拒绝越出 workdir 的路径（防误写）。读工具与 shell
-	// 不约束：free 读无副作用，shell 沙箱只能靠 OS（见 README「运行隔离」）。
-	if confine == "workdir" && workdir != "" {
+	if mode == miniagent.ModeDefault && workdir != "" {
 		write = confineWrap(write, workdir)
 		edit = confineWrap(edit, workdir)
 		multiEdit = confineWrap(multiEdit, workdir)
@@ -27,7 +33,7 @@ func buildTools(workdir string, shellTimeout time.Duration, confine string) []mi
 		multiEdit,
 		miniagent.GrepTool(workdir),
 		miniagent.GlobTool(workdir),
-		miniagent.ShellTool(workdir, shellTimeout),
+		miniagent.ShellTool(workdir, shellTimeout, shellMode),
 		miniagent.FetchTool(),
 		miniagent.TodoTool(tasks),
 	}

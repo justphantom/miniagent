@@ -78,6 +78,9 @@ func (c *HTTPClient) DoStream(ctx context.Context, req Request, onDelta func(Del
 		if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
 			return Response{}, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
 		}
+		if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
+			return Response{}, fmt.Errorf("%w: %s", ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
+		}
 		return Response{}, fmt.Errorf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…"))
 	}
 	return parseSSE(resp.Body, onDelta)
@@ -87,7 +90,7 @@ func (c *HTTPClient) prepareStream(req Request) (*http.Client, *url.URL, []byte,
 	if c.APIKey == "" {
 		return nil, nil, nil, errors.New("miniagent: api_key is empty")
 	}
-	client, u, err := c.endpoint("/v1/chat/completions", 120*time.Second)
+	client, u, err := c.chatEndpoint(120 * time.Second)
 	if err != nil {
 		return nil, nil, nil, err
 	}

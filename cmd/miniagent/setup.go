@@ -1,0 +1,282 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"log/slog"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+)
+
+func mustParseLogLevel(s string) slog.Level {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(s)); err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: invalid -log-level %q (want debug|info|warn|error)\n", s)
+		os.Exit(1)
+	}
+	return level
+}
+
+// loadConfigOrBare：显式 -config 不存在=硬错误；默认 ./miniagent.json 不存在=软失败退裸模式
+// （审查 v3 #1/#7）。默认存在但非法=报错。
+func loadConfigOrBare(configPath string) (*miniagent.Config, error) {
+	if configPath != "" {
+		return miniagent.LoadConfig(configPath)
+	}
+	// 默认 config 是否存在；其他 Stat 错误按「无 config」处理（软失败语义）。
+	exists := false
+	if _, err := os.Stat("./miniagent.json"); err == nil {
+		exists = true
+	}
+	if !exists {
+		return nil, nil // 不存在 → 裸模式
+	}
+	return miniagent.LoadConfig("./miniagent.json")
+}
+
+// collectOverrides 用 flag.Visit 收集「显式传入」的 flag（未传入置 nil），供 Resolve 裁决。
+func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
+	set := map[string]bool{}
+	flag.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	o := miniagent.CLIOverrides{}
+	if set["model"] {
+		o.Model = f.model
+	}
+	if set["thinking"] {
+		o.Thinking = f.thinking
+	}
+	if set["mode"] {
+		o.Mode = f.mode
+	}
+	if set["system"] {
+		o.System = f.system
+	}
+	if set["workdir"] {
+		o.Workdir = f.workdir
+	}
+	if set["session"] {
+		o.Session = f.session
+	}
+	if set["chat-url"] {
+		o.ChatURL = f.chatURL
+	}
+	if set["models-url"] {
+		o.ModelsURL = f.modelsURL
+	}
+	if set["max-tokens"] {
+		o.MaxTokens = f.maxTokens
+	}
+	if set["max-iterations"] {
+		o.MaxIterations = f.maxIterations
+	}
+	if set["max-tokens-total"] {
+		o.MaxTotalTokens = f.maxTokensTotal
+	}
+	if set["context-window"] {
+		o.ContextWindow = f.contextWindow
+	}
+	if set["max-duration"] {
+		o.MaxDuration = f.maxDuration
+	}
+	if set["shell-timeout"] {
+		o.ShellTimeout = f.shellTimeout
+	}
+	if set["stream"] {
+		o.Stream = f.stream
+	}
+	if set["result-only"] {
+		o.ResultOnly = f.resultOnly
+	}
+	return o
+}
+
+// resolveFinalKey：cli(-key-file) > config(provider.Key) > env。机密不入 config 文件——
+// provider.Key 通常是 ${VAR} 展开，仍来自环境。
+func resolveFinalKey(providerKey, keyFile string) string {
+	if keyFile != "" {
+		key, err := resolveAPIKey(keyFile, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
+			os.Exit(1)
+		}
+		warnKeyFilePerm(keyFile)
+		return key
+	}
+	if providerKey != "" {
+		return providerKey
+	}
+	return os.Getenv("MINIAGENT_API_KEY")
+}
+
+func resolveAPIKey(keyFile, envKey string) (string, error) {
+	if keyFile == "" {
+		return envKey, nil
+	}
+	data, err := os.ReadFile(keyFile)
+	if err != nil {
+		return "", fmt.Errorf("read key-file %q: %w", keyFile, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func warnKeyFilePerm(path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(os.Stderr, "miniagent: warning: key-file %s readable by group/other (mode=%o); recommend 0600\n", path, info.Mode().Perm())
+	}
+}
+
+// warnInsecureURL：http（非 loopback）时 API key 明文上链，stderr 警告。不强制拒绝。
+func warnInsecureURL(rawURL string) {
+	u, err := url.Parse(strings.TrimRight(rawURL, "/"))
+	if err != nil || u.Scheme != "http" {
+		return
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "miniagent: warning: endpoint %s uses plain http, API key sent unencrypted\n", u.Redacted())
+}
+
+func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger) *miniagent.HTTPClient {
+	llm, err := miniagent.NewHTTPClient(apiKey, p.ChatURL, p.ModelsURL, &http.Client{Timeout: 120 * time.Second}, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
+		os.Exit(1)
+	}
+	return llm
+}
+
+func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
+	if *f.stream && *f.resultOnly {
+		fmt.Fprintln(os.Stderr, "miniagent: -stream 与 -result-only 互斥")
+		os.Exit(1)
+	}
+	if resolved.Mode == miniagent.ModeDefault && effectiveWorkdir(resolved, f) == "" {
+		fmt.Fprintln(os.Stderr, "miniagent: default 模式需 -workdir（或 config run.workdir，或用 -mode auto）")
+		os.Exit(1)
+	}
+}
+
+func effectiveWorkdir(resolved *miniagent.Resolved, f *cliFlags) string {
+	if resolved.Run.Workdir != nil && *resolved.Run.Workdir != "" {
+		return *resolved.Run.Workdir
+	}
+	return *f.workdir
+}
+
+func maxDurationOf(resolved *miniagent.Resolved, f *cliFlags) time.Duration {
+	if resolved.Run.MaxDuration != nil {
+		return *resolved.Run.MaxDuration
+	}
+	return *f.maxDuration
+}
+
+func shellTimeoutOf(resolved *miniagent.Resolved, f *cliFlags) time.Duration {
+	if resolved.Run.ShellTimeout != nil {
+		return *resolved.Run.ShellTimeout
+	}
+	return *f.shellTimeout
+}
+
+func buildHooks(resultOnly bool) miniagent.LoopHooks {
+	if resultOnly {
+		// subagent fork：stdout 纯文本即结果，不发 NDJSON 事件。
+		return miniagent.LoopHooks{}
+	}
+	emit := miniagent.ToolUseWriter(os.Stdout)
+	return miniagent.LoopHooks{
+		OnToolUse: func(name, input string) error { return emit(name, input) },
+		OnToolResult: func(name, callID string, r miniagent.ToolResult) error {
+			return miniagent.EmitToolResult(os.Stdout, name, callID, r)
+		},
+		OnDelta: func(step int, kind miniagent.DeltaKind, text string) error {
+			return miniagent.EmitDelta(os.Stdout, step, kind, text)
+		},
+	}
+}
+
+func emitRunError(err error, resultOnly bool, logger *slog.Logger) {
+	if resultOnly {
+		fmt.Printf("error: %s\n", err.Error())
+		return
+	}
+	if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
+		logger.Warn("emit error failed", "error", eerr)
+		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
+	}
+}
+
+func emitRunResult(result miniagent.Result, model string, resultOnly bool, logger *slog.Logger) {
+	if resultOnly {
+		fmt.Println(result.Text)
+		return
+	}
+	if err := miniagent.EmitResult(os.Stdout, result, model); err != nil {
+		logger.Warn("emit result failed", "error", err)
+		fmt.Fprintf(os.Stderr, "miniagent: emit result failed: %v (text: %.200q)\n", err, result.Text)
+		os.Exit(1)
+	}
+}
+
+// providerForListModels 解析 -list-models 所需 provider（不要求 -model，因 list 本就为发现模型）：
+// config 模式按 -model/defaults.model/单一 provider；裸模式按 -chat-url。
+func providerForListModels(cfg *miniagent.Config, f *cliFlags) (miniagent.ProviderConfig, error) {
+	if cfg != nil {
+		spec := ""
+		if f.model != nil && *f.model != "" {
+			spec = *f.model
+		} else {
+			spec = cfg.Defaults.Model
+		}
+		if spec != "" {
+			p, _, err := miniagent.ParseModelSpec(spec, cfg)
+			return p, err
+		}
+		if len(cfg.Providers) == 1 {
+			return cfg.Providers[0], nil
+		}
+		return miniagent.ProviderConfig{}, errors.New("list-models 需 -model 或 defaults.model 或单一 provider")
+	}
+	if f.chatURL == nil || *f.chatURL == "" {
+		return miniagent.ProviderConfig{}, errors.New("list-models 需 -chat-url 或 -config")
+	}
+	p := miniagent.ProviderConfig{Name: "cli", ChatURL: *f.chatURL}
+	if f.modelsURL != nil {
+		p.ModelsURL = *f.modelsURL
+	}
+	return p, nil
+}
+
+// absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 ./miniagent.json），
+// 供 subagent fork 引导注入；裸模式返回空。
+func absConfigPath(configPath string, cfg *miniagent.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	p := configPath
+	if p == "" {
+		p = "./miniagent.json"
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}

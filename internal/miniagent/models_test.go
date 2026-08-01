@@ -14,7 +14,7 @@ func TestListModels_NonOKErrors(t *testing.T) {
 		fmt.Fprint(w, "err")
 	}))
 	defer srv.Close()
-	llm := &HTTPClient{APIKey: "sk", BaseURL: srv.URL}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}
 	if _, err := llm.ListModels(context.Background()); err == nil {
 		t.Error("non-200 should error")
 	}
@@ -25,7 +25,7 @@ func TestListModels_EmptyData(t *testing.T) {
 		fmt.Fprint(w, `{"data":[]}`)
 	}))
 	defer srv.Close()
-	llm := &HTTPClient{APIKey: "sk", BaseURL: srv.URL}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}
 	ids, err := llm.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("empty data should not error: %v", err)

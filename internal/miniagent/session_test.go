@@ -20,113 +20,130 @@ func sampleTranscript() []Message {
 	}
 }
 
-// 保存→加载 round-trip：消息逐一相等，且加载端通过校验。
-func TestSession_RoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.json")
-	want := sampleTranscript()
-	if err := SaveSession(path, want); err != nil {
-		t.Fatalf("SaveSession: %v", err)
+func writeLines(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	got, err := LoadSession(path)
+}
+
+// Append→Load round-trip：消息逐一相等，metadata 复现。
+func TestSession_RoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	want := sampleTranscript()
+	meta := SessionMeta{ID: "s", Model: "main/glm", Workdir: "/abs", Provider: "main"}
+	if err := AppendMessages(path, meta, want); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	gotMeta, got, err := LoadSession(path)
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("round-trip mismatch:\n got %+v\nwant %+v", got, want)
 	}
+	if gotMeta.ID != "s" || gotMeta.Model != "main/glm" {
+		t.Errorf("meta mismatch: %+v", gotMeta)
+	}
 }
 
-// session 文件不存在 → (nil, nil)，等同新会话。
+// 文件不存在 → (零 meta, nil, nil)，等同新会话。
 func TestLoadSession_MissingFileReturnsNil(t *testing.T) {
-	msgs, err := LoadSession(filepath.Join(t.TempDir(), "nope.json"))
-	if err != nil || msgs != nil {
-		t.Errorf("got (%v, %v), want (nil, nil)", msgs, err)
+	meta, msgs, err := LoadSession(filepath.Join(t.TempDir(), "nope.jsonl"))
+	if err != nil || msgs != nil || meta.Type != "" {
+		t.Errorf("got (%+v, %v, %v), want (零 meta, nil, nil)", meta, msgs, err)
 	}
 }
 
-// 损坏文件必须报错，不静默丢弃历史。
+// 损坏 JSON 行必须报错。
 func TestLoadSession_CorruptJSONFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "bad.json")
-	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadSession(path); err == nil {
-		t.Fatal("expected error for corrupt JSON")
+	path := filepath.Join(t.TempDir(), "bad.jsonl")
+	writeLines(t, path, `{"type":"session","id":"s"}`, `{not json`)
+	if _, _, err := LoadSession(path); err == nil {
+		t.Fatal("expected error for corrupt JSON line")
 	}
 }
 
 func TestLoadSession_UnknownRoleFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "role.json")
-	if err := os.WriteFile(path, []byte(`[{"role":"system","content":"x"}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadSession(path); err == nil {
+	path := filepath.Join(t.TempDir(), "role.jsonl")
+	writeLines(t, path, `{"type":"message","role":"system","content":"x"}`)
+	if _, _, err := LoadSession(path); err == nil {
 		t.Fatal("expected error for unknown role")
 	}
 }
 
 func TestLoadSession_ToolMissingCallIDFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tool.json")
-	if err := os.WriteFile(path, []byte(`[{"role":"tool","content":"x"}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadSession(path); err == nil {
+	path := filepath.Join(t.TempDir(), "tool.jsonl")
+	writeLines(t, path, `{"type":"message","role":"tool","content":"x"}`)
+	if _, _, err := LoadSession(path); err == nil {
 		t.Fatal("expected error for tool message without tool_call_id")
 	}
 }
 
-// 超过 maxSessionBytes 的 session 文件必须拒绝：超大历史会撑内存并被完整
-// 拼进下次请求烧 token。
 func TestLoadSession_OversizedFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "big.json")
+	path := filepath.Join(t.TempDir(), "big.jsonl")
 	if err := os.WriteFile(path, make([]byte, maxSessionBytes+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadSession(path); err == nil {
+	if _, _, err := LoadSession(path); err == nil {
 		t.Fatal("expected error for oversized session file")
 	}
 }
 
-// tool_calls 与 tool 消息配对断裂（手改/截断的 session）必须拒绝，
-// 否则下一轮请求直接被端点 400。
+// tool_calls 与 tool 配对断裂必须拒绝。
 func TestLoadSession_DanglingToolCallFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dangling.json")
-	msgs := `[{"role":"user","content":"q"},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"read","args":"{}"}]}]`
-	if err := os.WriteFile(path, []byte(msgs), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadSession(path); err == nil {
+	path := filepath.Join(t.TempDir(), "dangling.jsonl")
+	writeLines(t, path,
+		`{"type":"message","role":"user","content":"q"}`,
+		`{"type":"message","role":"assistant","content":"","tool_calls":[{"id":"c1","name":"read","args":"{}"}]}`)
+	if _, _, err := LoadSession(path); err == nil {
 		t.Fatal("expected error for dangling tool_call")
 	}
 }
 
 func TestLoadSession_OrphanToolMessageFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "orphan.json")
-	msgs := `[{"role":"user","content":"q"},{"role":"tool","tool_call_id":"cX","content":"x"}]`
-	if err := os.WriteFile(path, []byte(msgs), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadSession(path); err == nil {
+	path := filepath.Join(t.TempDir(), "orphan.jsonl")
+	writeLines(t, path,
+		`{"type":"message","role":"user","content":"q"}`,
+		`{"type":"message","role":"tool","tool_call_id":"cX","content":"x"}`)
+	if _, _, err := LoadSession(path); err == nil {
 		t.Fatal("expected error for orphan tool message")
 	}
 }
 
-// 空 transcript 拒写：nil 会落成 "null"，"空会话"与"新会话"无法区分。
-func TestSaveSession_EmptyRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "empty.json")
-	if err := SaveSession(path, nil); err == nil {
-		t.Fatal("expected error for empty transcript")
+// kind=summary 结构化标记可读（审查 v3 #2），role=user 合法持久化。
+func TestLoadSession_KindSummaryRecognized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sum.jsonl")
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{
+		{Role: "user", Kind: KindSummary, Content: "[既往对话摘要] xxx"},
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); err == nil {
-		t.Error("file should not be created")
+	_, msgs, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Kind != KindSummary || msgs[0].Role != "user" {
+		t.Errorf("summary kind not recognized: %+v", msgs)
 	}
 }
 
-// 对话内容属敏感数据：落盘权限必须 0o600。
-func TestSaveSession_FileMode0600(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "perm.json")
-	if err := SaveSession(path, sampleTranscript()); err != nil {
-		t.Fatalf("SaveSession: %v", err)
+// 空 msgs：AppendMessages no-op，不创建文件（main 仅成功轮调用，空 NewMessages 不落盘）。
+func TestAppendMessages_EmptyNoop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.jsonl")
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, nil); err != nil {
+		t.Fatalf("empty append should be no-op: %v", err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("file should not be created for empty msgs")
+	}
+}
+
+// 落盘权限 0o600（对话属敏感数据）。
+func TestAppendMessages_FileMode0600(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perm.jsonl")
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, sampleTranscript()); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -137,30 +154,100 @@ func TestSaveSession_FileMode0600(t *testing.T) {
 	}
 }
 
-// C-3：reasoning 随 Message.Reasoning 落盘（与 Content 同级、对称），支持
-// reasoning 模型跨会话续跑。
-func TestSaveSession_ReasoningPersisted(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.json")
-	msgs := []Message{
-		{Role: "user", Content: "q"},
-		{Role: "assistant", Content: "a", Reasoning: "thought chain"},
+// 多次 Append 累积（append-only），每次仅追加新消息。
+func TestAppendMessages_AppendsAcrossCalls(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "acc.jsonl")
+	meta := SessionMeta{ID: "s"}
+	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: "q1"}}); err != nil {
+		t.Fatal(err)
 	}
-	if err := SaveSession(path, msgs); err != nil {
-		t.Fatalf("SaveSession: %v", err)
+	if err := AppendMessages(path, meta, []Message{{Role: "assistant", Content: "a1"}}); err != nil {
+		t.Fatal(err)
 	}
-	got, err := LoadSession(path)
+	_, msgs, err := LoadSession(path)
 	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
+		t.Fatal(err)
 	}
-	if len(got) != 2 || got[1].Reasoning != "thought chain" {
-		t.Errorf("reasoning not persisted: %+v", got)
+	if len(msgs) != 2 || msgs[0].Content != "q1" || msgs[1].Content != "a1" {
+		t.Errorf("appended msgs wrong: %+v", msgs)
+	}
+}
+
+func TestResolveSessionPath(t *testing.T) {
+	if p, err := ResolveSessionPath("s.json", "dir"); err != nil || p != "s.json" {
+		t.Errorf("path arg should be used as-is: p=%q err=%v", p, err)
+	}
+	if p, err := ResolveSessionPath("./x/s.jsonl", "dir"); err != nil || !strings.HasSuffix(p, "s.jsonl") {
+		t.Errorf("relative path: p=%q err=%v", p, err)
+	}
+	p, err := ResolveSessionPath("mysess", ".miniagent/sessions")
+	if err != nil || p != filepath.Join(".miniagent/sessions", "mysess.jsonl") {
+		t.Errorf("id resolution: p=%q err=%v", p, err)
+	}
+	if _, err := ResolveSessionPath("mysess", ""); err == nil {
+		t.Error("id without dir should error")
+	}
+}
+
+// v2 JSON 数组 → jsonl 迁移：内容逐条相等，落盘为 jsonl。
+func TestMigrateSession(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "old.json")
+	want := sampleTranscript()
+	arr, _ := json.Marshal(want)
+	if err := os.WriteFile(src, arr, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := MigrateSession(src, dir)
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if !strings.HasSuffix(dst, "old.jsonl") {
+		t.Errorf("dst = %q", dst)
+	}
+	_, got, err := LoadSession(dst)
+	if err != nil {
+		t.Fatalf("load migrated: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("migrated mismatch:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// NewMessages 仅含本轮新增（不含 History），Messages 含 History 前缀。
+func TestRun_NewMessagesExcludesHistory(t *testing.T) {
+	tool := Tool{Name: "echo", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "echoed"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
+		textResponse("done"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	history := []Message{
+		{Role: "user", Content: "old"},
+		{Role: "assistant", Content: "oldans"},
+	}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	wantRoles := []string{"user", "assistant", "tool", "assistant"}
+	if len(res.NewMessages) != len(wantRoles) {
+		t.Fatalf("NewMessages len = %d, want %d (%+v)", len(res.NewMessages), len(wantRoles), res.NewMessages)
+	}
+	for i, w := range wantRoles {
+		if res.NewMessages[i].Role != w {
+			t.Errorf("NewMessages[%d].Role = %q, want %q", i, res.NewMessages[i].Role, w)
+		}
+	}
+	if len(res.Messages) != len(history)+len(wantRoles) {
+		t.Errorf("Messages len = %d, want %d", len(res.Messages), len(history)+len(wantRoles))
 	}
 }
 
 // History 作为前缀拼在新 prompt 之前发给 LLM；Run 不修改调用方的 History。
 func TestRun_HistoryPrefixSent(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("a2")}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	history := []Message{
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
@@ -192,7 +279,7 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 // 最终 assistant 文本必须进入 Messages（接续对话依赖上一轮的回答）。
 func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("final answer")}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	res, err := Run(context.Background(), llm, LoopConfig{}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -203,22 +290,21 @@ func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	}
 }
 
-// 两轮接续：第一轮的完整 transcript（user/assistant+tool_calls/tool/assistant
-// 最终文本）作为 History 传入第二轮，请求体须按序包含全部 4 类消息。
+// 两轮接续：第一轮的完整 transcript 作为 History 传入第二轮，请求体按序含全部 4 类消息。
 func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 	tool := Tool{Name: "echo", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "echoed"} }}
 	tr := &fakeTransport{responses: []string{
 		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
 		textResponse("第一轮回答"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	r1, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn1: %v", err)
 	}
 
 	tr2 := &fakeTransport{responses: []string{textResponse("第二轮回答")}}
-	llm2 := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr2}}
+	llm2 := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr2}}
 	_, err = Run(context.Background(), llm2, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn2: %v", err)
@@ -233,8 +319,6 @@ func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 	for _, m := range body.Messages {
 		roles = append(roles, m.Role)
 	}
-	// 请求体 = 第一轮 transcript（4 条）+ 本轮 user；第二轮的 assistant 回答
-	// 是响应，不在请求体中。
 	want := []string{"user", "assistant", "tool", "assistant", "user"}
 	if !reflect.DeepEqual(roles, want) {
 		t.Errorf("turn2 request roles = %v, want %v", roles, want)
@@ -251,7 +335,7 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
 	}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	res, err := Run(context.Background(), llm, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
@@ -269,12 +353,11 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 		responses[i] = toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"})
 	}
 	tr := &fakeTransport{responses: responses}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// 1 条 user + 每步 assistant+tool 各 1 条。
 	if want := 1 + 2*maxIterations; len(res.Messages) != want {
 		t.Errorf("Messages len = %d, want %d", len(res.Messages), want)
 	}

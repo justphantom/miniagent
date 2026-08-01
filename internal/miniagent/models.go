@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// ListModels 调 GET {BaseURL}/v1/models，返回 id 列表。复用 endpoint/鉴权。
+// ListModels 调 GET ModelsURL，返回 id 列表。复用 modelsEndpoint/鉴权。
 func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
-	client, u, err := c.endpoint("/v1/models", 30*time.Second)
+	client, u, err := c.modelsEndpoint(30 * time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -42,4 +42,16 @@ func (c *HTTPClient) ListModels(ctx context.Context) ([]string, error) {
 		ids = append(ids, m.ID)
 	}
 	return ids, nil
+}
+
+// ListAvailableModels 按 provider 解析可用模型：ModelsURL 空则直接返回静态 Models（不 GET），
+// 静态也空则报错；否则经 llm GET ModelsURL（审查 v3 #5）。调用方须保证 llm 与 p 同源。
+func ListAvailableModels(ctx context.Context, llm *HTTPClient, p ProviderConfig) ([]string, error) {
+	if p.ModelsURL == "" {
+		if len(p.Models) == 0 {
+			return nil, fmt.Errorf("provider %q 无 models_url 且静态 models 为空", p.Name)
+		}
+		return append([]string(nil), p.Models...), nil
+	}
+	return llm.ListModels(ctx)
 }

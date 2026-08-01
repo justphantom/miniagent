@@ -31,7 +31,7 @@ func TestRun_ToolsRunInParallel(t *testing.T) {
 		),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 
 	done := make(chan struct{})
 	go func() {
@@ -65,7 +65,7 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 		),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var uses []string
 	onToolUse := func(name, input string) error {
 		uses = append(uses, name)
@@ -84,7 +84,7 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 func TestRun_CancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
 	_, err := Run(ctx, llm, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")

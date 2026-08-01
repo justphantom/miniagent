@@ -19,7 +19,7 @@ func TestHTTPClient_Do_TextResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -45,7 +45,7 @@ func TestHTTPClient_Do_ToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -69,7 +69,7 @@ func TestHTTPClient_Do_EmptyChoicesFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error for empty choices")
@@ -87,7 +87,7 @@ func TestHTTPClient_Do_NonOKStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -104,7 +104,7 @@ func TestHTTPClient_Do_RejectsOversizedBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected oversize error")
@@ -125,7 +125,7 @@ func TestHTTPClient_Do_EmptyAPIKey(t *testing.T) {
 
 // BaseURL 缺 scheme：错误信息应提示 "http(s)://"。
 func TestHTTPClient_Do_BaseURLMissingScheme(t *testing.T) {
-	c := &HTTPClient{APIKey: "sk", BaseURL: "api.example.com"}
+	c := &HTTPClient{APIKey: "sk", ChatURL: "api.example.com"}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -138,7 +138,7 @@ func TestHTTPClient_Do_BaseURLMissingScheme(t *testing.T) {
 // BaseURL 用非 http(s) scheme（如 ftp）：必须在组请求前拒绝，而非等请求
 // 失败才报错。
 func TestHTTPClient_Do_BaseURLUnsupportedScheme(t *testing.T) {
-	c := &HTTPClient{APIKey: "sk", BaseURL: "ftp://example.com"}
+	c := &HTTPClient{APIKey: "sk", ChatURL: "ftp://example.com"}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -159,7 +159,7 @@ func TestHTTPClient_Do_AcceptsLimitBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -245,7 +245,7 @@ func TestHTTPClient_Do_ContextLength400(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"error":{"message":"This model maximum context length is 8192 tokens"}}`)
 	}))
 	defer srv.Close()
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if !errors.Is(err, ErrContextLength) {
 		t.Fatalf("err = %v, want ErrContextLength", err)

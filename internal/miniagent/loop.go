@@ -53,7 +53,12 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	// slice，原地 append 会越界写调用方的数据。
 	msgs := make([]Message, 0, len(cfg.History)+1)
 	msgs = append(msgs, cfg.History...)
-	msgs = append(msgs, Message{Role: roleUser, Content: userPrompt})
+	// 阶段 1（Run 入口统一）：屏障掉最新 summary 之前的旧历史（审查 v3 #3）。
+	msgs = applyCompactionBarrier(msgs)
+	// newMsgs 仅记本轮新增（user prompt + assistant/tool + summary），main 据此 append-only
+	// 落盘，不重写全量。与 msgs 分离：上下文裁剪只动 msgs，落盘记真实发生。
+	var newMsgs []Message
+	appendMsg(&msgs, &newMsgs, Message{Role: roleUser, Content: userPrompt})
 	total := Usage{}
 	// 调用方可经 cfg.MaxIterations 覆盖默认上限；<=0 回退到包默认 maxIterations。
 	iterLimit := cfg.MaxIterations
@@ -63,15 +68,11 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 
 	for step := 1; step <= iterLimit; step++ {
 		if err := ctx.Err(); err != nil {
-			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
+			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
 		}
-		// 主动前置裁剪：估算超窗口 80% 时按轮成组删中段，保持 tool_calls/tool 配对。
-		// ContextWindow=0 时不管理（仅 ErrContextLength 被动降级）。
-		if cfg.ContextWindow > 0 && estimateTokens(msgs) > cfg.ContextWindow*4/5 {
-			msgs = compactHistory(msgs, contextKeepRecent)
-			if logger != nil {
-				logger.Warn("context near window; compacted history", "step", step, "msgs", len(msgs))
-			}
+		// 阶段 2（loop 每 step 前）：超 window 摘要中段 + 有损 fallback + 终止（见 compactIfOverWindow）。
+		if cerr := compactIfOverWindow(ctx, llm, cfg, &msgs, &newMsgs, logger); cerr != nil {
+			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, cerr
 		}
 		resp, err := callLLM(ctx, llm, cfg, step, msgs, hooks, logger)
 		if errors.Is(err, ErrContextLength) {
@@ -84,13 +85,13 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			resp, err = callLLM(ctx, llm, cfg, step, msgs, hooks, logger)
 		}
 		if err != nil {
-			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
+			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
 		}
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
 		// 预算熔断：以端点返回的真实 usage 累计判定，超限即停（error 路径 + 退出码 1）。
 		if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
-			return Result{Usage: total, Steps: step, Messages: msgs}, fmt.Errorf(
+			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, fmt.Errorf(
 				"%w: input=%d output=%d（累计超 MaxTotalTokens %d）",
 				ErrBudgetExceeded, total.InputTokens, total.OutputTokens, cfg.MaxTotalTokens,
 			)
@@ -98,18 +99,25 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 
 		if len(resp.ToolCalls) == 0 {
 			// 最终文本入历史：接续对话需要看到上一轮的回答。
-			msgs = append(msgs, Message{Role: roleAssistant, Content: resp.Text, Reasoning: resp.Reasoning})
-			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs}, nil
+			appendMsg(&msgs, &newMsgs, Message{Role: roleAssistant, Content: resp.Text, Reasoning: resp.Reasoning})
+			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
 		}
 
-		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, hooks, logger)
+		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, &newMsgs, hooks, logger)
 		if err != nil {
-			return Result{Usage: total, Steps: step, Messages: msgs}, err
+			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
 		}
 	}
 	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。
 	// Finish=finishMaxIterations 是终止信号（无最终 Text）。
-	return Result{Usage: total, Steps: iterLimit, Finish: finishMaxIterations, Messages: msgs}, nil
+	return Result{Usage: total, Steps: iterLimit, Finish: finishMaxIterations, Messages: msgs, NewMessages: newMsgs}, nil
+}
+
+// appendMsg 同时追加到 msgs（LLM context）与 newMsgs（持久化）。所有产生点统一经此，
+// 保证 session 落盘与上下文一致（审查 v1 #1 + v2 #4）。
+func appendMsg(msgs, newMsgs *[]Message, m Message) {
+	*msgs = append(*msgs, m)
+	*newMsgs = append(*newMsgs, m)
 }
 
 func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
@@ -126,28 +134,18 @@ func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
 
 func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, error) {
 	if logger != nil {
-		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream)
+		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream, "thinking", cfg.ThinkingLevel)
 	}
-	req := Request{
-		Model:     cfg.Model,
-		System:    cfg.System,
-		Messages:  msgs,
-		MaxTokens: cfg.MaxTokens,
-		Tools:     cfg.Tools,
-	}
-	var (
-		resp Response
-		err  error
-	)
-	if cfg.Stream {
-		onDelta := func(d Delta) {
-			if hooks.OnDelta != nil {
-				_ = hooks.OnDelta(step, d.Kind, d.Text)
-			}
+	resp, err := callLLMOnce(ctx, llm, cfg, step, msgs, hooks)
+	// thinking 不被支持：去字段重试一次（仅当确实发了 thinking，避免无谓重试，审查 v2 #7）。
+	if errors.Is(err, ErrThinkingUnsupported) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
+		if logger != nil {
+			logger.Warn("thinking 不被端点支持，去字段重试一次", "step", step)
 		}
-		resp, err = llm.DoStream(ctx, req, onDelta)
-	} else {
-		resp, err = llm.Do(ctx, req)
+		down := cfg
+		down.ThinkingLevel = ""
+		down.Thinking = nil
+		resp, err = callLLMOnce(ctx, llm, down, step, msgs, hooks)
 	}
 	if err != nil {
 		if logger != nil {
@@ -165,7 +163,28 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msg
 	return resp, nil
 }
 
-func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, hooks LoopHooks, logger *slog.Logger) ([]Message, error) {
+// callLLMOnce 构造 Request（含 thinking）并单次调用 Do/DoStream，不含降级/重试逻辑。
+func callLLMOnce(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks) (Response, error) {
+	req := Request{
+		Model:         cfg.Model,
+		System:        cfg.System,
+		Messages:      msgs,
+		MaxTokens:     cfg.MaxTokens,
+		Tools:         cfg.Tools,
+		ThinkingLevel: cfg.ThinkingLevel,
+		Thinking:      cfg.Thinking,
+	}
+	if cfg.Stream {
+		return llm.DoStream(ctx, req, func(d Delta) {
+			if hooks.OnDelta != nil {
+				_ = hooks.OnDelta(step, d.Kind, d.Text)
+			}
+		})
+	}
+	return llm.Do(ctx, req)
+}
+
+func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, newMsgs *[]Message, hooks LoopHooks, logger *slog.Logger) ([]Message, error) {
 	calls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		calls[i] = tc
@@ -174,7 +193,7 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 		}
 	}
 	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。
-	msgs = append(msgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls})
+	appendMsg(&msgs, newMsgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls})
 
 	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
 	// OnToolUse 返回 ErrToolDenied 表示拒绝该工具（如危险命令未确认）：记录后继续
@@ -212,7 +231,7 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 		if t, ok := toolByName[tc.Name]; ok {
 			limit = t.ResultLimit
 		}
-		msgs = append(msgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit)})
+		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit)})
 	}
 	return msgs, nil
 }

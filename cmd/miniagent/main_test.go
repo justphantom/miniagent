@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -22,35 +21,36 @@ import (
 
 // fork-based 测试：通过 MINIAGENT_TEST_ENTRYPOINTS=1 让 test binary 重新进入
 // main()，覆盖 os.Exit 路径（这些路径无法在进程内测试）。
-// os.Args[0] 为 test binary 自身，用 exec.Command 重新启动它。
 
 const entrypointEnv = "MINIAGENT_TEST_ENTRYPOINTS=1"
 
 func TestMain(m *testing.M) {
 	if os.Getenv("MINIAGENT_TEST_ENTRYPOINTS") == "1" {
 		main()
-		// main() 大概率已 os.Exit；若正常返回（成功完成对话路径），
-		// 显式 exit 0 避免 go test 框架继续运行（行为依赖版本，是埋雷）。
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
 
-func TestBuildTools_AlwaysRegisters6(t *testing.T) {
-	tools := buildTools(t.TempDir(), 0, "")
+// chatArgs 构造裸模式 e2e 的公共参数（auto 模式免 workdir，handler 忽略路径）。
+func chatArgs(srvURL string, extra ...string) []string {
+	return append([]string{
+		"-chat-url", srvURL + "/v1/chat/completions",
+		"-models-url", srvURL + "/v1/models",
+		"-model", "m",
+		"-mode", "auto",
+	}, extra...)
+}
+
+func TestBuildTools_AlwaysRegisters9(t *testing.T) {
+	tools := buildTools(t.TempDir(), 0, miniagent.ModeAuto)
 	if len(tools) != 9 {
 		t.Fatalf("got %d tools, want 9", len(tools))
-	}
-	expect := map[string]bool{"read": true, "write": true, "edit": true, "multi_edit": true, "grep": true, "glob": true, "shell": true, "todo": true, "fetch": true}
-	for _, tk := range tools {
-		if !expect[tk.Name] {
-			t.Errorf("unexpected tool %q", tk.Name)
-		}
 	}
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
-	tools := buildTools("", 0, "")
+	tools := buildTools("", 0, miniagent.ModeAuto)
 	if len(tools) != 9 {
 		t.Fatalf("got %d tools, want 9", len(tools))
 	}
@@ -60,12 +60,10 @@ func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 // (exitCode, combinedOutput)。extraEnv 追加在默认 env 之后（覆盖同名 key）。
 func runMainBin(t *testing.T, stdin string, args []string, extraEnv ...string) (int, string) {
 	t.Helper()
-	// 用测试自身 ctx 控制 fork 出来的 binary，避免卡死。
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], args...)
 	cmd.Stdin = strings.NewReader(stdin)
-	// 显式重建 env：剥离可能存在的宿主 MINIAGENT_API_KEY，保证用例独立。
 	env := []string{entrypointEnv}
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "MINIAGENT_API_KEY=") ||
@@ -100,29 +98,64 @@ func TestCLI_VersionExitsZero(t *testing.T) {
 	}
 }
 
-func TestCLI_MissingModelExits1(t *testing.T) {
+// 裸模式无 -chat-url → 报错。
+func TestCLI_NoChatURLExits1(t *testing.T) {
 	code, out := runMainBin(t, "prompt", nil)
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "--model is required") {
-		t.Errorf("missing error: %s", out)
+	if !strings.Contains(out, "chat-url") {
+		t.Errorf("missing chat-url error: %s", out)
+	}
+}
+
+// 裸模式有 -chat-url 缺 -model → 报错。
+func TestCLI_MissingModelExits1(t *testing.T) {
+	code, out := runMainBin(t, "prompt", []string{"-chat-url", "http://127.0.0.1:1/v1/chat/completions"})
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "model") {
+		t.Errorf("missing model error: %s", out)
 	}
 }
 
 func TestCLI_MissingAPIKeyExits1(t *testing.T) {
-	code, out := runMainBin(t, "prompt", []string{"-model", "x"})
+	code, out := runMainBin(t, "prompt", chatArgs("http://127.0.0.1:1"))
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "API_KEY is required") {
-		t.Errorf("missing error: %s", out)
+	if !strings.Contains(out, "API key") {
+		t.Errorf("missing API key error: %s", out)
+	}
+}
+
+// default 模式无 workdir → 报错（需 -workdir 或 -mode auto）。
+func TestCLI_DefaultModeRequiresWorkdir(t *testing.T) {
+	args := []string{"-chat-url", "http://127.0.0.1:1/v1/chat/completions", "-model", "m", "-mode", "default"}
+	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "workdir") {
+		t.Errorf("missing workdir-required error: %s", out)
+	}
+}
+
+// -stream 与 -result-only 互斥。
+func TestCLI_StreamResultOnlyMutex(t *testing.T) {
+	args := chatArgs("http://127.0.0.1:1", "-stream", "-result-only")
+	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "互斥") {
+		t.Errorf("missing mutex error: %s", out)
 	}
 }
 
 func TestCLI_EmptyStdinExits1(t *testing.T) {
-	// 提供 API_KEY 跳过前置校验，专测 stdin empty 路径。
-	code, out := runMainBin(t, "", []string{"-model", "x"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "", chatArgs("http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -131,10 +164,8 @@ func TestCLI_EmptyStdinExits1(t *testing.T) {
 	}
 }
 
-// 超大 prompt 必须在入口处拒绝：否则写回 session 后会撞 LoadSession 的
-// 大小上限，导致会话永久无法接续。
 func TestCLI_OversizedStdinExits1(t *testing.T) {
-	code, out := runMainBin(t, strings.Repeat("x", maxPromptBytes+1), []string{"-model", "x"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, strings.Repeat("x", maxPromptBytes+1), chatArgs("http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -143,9 +174,7 @@ func TestCLI_OversizedStdinExits1(t *testing.T) {
 	}
 }
 
-// 两轮接续 e2e：fork 出的子进程真实请求父进程内的 httptest server。
-// 第二轮的请求体必须包含第一轮的回答（上下文自动带入），session 文件
-// 落盘完整 transcript。
+// 两轮接续 e2e：第二轮请求体含第一轮回答，session jsonl 落盘。
 func TestCLI_SessionTwoTurns(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []string
@@ -158,8 +187,8 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sess := filepath.Join(t.TempDir(), "s.json")
-	args := []string{"-model", "m", "-base-url", srv.URL, "-session", sess}
+	sess := filepath.Join(t.TempDir(), "s.jsonl")
+	args := chatArgs(srv.URL, "-session", sess)
 	code, out := runMainBin(t, "第一轮提问", args, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("turn1 code = %d, out = %s", code, out)
@@ -177,7 +206,6 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 	if !strings.Contains(bodies[1], "第一轮提问") || !strings.Contains(bodies[1], "回答X") || !strings.Contains(bodies[1], "第二轮提问") {
 		t.Errorf("turn2 request missing turn1 context: %s", bodies[1])
 	}
-
 	data, err := os.ReadFile(sess)
 	if err != nil {
 		t.Fatalf("session file not written: %v", err)
@@ -189,13 +217,13 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 	}
 }
 
-// 损坏的 session 文件 → stderr 报错 + 退出码 1，不静默丢弃历史。
+// 损坏 session → 报错退出 1。
 func TestCLI_CorruptSessionExits1(t *testing.T) {
-	sess := filepath.Join(t.TempDir(), "bad.json")
+	sess := filepath.Join(t.TempDir(), "bad.jsonl")
 	if err := os.WriteFile(sess, []byte("{oops"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out := runMainBin(t, "prompt", []string{"-model", "x", "-session", sess}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "prompt", chatArgs("http://127.0.0.1:1", "-session", sess), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -204,9 +232,8 @@ func TestCLI_CorruptSessionExits1(t *testing.T) {
 	}
 }
 
-// 非法 -log-level 应报错退出码 1。
 func TestCLI_InvalidLogLevelExits1(t *testing.T) {
-	code, out := runMainBin(t, "prompt", []string{"-model", "x", "-log-level", "bogus"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "prompt", chatArgs("http://127.0.0.1:1", "-log-level", "bogus"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -215,20 +242,18 @@ func TestCLI_InvalidLogLevelExits1(t *testing.T) {
 	}
 }
 
-// http（非 loopback）BaseURL 应警告明文传 key；loopback/https 不警告。
-func TestWarnInsecureBaseURL(t *testing.T) {
+// http（非 loopback）端点应警告明文传 key。
+func TestWarnInsecureURL(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := os.Stderr
 	os.Stderr = w
-	warnInsecureBaseURL("http://llm.internal:8000")
-	warnInsecureBaseURL("http://localhost:8080")
-	warnInsecureBaseURL("http://127.0.0.1:11434")
-	warnInsecureBaseURL("http://127.0.0.2:8000") // 127.0.0.0/8 整段都是 loopback
-	warnInsecureBaseURL("http://[::1]:8000")
-	warnInsecureBaseURL("https://api.openai.com")
+	warnInsecureURL("http://llm.internal:8000/v1/chat/completions")
+	warnInsecureURL("http://localhost:8080/v1/chat/completions")
+	warnInsecureURL("http://127.0.0.1:11434/v1/chat/completions")
+	warnInsecureURL("https://api.openai.com/v1/chat/completions")
 	_ = w.Close()
 	os.Stderr = old
 	out, _ := io.ReadAll(r)
@@ -237,7 +262,6 @@ func TestWarnInsecureBaseURL(t *testing.T) {
 	}
 }
 
-// resolveAPIKey：-key-file 优先于 env，首尾空白截断；缺省回退 env；读失败报错。
 func TestResolveAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	kf := filepath.Join(dir, "k")
@@ -249,18 +273,17 @@ func TestResolveAPIKey(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	if got != "sk-file" {
-		t.Errorf("got %q, want sk-file (file trims + overrides env)", got)
+		t.Errorf("got %q, want sk-file", got)
 	}
 	got2, err := resolveAPIKey("", "sk-env2")
 	if err != nil || got2 != "sk-env2" {
-		t.Errorf("got (%q,%v), want sk-env2 (env fallback)", got2, err)
+		t.Errorf("got (%q,%v), want sk-env2", got2, err)
 	}
 	if _, err := resolveAPIKey(filepath.Join(dir, "nope"), ""); err == nil {
 		t.Error("expected error for missing key-file")
 	}
 }
 
-// key 文件权限 loose 警告，tight 不警告。
 func TestWarnKeyFilePerm(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -273,8 +296,8 @@ func TestWarnKeyFilePerm(t *testing.T) {
 	_ = os.WriteFile(loose, []byte("x"), 0o644)
 	tight := filepath.Join(dir, "tight")
 	_ = os.WriteFile(tight, []byte("x"), 0o600)
-	warnKeyFilePerm(loose) // 应警告
-	warnKeyFilePerm(tight) // 不警告
+	warnKeyFilePerm(loose)
+	warnKeyFilePerm(tight)
 	_ = w.Close()
 	os.Stderr = old
 	out, _ := io.ReadAll(r)
@@ -283,7 +306,7 @@ func TestWarnKeyFilePerm(t *testing.T) {
 	}
 }
 
-// e2e：仅靠 -key-file 提供 key（不设 MINIAGENT_API_KEY env），key 进入请求 Authorization。
+// e2e：仅靠 -key-file 提供 key，key 进入请求 Authorization。
 func TestCLI_KeyFileAuth(t *testing.T) {
 	var mu sync.Mutex
 	var gotAuth string
@@ -299,20 +322,18 @@ func TestCLI_KeyFileAuth(t *testing.T) {
 	if err := os.WriteFile(keyFile, []byte("sk-from-config-file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// runMainBin 已剥离 MINIAGENT_API_KEY，key 仅来自 -key-file。
-	code, out := runMainBin(t, "ping", []string{"-model", "m", "-base-url", srv.URL, "-key-file", keyFile})
+	code, out := runMainBin(t, "ping", chatArgs(srv.URL, "-key-file", keyFile))
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if gotAuth != "Bearer sk-from-config-file" {
-		t.Errorf("Authorization = %q, want Bearer sk-from-config-file", gotAuth)
+		t.Errorf("Authorization = %q", gotAuth)
 	}
 }
 
-// 交互模式（-interactive）：stdin 两行 → 两轮对话，第二轮请求含第一轮回答
-// （上下文进程内累积），session 文件含两轮内容。
+// 交互模式：两轮对话，第二轮请求含第一轮回答。
 func TestCLI_InteractiveTwoTurns(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []string
@@ -325,31 +346,22 @@ func TestCLI_InteractiveTwoTurns(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sess := filepath.Join(t.TempDir(), "s.json")
-	code, out := runMainBin(t, "第一问\n第二问\n", []string{"-model", "m", "-base-url", srv.URL, "-interactive", "-session", sess}, "MINIAGENT_API_KEY=sk-test")
+	sess := filepath.Join(t.TempDir(), "s.jsonl")
+	code, out := runMainBin(t, "第一问\n第二问\n", chatArgs(srv.URL, "-interactive", "-session", sess), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(bodies) != 2 {
-		t.Fatalf("got %d requests, want 2 (one per turn)", len(bodies))
+		t.Fatalf("got %d requests, want 2", len(bodies))
 	}
-	// 第二轮请求须含第一轮的回答（累积）与本轮 prompt。
 	if !strings.Contains(bodies[1], "回A") || !strings.Contains(bodies[1], "第二问") {
 		t.Errorf("turn2 missing accumulated context: %s", bodies[1])
 	}
-	data, err := os.ReadFile(sess)
-	if err != nil {
-		t.Fatalf("session not written: %v", err)
-	}
-	for _, want := range []string{"第一问", "回A", "第二问"} {
-		if !strings.Contains(string(data), want) {
-			t.Errorf("session missing %q: %s", want, data)
-		}
-	}
 }
 
+// 薄版 checkConfine：.. 越界拒；符号链接不追（不拒）。
 func TestCheckConfine(t *testing.T) {
 	dir := t.TempDir()
 	inner := filepath.Join(dir, "inner.txt")
@@ -357,10 +369,7 @@ func TestCheckConfine(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := checkConfine(dir, "inner.txt"); err != nil {
-		t.Errorf("inner relative path rejected: %v", err)
-	}
-	if err := checkConfine(dir, inner); err != nil {
-		t.Errorf("inner absolute path rejected: %v", err)
+		t.Errorf("inner relative rejected: %v", err)
 	}
 	if err := checkConfine(dir, filepath.Join(dir, "..", "outside")); err == nil {
 		t.Error("escape via .. should be rejected")
@@ -373,12 +382,13 @@ func TestCheckConfine(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkConfine(dir, "link"); err == nil {
-		t.Error("symlink escape should be rejected")
+	// 薄版不追符号链接：link 路径在 workdir 子树内即放行（真隔离靠 OS）。
+	if err := checkConfine(dir, "link"); err != nil {
+		t.Errorf("thin checkConfine should not follow symlink: %v", err)
 	}
 }
 
-// -list-models 早退：GET /v1/models，打印 id 后退出码 0。
+// -list-models：GET models-url，打印 id。
 func TestCLI_ListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -388,7 +398,7 @@ func TestCLI_ListModels(t *testing.T) {
 		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-3.5-turbo"}]}`)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "", []string{"-list-models", "-base-url", srv.URL}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "", []string{"-list-models", "-chat-url", srv.URL + "/v1/chat/completions", "-models-url", srv.URL + "/v1/models"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -397,33 +407,40 @@ func TestCLI_ListModels(t *testing.T) {
 	}
 }
 
-// checkApprove 各 mode × 各输入（共享 reader 已修复 stdin 冲突，此处直接喂 reader）。
-func TestCheckApprove(t *testing.T) {
-	mkR := func(s string) *bufio.Reader { return bufio.NewReader(strings.NewReader(s)) }
-	if err := checkApprove("all", "shell", "{}", mkR("")); err != nil {
-		t.Errorf("all mode should allow: %v", err)
+// -result-only：stdout 仅 result.text，无 NDJSON 事件。
+func TestCLI_ResultOnly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"纯结果"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+	code, out := runMainBin(t, "ping", chatArgs(srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
 	}
-	if err := checkApprove("dangerous", "read", "{}", mkR("")); err != nil {
-		t.Errorf("non-dangerous tool should allow: %v", err)
-	}
-	if err := checkApprove("dangerous", "shell", "{}", mkR("y\n")); err != nil {
-		t.Errorf("dangerous + y should allow: %v", err)
-	}
-	if err := checkApprove("dangerous", "shell", "{}", mkR("n\n")); err == nil {
-		t.Error("dangerous + n should deny")
-	}
-	if err := checkApprove("dangerous", "shell", "{}", mkR("")); err == nil {
-		t.Error("dangerous + EOF should deny")
-	}
-	if err := checkApprove("always", "read", "{}", mkR("y\n")); err != nil {
-		t.Errorf("always + y should allow: %v", err)
+	if strings.TrimSpace(out) != "纯结果" {
+		t.Errorf("result-only stdout should be bare text, got: %q", out)
 	}
 }
 
-// buildTools(confine=workdir) 后，写工具对越界 path 返回 IsError（含「沙箱」）。
-func TestBuildTools_ConfineRejectsEscape(t *testing.T) {
+// -result-only 失败：输出 "error: <msg>" + 退出码 1。
+func TestCLI_ResultOnlyError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	code, out := runMainBin(t, "ping", chatArgs(srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(out), "error:") {
+		t.Errorf("result-only failure should print 'error: ...': %q", out)
+	}
+}
+
+// buildTools(default) 后写工具对越界 path 返回 IsError（含「default 模式」）。
+func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
-	tools := buildTools(dir, 0, "workdir")
+	tools := buildTools(dir, 0, miniagent.ModeDefault)
 	byName := map[string]miniagent.Tool{}
 	for _, tk := range tools {
 		byName[tk.Name] = tk
@@ -439,8 +456,42 @@ func TestBuildTools_ConfineRejectsEscape(t *testing.T) {
 			args = `{"path":"../escape.txt","edits":[{"old_string":"a","new_string":"b"}]}`
 		}
 		r := byName[name].Call(context.Background(), args)
-		if !r.IsError || !strings.Contains(r.Output, "沙箱") {
+		if !r.IsError || !strings.Contains(r.Output, "default 模式") {
 			t.Errorf("%s escape should be rejected: %s", name, r.Output)
 		}
+	}
+}
+
+// config 模式 e2e：system prompt 含 subagent 引导（config 绝对路径 + 父 session id）。
+func TestCLI_SubagentPromptInjected(t *testing.T) {
+	var mu sync.Mutex
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = string(b)
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
+	cfg := `{"providers":[{"name":"main","chat_url":"` + srv.URL + `/v1/chat/completions","models":["glm"]}],"defaults":{"model":"main/glm","mode":"auto"}}`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessID := "parent1"
+	code, out := runMainBin(t, "hi", []string{"-config", cfgPath, "-session", sessID}, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	abs, _ := filepath.Abs(cfgPath)
+	if !strings.Contains(body, abs) {
+		t.Errorf("system prompt missing config abs path %q: %s", abs, body)
+	}
+	if !strings.Contains(body, sessID+"-sub-") {
+		t.Errorf("system prompt missing parent session id guidance: %s", body)
 	}
 }

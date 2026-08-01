@@ -5,6 +5,51 @@
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-01
+
+> v3 重大重构：双运行形态（config + 裸 CLI）、会话 jsonl append-only、摘要式压缩、
+> 思考级别、权限模式（default/auto）、subagent fork 引导。**破坏性变更**见 Removed。
+
+### Added
+- **配置系统**（`internal/miniagent/config.go` + `resolve.go`）：`./miniagent.json` 或
+  `-config <path>`，支持多 provider、`${VAR}` 展开、优先级 cli>config>builtin、校验。
+  双运行形态：config 模式（完整）与裸 CLI 模式（`-chat-url`+`-model`+key 隐式单 provider，
+  向后兼容）。默认 config 不存在 = 软失败退裸模式；显式 `-config` 不存在 = 硬错误（审查 v3 #1/#7）。
+- **会话 jsonl**（`session.go` 重写）：append-only，首行 metadata（id/model/workdir/provider/created）
+  + 每条 message 行（`type=message`）。`Message.Kind` 标记（如 `summary`）仅 session 层，wire 不泄漏。
+  `Result.NewMessages` 收集本轮新增，main `AppendMessages` 增量追加（不重写全量）。`-migrate-session`
+  把 v2 JSON 数组转为 jsonl。`ResolveSessionPath`：id 在 `session.dir` 解析，含 `/`/`.` 视为路径。
+- **摘要式压缩**（`compaction.go` 新增）：Run 入口阶段 1 `applyCompactionBarrier`（屏障最新 summary
+  之前的旧历史，仍留文件）；loop 每步阶段 2 超 window 80% 时 `compactWithSummary` 把中段摘要为单条
+  `KindSummary` 消息（既进 context 又落盘）。中段 `validateToolPairing` 断言；失败/无中段回落有损
+  `compactHistory`，仍超裁到最近轮，再超报错终止（避免循环烧请求，审查 v2 #8 + v3 #4）。
+- **思考级别**（`-thinking`）：off（默认）/minimal/low/medium/high/xhigh/max，wire 透传
+  `reasoning_effort`；provider `ThinkingMapping` 可覆盖字段名与取值映射。一次性降级：识别 thinking
+  致 400（启发式 body 特征）→ 去字段重试一次 + warn（审查 v2 #7）。
+- **权限模式**（`-mode default|auto`）：default（默认）= 写工具限 workdir 子树（薄版 `checkConfine`，
+  去 EvalSymlinks）、shell 词边界拒 sudo/su（`\b(sudo|su)\b`）；auto 无限制。default 不构成安全边界
+  （审查 v3 §6）。`buildTools(workdir, timeout, mode)`。
+- **subagent fork**（`-result-only`）：仅输出 result.text（与 `-stream` 互斥），失败输出 `error: <msg>`
+  + 退出码 1。system prompt 注入 subagent 引导（config 绝对路径 + 父 session id + 嵌套≤2 层约束，
+  审查 v3 #6/#8）。
+- **多 provider client**：`HTTPClient` 改 `ChatURL`/`ModelsURL`（完整 URL，构造时 parse 缓存，审查 v3 #10），
+  `validateURL` 抽出。`ListAvailableModels`：ModelsURL 空直接静态 models（不 GET），皆空报错（审查 v3 #5）。
+- 新增 flag：`-config` / `-chat-url` / `-models-url` / `-mode` / `-thinking` / `-result-only` / `-migrate-session`。
+
+### Changed
+- `-model`：config 模式 `provider/id`；裸模式裸 id。
+- `-session`：id 或路径（id 解析为 jsonl）；不再整体写回，改 append-only。
+- `-list-models`：经 `ListAvailableModels`（带静态回落）；不要求 `-model`。
+- `cmd/miniagent/setup.go` 拆出（`loadConfigOrBare`/`collectOverrides`/`resolveFinalKey`/`validateConversation`/
+  `loopCfg`/`buildHooks`/`providerForListModels` 等），main.go 仅入口编排。
+- interactive 模式：有 `-session` 时以文件为唯一真源（每轮 LoadSession → Run → AppendNewMessages），
+  过滤统一在 Run 入口（审查 v2 #3 + v3 #3）。
+
+### Removed（破坏性）
+- `-base-url`、`-approve`、`-confine` flag 与 `$MINIAGENT_BASE_URL` env。
+- session 旧 JSON 数组格式（用 `-migrate-session` 迁移）。
+- `SaveSession` / `checkApprove` / `HTTPClient.BaseURL` / `endpoint()`。
+
 ## [2.0.0] - 2026-08-01
 
 ### Added

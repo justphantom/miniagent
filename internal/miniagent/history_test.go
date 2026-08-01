@@ -1,10 +1,9 @@
 package miniagent
 
 import (
-	"bytes"
 	"context"
-	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -92,22 +91,45 @@ func TestCompactHistory_NoOpWhenSmall(t *testing.T) {
 	}
 }
 
-// ContextWindow 驱动 Run 在超阈值时调用 compactHistory（观察 logger warn）。
-func TestRun_CompactsWhenOverWindow(t *testing.T) {
+// Run 超 window 阈值触发摘要压缩：summary 进 context 又落 NewMessages（审查 v3 #12），
+// 且压缩后不再超 → Run 正常结束。transport 对摘要调用与主调用都回短文本。
+func TestRun_SummaryReducesAndPersists(t *testing.T) {
+	var hist []Message
+	for i := range 10 {
+		hist = append(hist,
+			Message{Role: roleUser, Content: strings.Repeat("q", 50) + strconv.Itoa(i)},
+			Message{Role: roleAssistant, Content: strings.Repeat("a", 50) + strconv.Itoa(i)},
+		)
+	}
+	tr := &fakeTransport{responses: []string{textResponse("ok"), textResponse("done")}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	res, err := Run(context.Background(), llm, LoopConfig{ContextWindow: 256, History: hist}, "now", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var hasSummary bool
+	for _, m := range res.NewMessages {
+		if m.Kind == KindSummary {
+			hasSummary = true
+		}
+	}
+	if !hasSummary {
+		t.Errorf("NewMessages missing persisted summary: %+v", res.NewMessages)
+	}
+}
+
+// 即使反复有损裁剪仍超 window → 报错终止（避免循环烧请求，审查 v3 #4）。
+func TestRun_OverWindowIrreducibleErrors(t *testing.T) {
 	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	bigArgs := strings.Repeat("a", 1000)
 	tr := &fakeTransport{responses: []string{
 		toolResponse(ToolCall{ID: "c1", Name: "q", Args: bigArgs}),
-		toolResponse(ToolCall{ID: "c2", Name: "q", Args: bigArgs}),
+		textResponse("ok"),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	if _, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, ContextWindow: 200}, "x", LoopHooks{}, logger); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if !strings.Contains(buf.String(), "compacted") {
-		t.Errorf("expected compact log when over window, got: %s", buf.String())
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	_, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, ContextWindow: 200}, "x", LoopHooks{}, nil)
+	if err == nil {
+		t.Fatal("expected error when irreducibly over window")
 	}
 }

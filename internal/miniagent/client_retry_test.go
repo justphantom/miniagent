@@ -56,7 +56,7 @@ func TestHTTPClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
 	}{
 		{status: http.StatusTooManyRequests, body: `{"error":"rate"}`, headers: map[string]string{"Retry-After": "0"}},
 	})
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -80,7 +80,7 @@ func TestHTTPClient_Do_RetriesExhaustedOn503(t *testing.T) {
 		{status: http.StatusServiceUnavailable, body: "busy"},
 		{status: http.StatusServiceUnavailable, body: "busy"},
 	})
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")
@@ -107,7 +107,7 @@ func TestHTTPClient_Do_RetriesOn500(t *testing.T) {
 	}{
 		{status: http.StatusInternalServerError, body: "boom"},
 	})
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("expected retry success, got: %v", err)
@@ -129,7 +129,7 @@ func TestHTTPClient_Do_NoRetryOn400(t *testing.T) {
 	}{
 		{status: http.StatusBadRequest, body: `{"error":"bad"}`},
 	})
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -148,7 +148,7 @@ func TestHTTPClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
 	}{
 		{status: http.StatusTooManyRequests, body: "", headers: map[string]string{"Retry-After": "1"}},
 	})
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	start := time.Now()
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	elapsed := time.Since(start)
@@ -175,7 +175,7 @@ func TestHTTPClient_Do_RetryCancelledByCtx(t *testing.T) {
 		{status: http.StatusServiceUnavailable, body: "", headers: map[string]string{"Retry-After": "60"}},
 		{status: http.StatusServiceUnavailable, body: "", headers: map[string]string{"Retry-After": "60"}},
 	})
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_, err := c.Do(ctx, Request{Model: "m"})
@@ -202,7 +202,7 @@ func TestHTTPClient_Do_RetriesOnNetworkError(t *testing.T) {
 		calls.Add(1)
 	}))
 	t.Cleanup(srv.Close)
-	c := &HTTPClient{APIKey: "sk", BaseURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")

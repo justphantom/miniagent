@@ -3,7 +3,6 @@ package miniagent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,20 +26,92 @@ const (
 )
 
 // HTTPClient calls an OpenAI-compatible chat completions endpoint via net/http.
+// ChatURL/ModelsURL 是完整端点 URL（构造时 parse 缓存进 chatURL/modelsURL，
+// 不再每请求重做，审查 v3 #10）。
 type HTTPClient struct {
-	APIKey  string
-	BaseURL string
-	HTTP    *http.Client
-	Logger  *slog.Logger
+	APIKey    string
+	ChatURL   string
+	ModelsURL string
+	chatURL   *url.URL // 构造时缓存；直接 struct 构造时由 chatEndpoint 懒解析兜底
+	modelsURL *url.URL
+	HTTP      *http.Client
+	Logger    *slog.Logger
 }
 
-// Do 调用 POST {BaseURL}/v1/chat/completions（非流式），解析 choices[0] /
-// usage / finish_reason。响应 body 上限 maxChatBodyBytes，越界报错。
+// validateURL 解析并校验 raw 为合法 http(s) URL（含 scheme+host）。供 NewHTTPClient
+// 与 chatEndpoint/modelsEndpoint 复用，避免端点解析逻辑散落。
+func validateURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("url %q 解析失败：%w（需 http(s)://host[:port][/path]）", raw, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("url %q 缺少 scheme 或 host（应为 http(s)://host[:port]）", raw)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("url %q 的 scheme %q 不支持（仅 http/https）", raw, u.Scheme)
+	}
+	return u, nil
+}
+
+// NewHTTPClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
+// （ListAvailableModels 走静态回落时不 GET）。生产用此构造；测试可直接构造 struct，
+// chatEndpoint/modelsEndpoint 懒解析兜底。
+func NewHTTPClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger) (*HTTPClient, error) {
+	chat, err := validateURL(chatURL)
+	if err != nil {
+		return nil, err
+	}
+	c := &HTTPClient{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: chat, HTTP: httpClient, Logger: logger}
+	if modelsURL != "" {
+		m, err := validateURL(modelsURL)
+		if err != nil {
+			return nil, err
+		}
+		c.modelsURL = m
+	}
+	return c, nil
+}
+
+// chatEndpoint 返回缓存的 chatURL（懒解析兜底直接构造）+ http client。
+func (c *HTTPClient) chatEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
+	if c.chatURL == nil {
+		u, err := validateURL(c.ChatURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		c.chatURL = u
+	}
+	return c.client(defaultTimeout), c.chatURL, nil
+}
+
+func (c *HTTPClient) modelsEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
+	if c.modelsURL == nil {
+		if c.ModelsURL == "" {
+			return nil, nil, errors.New("miniagent: models_url 未配置")
+		}
+		u, err := validateURL(c.ModelsURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		c.modelsURL = u
+	}
+	return c.client(defaultTimeout), c.modelsURL, nil
+}
+
+func (c *HTTPClient) client(defaultTimeout time.Duration) *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	return &http.Client{Timeout: defaultTimeout}
+}
+
+// Do 调用 POST ChatURL（非流式），解析 choices[0] / usage / finish_reason。响应 body
+// 上限 maxChatBodyBytes，越界报错。
 //
 // 重试策略：429/500/502/503/504 与网络错误自动重试 maxRetries 次，退避按
-// retryBaseDelay * 2^attempt；若响应带 Retry-After（秒数或 HTTP-date），
-// 用它取代退避（仍受 retryMaxDelay 封顶）。其他 4xx / 解析错误 / 超大
-// body 立即返回。重试可被 ctx 取消。
+// retryBaseDelay * 2^attempt；若响应带 Retry-After（秒数或 HTTP-date），用它取代退避
+// （仍受 retryMaxDelay 封顶）。其他 4xx / 解析错误 / 超大 body 立即返回。重试可被 ctx 取消。
 func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 	client, u, body, err := c.prepareDo(req)
 	if err != nil {
@@ -88,15 +159,15 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 }
 
 // doOnce 执行单次 HTTP 调用并解析。retryable 表示错误是否值得重试；
-// retryAfter 是 Retry-After 头解析出的等待时长（0 表示未提供）。
+// retryAfter 是 Retry-After 头解析出的等待时长（-1 表示未提供）。
 func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, u *url.URL, body []byte) (Response, bool, time.Duration, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return Response{}, false, 0, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
-	// 重定向安全：依赖标准库默认 CheckRedirect——跨域重定向前自动剥离
-	// Authorization 等敏感头。若未来自定义 CheckRedirect，必须保留该语义。
+	// 重定向安全：依赖标准库默认 CheckRedirect——跨域重定向前自动剥离 Authorization
+	// 等敏感头。若未来自定义 CheckRedirect，必须保留该语义。
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	callStart := time.Now()
@@ -107,13 +178,13 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 			c.Logger.Warn("llm request failed", "error", err, "duration_ms", callDur.Milliseconds())
 		}
 		// 网络层错误（连接拒绝/DNS/超时）：值得重试，无 Retry-After。
-		return Response{}, true, 0, fmt.Errorf("llm request: %w", err)
+		return Response{}, true, -1, fmt.Errorf("llm request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxChatBodyBytes+1))
 	if rerr != nil {
-		return Response{}, true, 0, fmt.Errorf("read response: %w", rerr)
+		return Response{}, true, -1, fmt.Errorf("read response: %w", rerr)
 	}
 	if int64(len(raw)) > maxChatBodyBytes {
 		return Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
@@ -122,6 +193,10 @@ func (c *HTTPClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		// context 超限（400 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
 		if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
 			return Response{}, false, 0, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
+		}
+		// thinking 参数不被支持（400 + 特征词）：callLLM 据此去字段重试一次（审查 v2 #7）。
+		if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
+			return Response{}, false, 0, fmt.Errorf("%w: %s", ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
 		}
 		msg := fmt.Sprintf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…"))
 		if shouldRetryStatus(resp.StatusCode) {
@@ -152,9 +227,8 @@ func shouldRetryStatus(code int) bool {
 }
 
 // isContextLengthError 启发式识别 context 超限的 400 响应：不同厂商措辞不一
-// （OpenAI: "maximum context length" / "context_length_exceeded"；其他:
-// "context window"）。小写匹配命中任一即认定。误判的最坏后果是触发一次无谓的
-// 历史收紧重试，可接受。
+// （OpenAI: "maximum context length" / "context_length_exceeded"；其他: "context window"）。
+// 小写匹配命中任一即认定。误判的最坏后果是触发一次无谓的历史收紧重试，可接受。
 func isContextLengthError(raw []byte) bool {
 	lower := strings.ToLower(string(raw))
 	for _, marker := range []string{"context_length", "context length", "maximum context", "context window"} {
@@ -165,9 +239,22 @@ func isContextLengthError(raw []byte) bool {
 	return false
 }
 
+// isThinkingError 启发式识别 thinking 参数（reasoning_effort 等）不被支持的 400：跨供应商
+// 措辞不一（"reasoning_effort"/"unknown parameter"/"unrecognized"）。宽松识别——误判只会触发
+// 一次无 thinking 重试，无害（审查 v2 #7）。
+func isThinkingError(raw []byte) bool {
+	lower := strings.ToLower(string(raw))
+	for _, marker := range []string{"reasoning_effort", "reasoning_effort_level", "unknown parameter", "unrecognized", "unexpected argument"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // parseRetryAfter 解析 Retry-After 头：秒数（RFC 7231 §7.1.3）或 HTTP-date。
-// 未提供或解析失败返回 -1（哨兵），以区分显式 "Retry-After: 0"——后者语义为
-// 立即重试。返回值不做上限封顶（封顶在调用处）。
+// 未提供或解析失败返回 -1（哨兵），以区分显式 "Retry-After: 0"——后者语义为立即重试。
+// 返回值不做上限封顶（封顶在调用处）。
 func parseRetryAfter(h http.Header) time.Duration {
 	v := strings.TrimSpace(h.Get("Retry-After"))
 	if v == "" {
@@ -184,31 +271,11 @@ func parseRetryAfter(h http.Header) time.Duration {
 	return -1
 }
 
-// endpoint 解析 BaseURL 并拼接 path；c.HTTP 为 nil 时用 defaultTimeout 的默认 client。
-func (c *HTTPClient) endpoint(path string, defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
-	trimmed := strings.TrimRight(c.BaseURL, "/")
-	base, err := url.Parse(trimmed)
-	if err != nil {
-		return nil, nil, fmt.Errorf("miniagent: base_url %q 解析失败：%w（需 http(s)://host[:port]）", c.BaseURL, err)
-	}
-	if base.Scheme == "" || base.Host == "" {
-		return nil, nil, fmt.Errorf("miniagent: base_url %q 缺少 scheme 或 host（应为 http(s)://host[:port]）", c.BaseURL)
-	}
-	if base.Scheme != "http" && base.Scheme != "https" {
-		return nil, nil, fmt.Errorf("miniagent: base_url %q 的 scheme %q 不支持（仅 http/https）", c.BaseURL, base.Scheme)
-	}
-	client := c.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: defaultTimeout}
-	}
-	return client, base.JoinPath(path), nil
-}
-
 func (c *HTTPClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, error) {
 	if c.APIKey == "" {
 		return nil, nil, nil, errors.New("miniagent: api_key is empty")
 	}
-	client, u, err := c.endpoint("/v1/chat/completions", 120*time.Second)
+	client, u, err := c.chatEndpoint(120 * time.Second)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -218,61 +285,4 @@ func (c *HTTPClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, err
 		return nil, nil, nil, fmt.Errorf("build request body: %w", err)
 	}
 	return client, u, body, nil
-}
-
-// chatCompletionResponse 只摘出循环需要的字段：首条 choice 的 message
-// （content + tool_calls）、finish_reason、usage。
-type chatCompletionResponse struct {
-	Choices []struct {
-		Message struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-			Reasoning        string `json:"reasoning"`
-			ToolCalls        []struct {
-				ID       string `json:"id"`
-				Type     string `json:"type"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-		} `json:"message"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
-}
-
-func parseChatResponse(raw []byte) (Response, error) {
-	var v chatCompletionResponse
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return Response{}, fmt.Errorf("parse response: %w", err)
-	}
-	out := Response{}
-	if len(v.Choices) == 0 {
-		// 空 choices 是端点异常（内容过滤/代理故障），静默零值会让上层把
-		// 它当作"成功的空回答"（退出码 0、text 为空），必须报错。
-		return Response{}, errors.New("llm response has no choices")
-	}
-	ch := v.Choices[0]
-	out.Text = ch.Message.Content
-	// 双兼容：DeepSeek 系用 reasoning_content，OpenAI o 系用 reasoning；前者优先。
-	out.Reasoning = ch.Message.ReasoningContent
-	if out.Reasoning == "" {
-		out.Reasoning = ch.Message.Reasoning
-	}
-	out.FinishReason = ch.FinishReason
-	for _, tc := range ch.Message.ToolCalls {
-		out.ToolCalls = append(out.ToolCalls, ToolCall{
-			ID:   tc.ID,
-			Name: tc.Function.Name,
-			Args: tc.Function.Arguments,
-		})
-	}
-	if v.Usage != nil {
-		out.Usage = Usage{InputTokens: v.Usage.PromptTokens, OutputTokens: v.Usage.CompletionTokens}
-	}
-	return out, nil
 }
