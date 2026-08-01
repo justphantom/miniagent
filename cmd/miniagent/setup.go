@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,17 +29,19 @@ func mustParseLogLevel(s string) slog.Level {
 
 // loadConfigOrBare：显式 -config 不存在=硬错误；默认 ./miniagent.json 不存在=软失败退裸模式
 // （审查 v3 #1/#7）。默认存在但非法=报错。
+//
+// 默认 config 的 Stat 错误精确区分：仅 fs.ErrNotExist 退裸模式；permission denied/
+// ELOOP/ENOTDIR 等按硬错误上抛——否则用户在权限/路径异常下被静默切到无 tool 边界、
+// 无 system prompt 注入的裸模式（审查 P2-6）。
 func loadConfigOrBare(configPath string) (*miniagent.Config, error) {
 	if configPath != "" {
 		return miniagent.LoadConfig(configPath)
 	}
-	// 默认 config 是否存在；其他 Stat 错误按「无 config」处理（软失败语义）。
-	exists := false
-	if _, err := os.Stat("./miniagent.json"); err == nil {
-		exists = true
-	}
-	if !exists {
-		return nil, nil // 不存在 → 裸模式
+	if _, err := os.Stat("./miniagent.json"); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil // 不存在 → 裸模式（软失败）
+		}
+		return nil, fmt.Errorf("stat 默认 config %q: %w", "./miniagent.json", err)
 	}
 	return miniagent.LoadConfig("./miniagent.json")
 }

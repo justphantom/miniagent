@@ -252,4 +252,23 @@ func TestHTTPClient_Do_ContextLength400(t *testing.T) {
 	}
 }
 
+// P3-5：c.HTTP==nil 时 client() 缓存同一 *http.Client（首次 defaultTimeout 固化，后续忽略）；
+// 注入 HTTP 时沿用注入值。
+func TestHTTPClient_DefaultClientCached(t *testing.T) {
+	c := &HTTPClient{APIKey: "sk", ChatURL: "http://x"}
+	a := c.client(2 * time.Second)
+	b := c.client(5 * time.Second)
+	if a != b {
+		t.Error("default client not cached across calls")
+	}
+	if a.Timeout != 2*time.Second {
+		t.Errorf("Timeout = %v, want first-call 2s (cached value preserved)", a.Timeout)
+	}
+	inj := &http.Client{Timeout: 30 * time.Second}
+	c2 := &HTTPClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
+	if c2.client(time.Second) != inj {
+		t.Error("injected HTTP client not used")
+	}
+}
+
 func contains(s, sub string) bool { return strings.Contains(s, sub) }

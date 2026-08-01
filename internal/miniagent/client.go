@@ -28,17 +28,21 @@ const (
 // HTTPClient calls an OpenAI-compatible chat completions endpoint via net/http.
 // 懒解析（直接 struct 构造的测试路径）用 sync.Once 保护，确保并发 Do/DoStream 无竞争（修复 R4）。
 type HTTPClient struct {
-	APIKey     string
-	ChatURL    string
-	ModelsURL  string
-	chatURL    *url.URL
-	chatOnce   sync.Once
-	chatErr    error
-	modelsURL  *url.URL
-	modelsOnce sync.Once
-	modelsErr  error
-	HTTP       *http.Client
-	Logger     *slog.Logger
+	APIKey            string
+	ChatURL           string
+	ModelsURL         string
+	chatURL           *url.URL
+	chatOnce          sync.Once
+	chatErr           error
+	modelsURL         *url.URL
+	modelsOnce        sync.Once
+	modelsErr         error
+	HTTP              *http.Client
+	Logger            *slog.Logger
+	defaultClient     *http.Client // c.HTTP==nil 时缓存的非流式 client（P3-5）
+	defaultClientOnce sync.Once
+	streamClient      *http.Client // 流式专用 client（无总 Timeout，P2-5）
+	streamClientOnce  sync.Once
 }
 
 // validateURL 解析并校验 raw 为合法 http(s) URL（含 scheme+host）。
@@ -111,13 +115,6 @@ func (c *HTTPClient) modelsEndpoint(defaultTimeout time.Duration) (*http.Client,
 	return c.client(defaultTimeout), c.modelsURL, nil
 }
 
-func (c *HTTPClient) client(defaultTimeout time.Duration) *http.Client {
-	if c.HTTP != nil {
-		return c.HTTP
-	}
-	return &http.Client{Timeout: defaultTimeout}
-}
-
 // Do 调用 POST ChatURL（非流式），解析 choices[0] / usage / finish_reason。响应 body
 // 上限 maxChatBodyBytes，越界报错。
 //
@@ -148,21 +145,12 @@ func (c *HTTPClient) Do(ctx context.Context, req Request) (Response, error) {
 			}
 			return Response{}, err
 		}
-		delay := backoff
-		if retryAfter >= 0 {
-			// 显式 Retry-After（含 0：立即重试）取代退避；-1 表示未提供，走 backoff。
-			delay = retryAfter
-		}
-		if delay > retryMaxDelay {
-			delay = retryMaxDelay
-		}
+		delay := capRetryDelay(backoff, retryAfter)
 		if c.Logger != nil {
 			c.Logger.Warn("llm call failed, retrying", "failed_attempt", attempt+1, "delay_ms", delay.Milliseconds(), "error", err)
 		}
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return Response{}, ctx.Err()
+		if waitErr := sleepCtx(ctx, delay); waitErr != nil {
+			return Response{}, waitErr
 		}
 		backoff *= 2
 	}
@@ -279,6 +267,8 @@ func parseRetryAfter(h http.Header) time.Duration {
 		if d := time.Until(t); d > 0 {
 			return d
 		}
+		// HTTP-date 已成过去：语义等同"立即可重试"，返回 0（区别于 -1 走 backoff）。P3-3。
+		return 0
 	}
 	return -1
 }

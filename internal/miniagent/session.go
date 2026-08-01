@@ -77,7 +77,9 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 	var meta SessionMeta
 	var msgs []Message
 	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	// 单行上限对齐文件总上限 maxSessionBytes：单条大消息（巨输出 tool 结果或手工拼装）
+	// 不应让 Scan 返回 ErrTooLong 致整会话不可读、append-only 无法修复（审查 P2-7）。
+	sc.Buffer(make([]byte, 64*1024), maxSessionBytes+1)
 	var corruptLine int // 挂起的非法 JSON 行号（1-based），0=无
 	var corruptErr error
 	for i := 0; sc.Scan(); i++ {
@@ -152,13 +154,13 @@ func validateToolPairing(msgs []Message) error {
 		case roleAssistant:
 			for _, tc := range m.ToolCalls {
 				if pending[tc.ID] {
-					return fmt.Errorf("第 %d 条：tool_call id %q 重复", i, tc.ID)
+					return fmt.Errorf("第 %d 条：tool_call id %q 重复", i+1, tc.ID)
 				}
 				pending[tc.ID] = true
 			}
 		case roleTool:
 			if !pending[m.ToolCallID] {
-				return fmt.Errorf("第 %d 条：tool 消息的 tool_call_id %q 没有对应的 assistant tool_call", i, m.ToolCallID)
+				return fmt.Errorf("第 %d 条：tool 消息的 tool_call_id %q 没有对应的 assistant tool_call", i+1, m.ToolCallID)
 			}
 			delete(pending, m.ToolCallID)
 		}
@@ -171,7 +173,10 @@ func validateToolPairing(msgs []Message) error {
 
 // AppendMessages append-only 追加 msgs 到 jsonl：文件新建/空时先写 metadata 行，再写每条
 // message 行，Flush 后 f.Sync 落盘缩小崩溃残行窗口（LoadSession 兜底容忍尾行半写）。
-// 失败轮由调用方决定是否落盘（main 仅成功轮调用）。权限 0o600（对话属敏感数据）。
+// 写侧两道护栏：(1) flock 跨进程排他锁防行边界交织产生中间非法 JSON（审查 P2-13）；
+// (2) 预序列化待写内容，按 info.Size()+待写 超限拒绝，避免写入成功而把失败延后到
+// LoadSession 致会话永久卡死（审查 P1-4）。失败轮由调用方决定是否落盘（main 仅成功
+// 轮调用）。权限 0o600（对话属敏感数据）。
 func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
@@ -186,11 +191,17 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
+	// flock 排他锁：defer 顺序保证 unlock 先于 Close 执行。
+	if err := lockSession(f); err != nil {
+		return fmt.Errorf("lock session %q: %w", path, err)
+	}
+	defer func() { _ = unlockSession(f) }()
 	info, err := f.Stat()
 	if err != nil {
 		return err
 	}
-	w := bufio.NewWriter(f)
+	// 预序列化待写内容：既精确估算大小做写侧预判，又复用一次 marshal 避免重复劳动。
+	var buf bytes.Buffer
 	if info.Size() == 0 {
 		if meta.Type == "" {
 			meta.Type = sessionTypeSession
@@ -199,24 +210,23 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 		if err != nil {
 			return err
 		}
-		if _, err := w.Write(b); err != nil {
-			return err
-		}
-		if err := w.WriteByte('\n'); err != nil {
-			return err
-		}
+		buf.Write(b)
+		buf.WriteByte('\n')
 	}
 	for _, m := range msgs {
 		b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 		if err != nil {
 			return err
 		}
-		if _, err := w.Write(b); err != nil {
-			return err
-		}
-		if err := w.WriteByte('\n'); err != nil {
-			return err
-		}
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	if info.Size()+int64(buf.Len()) > maxSessionBytes {
+		return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, info.Size()+int64(buf.Len()), maxSessionBytes)
+	}
+	w := bufio.NewWriter(f)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return err
 	}
 	if err := w.Flush(); err != nil {
 		return err

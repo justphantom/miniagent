@@ -3,11 +3,13 @@ package miniagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -376,5 +378,91 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	}
 	if want := 1 + 2*maxIterations; len(res.Messages) != want {
 		t.Errorf("Messages len = %d, want %d", len(res.Messages), want)
+	}
+}
+
+// P1-4：追加后将超过 maxSessionBytes 时返回 error，不写入。读侧硬封顶，写侧不预判会让
+// 某轮落盘后文件刚越 4MiB，下一轮 LoadSession 永久失败致会话不可接续。
+func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	meta := SessionMeta{ID: "s"}
+	big := strings.Repeat("x", maxSessionBytes/2+100)
+	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}); err != nil {
+		t.Fatalf("首次追加应成功: %v", err)
+	}
+	// 再追加同样大小，总和超 maxSessionBytes → 写侧预判应返回 error。
+	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}); err == nil {
+		t.Fatal("P1-4：追加后超 maxSessionBytes 应返回 error")
+	}
+	// 第二次失败不应让文件越过上限（写侧预判在写入前）。
+	info, _ := os.Stat(path)
+	if info.Size() > maxSessionBytes {
+		t.Errorf("文件大小 %d 超 maxSessionBytes %d", info.Size(), maxSessionBytes)
+	}
+}
+
+// P2-7：单条大消息（>1MiB 既单行上限、<maxSessionBytes 总上限）可正常 load，
+// 不再因 scanner ErrTooLong 致整会话不可读、append-only 无法修复。
+func TestLoadSession_LargeSingleLineOK(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	big := strings.Repeat("x", maxSessionBytes/2) // 2MiB，超过旧 1MiB 单行限制
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	_, msgs, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("P2-7：大单行 load 失败（scanner 单行上限不足）: %v", err)
+	}
+	if len(msgs) != 1 || len(msgs[0].Content) != len(big) {
+		t.Errorf("大单行 round-trip 不一致: %+v", msgs)
+	}
+}
+
+// P2-13：并发 AppendMessages 不损坏 session 文件。flock 跨进程互斥由 POSIX 保证；
+// 同进程内不同 fd 的 flock 语义不互斥，此测试主要回归保护 AppendMessages 集成 flock
+// 后单进程多调用仍正常（不阻塞自己、不残留锁、LoadSession 不报中间损坏）。
+func TestAppendMessages_ConcurrentSafe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	meta := SessionMeta{ID: "s"}
+	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: "init"}}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for g := range 4 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			for i := range 10 {
+				if err := AppendMessages(path, meta, []Message{
+					{Role: "assistant", Content: fmt.Sprintf("g%d-%d", idx, i)},
+				}); err != nil {
+					t.Errorf("append %d-%d: %v", idx, i, err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	_, msgs, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("P2-13：并发 append 后 load 报错（行交织中间损坏）: %v", err)
+	}
+	if want := 1 + 4*10; len(msgs) != want {
+		t.Errorf("msgs len = %d, want %d", len(msgs), want)
+	}
+}
+
+// P3-10：validateToolPairing 错误消息索引为 1-based（便于按行号定位 session 文件）。
+func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
+	// 第 2 条（0-based 索引 1）出现重复 tool_call id。
+	msgs := []Message{
+		{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
+		{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
+	}
+	err := validateToolPairing(msgs)
+	if err == nil {
+		t.Fatal("expected pairing error")
+	}
+	if !strings.Contains(err.Error(), "第 2 条") {
+		t.Errorf("错误消息应为 1-based「第 2 条」，got: %v", err)
 	}
 }

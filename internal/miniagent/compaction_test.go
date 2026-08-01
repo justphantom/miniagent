@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,7 +29,8 @@ func TestApplyCompactionBarrier(t *testing.T) {
 }
 
 // compactWithSummary：中段摘要为 KindSummary，结构（最早 1 轮 + summary + 最近 N 轮）正确，
-// 且 summary 写入 newMsgs（持久化）。
+// 且 summary 写入 newMsgs（持久化）。注意此用例起点 newMsgs 为空（退化场景），实际 Run
+// 场景 newMsgs 此时已含本轮 user_prompt，summary 须排其前——见 TestCompactWithSummary_SummaryBeforeUserPrompt。
 func TestCompactWithSummary_Success(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("压缩摘要")}}
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -103,5 +105,93 @@ func TestSummarizeMiddle_LLMError(t *testing.T) {
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
+	}
+}
+
+// P3-1：摘要请求设置 MaxTokens=summaryMaxTokens，避免端点按默认上限输出后再被字符截断浪费 token。
+func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	if _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err != nil {
+		t.Fatalf("summarizeMiddle: %v", err)
+	}
+	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
+		t.Errorf("摘要请求未设置 max_tokens=1024: %s", tr.lastBody)
+	}
+}
+
+// P1-1 回归：compactWithSummary 后 summary 必须排在 user_prompt 之前。loop.go Run 入口
+// 先把本轮 user_prompt 加入 newMsgs，故此时 newMsgs=[user_prompt]；若 summary 尾 append
+// 到 user_prompt 之后，下一轮 applyCompactionBarrier 会屏障掉本轮 user_prompt。
+func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("历史摘要")}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	var msgs []Message
+	for i := range 10 {
+		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
+	}
+	// 模拟 loop.go Run：入口已把本轮 user_prompt 加入 newMsgs 与 msgs。
+	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
+	msgs = append(msgs, newMsgs...)
+	summarized, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
+	if err != nil || !summarized {
+		t.Fatalf("compactWithSummary: summarized=%v err=%v", summarized, err)
+	}
+	if len(newMsgs) != 2 {
+		t.Fatalf("newMsgs len=%d, want 2 (summary+user_prompt): %+v", len(newMsgs), newMsgs)
+	}
+	if newMsgs[0].Kind != KindSummary {
+		t.Errorf("newMsgs[0] 应为 summary，got %+v", newMsgs[0])
+	}
+	if newMsgs[1].Role != roleUser || newMsgs[1].Content != "本轮新问题" {
+		t.Errorf("newMsgs[1] 应为本轮 user_prompt，got %+v", newMsgs[1])
+	}
+}
+
+// P1-1 端到端：compactWithSummary 改写 newMsgs → AppendMessages 落盘 → LoadSession 读取
+// → applyCompactionBarrier：本轮 user_prompt 必须仍在结果中。这是原 bug 漏测的根因——
+// 测试只覆盖孤立 newMsgs（起点空），未走通 compact→persist→load→barrier 全链路。
+func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("既往对话摘要")}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	// 模拟上一轮 Run：历史 10 条 + 本轮 user_prompt。
+	var msgs []Message
+	for i := range 10 {
+		msgs = append(msgs, Message{Role: roleUser, Content: "hist" + strconv.Itoa(i)})
+	}
+	newMsgs := []Message{{Role: roleUser, Content: "上一轮问题"}}
+	msgs = append(msgs, newMsgs...)
+	if _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil {
+		t.Fatalf("compactWithSummary: %v", err)
+	}
+	// 模拟上一轮 Run 末尾把 assistant 最终回答加入 newMsgs（接续对话依赖上一轮答案）。
+	newMsgs = append(newMsgs, Message{Role: roleAssistant, Content: "上一轮回答"})
+
+	// 落盘（main 仅成功轮调用 AppendMessages）。
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, newMsgs); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+
+	// 下一轮 LoadSession + Run 入口的 applyCompactionBarrier。
+	_, loaded, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	barrier := applyCompactionBarrier(loaded)
+	var hasPrompt, hasAnswer bool
+	for _, m := range barrier {
+		if m.Content == "上一轮问题" {
+			hasPrompt = true
+		}
+		if m.Content == "上一轮回答" {
+			hasAnswer = true
+		}
+	}
+	if !hasPrompt {
+		t.Errorf("P1-1 回归：barrier 后本轮 user_prompt 丢失：barrier=%+v", barrier)
+	}
+	if !hasAnswer {
+		t.Errorf("barrier 后本轮 assistant 回答丢失：barrier=%+v", barrier)
 	}
 }

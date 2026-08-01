@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 纯文本 + reasoning + usage + [DONE]：聚合正确，onDelta 收到每个片段。
@@ -99,9 +100,11 @@ data: [DONE]
 	}
 }
 
-// DoStream 非 200 直接上抛（不重试，已流出不可撤回）。
+// DoStream 非 200：pre-delta 阶段重试 maxRetries 次后仍失败上抛（含 "503"）。
+// Retry-After: 0 使退避即时，避免测试等待（重试耗尽路径的严格断言见 client_retry_test.go）。
 func TestDoStream_NonOKErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "0")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, "busy")
 	}))
@@ -110,6 +113,83 @@ func TestDoStream_NonOKErrors(t *testing.T) {
 	_, err := llm.DoStream(context.Background(), Request{Model: "m"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v, want 503", err)
+	}
+}
+
+// P1-2：流直接以 [DONE] 开始/无 choices/仅 usage，必须报错而非返回空 Response 伪装成功。
+func TestParseSSE_EmptyStreamErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		sse  string
+	}{
+		{"done-only", "data: [DONE]\n"},
+		{"empty-input", ""},
+		{"usage-only-no-choices", `data: {"usage":{"prompt_tokens":5,"completion_tokens":0}}` + "\ndata: [DONE]\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseSSE(strings.NewReader(tc.sse), nil)
+			if err == nil {
+				t.Fatalf("expected error for %s stream", tc.name)
+			}
+			if !strings.Contains(err.Error(), "without any choices") {
+				t.Errorf("%s: err = %v", tc.name, err)
+			}
+		})
+	}
+}
+
+// P1-3：provider 中途以 {"error":{"message":...}} chunk 报错，必须上抛而非吞掉当成功。
+func TestParseSSE_MidStreamError(t *testing.T) {
+	const sse = `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n" +
+		`data: {"error":{"message":"content filter triggered"}}` + "\n" +
+		"data: [DONE]\n"
+	_, err := parseSSE(strings.NewReader(sse), nil)
+	if err == nil {
+		t.Fatal("expected error for mid-stream error chunk")
+	}
+	if !strings.Contains(err.Error(), "content filter triggered") {
+		t.Errorf("err should carry provider message: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stream error from provider") {
+		t.Errorf("err should be flagged as provider stream error: %v", err)
+	}
+}
+
+// P3-2：单个 data 行载荷 > 1MB（旧上限）但 < 4MB（新上限）应能解析，不触发 ErrTooLong。
+func TestParseSSE_LongLine(t *testing.T) {
+	big := strings.Repeat("a", 1500*1024)
+	chunk := fmt.Sprintf(`{"choices":[{"delta":{"content":%q}}]}`, big)
+	sse := "data: " + chunk + "\n" +
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n" +
+		"data: [DONE]\n"
+	res, err := parseSSE(strings.NewReader(sse), nil)
+	if err != nil {
+		t.Fatalf("parseSSE long line: %v", err)
+	}
+	if len(res.Text) != len(big) {
+		t.Errorf("Text len = %d, want %d", len(res.Text), len(big))
+	}
+	if res.FinishReason != "stop" {
+		t.Errorf("FinishReason = %q", res.FinishReason)
+	}
+}
+
+// P2-5：c.HTTP==nil 时 streamHTTPClient 返回无 Timeout 的 client（流式总时长由 ctx 控制，
+// http.Client.Timeout 覆盖 body 读取会砍断长流）；缓存同一实例；注入时沿用注入。
+func TestHTTPClient_StreamClientNoTimeout(t *testing.T) {
+	c := &HTTPClient{APIKey: "sk", ChatURL: "http://x"}
+	sc := c.streamHTTPClient()
+	if sc.Timeout != 0 {
+		t.Errorf("stream client Timeout = %v, want 0", sc.Timeout)
+	}
+	if c.streamHTTPClient() != sc {
+		t.Error("stream client not cached")
+	}
+	inj := &http.Client{Timeout: 30 * time.Second}
+	c2 := &HTTPClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
+	if c2.streamHTTPClient() != inj {
+		t.Error("injected client not used")
 	}
 }
 

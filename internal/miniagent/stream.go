@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -39,6 +38,11 @@ type chatCompletionChunk struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
+	// Error：部分 provider/网关在中途以 {"error":{"message":...}} chunk 报错（内容过滤、
+	// 上游故障）。标准 chat.completion.chunk schema 无此字段，出现即视为流级错误（P1-3）。
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // Delta 是推给消费方的流式增量。
@@ -47,59 +51,128 @@ type Delta struct {
 	Text string
 }
 
-// DoStream 流式调用 POST /v1/chat/completions（stream=true）。onDelta 实时推增量；
-// 返回聚合 Response（与 Do 同构）。重试不同于 Do：连接/HTTP 错误直接上抛——一旦
-// 开始流出 delta 即不可撤回，故不重试（瞬时抖动由调用方重跑或退回非流式 Do）。
+// DoStream 流式调用 POST /v1/chat/completions（stream=true），onDelta 实时推增量，返回聚合 Response。
+// 重试：pre-delta 阶段（client.Do 失败或非 200，尚未流出 delta）复用 Do 的
+// shouldRetryStatus+退避+Retry-After；进入 parseSSE（200，已流 delta）即不可撤回不重试（P2-4）。
 func (c *HTTPClient) DoStream(ctx context.Context, req Request, onDelta func(Delta)) (Response, error) {
-	client, u, body, err := c.prepareStream(req)
+	if c.APIKey == "" {
+		return Response{}, errors.New("miniagent: api_key is empty")
+	}
+	// URL 走 chatEndpoint（懒解析+缓存）；http.Client 用 streamHTTPClient：流式不能设
+	// http.Client.Timeout（覆盖 body 读取会砍断长生成，P2-5），总时长交由 ctx 控制。
+	_, u, err := c.chatEndpoint(120 * time.Second)
 	if err != nil {
 		return Response{}, err
-	}
-	if c.Logger != nil {
-		c.Logger.Debug("llm stream request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
-	if err != nil {
-		return Response{}, fmt.Errorf("build request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		if c.Logger != nil {
-			c.Logger.Warn("llm stream request failed", "error", err)
-		}
-		return Response{}, fmt.Errorf("llm request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxChatBodyBytes+1))
-		// context 超限在流出首 chunk 前以 400 返回，沿用非流式判定供 Run 降级重试。
-		if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
-			return Response{}, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
-		}
-		if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
-			return Response{}, fmt.Errorf("%w: %s", ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
-		}
-		return Response{}, fmt.Errorf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…"))
-	}
-	return parseSSE(resp.Body, onDelta)
-}
-
-func (c *HTTPClient) prepareStream(req Request) (*http.Client, *url.URL, []byte, error) {
-	if c.APIKey == "" {
-		return nil, nil, nil, errors.New("miniagent: api_key is empty")
-	}
-	client, u, err := c.chatEndpoint(120 * time.Second)
-	if err != nil {
-		return nil, nil, nil, err
 	}
 	req.Stream = true
 	body, err := buildChatBody(req)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build request body: %w", err)
+		return Response{}, fmt.Errorf("build request body: %w", err)
 	}
-	return client, u, body, nil
+	client := c.streamHTTPClient()
+	if c.Logger != nil {
+		c.Logger.Debug("llm stream request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
+	}
+	backoff := retryBaseDelay
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return Response{}, err
+		}
+		// 每次重建 httpReq：body reader 上一轮已被消费，复用会发空 body。
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+		if err != nil {
+			return Response{}, fmt.Errorf("build request: %w", err)
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+		httpReq.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			if c.Logger != nil {
+				c.Logger.Warn("llm stream request failed", "error", err, "failed_attempt", attempt+1)
+			}
+			if attempt == maxRetries {
+				return Response{}, fmt.Errorf("after %d retries: llm request: %w", attempt, err)
+			}
+			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, -1)); waitErr != nil {
+				return Response{}, waitErr
+			}
+			backoff *= 2
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxChatBodyBytes+1))
+			_ = resp.Body.Close()
+			// context 超限 / thinking 不支持在首 chunk 前以 400 返回：沿用非流式判定供 Run 降级，不重试。
+			if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
+				return Response{}, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
+			}
+			if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
+				return Response{}, fmt.Errorf("%w: %s", ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
+			}
+			if !shouldRetryStatus(resp.StatusCode) || attempt == maxRetries {
+				msg := fmt.Sprintf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…"))
+				if attempt > 0 {
+					return Response{}, fmt.Errorf("after %d retries: %s", attempt, msg)
+				}
+				return Response{}, errors.New(msg)
+			}
+			if c.Logger != nil {
+				c.Logger.Warn("llm stream non-200, retrying", "status", resp.StatusCode, "failed_attempt", attempt+1)
+			}
+			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, parseRetryAfter(resp.Header))); waitErr != nil {
+				return Response{}, waitErr
+			}
+			backoff *= 2
+			continue
+		}
+		// HTTP 200：进入 SSE 解析（开始流出 delta），此后不可重试。
+		res, perr := parseSSE(resp.Body, onDelta)
+		_ = resp.Body.Close()
+		return res, perr
+	}
+	return Response{}, errors.New("llm stream retry loop exited unexpectedly")
+}
+
+// client 返回非流式 http.Client。c.HTTP!=nil 沿用注入；否则懒构造并缓存带 defaultTimeout
+// 的 client（P3-5：稳定资源 + 避免重复构造）。
+func (c *HTTPClient) client(defaultTimeout time.Duration) *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	c.defaultClientOnce.Do(func() { c.defaultClient = &http.Client{Timeout: defaultTimeout} })
+	return c.defaultClient
+}
+
+// streamHTTPClient 返回流式 http.Client。c.HTTP!=nil 沿用注入；否则懒构造并缓存一个不设
+// Timeout 的 client——http.Client.Timeout 覆盖 body 读取会砍断长流，流式改由 ctx 控时长（P2-5）。
+func (c *HTTPClient) streamHTTPClient() *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	c.streamClientOnce.Do(func() { c.streamClient = &http.Client{} })
+	return c.streamClient
+}
+
+// capRetryDelay：显式 Retry-After（>=0，含 0=立即）优先于指数 backoff，再封顶 retryMaxDelay。
+// retryAfter<0 表示未提供。Do/DoStream 重试循环共用（P2-4）。
+func capRetryDelay(backoff, retryAfter time.Duration) time.Duration {
+	if retryAfter >= 0 {
+		backoff = retryAfter
+	}
+	if backoff > retryMaxDelay {
+		backoff = retryMaxDelay
+	}
+	return backoff
+}
+
+// sleepCtx 等 delay 或 ctx 取消，ctx 先就绪返回 ctx.Err()。Do/DoStream 重试循环共用（P2-4）。
+func sleepCtx(ctx context.Context, delay time.Duration) error {
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // streamToolCall 累积单个 tool_call 的分片（按 delta.index 路由）。
@@ -116,6 +189,7 @@ type streamAccum struct {
 	callOrder []int                   // index 出现顺序，稳定聚合
 	finish    string
 	usage     Usage
+	sawChoice bool // 是否见过含 choices 的 chunk（空响应判定，P1-2）
 }
 
 // parseSSE 读 SSE 流：每个 content/reasoning 片段调 onDelta，结束时返回聚合 Response。
@@ -123,8 +197,8 @@ type streamAccum struct {
 func parseSSE(r io.Reader, onDelta func(Delta)) (Response, error) {
 	acc := &streamAccum{calls: map[int]*streamToolCall{}}
 	sc := bufio.NewScanner(r)
-	// arguments 片段可能很长（大 JSON 参数），放宽默认 64KB 行长到 1MB。
-	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	// 放宽默认 64KB 行长到 4MB（与 maxChatBodyBytes 同级），避免超大单行 chunk 触发 ErrTooLong（P3-2）。
+	sc.Buffer(make([]byte, 64*1024), 4<<20)
 	for sc.Scan() {
 		line := sc.Text()
 		if line == "" || strings.HasPrefix(line, ":") {
@@ -141,12 +215,21 @@ func parseSSE(r io.Reader, onDelta func(Delta)) (Response, error) {
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return Response{}, fmt.Errorf("parse sse chunk: %w", err)
 		}
+		// provider/网关以 error chunk 报错（内容过滤/上游故障）：上抛而非吞掉当成功（P1-3）。
+		if chunk.Error != nil {
+			return Response{}, fmt.Errorf("stream error from provider: %s", chunk.Error.Message)
+		}
 		acc.apply(chunk, onDelta)
 	}
 	if err := sc.Err(); err != nil {
 		return Response{}, fmt.Errorf("read sse: %w", err)
 	}
-	return acc.response(), nil
+	res := acc.response()
+	// 从未见过 choices（截断/空流/仅 usage）：报错而非伪装成空回答，与 parseChatResponse 对齐（P1-2）。
+	if !acc.sawChoice && res.FinishReason == "" && res.Text == "" && len(res.ToolCalls) == 0 {
+		return Response{}, errors.New("stream ended without any choices")
+	}
+	return res, nil
 }
 
 func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta)) {
@@ -157,6 +240,7 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta)) {
 	if len(ch.Choices) == 0 {
 		return
 	}
+	a.sawChoice = true
 	c := ch.Choices[0]
 	if c.FinishReason != "" {
 		a.finish = c.FinishReason

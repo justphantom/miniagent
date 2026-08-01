@@ -143,6 +143,11 @@ func validateConfig(cfg *Config) error {
 				return fmt.Errorf("provider %q models_url: %w", p.Name, err)
 			}
 		}
+		// key 明文入 config 与「机密不入文件」的承诺相悖；不强制拒绝（兼容现有
+		// 用法），仅 stderr 告警引导用 ${VAR} 注入（审查 P3-11）。
+		if p.Key != "" && !envVarRe.MatchString(p.Key) {
+			fmt.Fprintf(os.Stderr, "miniagent: warning: provider %q 的 key 明文写入 config，建议用 ${VAR} 注入避免机密入文件\n", p.Name)
+		}
 	}
 	if cfg.Defaults.Model != "" {
 		if _, _, err := ParseModelSpec(cfg.Defaults.Model, cfg); err != nil {

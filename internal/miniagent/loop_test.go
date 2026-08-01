@@ -1,28 +1,32 @@
 package miniagent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 )
 
 // fakeTransport 把预设的非流式 JSON body 按调用顺序回放，便于 loop 测试
-// 不依赖真实端点。lastBody 记录最后一次请求体供断言。
+// 不依赖真实端点。lastBody 记录最后一次请求体；bodies 记录全部请求体供多步断言。
 type fakeTransport struct {
 	responses []string
 	statuses  []int
 	calls     int
 	lastBody  string
+	bodies    []string
 }
 
 func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		b, _ := io.ReadAll(req.Body)
 		f.lastBody = string(b)
+		f.bodies = append(f.bodies, string(b))
 		_ = req.Body.Close()
 	}
 	idx := f.calls
@@ -479,5 +483,131 @@ func TestRun_ToolDeniedSkipped(t *testing.T) {
 	}
 	if !strings.Contains(bOut, "B_ran") {
 		t.Errorf("tool b should still run: %q", bOut)
+	}
+}
+
+// P1-5：usage 全零（端点不返回 usage）时 Run 仍正常运行，并 warn 暴露预算熔断可能失效。
+func TestRun_ZeroUsageWarns(t *testing.T) {
+	// 响应不含 usage 字段 → parseChatResponse 得零值 Usage（流式端点常见的现实情形）。
+	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
+	tr := &fakeTransport{responses: []string{noUsage}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", MaxTotalTokens: 100}, "q", LoopHooks{}, logger)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Text != "hi" {
+		t.Errorf("Text = %q, want hi", res.Text)
+	}
+	// 预算熔断因 usage 全零不会触发；warn 是唯一的失效信号，必须出现。
+	if !strings.Contains(buf.String(), "llm returned no usage") {
+		t.Errorf("expected warn about missing usage, got logs: %s", buf.String())
+	}
+}
+
+// P2-1：OnToolResult 中途 error 时，assistant.tool_calls 的每个 id 都应有对应 tool 消息，
+// 保证 Messages 配对完整可续跑（端点不会因孤立 tool_call 返回 400）。
+func TestRun_OnToolResultErrorKeepsPairing(t *testing.T) {
+	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(
+			ToolCall{ID: "c0", Name: "q", Args: "{}"},
+			ToolCall{ID: "c1", Name: "q", Args: "{}"},
+			ToolCall{ID: "c2", Name: "q", Args: "{}"},
+		),
+		textResponse("done"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	stop := errors.New("downstream closed")
+	hooks := LoopHooks{OnToolResult: func(name, callID string, r ToolResult) error {
+		if callID == "c1" {
+			return stop // 在第 2 个工具处中断下游
+		}
+		return nil
+	}}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	if !errors.Is(err, stop) {
+		t.Fatalf("err = %v, want %v", err, stop)
+	}
+	// 校验每个 assistant.tool_call 的 id 都有匹配的 tool 消息。
+	var wantIDs []string
+	gotIDs := make(map[string]bool)
+	for _, m := range res.Messages {
+		if m.Role == roleAssistant && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				wantIDs = append(wantIDs, tc.ID)
+			}
+		}
+		if m.Role == roleTool {
+			gotIDs[m.ToolCallID] = true
+		}
+	}
+	if len(wantIDs) == 0 {
+		t.Fatalf("no assistant tool_calls found; msgs=%+v", res.Messages)
+	}
+	for _, id := range wantIDs {
+		if !gotIDs[id] {
+			t.Errorf("tool_call %q has no matching tool message (pairing broken); msgs=%+v", id, res.Messages)
+		}
+	}
+}
+
+// P2-2：端点不支持 thinking 时，跨步仅首步降级一次；后续步直接走无 thinking，不再撞 400。
+func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
+	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	thinkErr := `{"error":{"message":"unknown parameter: reasoning_effort"}}`
+	tr := &fakeTransport{
+		statuses:  []int{http.StatusBadRequest, http.StatusOK, http.StatusOK},
+		responses: []string{thinkErr, toolResponse(ToolCall{ID: "c1", Name: "q", Args: "{}"}), textResponse("done")},
+	}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium", Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Text != "done" {
+		t.Errorf("Text = %q, want done", res.Text)
+	}
+	// 无降级固化时 step2 会重发 thinking → 多一次 400 + 重试（共 4 次）；固化后共 3 次。
+	if len(tr.bodies) != 3 {
+		t.Fatalf("calls = %d, want 3 (降级仅首步一次，step2 应直发无 thinking)", len(tr.bodies))
+	}
+	for i, b := range tr.bodies {
+		has := strings.Contains(b, "reasoning_effort")
+		if i == 0 && !has {
+			t.Errorf("body[%d] 应带 thinking（首次探测）: %s", i, b)
+		}
+		if i != 0 && has {
+			t.Errorf("body[%d] 不应带 thinking（降级应已固化）: %s", i, b)
+		}
+	}
+}
+
+// P3-4：未知工具的 ToolResult.ExitCode 应为 exitCodeNotSet（与被拒工具一致），
+// 零值 0 会被事件层误读为"成功退出"。
+func TestRun_UnknownToolExitCodeNotSet(t *testing.T) {
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "missing", Args: "{}"}),
+		textResponse("ok"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	var got *int
+	hooks := LoopHooks{OnToolResult: func(name, callID string, r ToolResult) error {
+		if name == "missing" {
+			ec := r.ExitCode
+			got = &ec
+		}
+		return nil
+	}}
+	if _, err := Run(context.Background(), llm, LoopConfig{}, "x", hooks, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got == nil {
+		t.Fatal("OnToolResult not fired for missing tool")
+	}
+	if *got != exitCodeNotSet {
+		t.Errorf("unknown tool ExitCode = %d, want %d (exitCodeNotSet)", *got, exitCodeNotSet)
 	}
 }

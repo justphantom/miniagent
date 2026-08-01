@@ -9,8 +9,13 @@ import (
 	"strings"
 )
 
-// summaryMaxChars 是摘要的字符上限（初值，按实测调，设计 §15.4）。
-const summaryMaxChars = 2000
+const (
+	// summaryMaxChars 是摘要的字符上限（初值，按实测调，设计 §15.4）。
+	summaryMaxChars = 2000
+	// summaryMaxTokens 限制摘要请求的输出 token 数：端点默认上限远超 summaryMaxChars
+	// 对应的 token 量，不限会先生成超长输出再被字符截断，白烧 token（审查 P3-1）。
+	summaryMaxTokens = 1024
+)
 
 // summarizerSystem 是压缩专用 system prompt：要求把历史压成一段受限摘要，保留关键事实。
 const summarizerSystem = "你是会话压缩器。把以下对话历史压缩为一段不超过 %d 字符的中文摘要，保留关键事实、决策、文件改动与未决问题，不要复述全部对话，不要输出多余解释。"
@@ -67,9 +72,10 @@ func summarizeMiddle(ctx context.Context, llm *HTTPClient, model string, msgs []
 		return "", errors.New("无中段可摘要")
 	}
 	resp, err := llm.Do(ctx, Request{
-		Model:    model,
-		System:   fmt.Sprintf(summarizerSystem, summaryMaxChars),
-		Messages: msgs,
+		Model:     model,
+		System:    fmt.Sprintf(summarizerSystem, summaryMaxChars),
+		Messages:  msgs,
+		MaxTokens: summaryMaxTokens,
 	})
 	if err != nil {
 		return "", err
@@ -102,6 +108,10 @@ func compactWithSummary(ctx context.Context, llm *HTTPClient, model string, msgs
 	out = append(out, summaryMsg)
 	out = append(out, flatten(rounds[len(rounds)-keepRecent:])...)
 	*msgs = out
-	*newMsgs = append(*newMsgs, summaryMsg) // 既进本轮 context 又落盘（审查 v3 #12）
+	// summary 须排在 user_prompt 之前落盘：applyCompactionBarrier 屏障掉最新 summary 之前的
+	// 旧历史，若 summary 落在 user_prompt 之后，下一轮 barrier 会把本轮 user_prompt 一并屏障，
+	// 使压缩「保留最近 N 轮」的承诺跨轮失效（审查 P1-1）。此时 newMsgs 已含本轮 user_prompt
+	// （loop.go Run 入口先加），故 summary 前插而非尾 append。
+	*newMsgs = append([]Message{summaryMsg}, *newMsgs...)
 	return true, nil
 }

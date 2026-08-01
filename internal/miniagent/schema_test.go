@@ -2,6 +2,8 @@ package miniagent
 
 import (
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -87,5 +89,56 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 		if strings.Contains(string(b), `"required":null`) {
 			t.Errorf("%s: raw JSON has required:null: %s", tk.Name, b)
 		}
+	}
+}
+
+// validateConfig 对 provider.key 字面量（非 ${VAR} 形式）输出 stderr 警告，引导
+// 用环境变量注入避免机密入文件；不强制拒绝以兼容现有用法（审查 P3-11）。
+func TestValidateConfig_PlaintextKeyWarns(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "main", ChatURL: "https://api/v1/chat/completions", Key: "sk-literal-abc123"},
+		},
+	}
+	vErr := validateConfig(cfg)
+	os.Stderr = old
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	if vErr != nil {
+		t.Fatalf("validateConfig: %v", vErr)
+	}
+	if !strings.Contains(string(out), "明文") || !strings.Contains(string(out), "main") {
+		t.Errorf("expected plaintext key warning mentioning provider main, got: %s", out)
+	}
+}
+
+// ${VAR} 形式的 key（注入式）不应触发警告（审查 P3-11）。
+func TestValidateConfig_InjectedKeyNoWarn(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "main", ChatURL: "https://api/v1/chat/completions", Key: "${MAIN_API_KEY}"},
+		},
+	}
+	vErr := validateConfig(cfg)
+	os.Stderr = old
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	if vErr != nil {
+		t.Fatalf("validateConfig: %v", vErr)
+	}
+	if strings.Contains(string(out), "明文") {
+		t.Errorf("injected ${VAR} key should not warn, got: %s", out)
 	}
 }

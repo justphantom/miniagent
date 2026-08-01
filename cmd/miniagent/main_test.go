@@ -497,3 +497,56 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 		t.Errorf("system prompt missing parent session id guidance: %s", body)
 	}
 }
+
+// loadConfigOrBare：默认 ./miniagent.json 不存在=软失败退裸模式（nil, nil）。
+// loadConfigOrBare 硬编码 "./miniagent.json"，须切到临时 cwd 才能控制其解析。
+func TestLoadConfigOrBare_DefaultMissingIsBare(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWD)
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfigOrBare("")
+	if err != nil {
+		t.Fatalf("missing default config should soft-fail to bare mode: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected nil cfg for missing default, got %+v", cfg)
+	}
+}
+
+// loadConfigOrBare：默认 config 的 Stat 错误若非 fs.ErrNotExist（如自指符号链接触发
+// ELOOP、permission denied）按硬错误返回，不静默退裸模式（审查 P2-6）。
+func TestLoadConfigOrBare_DefaultStatErrorIsHardError(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWD)
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	// 自指符号链接：Stat 跟随 → ELOOP（非 fs.ErrNotExist）→ 硬错误。
+	if err := os.Symlink("./miniagent.json", "./miniagent.json"); err != nil {
+		t.Skipf("cannot create self-referential symlink: %v", err)
+	}
+	if _, err := loadConfigOrBare(""); err == nil {
+		t.Fatal("expected hard error for non-ErrNotExist Stat failure, got nil")
+	}
+}
+
+// checkConfine 拒绝 path="." 或等于 workdir 绝对路径：rename 覆盖目录会 EISDIR
+// （错误含糊），且 MkdirAll/Rename 真生效将摧毁整个 workdir（审查 P3-8）。
+func TestCheckConfine_RejectsWorkdirRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := checkConfine(dir, "."); err == nil {
+		t.Error(`path="." should be rejected as workdir root`)
+	}
+	if err := checkConfine(dir, dir); err == nil {
+		t.Error("absolute path equal to workdir root should be rejected")
+	}
+}

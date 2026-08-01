@@ -44,6 +44,11 @@ func WriteFileTool(workspaceRoot string) Tool {
 			}
 			mode := os.FileMode(0o644)
 			if info, err := os.Lstat(full); err == nil {
+				// 拒绝非普通文件：FIFO/字符设备会让后续 Rename 报含糊错误，目录会
+				// EISDIR；与 edit/multi_edit 对齐明确报「不是普通文件」（审查 P3-7）。
+				if !info.Mode().IsRegular() {
+					return ToolResult{IsError: true, Output: fmt.Sprintf("%q 不是普通文件（mode=%s），仅支持 regular file", a.Path, info.Mode().String())}
+				}
 				mode = info.Mode().Perm()
 			}
 			if err := writeFileAtomic(full, []byte(a.Content), mode); err != nil {

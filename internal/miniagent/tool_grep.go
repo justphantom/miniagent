@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	maxGrepMatches = 200
-	maxGrepOutput  = maxShellOutputChars // 复用 20000 字符输出上限
+	maxGrepMatches   = 200
+	maxGrepOutput    = maxShellOutputChars // 复用 20000 字符输出上限
+	maxGrepFileBytes = 50 << 20            // 单文件大小上限：超大文件（日志/生成物）逐行扫到 fileOpTimeout 才超时，浪费 IO，入口 Stat 直接跳过
 )
 
 type grepArgs struct {
@@ -31,7 +32,7 @@ type grepArgs struct {
 func GrepTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "grep",
-		Description: "递归正则搜索文本文件内容。输出 path:lineno:line（与 grep -n 一致，便于定位）。默认搜 workdir；可用 glob 按文件名过滤。命中行上限 " + strconv.Itoa(maxGrepMatches) + "，输出超 " + strconv.Itoa(maxGrepOutput) + " 字符截断。跳过 .git 与二进制文件。",
+		Description: "递归正则搜索文本文件内容。输出 path:lineno:line（与 grep -n 一致，便于定位）。默认搜 workdir；可用 glob 按文件名过滤（仅匹配 base name，* 不跨 /，如 sub/*.go 不命中）。命中行上限 " + strconv.Itoa(maxGrepMatches) + "，输出超 " + strconv.Itoa(maxGrepOutput) + " 字符截断。跳过 .git、二进制与超过 50MB 的文件。",
 		Parameters: object(map[string]any{
 			"pattern": map[string]any{"type": "string", "description": "正则表达式（Go regexp 语法，如 foo、Foo.*、(?i)error）"},
 			"path":    map[string]any{"type": "string", "description": "搜索根目录，相对 workdir 或绝对，默认 workdir"},
@@ -153,8 +154,16 @@ func grepWalk(root string, re *regexp.Regexp, globFn func(string) bool) ([]grepM
 }
 
 // grepFile 读 path 逐行匹配，display 作为输出里的文件名（通常是相对 root 的路径）。
-// 含 NUL 视为二进制跳过（与 read 工具一致，防乱码污染上下文）。
+// 含 NUL 视为二进制跳过（与 read 工具一致，防乱码污染上下文）。入口 Stat 限制单文
+// 件大小：无匹配的超大文件（日志/生成物）会逐行扫到 fileOpTimeout，纯耗 IO。
 func grepFile(path, display string, re *regexp.Regexp) ([]grepMatch, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Size() > maxGrepFileBytes {
+		return nil, errors.New("file too large, skipped")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

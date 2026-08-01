@@ -19,9 +19,11 @@ const maxShellOutputChars = 20000
 const maxShellOutputBytes = maxShellOutputChars * 4
 const shellTimeout = 60 * time.Second
 
-// sudoSuRe 词边界匹配 sudo/su：覆盖 "cd /x && sudo ..." 等中段命令。仍可被变量拼接/
-// 拆分绕过——default 是薄软约束，不构成安全边界（审查 v2 #10）。
-var sudoSuRe = regexp.MustCompile(`\b(sudo|su)\b`)
+// sudoSuRe 词边界匹配常见特权提升器（sudo/su/doas/pkexec/gsudo/run0）：
+// 覆盖 "cd /x && sudo ..." 等中段命令。仍可被变量拼接/拆分/未列出的提权器绕过——
+// default 是薄软约束，不构成安全边界（审查 v2 #10、P2-12）。
+// 不含 please：它是英文常用词（commit message/文件名常见），误伤远大于作为提权器的收益。
+var sudoSuRe = regexp.MustCompile(`\b(sudo|su|doas|pkexec|gsudo|run0)\b`)
 
 // ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 用默认 shellTimeout。
 // workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。mode=default 时拒绝 sudo/su。
@@ -46,14 +48,14 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 				return ToolResult{IsError: true, Output: "参数缺失：command"}
 			}
 			if mode == ModeDefault && sudoSuRe.MatchString(a.Command) {
-				return ToolResult{IsError: true, Output: "default 模式禁止 sudo/su（用 -mode auto 放行）"}
+				return ToolResult{IsError: true, Output: "default 模式禁止特权提升器 sudo/su/doas/pkexec/gsudo/run0（用 -mode auto 放行）"}
 			}
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			cmd := exec.CommandContext(runCtx, "sh", "-c", a.Command)
 			cmd.Dir = workspaceRoot
-			// 仅剥离 MINIAGENT_* 前缀变量，降低 LLM 直接 echo 宿主配置的概率；
-			// 非隔离边界，见 scrubEnv 注释。
+			// 剥离 MINIAGENT_* 前缀与含密钥关键字的变量，降低 LLM 直接 echo 宿主
+			// 配置/凭证的概率；非隔离边界，见 scrubEnv 注释。
 			cmd.Env = scrubEnv(os.Environ())
 			// 独立进程组：超时 kill(-pgid) 才能连带清理 sh 派生的孙子进程，
 			// 否则 make/find 之类会成孤儿继续跑。
@@ -116,17 +118,40 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	return truncate(out.String(), maxShellOutputChars, "…"), err
 }
 
-// scrubEnv 复制 env 并移除所有 MINIAGENT_* 前缀条目（API_KEY/BASE_URL 等）。
-// 这不是密钥隔离边界：其他第三方变量原样继承，且子进程可经
-// /proc/<ppid>/environ 读到 exec 前的环境。free 模式下隔离依赖调用方
-// （容器/独立 UID），见 README。
+// scrubEnv 复制 env 并移除：所有 MINIAGENT_* 前缀条目，以及变量名（大写后）含
+// KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL 的条目。后者覆盖 config 模式 ${MAIN_API_KEY}
+// 注入的来源变量（非 MINIAGENT_ 前缀但同样承载真实 key），以及 AWS_ACCESS_KEY_ID、
+// GH_TOKEN、DATABASE_PASSWORD 等宿主凭证，降低非 -key-file 模式下 LLM echo 出密钥的
+// 概率。会误伤含这些子串的普通变量（如 MONKEY/TOKEN_BUCKET）——倾向过度剥离而非泄漏。
+//
+// 这不是密钥隔离边界：未列出的凭证名仍继承，且子进程可经 /proc/$PPID/environ 读到
+// exec 前的完整环境快照。彻底方案是 -key-file（key 不进 env）。free 模式下隔离依赖
+// 调用方（容器/独立 UID），见 README。
 func scrubEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "MINIAGENT_") {
 			continue
 		}
+		name := kv
+		if i := strings.IndexByte(name, '='); i >= 0 {
+			name = name[:i]
+		}
+		if hasSecretKeyword(strings.ToUpper(name)) {
+			continue
+		}
 		out = append(out, kv)
 	}
 	return out
+}
+
+// hasSecretKeyword 报告大写变量名是否含密钥相关关键字。仅服务于 scrubEnv，
+// 与 MINIAGENT_ 前缀剥离互补；不构成完整凭证发现（见 scrubEnv 注释的隔离边界说明）。
+func hasSecretKeyword(upperName string) bool {
+	for _, kw := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"} {
+		if strings.Contains(upperName, kw) {
+			return true
+		}
+	}
+	return false
 }

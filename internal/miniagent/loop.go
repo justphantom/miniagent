@@ -9,16 +9,13 @@ import (
 	"log/slog"
 )
 
-// 单轮对话的 LLM 调用上限（默认值）：防止模型陷入工具循环烧 token，按典型
-// 工具链（读→改→测→答）所需步骤数 + 适度余量设定。可经 LoopConfig.MaxIterations 覆盖。
+// maxIterations：单轮 LLM 调用上限默认值，防工具循环烧 token；可经 MaxIterations 覆盖。
 const maxIterations = 20
 
-// 单条 tool 结果进入历史的字符上限：超长输出会稀释上下文预算，2k 字符
-// 既能保留工具结果的可读信息，又不至于挤占 LLM 的输入窗口。
+// maxToolResultInHistory：单条 tool 结果入历史字符上限，平衡可读性与上下文预算。
 const maxToolResultInHistory = 2000
 
-// 同一步内并行工具的并发上限：防止 LLM 一次发起大量 tool_call 时耗尽
-// FD/连接或触发目标服务限流。
+// maxParallelTools：同一步并行工具上限，防耗尽 FD/连接或触发目标限流。
 const maxParallelTools = 8
 
 func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args string) (res ToolResult) {
@@ -34,29 +31,23 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 }
 
 // Run 单轮 ReAct 循环：把 userPrompt 发给 llm，模型若请求工具则执行后回灌，
-// 直到模型给出无 tool_calls 的最终文本或撞 maxIterations 上限。
+// 直到模型给出无 tool_calls 的最终文本或撞 maxIterations 上限。logger 为 nil 时静默。
 //
-// onToolUse 仅在每次工具执行前被调用一次；最终文本只在返回的 Result.Text 里
-// 一次性给出。logger 为 nil 时静默。
-//
-// Result.Messages 是截至返回时的全量 transcript，所有 return 路径均带回。
-// 注意：onToolUse 报错返回时，Messages 尾部可能是"有 tool_calls、无对应
-// tool 结果"的 assistant 消息——该尾部不能直接作为 History 续跑（端点会
-// 因配对断裂 400）。CLI 在出错分支不写回 session，库使用者同理不应持久化。
+// Result.Messages 是截至返回的全量 transcript，所有 return 路径均带回。配对：OnToolUse 非
+// denied 的 error 路径尾部可能留下"有 tool_calls、无 tool 结果"的 assistant 消息（不可续跑）；
+// OnToolResult error 路径已补占位 tool 消息保配对完整（P2-1）。出错分支不应持久化。
 func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (Result, error) {
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")
 	}
 	toolByName := buildToolIndex(cfg.Tools, logger)
 
-	// 复制 History 而非 append 到其底层数组：接续对话时调用方可能复用同一
-	// slice，原地 append 会越界写调用方的数据。
+	// 复制 History：接续对话时调用方可能复用同一 slice，原地 append 会越界写其数据。
 	msgs := make([]Message, 0, len(cfg.History)+1)
 	msgs = append(msgs, cfg.History...)
 	// 阶段 1（Run 入口统一）：屏障掉最新 summary 之前的旧历史（审查 v3 #3）。
 	msgs = applyCompactionBarrier(msgs)
-	// newMsgs 仅记本轮新增（user prompt + assistant/tool + summary），main 据此 append-only
-	// 落盘，不重写全量。与 msgs 分离：上下文裁剪只动 msgs，落盘记真实发生。
+	// newMsgs 仅记本轮新增，main 据此 append-only 落盘；与 msgs 分离：裁剪只动 msgs。
 	var newMsgs []Message
 	appendMsg(&msgs, &newMsgs, Message{Role: roleUser, Content: userPrompt})
 	total := Usage{}
@@ -74,21 +65,28 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 		if cerr := compactIfOverWindow(ctx, llm, cfg, &msgs, &newMsgs, logger); cerr != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, cerr
 		}
-		resp, err := callLLM(ctx, llm, cfg, step, msgs, hooks, logger)
+		// downgraded=true 时固化 cfg（P2-2：thinking 降级跨步生效，避免每步重撞 400）。
+		resp, downgraded, err := callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+		if downgraded {
+			cfg.ThinkingLevel, cfg.Thinking = "", nil
+		}
 		if errors.Is(err, ErrContextLength) {
-			// 撞端点 context 上限：收紧历史（先清 reasoning，再压 tool content）后
-			// 对本步重试一次；仍超则由下方 err 分支上抛。只降级一次，避免循环烧请求。
+			// 撞 context 上限：收紧历史（清 reasoning + 压 tool content）后重试一次，仍超则上抛。
 			msgs = trimHistoryForContext(msgs)
 			if logger != nil {
 				logger.Warn("context length exceeded; trimmed history; retrying step", "step", step)
 			}
-			resp, err = callLLM(ctx, llm, cfg, step, msgs, hooks, logger)
+			resp, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
 		}
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
 		}
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
+		// usage 全零（流式端点常不 honor include_usage / 非流式缺失）：预算熔断静默失效，warn 暴露（P1-5）。
+		if logger != nil && resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0 {
+			logger.Warn("llm returned no usage; budget enforcement may be ineffective", "step", step)
+		}
 		// 预算熔断：以端点返回的真实 usage 累计判定，超限即停（error 路径 + 退出码 1）。
 		if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, fmt.Errorf(
@@ -132,11 +130,21 @@ func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
 	return toolByName
 }
 
+// callLLM 保持原签名供 thinking_test.go 直接调用，委托 callLLMWithDowngrade 并丢弃
+// downgraded。Run 改用 callLLMWithDowngrade 以跨步固化 thinking 降级（P2-2）。
 func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, error) {
+	resp, _, err := callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+	return resp, err
+}
+
+// callLLMWithDowngrade：callLLMOnce 之上做单步 thinking 降级重试，回传 downgraded 供 Run
+// 跨步固化 cfg；其余（重试一次、日志、截断告警）与原 callLLM 一致。
+func callLLMWithDowngrade(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, bool, error) {
 	if logger != nil {
 		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream, "thinking", cfg.ThinkingLevel)
 	}
 	resp, err := callLLMOnce(ctx, llm, cfg, step, msgs, hooks)
+	downgraded := false
 	// thinking 不被支持：去字段重试一次（仅当确实发了 thinking，避免无谓重试，审查 v2 #7）。
 	if errors.Is(err, ErrThinkingUnsupported) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
 		if logger != nil {
@@ -146,12 +154,13 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msg
 		down.ThinkingLevel = ""
 		down.Thinking = nil
 		resp, err = callLLMOnce(ctx, llm, down, step, msgs, hooks)
+		downgraded = true
 	}
 	if err != nil {
 		if logger != nil {
 			logger.Warn("llm call failed", "step", step, "error", err)
 		}
-		return Response{}, fmt.Errorf("llm call %d: %w", step, err)
+		return Response{}, downgraded, fmt.Errorf("llm call %d: %w", step, err)
 	}
 	if logger != nil {
 		logger.Info("llm call done", "step", step, "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
@@ -160,7 +169,7 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msg
 	if logger != nil && resp.FinishReason != "" && resp.FinishReason != "stop" && resp.FinishReason != "tool_calls" {
 		logger.Warn("llm response truncated", "step", step, "finish_reason", resp.FinishReason)
 	}
-	return resp, nil
+	return resp, downgraded, nil
 }
 
 // callLLMOnce 构造 Request（含 thinking）并单次调用 Do/DoStream，不含降级/重试逻辑。
@@ -224,6 +233,11 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 		// 工具执行后通知消费方结果（含 ExitCode/is_error），供实时观察与校验。
 		if hooks.OnToolResult != nil {
 			if err := hooks.OnToolResult(tc.Name, tc.ID, tres); err != nil {
+				// 配对补全：下游不可写，剩余 calls（含当前 i）结果无法提交；但 assistant.tool_calls 已入历史，
+				// 须为每个补一条占位 tool 消息，否则 Messages 配对断裂、续跑被端点 400（P2-1）。
+				for j := i; j < len(calls); j++ {
+					appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误"})
+				}
 				return msgs, err
 			}
 		}
@@ -251,7 +265,8 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 		}
 		tool, ok := toolByName[tc.Name]
 		if !ok {
-			results[i] = ToolResult{IsError: true, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
+			// ExitCode=exitCodeNotSet 与 denied 一致：未知工具从未真正执行，零值 0 会被事件层误读为成功（P3-4）。
+			results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
 			continue
 		}
 		wg.Add(1)

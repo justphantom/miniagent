@@ -232,3 +232,74 @@ func TestShell_ParentCancelNotReportedAsShellTimeout(t *testing.T) {
 		t.Errorf("parent cancel misreported as shell timeout: %s", res.Output)
 	}
 }
+
+// scrubEnv 除 MINIAGENT_ 前缀外，还需剥离变量名含 KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL
+// 的条目（P2-8）：覆盖 config ${MAIN_API_KEY} 注入来源、AWS_ACCESS_KEY_ID、GH_TOKEN 等。
+// DATABASE_URL/PATH 等无关键字变量保留；含关键字子串的普通变量（MONKEY/TOKEN_BUCKET）
+// 会过度剥离——安全侧倾斜的已知取舍，由 scrubEnv 注释明示。
+func TestScrubEnv(t *testing.T) {
+	cases := []struct {
+		kv   string
+		keep bool
+	}{
+		{"MINIAGENT_API_KEY=sk-mini", false}, // 前缀剥离
+		{"MAIN_API_KEY=sk-injected", false},  // ${MAIN_API_KEY} 注入来源，含 KEY
+		{"GH_TOKEN=ghp_xxx", false},          // 含 TOKEN
+		{"AWS_ACCESS_KEY_ID=AKIAxxx", false}, // 含 KEY
+		{"DB_PASSWORD=pw", false},            // 含 PASSWORD
+		{"MY_CREDENTIAL_FILE=/x", false},     // 含 CREDENTIAL
+		{"TOPSECRET=v", false},               // 含 SECRET
+		{"TOKEN_BUCKET=100", false},          // 含 TOKEN → 误伤（过度剥离）
+		{"MONKEY_COUNT=5", false},            // 含 KEY → 误伤（过度剥离）
+		{"DATABASE_URL=postgres://db", true}, // 无关键字 → 保留
+		{"PATH=/usr/bin:/bin", true},         // 保留
+		{"HOME=/root", true},                 // 保留
+	}
+	in := make([]string, len(cases))
+	for i, c := range cases {
+		in[i] = c.kv
+	}
+	out := scrubEnv(in)
+	have := make(map[string]bool, len(out))
+	for _, kv := range out {
+		have[kv] = true
+	}
+	for _, c := range cases {
+		if c.keep && !have[c.kv] {
+			t.Errorf("scrubEnv should keep %q", c.kv)
+		}
+		if !c.keep && have[c.kv] {
+			t.Errorf("scrubEnv should strip %q", c.kv)
+		}
+	}
+}
+
+// default 模式拦截常见特权提升器（P2-12）：sudo/su/doas/pkexec/gsudo/run0。
+// please 不在列：英文常用词，误伤合法命令（二次审查回归）。
+// auto 模式不拦，此处仅验 default 模式前置拒绝（不实际执行，无环境依赖）。
+func TestShellTool_DefaultRejectsPrivilegeEscalators(t *testing.T) {
+	s := ShellTool(t.TempDir(), 0, ModeDefault)
+	for _, cmd := range []string{
+		"sudo rm -f /",
+		"su root",
+		"doas sh",
+		"pkexec ls /",
+		"gsudo whoami",
+		"run0 id",
+		"cd /tmp && doas touch x",
+	} {
+		res := s.Call(context.Background(), `{"command":"`+cmd+`"}`)
+		if !res.IsError {
+			t.Errorf("default mode should reject %q: %s", cmd, res.Output)
+		}
+	}
+}
+
+// default 模式不得误伤含 please 的合法命令（二次审查 P2 #1：please 是英文常用词）。
+func TestShellTool_PleaseNotFalselyRejected(t *testing.T) {
+	s := ShellTool(t.TempDir(), 0, ModeDefault)
+	res := s.Call(context.Background(), `{"command":"echo please review"}`)
+	if res.IsError && strings.Contains(res.Output, "禁止特权提升器") {
+		t.Fatalf("please wrongly rejected: %s", res.Output)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -86,5 +87,51 @@ func TestGrepTool_SkipDotGit(t *testing.T) {
 	// 仅命中 a.go；.git 下两处必须跳过。
 	if strings.Count(res.Output, ":foo") != 1 {
 		t.Errorf(".git not skipped (want 1 hit): %s", res.Output)
+	}
+}
+
+// P2-9：单文件大小上限。超过 maxGrepFileBytes 的文件入口 Stat 直接跳过，避免
+// 无匹配的巨文件逐行扫到 fileOpTimeout(30s) 纯耗 IO。用 Truncate 造稀疏文件
+// （Size() 报告大但不占盘），grepFile 在读前就返回，跳过路径不读内容。
+func TestGrepFile_SkipsOversized(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.log")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// 稀疏文件：Size() 报告 maxGrepFileBytes+1，文件系统不实际分配（ext4/tmpfs 支持）。
+	if err := f.Truncate(maxGrepFileBytes + 1); err != nil {
+		_ = f.Close()
+		t.Skipf("truncate to sparse size unsupported: %v", err)
+	}
+	_ = f.Close()
+	re := regexp.MustCompile("foo")
+	_, err = grepFile(big, big, re)
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Errorf("grepFile should skip oversized file with \"too large\" error, got %v", err)
+	}
+}
+
+// 端到端验证：大文件被跳过、小文件正常命中，结果只含小文件。
+func TestGrepTool_SkipsOversizedFile(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.log")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := f.Truncate(maxGrepFileBytes + 1); err != nil {
+		_ = f.Close()
+		t.Skipf("truncate unsupported: %v", err)
+	}
+	_ = f.Close()
+	writeTree(t, dir, map[string]string{"small.go": "foo match\n"})
+	res := GrepTool(dir).Call(context.Background(), `{"pattern":"foo"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "small.go:1:foo match") {
+		t.Errorf("small file hit missing: %s", res.Output)
 	}
 }

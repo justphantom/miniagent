@@ -21,6 +21,14 @@ const (
 	maxFetchRedirects = 5
 )
 
+// fetchHeaderTimeout/fetchDialTimeout 在 Transport 层限制恶意超大响应头与慢连接建立：
+// http.Client.Timeout(fetchTimeout) 按规范含 reading response body，但 header 阶段
+// 无显式上限时被恶意识服务器拖延至整体 20s。用 var 而非 const 仅为测试可短化覆盖。
+var (
+	fetchHeaderTimeout = 10 * time.Second
+	fetchDialTimeout   = 10 * time.Second
+)
+
 var (
 	fetchScriptRe = regexp.MustCompile(`(?is)<script\b.*?</script>`)
 	fetchStyleRe  = regexp.MustCompile(`(?is)<style\b.*?</style>`)
@@ -51,8 +59,13 @@ func FetchTool() Tool {
 	}
 }
 
-// runFetch 抓取并清洗。ssrf 为 nil 时跳过目标检查（仅供测试绕过 loopback httptest）。
+// runFetch 抓取并清洗。ssrf==nil 时兜底用 checkSSRF：签名保留 nil 曾是维护陷阱
+// （生产路径固定传 checkSSRF，但 nil 会静默旁路 SSRF）。测试需绕过 loopback httptest
+// 时显式传入 no-op func，而非依赖 nil。
 func runFetch(ctx context.Context, args string, ssrf func(context.Context, *url.URL) error) ToolResult {
+	if ssrf == nil {
+		ssrf = checkSSRF
+	}
 	var a fetchArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
@@ -64,23 +77,25 @@ func runFetch(ctx context.Context, args string, ssrf func(context.Context, *url.
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("URL 非法：%v", err)}
 	}
-	if ssrf != nil {
-		if err := ssrf(ctx, u); err != nil {
-			return ToolResult{IsError: true, Output: err.Error()}
-		}
+	if err := ssrf(ctx, u); err != nil {
+		return ToolResult{IsError: true, Output: err.Error()}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	client := &http.Client{
 		Timeout: fetchTimeout,
+		Transport: &http.Transport{
+			// Proxy 沿用 DefaultTransport 行为（HTTP_PROXY/HTTPS_PROXY），避免新增 Transport
+			// 丢失代理支持（corporate 网络出网依赖）。
+			Proxy:                 http.ProxyFromEnvironment,
+			ResponseHeaderTimeout: fetchHeaderTimeout,
+			DialContext:           (&net.Dialer{Timeout: fetchDialTimeout}).DialContext,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxFetchRedirects {
 				return fmt.Errorf("重定向超过 %d 跳", maxFetchRedirects)
 			}
-			if ssrf != nil {
-				return ssrf(req.Context(), req.URL)
-			}
-			return nil
+			return ssrf(req.Context(), req.URL)
 		},
 	}
 	req, err := http.NewRequestWithContext(runCtx, http.MethodGet, a.URL, nil)

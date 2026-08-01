@@ -215,6 +215,7 @@ func TestHTTPClient_Do_RetriesOnNetworkError(t *testing.T) {
 
 // parseRetryAfter 必须区分"未提供"（-1，走 backoff）与"显式 0"（0，立即重试），
 // 否则合法的 Retry-After: 0 会被误当作未提供而退回退避，违背服务端意图。
+// P3-3：HTTP-date 已成过去时语义等同立即重试，返回 0（而非 -1 走 backoff）。
 func TestParseRetryAfter(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -225,6 +226,8 @@ func TestParseRetryAfter(t *testing.T) {
 		{"explicit-zero", "0", 0},
 		{"seconds", "2", 2 * time.Second},
 		{"garbage", "not-a-date", -1},
+		// P3-3：过去的 HTTP-date → 0（立即可重试），而非 -1（走 backoff 退火）。
+		{"past-http-date", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), 0},
 	}
 	for _, c := range cases {
 		h := http.Header{}
@@ -234,5 +237,56 @@ func TestParseRetryAfter(t *testing.T) {
 		if got := parseRetryAfter(h); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// P2-4：DoStream pre-delta 阶段 503 重试一次后拿到 200 SSE 流，成功聚合（pre-delta 失败可重试）。
+func TestHTTPClient_DoStream_RetriesOn503ThenSucceeds(t *testing.T) {
+	const okSSE = `data: {"choices":[{"delta":{"content":"recovered"}}]}
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`
+	srv, calls := retryServer(t, []struct {
+		status  int
+		body    string
+		headers map[string]string
+	}{
+		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
+		{status: http.StatusOK, body: okSSE, headers: map[string]string{"Content-Type": "text/event-stream"}},
+	})
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	resp, err := c.DoStream(context.Background(), Request{Model: "m"}, nil)
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+	if resp.Text != "recovered" {
+		t.Errorf("Text = %q", resp.Text)
+	}
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Errorf("calls = %d, want 2 (503 retried then success)", got)
+	}
+}
+
+// P2-4：DoStream pre-delta 503 持续，重试用尽后上抛含 "503" 与 "after N retries" 的错误。
+func TestHTTPClient_DoStream_RetriesExhaustedOn503(t *testing.T) {
+	srv, calls := retryServer(t, []struct {
+		status  int
+		body    string
+		headers map[string]string
+	}{
+		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
+		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
+		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
+	})
+	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	_, err := c.DoStream(context.Background(), Request{Model: "m"}, nil)
+	if err == nil {
+		t.Fatal("expected error after retries exhausted")
+	}
+	if !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "after 2 retries") {
+		t.Errorf("err = %v", err)
+	}
+	if got := atomic.LoadInt32(calls); got != int32(1+maxRetries) {
+		t.Errorf("calls = %d, want %d", got, 1+maxRetries)
 	}
 }

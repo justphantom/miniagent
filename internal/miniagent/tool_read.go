@@ -16,8 +16,13 @@ const maxReadFileChars = 20000
 const maxReadFileBytes = maxReadFileChars * 4
 
 // fileOpTimeout 是 read/edit 的内置操作超时：IsRegular 已切断 FIFO 阻塞主因，
-// 此处兜底挂起的文件系统（NFS 等）。超时返回后后台 goroutine 可能仍阻塞在
-// 内核读，属已接受取舍。
+// 此处兜底挂起的文件系统（NFS 服务端失联、坏盘、网络黑洞）。
+//
+// 已知取舍（P2-10，文档化而非重构）：select 命中 runCtx.Done 后主流程返回，但后台
+// 读 goroutine 可能仍阻塞在不可中断的内核 read（D 态，如 NFS 服务端失联时 read 不响
+// 应信号），ctx 无法取消 → goroutine 不可回收，长跑进程会累积。完整修复需非阻塞 IO
+// + 周期 ctx 轮询的重构（成本高、收益低，默认 isolation 下进程短命），暂以注释明示。
+// 彻底规避靠调用方按 README「运行隔离」配容器/低权限用户。
 const fileOpTimeout = 30 * time.Second
 
 const maxLineLimit = 10000
@@ -32,7 +37,7 @@ type readFileArgs struct {
 func ReadFileTool(workspaceRoot string) Tool {
 	return Tool{
 		Name:        "read",
-		Description: "读取文本文件，输出带行号（N │ line，edit 据此定位 offset）。支持 offset/limit 分段读大文件。拒绝二进制（含 NUL）、符号链接与非普通文件。单文件 80KB、输出 20000 字符上限。path 相对 workdir 或绝对。",
+		Description: "读取文本文件，输出带行号（N │ line，edit 据此定位 offset）。支持 offset/limit 分段读大文件。拒绝二进制（含 NUL）、最终分量符号链接（中间目录 symlink 仍跟随）与非普通文件。单文件 80KB、输出 20000 字符上限。path 相对 workdir 或绝对。",
 		Parameters: object(map[string]any{
 			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workdir 或绝对路径"},
 			"offset": map[string]any{"type": "integer", "description": "起始行号（1-based），默认 1（从头开始）"},
@@ -63,13 +68,17 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
 	full := resolveToolPath(workspaceRoot, a.Path)
-	info, err := os.Stat(full)
+	// Lstat 而非 Stat：与 edit/openNoFollow 对齐，对最终路径分量是符号链接直接拒
+	// （Stat 会跟随软链读目标，与「拒绝符号链接」描述不符）。中间目录的 symlink
+	// 仍跟随（read 本就无路径约束，仅最终分量由 O_NOFOLLOW/Lstat 兜底）。
+	info, err := os.Lstat(full)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 	}
 	if !info.Mode().IsRegular() {
 		// 拒绝非普通文件：FIFO/设备/socket 会让 openNoFollow 阻塞（无写者的
-		// FIFO 永久卡住）或读出非文本字节流；只允许 regular 文件。
+		// FIFO 永久卡住）或读出非文本字节流；symlink（mode 含 ModeSymlink）同样
+		// 在此拦截，给出清晰错误而非落到 openNoFollow 的 O_NOFOLLOW errno。
 		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 不是普通文件（mode=%s），仅支持 regular file", a.Path, info.Mode().String())}
 	}
 	content, err := readFileContent(full)
