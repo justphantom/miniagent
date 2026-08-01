@@ -58,11 +58,9 @@ func TestTodo_ConcurrentAdd(t *testing.T) {
 	tool := TodoTool(tl)
 	var wg sync.WaitGroup
 	for range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			tool.Call(context.Background(), `{"action":"add","subject":"t"}`)
-		}()
+		})
 	}
 	wg.Wait()
 	r := tool.Call(context.Background(), `{"action":"list"}`)

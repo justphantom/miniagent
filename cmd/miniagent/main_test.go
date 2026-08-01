@@ -430,11 +430,12 @@ func TestBuildTools_ConfineRejectsEscape(t *testing.T) {
 	}
 	for _, name := range []string{"write", "edit", "multi_edit"} {
 		var args string
-		if name == "write" {
+		switch name {
+		case "write":
 			args = `{"path":"../escape.txt","content":"x"}`
-		} else if name == "edit" {
+		case "edit":
 			args = `{"path":"../escape.txt","old_string":"a","new_string":"b"}`
-		} else {
+		default:
 			args = `{"path":"../escape.txt","edits":[{"old_string":"a","new_string":"b"}]}`
 		}
 		r := byName[name].Call(context.Background(), args)

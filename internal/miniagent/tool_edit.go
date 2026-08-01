@@ -90,18 +90,18 @@ func parseEditArgs(args string) (editFileArgs, error) {
 // applyOne 在 content 上应用一次替换，返回新 content 与命中处数。纯内存，不写盘。
 // 0 处返回 (content, 0, error)；非 replaceAll 且多处返回 (content, n, error)。
 // 调用方据 count 区分「未找到」与「多次匹配」给出具体提示。multi_edit 复用此做事务。
-func applyOne(content, old, new string, replaceAll bool) (string, int, error) {
+func applyOne(content, old, newText string, replaceAll bool) (string, int, error) {
 	count := strings.Count(content, old)
 	if count == 0 {
-		return content, 0, fmt.Errorf("未找到")
+		return content, 0, errors.New("未找到")
 	}
 	if !replaceAll && count > 1 {
 		return content, count, fmt.Errorf("出现 %d 次", count)
 	}
 	if replaceAll {
-		return strings.ReplaceAll(content, old, new), count, nil
+		return strings.ReplaceAll(content, old, newText), count, nil
 	}
-	return strings.Replace(content, old, new, 1), count, nil
+	return strings.Replace(content, old, newText, 1), count, nil
 }
 
 func applyEdit(full string, info os.FileInfo, a editFileArgs) ToolResult {

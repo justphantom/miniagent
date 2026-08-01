@@ -52,7 +52,7 @@ func FetchTool() Tool {
 }
 
 // runFetch 抓取并清洗。ssrf 为 nil 时跳过目标检查（仅供测试绕过 loopback httptest）。
-func runFetch(ctx context.Context, args string, ssrf func(*url.URL) error) ToolResult {
+func runFetch(ctx context.Context, args string, ssrf func(context.Context, *url.URL) error) ToolResult {
 	var a fetchArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
@@ -65,7 +65,7 @@ func runFetch(ctx context.Context, args string, ssrf func(*url.URL) error) ToolR
 		return ToolResult{IsError: true, Output: fmt.Sprintf("URL 非法：%v", err)}
 	}
 	if ssrf != nil {
-		if err := ssrf(u); err != nil {
+		if err := ssrf(ctx, u); err != nil {
 			return ToolResult{IsError: true, Output: err.Error()}
 		}
 	}
@@ -78,7 +78,7 @@ func runFetch(ctx context.Context, args string, ssrf func(*url.URL) error) ToolR
 				return fmt.Errorf("重定向超过 %d 跳", maxFetchRedirects)
 			}
 			if ssrf != nil {
-				return ssrf(req.URL)
+				return ssrf(req.Context(), req.URL)
 			}
 			return nil
 		},
@@ -113,9 +113,9 @@ func runFetch(ctx context.Context, args string, ssrf func(*url.URL) error) ToolR
 }
 
 // checkSSRF 限 http/https 且拒绝 loopback/私网/链路本地/未指定地址。
-// 注意：DNS 解析（LookupIP）与实际连接分离，无法防 rebinding——彻底防护需调用方
+// 注意：DNS 解析（LookupIPAddr）与实际连接分离，无法防 rebinding——彻底防护需调用方
 // 网络隔离。MVP 拦截静态内网/本地目标与非法 scheme。
-func checkSSRF(u *url.URL) error {
+func checkSSRF(ctx context.Context, u *url.URL) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("仅支持 http/https，got %q", u.Scheme)
 	}
@@ -123,13 +123,13 @@ func checkSSRF(u *url.URL) error {
 	if host == "" {
 		return errors.New("URL 缺 host")
 	}
-	ips, err := net.LookupIP(host)
+	ips, err := (&net.Resolver{}).LookupIPAddr(ctx, host)
 	if err != nil {
-		return fmt.Errorf("解析 %s 失败：%v", host, err)
+		return fmt.Errorf("解析 %s 失败：%w", host, err)
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return fmt.Errorf("拒绝内网/本地地址 %s → %s", host, ip)
+		if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() || ip.IP.IsUnspecified() {
+			return fmt.Errorf("拒绝内网/本地地址 %s → %s", host, ip.IP)
 		}
 	}
 	return nil

@@ -24,7 +24,7 @@ func TestCheckSSRF(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %q: %v", c.url, err)
 		}
-		if err := checkSSRF(u); err == nil || !strings.Contains(err.Error(), c.msg) {
+		if err := checkSSRF(context.Background(), u); err == nil || !strings.Contains(err.Error(), c.msg) {
 			t.Errorf("checkSSRF(%q) = %v, want containing %q", c.url, err, c.msg)
 		}
 	}
