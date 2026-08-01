@@ -212,6 +212,7 @@ func (c *HTTPClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, err
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	req.Stream = false // Do 必非流式，防御调用方误设
 	body, err := buildChatBody(req)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("build request body: %w", err)

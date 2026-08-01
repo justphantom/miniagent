@@ -33,6 +33,9 @@ type Request struct {
 	Messages  []Message
 	MaxTokens int
 	Tools     []Tool
+	// Stream 决定 buildChatBody 是否生成 stream:true；由 prepareDo（false）/prepareStream
+	// （true）强制设置，Do/DoStream 行为据此确定，不暴露给调用方决策。
+	Stream bool
 }
 
 // Tool is one agent tool the LLM may call. Name/Description/Parameters
@@ -61,15 +64,43 @@ type Usage struct {
 	OutputTokens int
 }
 
+// exitCodeNotSet 标记 shell 命令未产生有效退出码（超时或启动失败），与正常退出的
+// 0（成功）/N（命令退出码）区分，供消费方识别「命令没真正跑完」。
+const exitCodeNotSet = -1
+
 type ToolResult struct {
 	Output  string
 	IsError bool
+	// ExitCode 仅 shell 工具有意义；非 shell 工具不设置（零值 0），事件层按工具名
+	// 决定是否输出该字段（见 A4 tool_result 事件）。
+	ExitCode int
 }
 
 // OnToolUse 是工具执行前的回调：name 为工具名，input 为原始 JSON 参数。
 // 返回 error 会沿调用链上抛到 Run——当下游不可写（stdout 管道被消费者提前
 // 关闭）时立即终止循环，避免继续烧 token。传 nil 表示不通知。
 type OnToolUse func(name, input string) error
+
+// DeltaKind 标识 LLM 流式增量的种类，由 OnDelta 回调携带（流式模式启用后）。
+type DeltaKind string
+
+const (
+	DeltaText      DeltaKind = "text"
+	DeltaReasoning DeltaKind = "reasoning"
+)
+
+// LoopHooks 是 Run 在循环各点回调消费方的钩子集合，所有字段可 nil（不通知）。
+// 聚合为结构而非散参：回调达 3 个（工具前通知 / 工具后结果 / LLM 增量），集中扩展，
+// Run 签名只暴露一个 hooks 参数。
+type LoopHooks struct {
+	// OnToolUse 工具执行前通知；返回 error 沿链上抛到 Run 终止循环（下游管道关闭时）。
+	// 返回哨兵 ErrToolDenied（loop.go 定义）时仅拒绝该工具、不终止循环。
+	OnToolUse func(name, input string) error
+	// OnToolResult 工具执行后通知，透传 ToolResult（含 ExitCode / IsError）。
+	OnToolResult func(name, callID string, r ToolResult) error
+	// OnDelta LLM 流式增量；非流式模式不触发。
+	OnDelta func(step int, kind DeltaKind, text string) error
+}
 
 type Result struct {
 	Text  string
@@ -96,6 +127,10 @@ var ErrBudgetExceeded = errors.New("miniagent: token budget exceeded")
 // 做一次历史收紧重试（见 trimHistoryForContext）；调用方亦可 errors.Is 判定。
 var ErrContextLength = errors.New("miniagent: context length exceeded")
 
+// ErrToolDenied 由 OnToolUse 返回表示拒绝执行该工具（如危险命令未获确认）。
+// handleToolCalls 据此跳过该工具（回填拒绝结果）、不终止循环；其他 error 仍终止。
+var ErrToolDenied = errors.New("miniagent: tool denied by caller")
+
 // LoopConfig carries the per-turn LLM parameters.
 type LoopConfig struct {
 	Model     string
@@ -110,4 +145,11 @@ type LoopConfig struct {
 	// MaxTotalTokens 单轮累计 token（输入+输出）上限；<=0 不限。超限 Run 返回
 	// ErrBudgetExceeded（走 error 事件 + 退出码 1）。
 	MaxTotalTokens int
+	// Stream 为 true 时 callLLM 走流式（DoStream），增量经 LoopHooks.OnDelta 推出；
+	// 默认 false（非流式 Do），保持单测与兼容。
+	Stream bool
+	// ContextWindow 是模型 context 上限（tokens）；>0 时 Run 在每步 callLLM 前据
+	// estimateTokens 判定是否主动裁剪历史（见 compactHistory）；0=未知，不主动管理
+	// （仅 ErrContextLength 被动降级），保持兼容。
+	ContextWindow int
 }

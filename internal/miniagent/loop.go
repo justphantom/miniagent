@@ -43,7 +43,7 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 // 注意：onToolUse 报错返回时，Messages 尾部可能是"有 tool_calls、无对应
 // tool 结果"的 assistant 消息——该尾部不能直接作为 History 续跑（端点会
 // 因配对断裂 400）。CLI 在出错分支不写回 session，库使用者同理不应持久化。
-func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, onToolUse OnToolUse, logger *slog.Logger) (Result, error) {
+func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (Result, error) {
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm client is nil")
 	}
@@ -65,7 +65,15 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
 		}
-		resp, err := callLLM(ctx, llm, cfg, step, msgs, logger)
+		// 主动前置裁剪：估算超窗口 80% 时按轮成组删中段，保持 tool_calls/tool 配对。
+		// ContextWindow=0 时不管理（仅 ErrContextLength 被动降级）。
+		if cfg.ContextWindow > 0 && estimateTokens(msgs) > cfg.ContextWindow*4/5 {
+			msgs = compactHistory(msgs, contextKeepRecent)
+			if logger != nil {
+				logger.Warn("context near window; compacted history", "step", step, "msgs", len(msgs))
+			}
+		}
+		resp, err := callLLM(ctx, llm, cfg, step, msgs, hooks, logger)
 		if errors.Is(err, ErrContextLength) {
 			// 撞端点 context 上限：收紧历史（先清 reasoning，再压 tool content）后
 			// 对本步重试一次；仍超则由下方 err 分支上抛。只降级一次，避免循环烧请求。
@@ -73,7 +81,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			if logger != nil {
 				logger.Warn("context length exceeded; trimmed history; retrying step", "step", step)
 			}
-			resp, err = callLLM(ctx, llm, cfg, step, msgs, logger)
+			resp, err = callLLM(ctx, llm, cfg, step, msgs, hooks, logger)
 		}
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs}, err
@@ -94,7 +102,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs}, nil
 		}
 
-		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, onToolUse, logger)
+		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, hooks, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step, Messages: msgs}, err
 		}
@@ -116,9 +124,9 @@ func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
 	return toolByName
 }
 
-func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, logger *slog.Logger) (Response, error) {
+func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, error) {
 	if logger != nil {
-		logger.Debug("llm call start", "step", step, "model", cfg.Model)
+		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream)
 	}
 	req := Request{
 		Model:     cfg.Model,
@@ -127,7 +135,20 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msg
 		MaxTokens: cfg.MaxTokens,
 		Tools:     cfg.Tools,
 	}
-	resp, err := llm.Do(ctx, req)
+	var (
+		resp Response
+		err  error
+	)
+	if cfg.Stream {
+		onDelta := func(d Delta) {
+			if hooks.OnDelta != nil {
+				_ = hooks.OnDelta(step, d.Kind, d.Text)
+			}
+		}
+		resp, err = llm.DoStream(ctx, req, onDelta)
+	} else {
+		resp, err = llm.Do(ctx, req)
+	}
 	if err != nil {
 		if logger != nil {
 			logger.Warn("llm call failed", "step", step, "error", err)
@@ -144,7 +165,7 @@ func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msg
 	return resp, nil
 }
 
-func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, onToolUse OnToolUse, logger *slog.Logger) ([]Message, error) {
+func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, hooks LoopHooks, logger *slog.Logger) ([]Message, error) {
 	calls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		calls[i] = tc
@@ -156,9 +177,16 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 	msgs = append(msgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls})
 
 	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
-	if onToolUse != nil {
+	// OnToolUse 返回 ErrToolDenied 表示拒绝该工具（如危险命令未确认）：记录后继续
+	// 通知其余工具，runToolsParallel 跳过被拒者；其他 error 仍终止循环。
+	denied := make(map[string]bool)
+	if hooks.OnToolUse != nil {
 		for _, tc := range calls {
-			if err := onToolUse(tc.Name, tc.Args); err != nil {
+			if err := hooks.OnToolUse(tc.Name, tc.Args); err != nil {
+				if errors.Is(err, ErrToolDenied) {
+					denied[tc.ID] = true
+					continue
+				}
 				return msgs, err
 			}
 		}
@@ -167,12 +195,18 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 	// 同一步内 LLM 一次发起的多个 tool_call 相互独立，串行会让总耗时 = Σ 单工具
 	// 耗时（shell 可达数十秒）。并行执行，结果按原 index 回填，保证历史消息
 	// 与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
-	results := runToolsParallel(ctx, logger, calls, toolByName)
+	results := runToolsParallel(ctx, logger, calls, toolByName, denied)
 
 	for i, tc := range calls {
 		tres := results[i]
 		if logger != nil {
 			logger.Info("tool executed", "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
+		}
+		// 工具执行后通知消费方结果（含 ExitCode/is_error），供实时观察与校验。
+		if hooks.OnToolResult != nil {
+			if err := hooks.OnToolResult(tc.Name, tc.ID, tres); err != nil {
+				return msgs, err
+			}
 		}
 		limit := 0
 		if t, ok := toolByName[tc.Name]; ok {
@@ -187,11 +221,15 @@ func handleToolCalls(ctx context.Context, step int, resp Response, toolByName ma
 // 各 goroutine 写入 results 的不同下标，无内存竞争；wg.Wait 提供 happens-before。
 // 未知工具在调度前短路，直接回填错误结果。每个 tool 的 panic 由 safeCall 兜底。
 // 用 buffered chan 做信号量限制同时在途的工具数（maxParallelTools）。
-func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall, toolByName map[string]Tool) []ToolResult {
+func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall, toolByName map[string]Tool, denied map[string]bool) []ToolResult {
 	results := make([]ToolResult, len(calls))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxParallelTools)
 	for i, tc := range calls {
+		if denied[tc.ID] {
+			results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: "用户拒绝执行"}
+			continue
+		}
 		tool, ok := toolByName[tc.Name]
 		if !ok {
 			results[i] = ToolResult{IsError: true, Output: fmt.Sprintf("未知工具 %q", tc.Name)}

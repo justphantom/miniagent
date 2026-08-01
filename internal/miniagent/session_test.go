@@ -165,7 +165,7 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
 	}
-	res, err := Run(context.Background(), llm, LoopConfig{History: history}, "q2", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("final answer")}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{}, "q", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -212,14 +212,14 @@ func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 		textResponse("第一轮回答"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	r1, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "第一轮", nil, nil)
+	r1, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn1: %v", err)
 	}
 
 	tr2 := &fakeTransport{responses: []string{textResponse("第二轮回答")}}
 	llm2 := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr2}}
-	_, err = Run(context.Background(), llm2, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", nil, nil)
+	_, err = Run(context.Background(), llm2, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn2: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 		http.StatusServiceUnavailable,
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{}, "hi", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -270,7 +270,7 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: responses}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

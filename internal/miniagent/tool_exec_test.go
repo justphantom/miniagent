@@ -18,6 +18,9 @@ func TestShell_RunsCommand(t *testing.T) {
 	if !strings.Contains(res.Output, "hello") {
 		t.Errorf("Output = %q", res.Output)
 	}
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
+	}
 }
 
 func TestShell_CwdIsWorkspaceRoot(t *testing.T) {
@@ -33,14 +36,19 @@ func TestShell_CwdIsWorkspaceRoot(t *testing.T) {
 	}
 }
 
-func TestShell_NonZeroExitIsError(t *testing.T) {
+// 非 0 退出是命令的合法结果：IsError=false、ExitCode=命令退出码、stdout 完整保留。
+// 旧版把非 0 退出当 IsError=true 并把退出码拼进 Output 文本，已改为结构化 ExitCode。
+func TestShell_NonZeroExitReturnsExitCode(t *testing.T) {
 	s := ShellTool(t.TempDir(), 0)
 	res := s.Call(context.Background(), `{"command":"echo out; exit 3"}`)
-	if !res.IsError {
-		t.Fatal("expected error")
+	if res.IsError {
+		t.Fatalf("non-zero exit should not be IsError: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "退出码") {
-		t.Errorf("Output = %q", res.Output)
+	if res.ExitCode != 3 {
+		t.Errorf("ExitCode = %d, want 3", res.ExitCode)
+	}
+	if !strings.Contains(res.Output, "out") {
+		t.Errorf("stdout lost: Output = %q", res.Output)
 	}
 }
 
@@ -53,21 +61,25 @@ func TestShell_KillsGrandchildOnTimeout(t *testing.T) {
 	if _, err := exec.LookPath("pgrep"); err != nil {
 		t.Skip("pgrep not available")
 	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available (exec -a needs bash)")
+	}
 	marker := "miniagent_uniq_sleep_marker_9f3k2"
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = exec.CommandContext(ctx, "pkill", "-9", "-f", marker).Run()
 	})
-	s := ShellTool(t.TempDir(), 0)
-	// exec -a 让 sleep 进程名带 marker，pgrep -f 才能精确匹配。
+	s := ShellTool(t.TempDir(), 2*time.Second)
+	// bash -c 'exec -a marker sleep 600'：让 sleep 进程名带 marker 供 pgrep -f 精确匹配。
+	// 用 2s 超时（非默认 60s）加速；仍验证进程组被 kill（孙进程清理）。
 	start := time.Now()
-	res := s.Call(context.Background(), `{"command":"exec -a `+marker+` sleep 600"}`)
+	res := s.Call(context.Background(), `{"command":"bash -c 'exec -a `+marker+` sleep 600'"}`)
 	elapsed := time.Since(start)
 	if !res.IsError {
 		t.Error("expected timeout error")
 	}
-	if elapsed > 75*time.Second {
+	if elapsed > 5*time.Second {
 		t.Errorf("timeout not enforced: elapsed=%v", elapsed)
 	}
 	time.Sleep(time.Second)
@@ -157,6 +169,9 @@ func TestShellTool_CustomTimeout(t *testing.T) {
 	elapsed := time.Since(start)
 	if !res.IsError {
 		t.Fatal("expected timeout error")
+	}
+	if res.ExitCode != exitCodeNotSet {
+		t.Errorf("ExitCode = %d, want %d (timeout)", res.ExitCode, exitCodeNotSet)
 	}
 	if !strings.Contains(res.Output, "超时") {
 		t.Errorf("Output = %q", res.Output)

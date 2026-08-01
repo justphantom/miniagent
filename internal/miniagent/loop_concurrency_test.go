@@ -35,7 +35,7 @@ func TestRun_ToolsRunInParallel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", nil, nil)
+		_, _ = Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", LoopHooks{}, nil)
 		close(done)
 	}()
 
@@ -71,7 +71,7 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 		uses = append(uses, name)
 		return nil
 	}
-	_, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", onToolUse, nil)
+	_, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", LoopHooks{OnToolUse: onToolUse}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestRun_CancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
-	_, err := Run(ctx, llm, LoopConfig{}, "hi", nil, nil)
+	_, err := Run(ctx, llm, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}

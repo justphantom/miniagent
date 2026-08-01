@@ -55,3 +55,60 @@ func EmitResult(w io.Writer, result Result, model string) error {
 func EmitError(w io.Writer, msg string) error {
 	return json.NewEncoder(w).Encode(errorEvent{Type: "error", Message: msg})
 }
+
+// maxToolResultEventChars 是 tool_result 事件里 output 的字符上限：事件给消费方看
+// 概要，完整结果仍经 trimForHistory 入历史回灌 LLM。与历史裁剪上限解耦。
+const maxToolResultEventChars = 2000
+
+// toolResultEvent 是工具执行后的结果事件。exit_code 仅 shell 工具设置（指针，
+// nil 时不输出）——其他工具无退出码语义，避免零值 0 被误读为「成功」。
+type toolResultEvent struct {
+	Type      string `json:"type"` // tool_result
+	Name      string `json:"name"`
+	CallID    string `json:"call_id"`
+	Output    string `json:"output"`
+	Truncated bool   `json:"truncated"`
+	IsError   bool   `json:"is_error"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
+}
+
+// EmitToolResult 写一条 tool_result 事件。output 截断到 maxToolResultEventChars；
+// 仅 shell 工具输出 exit_code（其他工具 ExitCode 是无语义的零值）。
+func EmitToolResult(w io.Writer, name, callID string, r ToolResult) error {
+	out := truncate(r.Output, maxToolResultEventChars, "…[tool_result 已截断]")
+	ev := toolResultEvent{
+		Type:      "tool_result",
+		Name:      name,
+		CallID:    callID,
+		Output:    out,
+		Truncated: len([]rune(r.Output)) > maxToolResultEventChars,
+		IsError:   r.IsError,
+	}
+	if name == "shell" {
+		ec := r.ExitCode
+		ev.ExitCode = &ec
+	}
+	return json.NewEncoder(w).Encode(ev)
+}
+
+// deltaEvent 是流式增量事件（type 为 text_delta 或 reasoning_delta）。
+type deltaEvent struct {
+	Type string `json:"type"`
+	Step int    `json:"step"`
+	Text string `json:"text"`
+}
+
+// EmitDelta 写一条增量事件。kind 决定 type：text→text_delta，reasoning→reasoning_delta；
+// 未知 kind 不输出（防御）。
+func EmitDelta(w io.Writer, step int, kind DeltaKind, text string) error {
+	var t string
+	switch kind {
+	case DeltaText:
+		t = "text_delta"
+	case DeltaReasoning:
+		t = "reasoning_delta"
+	default:
+		return nil
+	}
+	return json.NewEncoder(w).Encode(deltaEvent{Type: t, Step: step, Text: text})
+}

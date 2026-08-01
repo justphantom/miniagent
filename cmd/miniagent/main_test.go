@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // fork-based 测试：通过 MINIAGENT_TEST_ENTRYPOINTS=1 让 test binary 重新进入
@@ -34,11 +37,11 @@ func TestMain(m *testing.M) {
 }
 
 func TestBuildTools_AlwaysRegisters6(t *testing.T) {
-	tools := buildTools(t.TempDir(), 0)
-	if len(tools) != 6 {
-		t.Fatalf("got %d tools, want 6", len(tools))
+	tools := buildTools(t.TempDir(), 0, "")
+	if len(tools) != 9 {
+		t.Fatalf("got %d tools, want 9", len(tools))
 	}
-	expect := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true}
+	expect := map[string]bool{"read": true, "write": true, "edit": true, "multi_edit": true, "grep": true, "glob": true, "shell": true, "todo": true, "fetch": true}
 	for _, tk := range tools {
 		if !expect[tk.Name] {
 			t.Errorf("unexpected tool %q", tk.Name)
@@ -47,9 +50,9 @@ func TestBuildTools_AlwaysRegisters6(t *testing.T) {
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
-	tools := buildTools("", 0)
-	if len(tools) != 6 {
-		t.Fatalf("got %d tools, want 6", len(tools))
+	tools := buildTools("", 0, "")
+	if len(tools) != 9 {
+		t.Fatalf("got %d tools, want 9", len(tools))
 	}
 }
 
@@ -305,5 +308,138 @@ func TestCLI_KeyFileAuth(t *testing.T) {
 	defer mu.Unlock()
 	if gotAuth != "Bearer sk-from-config-file" {
 		t.Errorf("Authorization = %q, want Bearer sk-from-config-file", gotAuth)
+	}
+}
+
+// 交互模式（-interactive）：stdin 两行 → 两轮对话，第二轮请求含第一轮回答
+// （上下文进程内累积），session 文件含两轮内容。
+func TestCLI_InteractiveTwoTurns(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"回A"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	sess := filepath.Join(t.TempDir(), "s.json")
+	code, out := runMainBin(t, "第一问\n第二问\n", []string{"-model", "m", "-base-url", srv.URL, "-interactive", "-session", sess}, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("got %d requests, want 2 (one per turn)", len(bodies))
+	}
+	// 第二轮请求须含第一轮的回答（累积）与本轮 prompt。
+	if !strings.Contains(bodies[1], "回A") || !strings.Contains(bodies[1], "第二问") {
+		t.Errorf("turn2 missing accumulated context: %s", bodies[1])
+	}
+	data, err := os.ReadFile(sess)
+	if err != nil {
+		t.Fatalf("session not written: %v", err)
+	}
+	for _, want := range []string{"第一问", "回A", "第二问"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("session missing %q: %s", want, data)
+		}
+	}
+}
+
+func TestCheckConfine(t *testing.T) {
+	dir := t.TempDir()
+	inner := filepath.Join(dir, "inner.txt")
+	if err := os.WriteFile(inner, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkConfine(dir, "inner.txt"); err != nil {
+		t.Errorf("inner relative path rejected: %v", err)
+	}
+	if err := checkConfine(dir, inner); err != nil {
+		t.Errorf("inner absolute path rejected: %v", err)
+	}
+	if err := checkConfine(dir, filepath.Join(dir, "..", "outside")); err == nil {
+		t.Error("escape via .. should be rejected")
+	}
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("s"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkConfine(dir, "link"); err == nil {
+		t.Error("symlink escape should be rejected")
+	}
+}
+
+// -list-models 早退：GET /v1/models，打印 id 后退出码 0。
+func TestCLI_ListModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-3.5-turbo"}]}`)
+	}))
+	defer srv.Close()
+	code, out := runMainBin(t, "", []string{"-list-models", "-base-url", srv.URL}, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	if !strings.Contains(out, "gpt-4o") || !strings.Contains(out, "gpt-3.5-turbo") {
+		t.Errorf("missing model ids: %s", out)
+	}
+}
+
+// checkApprove 各 mode × 各输入（共享 reader 已修复 stdin 冲突，此处直接喂 reader）。
+func TestCheckApprove(t *testing.T) {
+	mkR := func(s string) *bufio.Reader { return bufio.NewReader(strings.NewReader(s)) }
+	if err := checkApprove("all", "shell", "{}", mkR("")); err != nil {
+		t.Errorf("all mode should allow: %v", err)
+	}
+	if err := checkApprove("dangerous", "read", "{}", mkR("")); err != nil {
+		t.Errorf("non-dangerous tool should allow: %v", err)
+	}
+	if err := checkApprove("dangerous", "shell", "{}", mkR("y\n")); err != nil {
+		t.Errorf("dangerous + y should allow: %v", err)
+	}
+	if err := checkApprove("dangerous", "shell", "{}", mkR("n\n")); err == nil {
+		t.Error("dangerous + n should deny")
+	}
+	if err := checkApprove("dangerous", "shell", "{}", mkR("")); err == nil {
+		t.Error("dangerous + EOF should deny")
+	}
+	if err := checkApprove("always", "read", "{}", mkR("y\n")); err != nil {
+		t.Errorf("always + y should allow: %v", err)
+	}
+}
+
+// buildTools(confine=workdir) 后，写工具对越界 path 返回 IsError（含「沙箱」）。
+func TestBuildTools_ConfineRejectsEscape(t *testing.T) {
+	dir := t.TempDir()
+	tools := buildTools(dir, 0, "workdir")
+	byName := map[string]miniagent.Tool{}
+	for _, tk := range tools {
+		byName[tk.Name] = tk
+	}
+	for _, name := range []string{"write", "edit", "multi_edit"} {
+		var args string
+		if name == "write" {
+			args = `{"path":"../escape.txt","content":"x"}`
+		} else if name == "edit" {
+			args = `{"path":"../escape.txt","old_string":"a","new_string":"b"}`
+		} else {
+			args = `{"path":"../escape.txt","edits":[{"old_string":"a","new_string":"b"}]}`
+		}
+		r := byName[name].Call(context.Background(), args)
+		if !r.IsError || !strings.Contains(r.Output, "沙箱") {
+			t.Errorf("%s escape should be rejected: %s", name, r.Output)
+		}
 	}
 }

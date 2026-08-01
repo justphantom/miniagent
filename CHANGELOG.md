@@ -5,7 +5,41 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-01
+
 ### Added
+- `-list-models` flag：GET /v1/models 列出端点可用模型 id 后退出（早退路径，仅需
+  key + base-url，不经对话流程）。`HTTPClient.ListModels` 复用 endpoint/鉴权。
+- `-confine workdir` flag（默认空=free）：把写工具（write/edit/multi_edit）约束在
+  workdir 子树内（`confineWrap` 执行前校验 args.path，`EvalSymlinks` 防符号链接逃逸，
+  越界拒绝）。读工具与 shell 不约束（free 读无副作用；shell 沙箱靠 OS）。不改 free 默认。
+- `fetch` 工具：抓取 http(s) URL 转 plain text（剥 script/style/标签，反转义实体）。
+  SSRF 防护（`checkSSRF` 拒绝 loopback/私网/链路本地/未指定，限 http/https，重定向
+  上限 5 跳每跳重检）；body 上限 200KB、输出超 20000 字符截断。彻底防护（DNS
+  rebinding）仍需调用方网络隔离。
+- `multi_edit` 工具：对同一文件的多处文本顺序精确替换（事务——全部成功才写盘，
+  任一失败不改文件）。抽 `applyOne` 复用匹配逻辑，edits 按序基于前一处结果匹配。
+- `todo` 工具：进程内任务清单（`add`/`update`/`list`/`complete`/`delete`），
+  `sync.Mutex` 保护支持并行调用，不进 session（过程态）。默认 system prompt 引导
+  复杂任务先拆解再逐步推进。
+- 交互模式（`-interactive` flag，默认关）：循环读取 prompt（每行一个，空行跳过，
+  EOF 退出），多轮对话进程内累积上下文（每轮 History = 上轮 transcript），每轮成功
+  后增量写回 session；单轮错误不退出会话。非交互保持单次 stdin 行为。
+- 工具前确认（`-approve` flag，默认 all）：`OnToolUse` 返回 `ErrToolDenied` 时
+  `handleToolCalls` 跳过该工具（回填拒绝结果）、不终止循环；其他 error 仍终止。
+  `dangerous` 仅 shell/write/edit 读 stdin 确认，`always` 全部确认；非交互（stdin
+  已被 prompt 读光 → EOF）即拒绝危险工具，不静默放行。
+- 主动历史管理（`-context-window` flag，默认 0=不限）：`Run` 每步前用
+  `estimateTokens`（CJK 感知字符近似）估算，超窗口 80% 时 `compactHistory` 按
+  「轮」成组删中段（保 tool_calls/tool 配对，首轮 + 末 6 轮保留）。被动
+  `trimHistoryForContext`（ErrContextLength）仍作兜底。
+- 流式输出（`-stream` flag，默认关）：`DoStream` 走 SSE，增量发
+  `text_delta`/`reasoning_delta` 事件；流式 `tool_calls` 按 index 累积、末 chunk
+  `usage` 聚合。`LoopConfig.Stream` 控制，`OnDelta` 回调推出。非流式 `Do` 仍为默认。
+- `tool_result` NDJSON 事件：工具执行后输出结果（`output` 截断到 2000 字符，
+  完整版仍入历史回灌 LLM）；`exit_code` 仅 shell 工具输出。
+- `Run` 回调从散参 `onToolUse` 改为 `LoopHooks` 结构（`OnToolUse`/`OnToolResult`/
+  `OnDelta`，内部 API breaking，仅 `cmd/miniagent` 调用）。
 - `-max-iterations` flag：单轮 LLM 调用上限（0=默认 20）。原 `maxIterations`
   硬编码提升为 `LoopConfig.MaxIterations` 可配置，否则稍复杂任务必撞顶。
 - `-shell-timeout` flag：单条 shell 命令超时（0=默认 60s），仍受 `-max-duration`
@@ -33,6 +67,16 @@
   read/write 工具描述补全。
 
 ### Changed
+- **breaking（外部可观察）**：`shell` 工具非 0 退出的 `is_error` 从 `true` 改为
+  `false`（命令的合法结果，非执行失败），新增 `exit_code` 字段表达退出码。消费方须
+  改据 `exit_code` 判命令成败——这是定为 2.0.0 的主因。
+- **breaking（内部 API，仅 `cmd/miniagent` 调用，外部契约不变）**：`Run` 的
+  `onToolUse` 散参改为 `LoopHooks` 结构；`buildTools` 新增 `confine` 参数；`Request`
+  新增 `Stream` 字段；`ToolResult` 新增 `ExitCode`。
+- `shell` 工具退出码结构化：`ToolResult` 新增 `ExitCode` 字段；非 0 退出从
+  `IsError=true` 改为 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；
+  超时/启动失败 `ExitCode=-1`（`exitCodeNotSet`）。LLM 改据 `ExitCode` 判命令成败，
+  `IsError` 仅表「命令未正常执行」。
 - `ShellTool` 签名 breaking：新增 `timeout time.Duration` 参数。
 - 默认 system prompt 从「简洁助手」改为代码向工程 prompt（可用 `-system` 覆盖）。
 - 工具数 4 → 6（新增 grep/glob）；`buildTools` 签名 breaking（新增 `shellTimeout`）。

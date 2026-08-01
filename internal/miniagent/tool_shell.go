@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,11 +53,17 @@ func ShellTool(workspaceRoot string, timeout time.Duration) Tool {
 			body, err := runShellLimited(runCtx, cmd)
 			if err != nil {
 				if runCtx.Err() == context.DeadlineExceeded {
-					return ToolResult{IsError: true, Output: body + fmt.Sprintf("\n⏱ 命令超时（>%s），已终止。", shellTimeout)}
+					return ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: body + fmt.Sprintf("\n⏱ 命令超时（>%s），已终止。", shellTimeout)}
 				}
-				return ToolResult{IsError: true, Output: body + fmt.Sprintf("\n退出码错误：%v", err)}
+				// 非 0 退出是命令的合法结果而非执行失败：提取退出码，IsError=false，
+				// 让 LLM 据 ExitCode 判成败（旧版把非 0 退出当 IsError=true，语义不准）。
+				var ee *exec.ExitError
+				if errors.As(err, &ee) {
+					return ToolResult{Output: body, ExitCode: ee.ExitCode()}
+				}
+				return ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: body + fmt.Sprintf("\n执行失败：%v", err)}
 			}
-			return ToolResult{Output: body}
+			return ToolResult{Output: body, ExitCode: 0}
 		},
 	}
 }

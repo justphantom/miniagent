@@ -74,3 +74,47 @@ func TestEmitError(t *testing.T) {
 		t.Errorf("event = %+v", ev)
 	}
 }
+
+func TestEmitToolResult_ShellExitCode(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EmitToolResult(&buf, "shell", "c1", ToolResult{Output: "out", ExitCode: 7}); err != nil {
+		t.Fatalf("EmitToolResult: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev["type"] != "tool_result" || ev["name"] != "shell" || ev["call_id"] != "c1" || ev["exit_code"] != float64(7) {
+		t.Errorf("event = %+v", ev)
+	}
+}
+
+// 非 shell 工具不输出 exit_code，避免零值 0 被误读为「命令成功」。
+func TestEmitToolResult_NonShellOmitsExitCode(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EmitToolResult(&buf, "read", "c2", ToolResult{Output: "data"}); err != nil {
+		t.Fatalf("EmitToolResult: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := ev["exit_code"]; ok {
+		t.Errorf("non-shell must omit exit_code: %s", buf.String())
+	}
+}
+
+func TestEmitToolResult_TruncatesLongOutput(t *testing.T) {
+	var buf bytes.Buffer
+	long := strings.Repeat("x", maxToolResultEventChars+50)
+	if err := EmitToolResult(&buf, "read", "c3", ToolResult{Output: long}); err != nil {
+		t.Fatalf("EmitToolResult: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev["truncated"] != true {
+		t.Errorf("truncated = %v, want true", ev["truncated"])
+	}
+}

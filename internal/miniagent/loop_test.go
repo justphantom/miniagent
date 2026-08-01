@@ -60,7 +60,7 @@ func toolResponse(calls ...ToolCall) string {
 func TestRun_TextOnlyReturnsImmediately(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("hello world")}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", System: "be brief"}, "hi", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", System: "be brief"}, "hi", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var uses []string
 	onToolUse := func(name, input string) error { uses = append(uses, name); return nil }
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", onToolUse, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{OnToolUse: onToolUse}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestRun_UnknownToolYieldsErrorResult(t *testing.T) {
 		textResponse("ok"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRun_ToolPanicRecovered(t *testing.T) {
 		textResponse("recovered"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestRun_LLMErrorPropagates(t *testing.T) {
 		http.StatusServiceUnavailable,
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, err := Run(context.Background(), llm, LoopConfig{}, "hi", nil, nil)
+	_, err := Run(context.Background(), llm, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -168,7 +168,7 @@ func TestRun_LLMErrorPropagates(t *testing.T) {
 }
 
 func TestRun_NilClientErrors(t *testing.T) {
-	if _, err := Run(context.Background(), nil, LoopConfig{}, "hi", nil, nil); err == nil {
+	if _, err := Run(context.Background(), nil, LoopConfig{}, "hi", LoopHooks{}, nil); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -183,7 +183,7 @@ func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: responses}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("expected nil error on max iterations, got %v", err)
 	}
@@ -210,7 +210,7 @@ func TestRun_MaxIterationsOverride(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: responses}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: 3}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: 3}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -231,7 +231,7 @@ func TestRun_MaxIterationsNonPositiveUsesDefault(t *testing.T) {
 			textResponse("ok"),
 		}}
 		llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-		res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: v}, "x", nil, nil)
+		res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: v}, "x", LoopHooks{}, nil)
 		if err != nil {
 			t.Fatalf("MaxIterations=%d: %v", v, err)
 		}
@@ -252,7 +252,7 @@ func TestRun_MultiStepReAct(t *testing.T) {
 		textResponse("final answer"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestRun_BudgetExceeded(t *testing.T) {
 	bigUsage := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1000,"completion_tokens":100}}`
 	tr := &fakeTransport{responses: []string{bigUsage, bigUsage}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 1000}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 1000}, "x", LoopHooks{}, nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
 	}
@@ -301,7 +301,7 @@ func TestRun_BudgetZeroUnlimited(t *testing.T) {
 		textResponse("ok"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 0}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 0}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestRun_ToolResultLimitUsedInHistory(t *testing.T) {
 		textResponse("done"),
 	}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestRun_ReasoningEntersHistory(t *testing.T) {
 	step1 := `{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"think-step1","tool_calls":[{"id":"c1","type":"function","function":{"name":"q","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 	tr := &fakeTransport{responses: []string{step1, textResponse("done")}}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestRun_ContextLengthFallbackOnce(t *testing.T) {
 		responses: []string{`{"error":{"message":"maximum context length exceeded"}}`, textResponse("recovered")},
 	}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{}, "x", nil, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -392,11 +392,92 @@ func TestRun_ContextLengthFallbackStillTooLong(t *testing.T) {
 		responses: []string{body, body},
 	}
 	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, err := Run(context.Background(), llm, LoopConfig{}, "x", nil, nil)
+	_, err := Run(context.Background(), llm, LoopConfig{}, "x", LoopHooks{}, nil)
 	if !errors.Is(err, ErrContextLength) {
 		t.Fatalf("err = %v, want ErrContextLength", err)
 	}
 	if tr.calls != 2 {
 		t.Errorf("calls = %d, want 2 (only one fallback)", tr.calls)
+	}
+}
+
+// OnToolResult 在每个工具执行后触发一次，透传 name/call_id 与结果（含 IsError）。
+func TestRun_OnToolResultFired(t *testing.T) {
+	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "res"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "q", Args: "{}"}),
+		textResponse("done"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	var got []string
+	hooks := LoopHooks{
+		OnToolResult: func(name, callID string, r ToolResult) error {
+			got = append(got, name+":"+callID+":"+r.Output)
+			return nil
+		},
+	}
+	if _, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(got) != 1 || got[0] != "q:c1:res" {
+		t.Errorf("OnToolResult calls = %v, want [q:c1:res]", got)
+	}
+}
+
+// OnToolResult 返回 error 沿链上抛终止循环（与 OnToolUse 同语义：下游不可写时停）。
+func TestRun_OnToolResultErrorStops(t *testing.T) {
+	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "q", Args: "{}"}),
+		textResponse("done"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	stop := errors.New("downstream closed")
+	hooks := LoopHooks{OnToolResult: func(string, string, ToolResult) error { return stop }}
+	_, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	if !errors.Is(err, stop) {
+		t.Fatalf("err = %v, want %v", err, stop)
+	}
+}
+
+// OnToolUse 返回 ErrToolDenied：该工具被拒（回填拒绝结果）、不执行；其他工具正常。
+func TestRun_ToolDeniedSkipped(t *testing.T) {
+	toolA := Tool{Name: "a", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "A_ran"} }}
+	toolB := Tool{Name: "b", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "B_ran"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(
+			ToolCall{ID: "ca", Name: "a", Args: "{}"},
+			ToolCall{ID: "cb", Name: "b", Args: "{}"},
+		),
+		textResponse("done"),
+	}}
+	llm := &HTTPClient{APIKey: "sk", BaseURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	hooks := LoopHooks{OnToolUse: func(name, input string) error {
+		if name == "a" {
+			return ErrToolDenied
+		}
+		return nil
+	}}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{toolA, toolB}}, "x", hooks, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var aOut, bOut string
+	for _, m := range res.Messages {
+		if m.Role != roleTool {
+			continue
+		}
+		if m.ToolCallID == "ca" {
+			aOut = m.Content
+		}
+		if m.ToolCallID == "cb" {
+			bOut = m.Content
+		}
+	}
+	if !strings.Contains(aOut, "拒绝") {
+		t.Errorf("denied tool a should be rejected: %q", aOut)
+	}
+	if !strings.Contains(bOut, "B_ran") {
+		t.Errorf("tool b should still run: %q", bOut)
 	}
 }

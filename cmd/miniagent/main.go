@@ -1,12 +1,12 @@
-// Command miniagent runs a single agent turn from stdin and emits NDJSON
-// events to stdout.
+// Command miniagent runs an agent turn (or interactive loop) from stdin and
+// emits NDJSON events to stdout.
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -36,6 +36,12 @@ type cliFlags struct {
 	maxIterations  *int
 	shellTimeout   *time.Duration
 	maxTokensTotal *int
+	stream         *bool
+	contextWindow  *int
+	approve        *string
+	interactive    *bool
+	confine        *string
+	listModels     *bool
 }
 
 func parseFlags() *cliFlags {
@@ -52,6 +58,12 @@ func parseFlags() *cliFlags {
 	f.maxIterations = flag.Int("max-iterations", 0, "单轮 LLM 调用上限（0=默认 20）")
 	f.shellTimeout = flag.Duration("shell-timeout", 0, "单条 shell 命令超时（0=默认 60s）；仍受 -max-duration 总上限约束")
 	f.maxTokensTotal = flag.Int("max-tokens-total", 0, "单轮累计 token（输入+输出）上限（0=不限）；超限以 error 事件 + 退出码 1 终止")
+	f.stream = flag.Bool("stream", false, "流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式")
+	f.contextWindow = flag.Int("context-window", 0, "模型 context 上限（tokens）；>0 时主动裁剪历史，0=不限管理（默认）")
+	f.approve = flag.String("approve", "all", "工具确认策略：all(默认,全放行)|dangerous(仅 shell/write/edit 确认)|always")
+	f.interactive = flag.Bool("interactive", false, "交互模式：循环读取 prompt（每行一个），多轮对话累积上下文")
+	f.confine = flag.String("confine", "", "路径沙箱：workdir=把写工具(write/edit/multi_edit)约束在 workdir 内；默认空=free（不约束）")
+	f.listModels = flag.Bool("list-models", false, "列出端点可用模型 id 后退出（GET /v1/models）")
 	f.showVer = flag.Bool("version", false, "show version")
 	flag.Parse()
 	return f
@@ -68,13 +80,42 @@ func main() {
 	apiKey := mustLoadAPIKey(f)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: mustParseLogLevel(*f.logLevel)}))
 
+	if *f.listModels {
+		llm := buildLLM(apiKey, *f.baseURL, logger)
+		ids, err := llm.ListModels(context.Background())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
+			os.Exit(1)
+		}
+		for _, id := range ids {
+			fmt.Println(id)
+		}
+		return
+	}
+
 	validateConversationFlags(f, apiKey)
 	warnInsecureBaseURL(*f.baseURL)
-	prompt := mustReadPrompt()
 	history := mustLoadSession(*f.session)
 	llm := buildLLM(apiKey, *f.baseURL, logger)
-	tools := buildTools(*f.workdir, *f.shellTimeout)
-	onToolUse := miniagent.ToolUseWriter(os.Stdout)
+	tools := buildTools(*f.workdir, *f.shellTimeout, *f.confine)
+	// 全进程共享单一 stdin reader：交互模式的 readTurn 与 -approve 的确认读取共用，
+	// 避免各自新建 reader 竞争吞字节（见 release-readiness §2.2）。
+	reader := bufio.NewReader(os.Stdin)
+	emit := miniagent.ToolUseWriter(os.Stdout)
+	hooks := miniagent.LoopHooks{
+		OnToolUse: func(name, input string) error {
+			if err := emit(name, input); err != nil {
+				return err
+			}
+			return checkApprove(*f.approve, name, input, reader)
+		},
+		OnToolResult: func(name, callID string, r miniagent.ToolResult) error {
+			return miniagent.EmitToolResult(os.Stdout, name, callID, r)
+		},
+		OnDelta: func(step int, kind miniagent.DeltaKind, text string) error {
+			return miniagent.EmitDelta(os.Stdout, step, kind, text)
+		},
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -84,6 +125,12 @@ func main() {
 		defer cancel()
 	}
 
+	if *f.interactive {
+		runInteractive(ctx, llm, f, history, tools, hooks, logger, reader)
+		return
+	}
+
+	prompt := mustReadPrompt(reader)
 	result, err := miniagent.Run(ctx, llm, miniagent.LoopConfig{
 		Model:          *f.model,
 		System:         *f.system,
@@ -92,7 +139,9 @@ func main() {
 		History:        history,
 		MaxIterations:  *f.maxIterations,
 		MaxTotalTokens: *f.maxTokensTotal,
-	}, string(prompt), onToolUse, logger)
+		Stream:         *f.stream,
+		ContextWindow:  *f.contextWindow,
+	}, string(prompt), hooks, logger)
 	if err != nil {
 		// Run 出错时不写回 session：不把失败轮的半成品历史固化（工具的
 		// 副作用已发生但无记录，是已接受的取舍）。
@@ -179,28 +228,6 @@ func warnKeyFilePerm(path string) {
 	}
 }
 
-// maxPromptBytes 是 stdin prompt 的大小上限：无上限读取既撑内存，写回
-// session 后又会撞 LoadSession 的 maxSessionBytes 上限，导致会话永久无法
-// 接续。取值小于 session 上限，给后续轮次的 transcript 增长留出空间。
-const maxPromptBytes = 1 << 20
-
-func mustReadPrompt() []byte {
-	prompt, err := io.ReadAll(io.LimitReader(os.Stdin, maxPromptBytes+1))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: read stdin: %v\n", err)
-		os.Exit(1)
-	}
-	if len(prompt) > maxPromptBytes {
-		fmt.Fprintf(os.Stderr, "miniagent: stdin prompt 超过大小上限 %d 字节\n", maxPromptBytes)
-		os.Exit(1)
-	}
-	if len(prompt) == 0 {
-		fmt.Fprintln(os.Stderr, "miniagent: stdin is empty (send prompt via pipe or redirect)")
-		os.Exit(1)
-	}
-	return prompt
-}
-
 // warnInsecureBaseURL：http（非 loopback）时 API key 明文上链，stderr 警告。
 // 不强制拒绝：本地 vLLM/Ollama 是合法场景。
 func warnInsecureBaseURL(baseURL string) {
@@ -239,19 +266,5 @@ func buildLLM(apiKey, baseURL string, logger *slog.Logger) *miniagent.HTTPClient
 		BaseURL: baseURL,
 		HTTP:    &http.Client{Timeout: 120 * time.Second},
 		Logger:  logger,
-	}
-}
-
-// buildTools 无条件注册 6 个工具。workdir 为空时工具内部按各自规则处理
-// （read/write/edit/grep/glob 走 resolveToolPath，shell 把 cmd.Dir 留空继承 cwd）。
-// shellTimeout<=0 时 ShellTool 用默认 60s。
-func buildTools(workdir string, shellTimeout time.Duration) []miniagent.Tool {
-	return []miniagent.Tool{
-		miniagent.ReadFileTool(workdir),
-		miniagent.WriteFileTool(workdir),
-		miniagent.EditFileTool(workdir),
-		miniagent.GrepTool(workdir),
-		miniagent.GlobTool(workdir),
-		miniagent.ShellTool(workdir, shellTimeout),
 	}
 }

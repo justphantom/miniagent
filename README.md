@@ -3,13 +3,13 @@
 一个用 Go 标准库实现的最小 LLM agent。从 stdin 读取一个 prompt，驱动 ReAct 循环（LLM ↔ 工具调用），把过程事件和最终结果以 NDJSON（每行一个 JSON 对象）写到 stdout。
 
 - 后端：OpenAI 兼容的 `/v1/chat/completions` 接口
-- 非流式：每次 LLM 调用是普通 POST，等完整响应返回（无 SSE、无增量片段）
+- 默认非流式：每次 LLM 调用是普通 POST，等完整响应返回；传 `-stream` 改走 SSE，增量发 `text_delta`/`reasoning_delta` 事件
 - 无状态：单次 stdin → stdout，无历史、无会话；仅当显式传 `-session` 时把 transcript 落盘以接续对话
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
 - 无路径边界约束：工具不约束路径（绝对路径可读写任意位置），shell 无黑名单；仅对 `read`/`edit` 的最终路径做符号链接拒绝（`O_NOFOLLOW`），不构成完整安全边界。隔离责任完全交给调用方（容器/cgroup 等）
 - 平台：仅 Linux/macOS（Unix）。`platform.go` 用 `//go:build !windows` 隔离 setpgid/killpg/O_NOFOLLOW，未提供 Windows fallback
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：`read` / `write` / `edit` / `grep` / `glob` / `shell`（全部 free 模式）
+- 工具：`read` / `write` / `edit` / `multi_edit` / `grep` / `glob` / `shell` / `fetch`（free 模式）+ `todo`（进程内任务管理）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行
 
 ## 构建
@@ -29,8 +29,13 @@ make test       # go test -race ./...
 ## CLI 参数
 
 ```
+-approve string          工具确认策略：all(默认,全放行)|dangerous(仅 shell/write/edit 确认)|always
 -base-url string         endpoint 根地址（不含 /v1），或 $MINIAGENT_BASE_URL
+-context-window int      模型 context 上限（tokens）；>0 时主动裁剪历史，0=不限管理（默认）
+-confine string          路径沙箱：workdir=把写工具(write/edit/multi_edit)约束在 workdir 内；默认空=free
+-interactive             交互模式：循环读取 prompt（每行一个），多轮对话累积上下文；默认单次 stdin
 -key-file string         从文件读 API key（首尾空白截断）；优先于 $MINIAGENT_API_KEY，规避 /proc 泄漏
+-list-models             列出端点可用模型 id（GET /v1/models）后退出
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-duration duration   整体墙钟上限（覆盖所有 LLM 调用 + 工具执行），0 表示不限（默认 0）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
@@ -39,6 +44,7 @@ make test       # go test -race ./...
 -model string            LLM 模型 id（必需）
 -session string          会话文件路径（JSON 历史）：存在则加载作为上下文，结束后写回完整 transcript；缺省则无状态
 -shell-timeout duration  单条 shell 命令超时（0=默认 60s）；仍受 -max-duration 总上限约束
+-stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
 -system string           系统提示词（默认为面向工程代码开发的代码向 prompt）
 -version                 显示版本号并退出
 -workdir string          工作目录（工具相对路径基准 + shell 的 cwd；空则继承进程 cwd，工具不做越界校验）
@@ -56,17 +62,19 @@ make test       # go test -race ./...
 
 ## NDJSON 输出结构
 
-每个事件占一行，JSON 对象，`type` 字段区分种类。所有事件按时间顺序写入 stdout，最后以一个 `result` 或 `error` 事件结束。
+每个事件占一行，JSON 对象，`type` 字段区分种类。所有事件按时间顺序写入 stdout，最后以一个 `result` 或 `error` 事件结束（**终态**）。`text_delta`/`tool_use`/`tool_result` 为中间事件，不标志流程结束。
 
 ### 事件类型
 
 | type | 何时输出 | 字段 |
 |------|---------|------|
+| `text_delta` / `reasoning_delta` | 流式模式（`-stream`）下 LLM 输出增量 | `step`, `text` |
 | `tool_use` | 每次 LLM 请求工具调用（工具执行前） | `name`, `input` |
+| `tool_result` | 每次工具执行后 | `name`, `call_id`, `output`(截断), `truncated`, `is_error`, `exit_code`(仅 shell) |
 | `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps` |
 | `error` | 主流程失败，**终态** | `message` |
 
-工具的执行结果不输出到 stdout（仅写入历史消息回灌给 LLM）。
+工具完整结果经 `trimForHistory` 裁剪后写入历史回灌 LLM；概要（截断到 `maxToolResultEventChars`）经 `tool_result` 事件输出到 stdout 供消费方观察。
 
 ### 字段说明
 
@@ -105,7 +113,7 @@ make test       # go test -race ./...
 
 ## 工具清单
 
-6 个工具全部为 free 模式：无路径边界约束、无 shell 黑名单。工具参数为 JSON 对象。
+文件与 shell 工具为 free 模式（无路径边界约束、无 shell 黑名单）；`todo` 为进程内任务管理（不落盘）。工具参数为 JSON 对象。
 
 ### `read`
 
@@ -143,6 +151,17 @@ make test       # go test -race ./...
 
 约束：文件最大 10 MiB；保留原文件权限。
 
+### `multi_edit`
+
+对同一文件的多处文本顺序精确替换，事务性：`edits` 数组按序应用，全部成功才写盘，任一失败不改文件。每处基于前一处的结果匹配。
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `path` | string | 是 | 相对 `-workdir` 或绝对路径 |
+| `edits` | array | 是 | 替换列表，每项 `{old_string, new_string, replace_all?}` |
+
+约束：文件最大 10 MiB；`old_string` 须精确匹配，缺省要求唯一（`replace_all=true` 替换该处全部）。先 `read` 查看内容再编辑。
+
 ### `grep`
 
 递归正则搜索文本文件内容，输出 `path:lineno:line`（与 `grep -n` 一致）。跳过 `.git`、符号链接与二进制文件。
@@ -177,7 +196,31 @@ make test       # go test -race ./...
 约束：
 - 命令超时 60 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
 - 输出超过 20000 字符截断
+- 退出码：成功 `ExitCode=0`；命令非 0 退出 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；超时/启动失败 `IsError=true` + `ExitCode=-1`（`exitCodeNotSet`）。LLM 据 `ExitCode` 判命令成败
 - 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或用 `-key-file` 不经环境变量传 key（key 不在进程 env，`/proc/$PPID/environ` 读不到）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
+
+### `fetch`
+
+抓取 http(s) URL 转 plain text（剥 `<script>`/`<style>`/标签，反转义实体）。SSRF 防护：拒绝 loopback/私网/链路本地地址，限 http/https，重定向上限 5 跳（每跳重检目标）。
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `url` | string | 是 | http(s) URL |
+
+约束：body 上限 200KB、输出超 20000 字符截断；不构成完整安全边界（DNS rebinding 等仍需调用方网络隔离）。
+
+### `todo`
+
+进程内任务清单（不落盘）。`action` 驱动：`add` 新增（返回 id）、`update` 改 status/subject、`list` 列出全部、`complete` 标记完成、`delete` 删除。
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `action` | string | 是 | `add`\|`update`\|`list`\|`complete`\|`delete` |
+| `id` | int | 否 | `update`/`complete`/`delete` 时指定 |
+| `subject` | string | 否 | `add` 标题；`update` 新标题 |
+| `status` | string | 否 | `update` 时：`pending`\|`in_progress`\|`completed` |
+
+约束：进程内、`sync.Mutex` 保护（支持并行调用）；不进 session，进程结束即丢失。
 
 ## 会话接续（-session）
 
@@ -197,7 +240,7 @@ make test       # go test -race ./...
 | 码 | 含义 |
 |----|------|
 | 0 | 正常结束（含达到 `maxIterations` 上限、最终文本为空的场景） |
-| 1 | 参数错误、API key 缺失、stdin 为空、session 加载/写回失败、主流程 `error` 事件 |
+| 1 | 参数错误、API key 缺失、stdin 为空、session 加载/写回失败、`-list-models` 失败、主流程 `error` 事件 |
 
 ## 运行隔离（工程实践）
 
@@ -218,6 +261,7 @@ miniagent **不在代码层做任何隔离**：`read`/`write`/`edit`/`grep`/`glo
 | `maxToolResultInHistory` | 2000 | tool 结果进入历史消息的默认字符数（shell/grep/glob） |
 | `maxFileResultInHistory` | 8000 | read/edit 结果进入历史消息的字符数（代码内容，截断丢准确性） |
 | `contextTrimToolChars` | 1000 | context 超限降级时把 tool 结果压到的字符数 |
+| `contextKeepRecent` | 6 | `compactHistory` 保留的最近轮数（首轮之外） |
 | `maxGrepMatches` / `maxGlobEntries` | 200 / 500 | grep 命中行 / glob 命中条数上限 |
 | `maxReadFileBytes` / `maxReadFileChars` | 80000 / 20000 | 读文件字节 / 输出字符上限 |
 | `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
@@ -227,6 +271,10 @@ miniagent **不在代码层做任何隔离**：`read`/`write`/`edit`/`grep`/`glo
 | `maxChatBodyBytes` | 4 MiB | chat completions 响应 body 上限 |
 | `maxRetries` | 2 | LLM 调用最大重试次数（仅 429/500/502/503/504 + 网络错） |
 | `retryBaseDelay` / `retryMaxDelay` | 500ms / 8s | 重试指数退火基线 / 单次封顶 |
+| `exitCodeNotSet` | -1 | shell 超时/启动失败的 ExitCode 哨兵 |
+| `maxToolResultEventChars` | 2000 | `tool_result` 事件 output 截断字符数 |
+| `maxFetchBytes` / `fetchTimeout` | 200KB / 20s | fetch body 上限 / 超时 |
+| `maxFetchRedirects` | 5 | fetch 重定向上限（每跳重检 SSRF） |
 
 ## 完整调用示例
 

@@ -48,6 +48,11 @@ func buildChatBody(req Request) ([]byte, error) {
 	if req.MaxTokens > 0 {
 		payload["max_tokens"] = req.MaxTokens
 	}
+	if req.Stream {
+		// stream_options.include_usage：让末 chunk 携带 usage（计费/熔断仍以它为准）。
+		payload["stream"] = true
+		payload["stream_options"] = map[string]any{"include_usage": true}
+	}
 	if len(req.Tools) > 0 {
 		funcs := make([]map[string]any, 0, len(req.Tools))
 		for _, t := range req.Tools {
