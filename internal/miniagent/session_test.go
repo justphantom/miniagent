@@ -55,12 +55,28 @@ func TestLoadSession_MissingFileReturnsNil(t *testing.T) {
 	}
 }
 
-// 损坏 JSON 行必须报错。
+// 中间损坏的 JSON 行（合法行夹在前后）必须报错。
 func TestLoadSession_CorruptJSONFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.jsonl")
-	writeLines(t, path, `{"type":"session","id":"s"}`, `{not json`)
+	writeLines(t, path, `{"type":"session","id":"s"}`, `{not json`, `{"type":"message","role":"user","content":"after"}`)
 	if _, _, err := LoadSession(path); err == nil {
-		t.Fatal("expected error for corrupt JSON line")
+		t.Fatal("expected error for corrupt JSON line in the middle")
+	}
+}
+
+// append-only 崩溃残留的尾行半写应被容忍：丢弃残行，加载此前合法的历史。
+func TestLoadSession_ToleratesCorruptTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tail.jsonl")
+	writeLines(t, path,
+		`{"type":"session","id":"s"}`,
+		`{"type":"message","role":"user","content":"ok"}`,
+		`{broken half line`)
+	_, msgs, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("corrupt tail should be tolerated: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "ok" {
+		t.Errorf("expected 1 valid message before corrupt tail, got %+v", msgs)
 	}
 }
 

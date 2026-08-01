@@ -220,7 +220,9 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 // 损坏 session → 报错退出 1。
 func TestCLI_CorruptSessionExits1(t *testing.T) {
 	sess := filepath.Join(t.TempDir(), "bad.jsonl")
-	if err := os.WriteFile(sess, []byte("{oops"), 0o600); err != nil {
+	// 中间损坏（合法行夹非法行）：LoadSession 严格报错（尾行半写才容忍），CLI 退出码 1。
+	body := "{\"type\":\"session\",\"id\":\"s\"}\n{oops}\n{\"type\":\"message\",\"role\":\"user\",\"content\":\"q\"}\n"
+	if err := os.WriteFile(sess, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	code, out := runMainBin(t, "prompt", chatArgs("http://127.0.0.1:1", "-session", sess), "MINIAGENT_API_KEY=sk-test")

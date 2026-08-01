@@ -2,6 +2,7 @@ package miniagent
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -96,11 +97,15 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		r.System = cfg.Defaults.SystemPrompt
 	}
 
-	r.Run = resolveRun(cfg, o)
+	run, rerr := resolveRun(cfg, o)
+	if rerr != nil {
+		return nil, rerr
+	}
+	r.Run = run
 	return r, nil
 }
 
-func resolveRun(cfg *Config, o CLIOverrides) ResolvedRun {
+func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	var r ResolvedRun
 	intPtr := func(get func(RunConfig) *int) *int {
 		if cfg == nil {
@@ -128,9 +133,17 @@ func resolveRun(cfg *Config, o CLIOverrides) ResolvedRun {
 	} else if cfg != nil {
 		r.Stream = cfg.Run.Stream
 	}
-	r.MaxDuration = pickDur(o.MaxDuration, durPtr(func(rc RunConfig) *string { return rc.MaxDuration }))
-	r.ShellTimeout = pickDur(o.ShellTimeout, durPtr(func(rc RunConfig) *string { return rc.ShellTimeout }))
-	return r
+	d, err := pickDur(o.MaxDuration, durPtr(func(rc RunConfig) *string { return rc.MaxDuration }))
+	if err != nil {
+		return r, fmt.Errorf("config run.max_duration %q: %w", *durPtr(func(rc RunConfig) *string { return rc.MaxDuration }), err)
+	}
+	r.MaxDuration = d
+	d, err = pickDur(o.ShellTimeout, durPtr(func(rc RunConfig) *string { return rc.ShellTimeout }))
+	if err != nil {
+		return r, fmt.Errorf("config run.shell_timeout %q: %w", *durPtr(func(rc RunConfig) *string { return rc.ShellTimeout }), err)
+	}
+	r.ShellTimeout = d
+	return r, nil
 }
 
 func pickInt(ov, cv *int) *int {
@@ -140,16 +153,16 @@ func pickInt(ov, cv *int) *int {
 	return cv
 }
 
-func pickDur(ov *time.Duration, cv *string) *time.Duration {
+func pickDur(ov *time.Duration, cv *string) (*time.Duration, error) {
 	if ov != nil {
-		return ov
+		return ov, nil
 	}
 	if cv == nil {
-		return nil
+		return nil, nil
 	}
 	d, err := time.ParseDuration(*cv)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return &d
+	return &d, nil
 }

@@ -60,8 +60,11 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 			setPGID(cmd)
 			body, err := runShellLimited(runCtx, cmd)
 			if err != nil {
-				if runCtx.Err() == context.DeadlineExceeded {
-					return ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: body + fmt.Sprintf("\n⏱ 命令超时（>%s），已终止。", shellTimeout)}
+				// 区分 shell 自身超时与父 ctx 取消：父 ctx（max-duration / 信号）未取消、
+				// 仅 runCtx 到 deadline 时，才是 shell 自身超时；否则走通用失败分支，
+				// 避免父超时被误报为「命令超时 >N」（runCtx 是 ctx 的子，父超时也会令 runCtx 到期）。
+				if ctx.Err() == nil && runCtx.Err() != nil {
+					return ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: body + fmt.Sprintf("\n⏱ 命令超时（>%s），已终止。", timeout)}
 				}
 				// 非 0 退出是命令的合法结果而非执行失败：提取退出码，IsError=false，
 				// 让 LLM 据 ExitCode 判成败（旧版把非 0 退出当 IsError=true，语义不准）。

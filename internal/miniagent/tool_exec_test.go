@@ -217,3 +217,18 @@ func TestShellTool_AutoAllowsAndCdNotBlocked(t *testing.T) {
 		t.Errorf("auto should not emit default-mode rejection: %s", res.Output)
 	}
 }
+
+// 父 ctx 超时（max-duration / 信号）不应被误报为 shell 自身超时（修复 R5）：
+// shell timeout 设长（不触发），父 ctx 短超时令 sleep 被取消 → 输出须不含「命令超时」文案。
+func TestShell_ParentCancelNotReportedAsShellTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires parent ctx to elapse")
+	}
+	parent, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	s := ShellTool(t.TempDir(), 60*time.Second, ModeAuto)
+	res := s.Call(parent, `{"command":"sleep 3"}`)
+	if strings.Contains(res.Output, "命令超时") {
+		t.Errorf("parent cancel misreported as shell timeout: %s", res.Output)
+	}
+}

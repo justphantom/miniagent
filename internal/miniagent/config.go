@@ -69,7 +69,8 @@ type CompactionConfig struct {
 var envVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // expandVars 把 raw 中所有 ${VAR} 替换为 os.Getenv(VAR)。未设置/空报错；值含 JSON
-// 特殊字符（" \）拒绝内联以防破坏 JSON 结构。
+// 特殊字符（" \）或控制字符（<0x20，含换行/制表/回车，RFC 8259 要求转义）拒绝内联，
+// 防止破坏 JSON 字符串结构（裸内联会让 json.Unmarshal 报「非法 JSON」，掩盖根因）。
 func expandVars(raw string) (string, error) {
 	var bad error
 	out := envVarRe.ReplaceAllStringFunc(raw, func(m string) string {
@@ -82,13 +83,23 @@ func expandVars(raw string) (string, error) {
 			bad = fmt.Errorf("环境变量 %q 未设置或为空", name)
 			return m
 		}
-		if strings.ContainsAny(v, `"\`) {
-			bad = fmt.Errorf("环境变量 %q 含 JSON 特殊字符，拒绝内联", name)
+		if strings.ContainsAny(v, `"\`) || hasControlChar(v) {
+			bad = fmt.Errorf("环境变量 %q 含 JSON 特殊字符或控制字符，拒绝内联", name)
 			return m
 		}
 		return v
 	})
 	return out, bad
+}
+
+// hasControlChar 报告 s 是否含 JSON 控制字符（U+0000–U+001F，须转义）或 DEL(0x7f)。
+func hasControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadConfig 读 path、展开 ${VAR}、反序列化、校验。显式 -config 不存在由调用方区分硬错误。

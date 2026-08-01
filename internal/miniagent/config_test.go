@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,6 +40,21 @@ func TestExpandVars_RejectSpecialChar(t *testing.T) {
 	t.Setenv("MA_QUOTE", `a"b`)
 	if _, err := expandVars(`${MA_QUOTE}`); err == nil {
 		t.Error("quote in value should be rejected")
+	}
+}
+
+func TestExpandVars_RejectControlChar(t *testing.T) {
+	// 控制字符（换行/制表/回车等）裸内联会破坏 JSON 字符串结构，须拒绝。
+	// （NUL 不测：OS setenv 不允许值含 NUL，进不到 expandVars。）
+	for name, val := range map[string]string{
+		"MA_NL": "line1\nline2",
+		"MA_TB": "a\tb",
+		"MA_CR": "a\rb",
+	} {
+		t.Setenv(name, val)
+		if _, err := expandVars(`{"k":"${` + name + `}"}`); err == nil {
+			t.Errorf("%s: control char %q should be rejected", name, val)
+		}
 	}
 }
 
@@ -212,6 +229,19 @@ func TestResolve_DurationFromString(t *testing.T) {
 	}
 }
 
+func TestResolve_BadDurationFromString(t *testing.T) {
+	// 配置中 duration 字符串非法（如缺单位）应上抛错误，而非静默回落。
+	bad := "30"
+	cfg := &Config{
+		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
+		Defaults:  DefaultsConfig{Model: "p/m"},
+		Run:       RunConfig{MaxDuration: &bad},
+	}
+	if _, err := Resolve(cfg, CLIOverrides{}); err == nil {
+		t.Error("bad duration string should error, not silently drop")
+	}
+}
+
 func TestListAvailableModels_StaticNoGET(t *testing.T) {
 	// ModelsURL 空 + 静态 Models → 直接返回，绝不发 HTTP（用会真实失败的内嵌 url 证明不 GET）。
 	p := ProviderConfig{Name: "p", Models: []string{"a", "b"}}
@@ -257,5 +287,33 @@ func TestChatEndpoint_CachedParse(t *testing.T) {
 	_, u2, _ := c.chatEndpoint(time.Second)
 	if u1 != u2 {
 		t.Error("chatEndpoint should return same cached *url.URL")
+	}
+}
+
+// 并发懒解析（直接 struct 构造、chatURL 未缓存）不应数据竞争（sync.Once 保护，修复 R4）。
+// go test -race 下验证：多 goroutine 首次触发的懒解析无竞争，且都返回同一缓存指针。
+func TestChatEndpoint_ConcurrentLazyParse(t *testing.T) {
+	c := &HTTPClient{ChatURL: "https://api/v1/chat/completions"}
+	const n = 20
+	var wg sync.WaitGroup
+	seen := make([]*url.URL, n)
+	for i := range seen {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, u, err := c.chatEndpoint(time.Second)
+			if err != nil {
+				t.Errorf("chatEndpoint: %v", err)
+				return
+			}
+			seen[i] = u
+		}(i)
+	}
+	wg.Wait()
+	for i := 1; i < n; i++ {
+		if seen[i] != seen[0] {
+			t.Error("concurrent chatEndpoint should return same cached *url.URL")
+			break
+		}
 	}
 }

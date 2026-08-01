@@ -78,6 +78,8 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 	var msgs []Message
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	var corruptLine int // 挂起的非法 JSON 行号（1-based），0=无
+	var corruptErr error
 	for i := 0; sc.Scan(); i++ {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
@@ -87,7 +89,18 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(line, &probe); err != nil {
-			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行非法 JSON：%w", path, i+1, err)
+			// 非法 JSON 行：append-only 下崩溃仅污染最后写入的行。先挂起而非立即报错，
+			// 待确认是否尾行（见循环后 corruptLine 处置）。若此前已有挂起行 → 中间损坏。
+			if corruptLine != 0 {
+				return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行非法 JSON：%w", path, corruptLine, corruptErr)
+			}
+			corruptLine = i + 1
+			corruptErr = err
+			continue
+		}
+		// 本行合法：若存在挂起的非法行，它不在文件末尾 → 中间损坏，严格报错。
+		if corruptLine != 0 {
+			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行非法 JSON（中间损坏）：%w", path, corruptLine, corruptErr)
 		}
 		if probe.Type == sessionTypeSession {
 			if err := json.Unmarshal(line, &meta); err != nil {
@@ -108,6 +121,8 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 	if err := sc.Err(); err != nil {
 		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 读取失败：%w", path, err)
 	}
+	// 扫描结束：corruptLine 仍非 0 → 最后一行半写（append-only 崩溃残行），容忍丢弃，
+	// 返回此前合法的历史。validateToolPairing 仍严格执行：若残行致配对断裂则报清晰错误。
 	if err := validateToolPairing(msgs); err != nil {
 		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q：%w", path, err)
 	}
@@ -155,7 +170,8 @@ func validateToolPairing(msgs []Message) error {
 }
 
 // AppendMessages append-only 追加 msgs 到 jsonl：文件新建/空时先写 metadata 行，再写每条
-// message 行。失败轮由调用方决定是否落盘（main 仅成功轮调用）。权限 0o600（对话属敏感数据）。
+// message 行，Flush 后 f.Sync 落盘缩小崩溃残行窗口（LoadSession 兜底容忍尾行半写）。
+// 失败轮由调用方决定是否落盘（main 仅成功轮调用）。权限 0o600（对话属敏感数据）。
 func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
@@ -202,7 +218,12 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 			return err
 		}
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	// Sync 落盘：把已 Flush 到内核缓冲的数据 fsync 到磁盘，缩小「已写残行 + 未落盘」
+	// 的崩溃窗口（配合 LoadSession 的尾行容忍，见该函数 corruptLine 逻辑）。
+	return f.Sync()
 }
 
 // MigrateSession 把 v2 的 JSON 数组 session（[]Message）转为 jsonl：写到 {dstDir}/{base}.jsonl，

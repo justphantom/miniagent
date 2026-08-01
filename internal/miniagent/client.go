@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -17,29 +18,30 @@ import (
 
 const (
 	maxChatBodyBytes = 4 << 20 // 4 MiB；恰好达到不截断，多 1 字节即报错
-	// 重试：仅对瞬时故障（429/5xx + 网络错误）生效，最多 maxRetries 次。
-	// 取值依据：LLM 端点 429/503 抖动通常在数秒内自愈，2 次足以覆盖典型尖刺，
-	// 同时避免在真故障下放大下游压力（雪崩）。
+	// 重试：仅对瞬时故障（429/5xx + 网络错误）生效，maxRetries 次。端点 429/503 抖动
+	// 数秒内自愈，2 次覆盖典型尖刺；避免真故障下放大下游压力（雪崩）。
 	maxRetries     = 2
 	retryBaseDelay = 500 * time.Millisecond
 	retryMaxDelay  = 8 * time.Second // 单次退火上限，含 Retry-After 解析值
 )
 
 // HTTPClient calls an OpenAI-compatible chat completions endpoint via net/http.
-// ChatURL/ModelsURL 是完整端点 URL（构造时 parse 缓存进 chatURL/modelsURL，
-// 不再每请求重做，审查 v3 #10）。
+// 懒解析（直接 struct 构造的测试路径）用 sync.Once 保护，确保并发 Do/DoStream 无竞争（修复 R4）。
 type HTTPClient struct {
-	APIKey    string
-	ChatURL   string
-	ModelsURL string
-	chatURL   *url.URL // 构造时缓存；直接 struct 构造时由 chatEndpoint 懒解析兜底
-	modelsURL *url.URL
-	HTTP      *http.Client
-	Logger    *slog.Logger
+	APIKey     string
+	ChatURL    string
+	ModelsURL  string
+	chatURL    *url.URL
+	chatOnce   sync.Once
+	chatErr    error
+	modelsURL  *url.URL
+	modelsOnce sync.Once
+	modelsErr  error
+	HTTP       *http.Client
+	Logger     *slog.Logger
 }
 
-// validateURL 解析并校验 raw 为合法 http(s) URL（含 scheme+host）。供 NewHTTPClient
-// 与 chatEndpoint/modelsEndpoint 复用，避免端点解析逻辑散落。
+// validateURL 解析并校验 raw 为合法 http(s) URL（含 scheme+host）。
 func validateURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -55,8 +57,7 @@ func validateURL(raw string) (*url.URL, error) {
 }
 
 // NewHTTPClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
-// （ListAvailableModels 走静态回落时不 GET）。生产用此构造；测试可直接构造 struct，
-// chatEndpoint/modelsEndpoint 懒解析兜底。
+// （ListAvailableModels 静态回落时不 GET）。
 func NewHTTPClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger) (*HTTPClient, error) {
 	chat, err := validateURL(chatURL)
 	if err != nil {
@@ -73,28 +74,39 @@ func NewHTTPClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, l
 	return c, nil
 }
 
-// chatEndpoint 返回缓存的 chatURL（懒解析兜底直接构造）+ http client。
+// cacheEndpoint 解析 raw 缓存进 dst（已设则不动），失败缓存进 errp。调用方在
+// sync.Once.Do 内调用以并发安全（chat/models 复用，修复 R4）。
+func cacheEndpoint(dst **url.URL, errp *error, raw string) {
+	if *dst != nil {
+		return
+	}
+	u, err := validateURL(raw)
+	if err != nil {
+		*errp = err
+		return
+	}
+	*dst = u
+}
+
+// chatEndpoint 返回缓存的 chatURL（懒解析兜底直接构造，sync.Once 保证并发安全）。
 func (c *HTTPClient) chatEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
-	if c.chatURL == nil {
-		u, err := validateURL(c.ChatURL)
-		if err != nil {
-			return nil, nil, err
-		}
-		c.chatURL = u
+	c.chatOnce.Do(func() { cacheEndpoint(&c.chatURL, &c.chatErr, c.ChatURL) })
+	if c.chatErr != nil {
+		return nil, nil, c.chatErr
 	}
 	return c.client(defaultTimeout), c.chatURL, nil
 }
 
 func (c *HTTPClient) modelsEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
-	if c.modelsURL == nil {
-		if c.ModelsURL == "" {
-			return nil, nil, errors.New("miniagent: models_url 未配置")
+	c.modelsOnce.Do(func() {
+		if c.modelsURL == nil && c.ModelsURL == "" {
+			c.modelsErr = errors.New("miniagent: models_url 未配置")
+			return
 		}
-		u, err := validateURL(c.ModelsURL)
-		if err != nil {
-			return nil, nil, err
-		}
-		c.modelsURL = u
+		cacheEndpoint(&c.modelsURL, &c.modelsErr, c.ModelsURL)
+	})
+	if c.modelsErr != nil {
+		return nil, nil, c.modelsErr
 	}
 	return c.client(defaultTimeout), c.modelsURL, nil
 }
