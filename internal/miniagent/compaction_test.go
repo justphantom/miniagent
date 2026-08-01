@@ -259,3 +259,64 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 		t.Errorf("barrier should start at newest summary: %+v", barrier)
 	}
 }
+
+// P2-1 跨轮继承：上轮 LoadSession 带入的旧 KindSummary 经 applyCompactionBarrier 落在 msgs 头，
+// splitRounds 使其单独成 rounds[0]。修复前 middle=flatten(rounds[1:len-keepRecent]) 排除 rounds[0]，
+// LLM 输入从未含旧 summary 文本 → 新 summary 不继承远古历史；下轮 barrier 命中新 summary 后
+// 旧 summary 被丢弃，其承载的历史永久失真。验证：(a) summarizeMiddle 收到的 Messages 含旧 summary
+// 文本；(b) 结果恰 1 条 KindSummary 在头（旧 summary 被自然替代而非双存）；(c) applyCompactionBarrier
+// 命中该新 summary。
+func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("新摘要内容")}}
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	// 头部是上轮遗留的 KindSummary（applyCompactionBarrier 的产物），后跟若干真实 user 轮 +
+	// keepRecent 轮（末位本轮 user_prompt，模拟 Run 入口已加入）。
+	msgs := []Message{
+		{Role: roleUser, Kind: KindSummary, Content: "[既往对话摘要]\n远古摘要内容-旧"},
+		{Role: roleUser, Content: "real0"},
+		{Role: roleUser, Content: "real1"},
+		{Role: roleUser, Content: "real2"},
+		{Role: roleUser, Content: "real3"},
+		{Role: roleUser, Content: "real4"},
+		{Role: roleUser, Content: "real5"},
+	}
+	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
+	msgs = append(msgs, newMsgs...)
+
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
+	if err != nil || !summarized {
+		t.Fatalf("compactWithSummary: summarized=%v err=%v", summarized, err)
+	}
+
+	// (a) LLM 输入必须含旧 summary 文本——修复前此处失败（middle 排除 rounds[0]），继承断链。
+	if len(tr.bodies) == 0 {
+		t.Fatal("expected summarizeMiddle to be called")
+	}
+	if !strings.Contains(tr.bodies[0], "远古摘要内容-旧") {
+		t.Errorf("LLM 输入应含旧 summary 文本以真正继承：body=%s", tr.bodies[0])
+	}
+
+	// (b) 结果恰 1 条 KindSummary，位于头部（旧 summary 已并入新 summary，不独立保留）。
+	count := 0
+	for _, m := range msgs {
+		if m.Kind == KindSummary {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 KindSummary in msgs, got %d: %+v", count, msgs)
+	}
+	if len(msgs) == 0 || msgs[0].Kind != KindSummary || !strings.Contains(msgs[0].Content, "新摘要内容") {
+		t.Errorf("head should be the new summary: %+v", msgs)
+	}
+	// 中段 real0..real3 被压进新 summary，不独立保留；tail = [real4, real5, 本轮新问题]。
+	if len(msgs) != 1+3 {
+		t.Errorf("msgs len = %d, want 4 (1 summary + 3 recent): %+v", len(msgs), msgs)
+	}
+
+	// (c) applyCompactionBarrier 命中头部新 summary（无旧 summary 残留导致反向命中错位）。
+	barrier := applyCompactionBarrier(msgs)
+	if len(barrier) == 0 || barrier[0].Kind != KindSummary || !strings.Contains(barrier[0].Content, "新摘要内容") {
+		t.Errorf("barrier should start at new summary: %+v", barrier)
+	}
+}

@@ -125,10 +125,10 @@ func (c *HTTPClient) DoStream(ctx context.Context, req Request, onDelta func(Del
 			backoff *= 2
 			continue
 		}
-		// HTTP 200：进入 SSE 解析（开始流出 delta），此后不可重试。
-		res, perr := parseSSE(resp.Body, onDelta)
-		_ = resp.Body.Close()
-		return res, perr
+		return func() (Response, error) { // HTTP 200：parseSSE 流 delta。IIFE 内 defer Close：onDelta panic（被 callLLMOnce recover）时仍关 body；函数级 defer 跨重试堆积故每次循环内联。
+			defer func() { _ = resp.Body.Close() }()
+			return parseSSE(resp.Body, onDelta)
+		}()
 	}
 	return Response{}, errors.New("llm stream retry loop exited unexpectedly")
 }

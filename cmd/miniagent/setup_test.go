@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,5 +33,37 @@ func TestBuildLLM_HTTPClientTimeoutAndProxy(t *testing.T) {
 	}
 	if tr.ResponseHeaderTimeout == 0 {
 		t.Error("Transport.ResponseHeaderTimeout = 0, want >0")
+	}
+}
+
+// P3：key-file 经 O_NOFOLLOW 读取，拒最终分量 symlink——攻击者把 key-file 换成指向
+// /etc/shadow 的软链会让机密外发；与 session openNoFollow 行为一致。
+func TestResolveAPIKey_RejectsSymlinkAndReadsRegular(t *testing.T) {
+	dir := t.TempDir()
+
+	// 普通文件：正常读取（且 strings.TrimSpace 生效）。
+	regular := filepath.Join(dir, "regular.key")
+	if err := os.WriteFile(regular, []byte("  sk-secret  "), 0o600); err != nil {
+		t.Fatalf("write regular key-file: %v", err)
+	}
+	got, err := resolveAPIKey(regular, "")
+	if err != nil {
+		t.Fatalf("regular file: unexpected error: %v", err)
+	}
+	if got != "sk-secret" {
+		t.Errorf("regular file: got %q, want %q (TrimSpace)", got, "sk-secret")
+	}
+
+	// 符号链接：被 O_NOFOLLOW 拒（ELOOP），返回明确 error。
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("leaked"), 0o600); err != nil {
+		t.Fatalf("write symlink target: %v", err)
+	}
+	link := filepath.Join(dir, "link.key")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	if _, err := resolveAPIKey(link, ""); err == nil {
+		t.Fatal("symlink key-file: want error (O_NOFOLLOW 拒最终分量 symlink)，got nil")
 	}
 }

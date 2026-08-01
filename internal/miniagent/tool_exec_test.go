@@ -284,6 +284,40 @@ func TestScrubEnv(t *testing.T) {
 	}
 }
 
+// hasSecretKeyword 直接覆盖（第五轮 P3）：PAT 命中 GITHUB_PAT/GITLAB_PAT/AZURE_DEVOPS_EXT_PAT
+// 等 fine-grained token；PATH 族（PATH/PATHEXT/LD_LIBRARY_PATH/CPATH/GITHUB_PATH）含 PATH 必
+// 豁免——PATH 误剥会让 shell 找不到 ls/grep。MONKEY_COUNT/AUTHPROXY/COMPAT_MODE 等误伤须仍
+// true（安全侧倾斜，与 TestScrubEnv 一致）。
+func TestHasSecretKeyword(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"GITHUB_PAT", true},
+		{"GITLAB_PAT", true},
+		{"AZURE_DEVOPS_EXT_PAT", true},
+		{"GH_TOKEN", true},
+		{"MAIN_API_KEY", true},
+		{"MYSQL_PWD", true},
+		{"MONKEY_COUNT", true},
+		{"AUTHPROXY", true},
+		{"COMPAT_MODE", true},
+		{"PATH", false},
+		{"PATHEXT", false},
+		{"LD_LIBRARY_PATH", false},
+		{"CPATH", false},
+		{"GITHUB_PATH", false},
+		{"DATABASE_URL", false},
+		{"HOME", false},
+		{"LANG", false},
+	}
+	for _, c := range cases {
+		if got := hasSecretKeyword(c.name); got != c.want {
+			t.Errorf("hasSecretKeyword(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // default 模式拦截常见特权提升器（P2-12 + 三轮 P3）：sudo/su/doas/pkexec/gsudo/run0，
 // 以及专有特权/命名空间工具 setpriv/nsenter/unshare/chroot/machinectl（低频专有，误伤小）。
 // please 不在列：英文常用词，误伤合法命令（二次审查回归）。

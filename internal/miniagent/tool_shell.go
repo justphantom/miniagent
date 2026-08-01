@@ -121,16 +121,20 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 }
 
 // scrubEnv 复制 env 并移除：所有 MINIAGENT_* 前缀条目，以及变量名（大写后）含
-// KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH 的条目。后者覆盖 config
+// KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT 的条目。后者覆盖 config
 // 模式 ${MAIN_API_KEY} 注入的来源变量（非 MINIAGENT_ 前缀但同样承载真实 key），以及
-// AWS_ACCESS_KEY_ID、GH_TOKEN、DATABASE_PASSWORD、MYSQL_PWD、DB_PASS/REDIS_PASS、
-// GPG_PASSPHRASE、BASIC_AUTH/AUTH_HEADER 等高频宿主凭证，降低非 -key-file 模式下 LLM
-// echo 出密钥的概率。PWD/PASS/AUTH 等短关键字会扩大误伤面（如 AUTHPROXY、PASSWORDLESS
-// 中含 PASS/PASSWORD）——安全侧倾斜的已知取舍，倾向过度剥离而非泄漏。
+// AWS_ACCESS_KEY_ID、GH_TOKEN/GITHUB_TOKEN/GITHUB_PAT/GITLAB_PAT、DATABASE_PASSWORD、
+// MYSQL_PWD、DB_PASS/REDIS_PASS、GPG_PASSPHRASE、BASIC_AUTH/AUTH_HEADER 等高频宿主凭证，
+// 降低非 -key-file 模式下 LLM echo 出密钥的概率。PWD/PASS/AUTH 等短关键字会扩大误伤面
+// （如 AUTHPROXY、PASSWORDLESS 中含 PASS/PASSWORD）——安全侧倾斜的已知取舍，倾向过度
+// 剥离而非泄漏。PAT 单独排除 PATH 族（PATH/PATHEXT/*_PATH），见 hasSecretKeyword 注释。
 //
-// 这不是密钥隔离边界：未列出的凭证名仍继承，且子进程可经 /proc/$PPID/environ 读到
-// exec 前的完整环境快照。彻底方案是 -key-file（key 不进 env）。free 模式下隔离依赖
-// 调用方（容器/独立 UID），见 README。
+// 已知未覆盖（依赖 -key-file 与 OS 隔离兜底，不强制剥离以免误伤 agent 自身 shell 命令
+// 所需环境）：DATABASE_URL/SERVICE_URL（URL 过宽，碰撞 SERVICE_URL 等良性变量）、
+// *_COOKIE（较窄但低频）、*_DSN（同前）、*_CONN（碰撞 CONNECTION_*/CONNECT_* 过宽）。
+// 这些是增量泄漏面收窄，不是密钥隔离边界——未列出的凭证名仍继承，且子进程可经
+// /proc/$PPID/environ 读到 exec 前的完整环境快照。彻底方案是 -key-file（key 不进 env）。
+// free 模式下隔离依赖调用方（容器/独立 UID），见 README。
 func scrubEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
@@ -153,11 +157,19 @@ func scrubEnv(env []string) []string {
 // 与 MINIAGENT_ 前缀剥离互补；不构成完整凭证发现（见 scrubEnv 注释的隔离边界说明）。
 // PWD/PASS/PASSPHRASE/AUTH 补全高频凭证名（MYSQL_PWD/DB_PASS/GPG_PASSPHRASE/BASIC_AUTH），
 // 短关键字接受更大误伤面换安全侧倾斜（如 AUTHPROXY 被剥，可接受）。
+// PAT 覆盖 GITHUB_PAT/GITLAB_PAT/AZURE_DEVOPS_EXT_PAT 等 fine-grained token（与已剥的
+// GH_TOKEN/GITHUB_TOKEN 并存的常用名），但 PATH/PATHEXT/LD_LIBRARY_PATH/CPATH/GITHUB_PATH
+// 等「路径」类变量共享 P-A-T 子串——PATH 是 shell 解析可执行路径的必需变量，误剥会让
+// ls/grep/cat 全部失效（亦会破坏既有 TestScrubEnv 的 PATH 用例）。故 PAT 单独走「含 PATH
+// 必为路径类、豁免」分支：GITHUB_PAT 不含 PATH（PAT 后无 H）→ 命中；GITHUB_PATH 含 PATH
+// → 豁免。COMPAT_*/PATCH_* 等含 PAT 但不含 PATH 的罕见变量会被过度剥离，接受（同
+// MONKEY_COUNT 取舍）。
 func hasSecretKeyword(upperName string) bool {
 	for _, kw := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PWD", "PASS", "PASSPHRASE", "AUTH"} {
 		if strings.Contains(upperName, kw) {
 			return true
 		}
 	}
-	return false
+	// PAT 单独判定：排除含 PATH 的路径类变量（PATH 不可剥，见上方注释）。
+	return strings.Contains(upperName, "PAT") && !strings.Contains(upperName, "PATH")
 }

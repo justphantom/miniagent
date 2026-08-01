@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"log/slog"
@@ -124,11 +126,21 @@ func resolveAPIKey(keyFile, envKey string) (string, error) {
 	if keyFile == "" {
 		return envKey, nil
 	}
-	data, err := os.ReadFile(keyFile)
+	data, err := readKeyFileNoFollow(keyFile)
 	if err != nil {
 		return "", fmt.Errorf("read key-file %q: %w", keyFile, err)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// readKeyFileNoFollow 以 O_NOFOLLOW 拒最终分量 symlink，避免 key-file 被换为指向 /etc/shadow 的软链致机密外发（与 session openNoFollow 一致）。
+func readKeyFileNoFollow(path string) ([]byte, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer syscall.Close(fd)
+	return io.ReadAll(os.NewFile(uintptr(fd), path))
 }
 
 func warnKeyFilePerm(path string) {

@@ -97,6 +97,19 @@ func compactWithSummary(ctx context.Context, llm *HTTPClient, model string, msgs
 		return false, Usage{}, nil // 无中段可摘
 	}
 	middle := flatten(rounds[1 : len(rounds)-keepRecent])
+	// 跨轮继承（P2-1）：上轮 LoadSession 带入的旧 summary 经 applyCompactionBarrier 落在 msgs
+	// 头，splitRounds 使其单独成 rounds[0]。middle 默认排除 rounds[0] → LLM 输入从未含旧
+	// summary 文本，新 summary 不继承远古历史；下轮 barrier 命中新 summary 后旧 summary 被丢弃，
+	// 其承载的历史永久失真。检测到该遗留 summary 时并入 middle 开头让 LLM 真正继承，并从 out 头
+	// 移除——否则新旧 summary 双存，下轮 splitRounds 又把新 summary 孤立进 rounds[0] 重演同一
+	// bug。首轮非 summary（正常 user 轮）维持原行为。与下方 newMsgs 去重边界：那条处理本轮多次
+	// 压缩累积的 summary（位于 newMsgs），本修复处理 LoadSession 带入的跨轮旧 summary（位于
+	// msgs），两者作用于不同序列，互不干扰。
+	head := rounds[0]
+	if len(head) == 1 && head[0].Kind == KindSummary {
+		middle = append([]Message{head[0]}, middle...)
+		head = nil
+	}
 	if len(middle) == 0 {
 		return false, Usage{}, nil
 	}
@@ -109,7 +122,7 @@ func compactWithSummary(ctx context.Context, llm *HTTPClient, model string, msgs
 		return false, Usage{}, err
 	}
 	summaryMsg := Message{Role: roleUser, Kind: KindSummary, Content: "[既往对话摘要]\n" + summary}
-	out := append([]Message{}, rounds[0]...)
+	out := append([]Message{}, head...)
 	out = append(out, summaryMsg)
 	out = append(out, flatten(rounds[len(rounds)-keepRecent:])...)
 	*msgs = out
