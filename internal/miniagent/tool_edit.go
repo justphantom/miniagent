@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 const maxEditFileBytes = 10 << 20
@@ -31,7 +32,11 @@ type editOne struct {
 // EditFileTool 精确替换文件中的文本：单段（old_string/new_string）或多段事务（edits 数组）。
 // old_string 须与文件精确匹配；缺省要求唯一（0 或多处失败），replace_all=true 替换全部。
 // edits 非空时按序事务应用，全部成功才写盘，任一失败不改文件。拒绝符号链接与非普通文件。
-func EditFileTool(workspaceRoot string) Tool {
+// timeout<=0 用默认 fileOpTimeout。
+func EditFileTool(workspaceRoot string, timeout time.Duration) Tool {
+	if timeout <= 0 {
+		timeout = fileOpTimeout
+	}
 	return Tool{
 		Name:        "edit",
 		Description: "精确替换文件中的一段或多段文本。单段：old_string+new_string（缺省要求唯一，replace_all=true 替换全部）。多段事务：edits 数组按序应用、全部成功才写盘、任一失败不改。old_string 须与文件精确匹配（含缩进和换行）。拒绝符号链接与非普通文件。先 read 查看内容再编辑。",
@@ -59,7 +64,7 @@ func EditFileTool(workspaceRoot string) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			runCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			done := make(chan ToolResult, 1)
 			go func() { done <- runEditFile(workspaceRoot, args) }()

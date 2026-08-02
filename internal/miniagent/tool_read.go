@@ -33,8 +33,11 @@ type readFileArgs struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-// ReadFileTool returns a read tool bound to workspaceRoot.
-func ReadFileTool(workspaceRoot string) Tool {
+// ReadFileTool returns a read tool bound to workspaceRoot. timeout<=0 用默认 fileOpTimeout。
+func ReadFileTool(workspaceRoot string, timeout time.Duration) Tool {
+	if timeout <= 0 {
+		timeout = fileOpTimeout
+	}
 	return Tool{
 		Name:        "read",
 		Description: "读取文本文件，输出带行号（N │ line，edit 据此定位 offset）。支持 offset/limit 分段读大文件。拒绝二进制（含 NUL）、最终分量符号链接（中间目录 symlink 仍跟随）与非普通文件。单文件 80KB、输出 20000 字符上限。path 相对 workdir 或绝对。",
@@ -48,7 +51,7 @@ func ReadFileTool(workspaceRoot string) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			runCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			done := make(chan ToolResult, 1)
 			go func() { done <- runReadFile(workspaceRoot, args) }()

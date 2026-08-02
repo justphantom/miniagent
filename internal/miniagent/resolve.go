@@ -19,7 +19,7 @@ type CLIOverrides struct {
 type ResolvedRun struct {
 	Workdir                                                                                      *string
 	MaxTokens, MaxIterations, MaxTotalTokens, ContextWindow                                      *int
-	MaxDuration, ShellTimeout                                                                    *time.Duration
+	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout                                       *time.Duration
 	Stream                                                                                       *bool
 	MaxToolResultChars, MaxFileResultChars, MaxParallelTools, ContextKeepRecent, SummaryMaxChars *int
 }
@@ -130,6 +130,14 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 		return r, err
 	}
 	r.ShellTimeout, err = parseDur(strPtr(func(rc RunConfig) *string { return rc.ShellTimeout }), "run.shell_timeout")
+	if err != nil {
+		return r, err
+	}
+	r.FileOpTimeout, err = parseDur(strPtr(func(rc RunConfig) *string { return rc.FileOpTimeout }), "run.file_op_timeout")
+	if err != nil {
+		return r, err
+	}
+	r.WriteTimeout, err = parseDur(strPtr(func(rc RunConfig) *string { return rc.WriteTimeout }), "run.write_timeout")
 	if err != nil {
 		return r, err
 	}

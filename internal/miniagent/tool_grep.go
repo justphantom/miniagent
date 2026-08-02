@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -29,7 +30,11 @@ type grepArgs struct {
 
 // GrepTool 递归正则搜索文本文件，输出 file:lineno:line（与 grep -n 一致）。
 // workspaceRoot 为空且 path 缺省时，搜调用方进程 cwd。
-func GrepTool(workspaceRoot string) Tool {
+// timeout<=0 用默认 fileOpTimeout。
+func GrepTool(workspaceRoot string, timeout time.Duration) Tool {
+	if timeout <= 0 {
+		timeout = fileOpTimeout
+	}
 	return Tool{
 		Name:        "grep",
 		Description: "递归正则搜索文本文件内容。输出 path:lineno:line（与 grep -n 一致，便于定位）。默认搜 workdir；可用 glob 按文件名过滤（仅匹配 base name，* 不跨 /，如 sub/*.go 不命中）。命中行上限 " + strconv.Itoa(maxGrepMatches) + "，输出超 " + strconv.Itoa(maxGrepOutput) + " 字符截断。跳过 .git、二进制与超过 50MB 的文件。",
@@ -42,7 +47,7 @@ func GrepTool(workspaceRoot string) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			runCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			done := make(chan ToolResult, 1)
 			go func() { done <- runGrep(workspaceRoot, args) }()

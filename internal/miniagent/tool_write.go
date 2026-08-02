@@ -6,20 +6,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const maxWriteFileBytes = 10 << 20
+
+// writeOpTimeout 是 write 的内置操作超时：原子写入本身极快，此处兜底极端文件系统延迟。
+const writeOpTimeout = 30 * time.Second
 
 type writeFileArgs struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 }
 
-// WriteFileTool returns a write tool bound to workspaceRoot.
-func WriteFileTool(workspaceRoot string) Tool {
+// WriteFileTool returns a write tool bound to workspaceRoot. timeout<=0 用默认 writeOpTimeout。
+func WriteFileTool(workspaceRoot string, timeout time.Duration) Tool {
+	if timeout <= 0 {
+		timeout = writeOpTimeout
+	}
+	desc := fmt.Sprintf("整体覆盖写入文件（自动建父目录、保留原文件权限）。content 上限 10MiB。path 相对 workdir 或绝对。仅用于新建文件或完整重写；局部改动用 edit。超时 %s。", timeout)
 	return Tool{
 		Name:        "write",
-		Description: "整体覆盖写入文件（自动建父目录、保留原文件权限）。content 上限 10MiB。path 相对 workdir 或绝对。仅用于新建文件或完整重写；局部改动用 edit。",
+		Description: desc,
 		Parameters: object(map[string]any{
 			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workdir 或绝对路径"},
 			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},

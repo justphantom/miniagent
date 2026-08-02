@@ -58,6 +58,8 @@ type RunConfig struct {
 	ContextWindow  *int    `json:"context_window,omitempty"`
 	MaxDuration    *string `json:"max_duration,omitempty"`
 	ShellTimeout   *string `json:"shell_timeout,omitempty"`
+	FileOpTimeout  *string `json:"file_op_timeout,omitempty"`
+	WriteTimeout   *string `json:"write_timeout,omitempty"`
 	Stream         *bool   `json:"stream,omitempty"`
 	// S4 策略化常量（<=0 或缺省=内置默认，见 loop/context/tools 使用点）。
 	MaxToolResultChars *int `json:"max_tool_result_chars,omitempty"`

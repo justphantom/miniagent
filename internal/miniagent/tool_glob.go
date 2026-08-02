@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maxGlobEntries = 500
@@ -19,7 +20,11 @@ type globArgs struct {
 
 // GlobTool 递归列举匹配通配的文件路径，每行一个相对 workdir 的路径。
 // filepath.Match 通配（*, ?, [...]），不跨 /、不支持 **——需递归用 grep 或 shell。
-func GlobTool(workspaceRoot string) Tool {
+// timeout<=0 用默认 fileOpTimeout。
+func GlobTool(workspaceRoot string, timeout time.Duration) Tool {
+	if timeout <= 0 {
+		timeout = fileOpTimeout
+	}
 	return Tool{
 		Name:        "glob",
 		Description: "递归列举匹配通配的文件路径，每行一个（相对 workdir）。filepath.Match 通配（* ? [...]，不跨 /、无 **）。排除 .git。命中上限 " + strconv.Itoa(maxGlobEntries) + "。",
@@ -31,7 +36,7 @@ func GlobTool(workspaceRoot string) Tool {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 			}
-			runCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			done := make(chan ToolResult, 1)
 			go func() { done <- runGlob(workspaceRoot, args) }()

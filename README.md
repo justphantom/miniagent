@@ -249,12 +249,10 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
 | `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | 写 / 编辑文件字节上限 |
 | `maxShellOutputChars` | 20000 | shell 输出字符上限 |
-| `shellTimeout` | 60s | shell/script 命令超时（默认值，可被 `config run.shell_timeout` 覆盖） |
-| `maxChatBodyBytes` | 4 MiB | chat completions 响应 body 上限 |
-| `maxRetries` | 2 | LLM 调用最大重试次数（仅 429/500/502/503/504 + 网络错） |
-| `retryBaseDelay` / `retryMaxDelay` | 500ms / 8s | 重试指数退火基线 / 单次封顶 |
-| `exitCodeNotSet` | -1 | shell 超时/启动失败的 ExitCode 哨兵 |
-| `maxToolResultEventChars` | 2000 | `tool_result` 事件 output 截断字符数 |
+| `shellTimeout` | 60s | `run.shell_timeout` | shell/script 命令超时（默认值，可被 config 覆盖） |
+| `fileOpTimeout` | 30s | `run.file_op_timeout` | read/edit/grep/glob 文件操作超时（默认值，可被 config 覆盖） |
+| `writeOpTimeout` | 30s | `run.write_timeout` | write 原子写入超时（默认值，可被 config 覆盖） |
+| `maxGrepMatches` / `maxGlobEntries` | 200 / 500 | grep 命中行 / glob 命中条数上限 |
 
 ## 项目专属配置（`.miniagent/`）
 
@@ -312,6 +310,8 @@ repo/
     "context_window": 128000,
     "max_duration": "5m",
     "shell_timeout": "30s",
+    "file_op_timeout": "20s",
+    "write_timeout": "10s",
     "max_tool_result_chars": 2000,
     "max_file_result_chars": 8000,
     "max_parallel_tools": 8,

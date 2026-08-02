@@ -201,6 +201,20 @@ func shellTimeoutOf(resolved *miniagent.Resolved) time.Duration {
 	return 0
 }
 
+func fileOpTimeoutOf(resolved *miniagent.Resolved) time.Duration {
+	if resolved.Run.FileOpTimeout != nil {
+		return *resolved.Run.FileOpTimeout
+	}
+	return 0
+}
+
+func writeTimeoutOf(resolved *miniagent.Resolved) time.Duration {
+	if resolved.Run.WriteTimeout != nil {
+		return *resolved.Run.WriteTimeout
+	}
+	return 0
+}
+
 func buildHooks(resultOnly bool) miniagent.LoopHooks {
 	if resultOnly {
 		// subagent fork：stdout 纯文本即结果，不发 NDJSON 事件。

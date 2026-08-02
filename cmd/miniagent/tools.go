@@ -12,16 +12,17 @@ import (
 //   - auto：无任何约束（shell/script mode=auto，写工具不包装）。
 //
 // workdir 为空时文件工具走 resolveToolPath、shell 的 cmd.Dir 留空。shellTimeout<=0 用默认 60s。
+// fileOpTimeout<=0 用默认 30s；writeTimeout<=0 用默认 30s。
 // fileResultLimit>0 时覆盖 read/edit 的 Tool.ResultLimit（S4：config run.max_file_result_chars），
 // <=0 保留构造器内置默认（maxFileResultInHistory）。scripts 中 name/command 为空者跳过。
-func buildTools(workdir string, shellTimeout time.Duration, mode string, fileResultLimit int, scripts []scriptDef) []miniagent.Tool {
+func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, scripts []scriptDef) []miniagent.Tool {
 	shellMode := mode
 	if shellMode == "" {
 		shellMode = miniagent.ModeDefault
 	}
-	read := miniagent.ReadFileTool(workdir)
-	write := miniagent.WriteFileTool(workdir)
-	edit := miniagent.EditFileTool(workdir)
+	read := miniagent.ReadFileTool(workdir, fileOpTimeout)
+	write := miniagent.WriteFileTool(workdir, writeTimeout)
+	edit := miniagent.EditFileTool(workdir, fileOpTimeout)
 	if fileResultLimit > 0 {
 		// ResultLimit 是导出字段；confineWrap 保留它（仅替换 Call），故先设再包装。
 		read.ResultLimit = fileResultLimit
@@ -35,8 +36,8 @@ func buildTools(workdir string, shellTimeout time.Duration, mode string, fileRes
 		read,
 		write,
 		edit,
-		miniagent.GrepTool(workdir),
-		miniagent.GlobTool(workdir),
+		miniagent.GrepTool(workdir, fileOpTimeout),
+		miniagent.GlobTool(workdir, fileOpTimeout),
 		miniagent.ShellTool(workdir, shellTimeout, shellMode),
 	}
 	// P1：项目脚本注册为 script_<name> 工具，复用 shell 的安全策略（runShellCommand）。

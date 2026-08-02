@@ -120,7 +120,7 @@ func main() {
 	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), meta.ID, resolved.Mode)
 
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger)
-	tools := buildTools(workdir, shellTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
+	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
 	reader := bufio.NewReader(os.Stdin)
 	hooks := buildHooks(*f.resultOnly)
 	baseCfg := loopCfg(resolved, f, history, tools)
