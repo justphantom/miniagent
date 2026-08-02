@@ -44,17 +44,17 @@ func chatArgs(srvURL string, extra ...string) []string {
 	}, extra...)
 }
 
-func TestBuildTools_AlwaysRegisters9(t *testing.T) {
+func TestBuildTools_AlwaysRegisters7(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, miniagent.ModeAuto)
-	if len(tools) != 9 {
-		t.Fatalf("got %d tools, want 9", len(tools))
+	if len(tools) != 7 {
+		t.Fatalf("got %d tools, want 7", len(tools))
 	}
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 	tools := buildTools("", 0, miniagent.ModeAuto)
-	if len(tools) != 9 {
-		t.Fatalf("got %d tools, want 9", len(tools))
+	if len(tools) != 7 {
+		t.Fatalf("got %d tools, want 7", len(tools))
 	}
 }
 

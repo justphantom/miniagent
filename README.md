@@ -9,7 +9,7 @@
 - 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：仅 Linux/macOS（Unix）。`platform.go` 用 `//go:build !windows` 隔离 setpgid/killpg/O_NOFOLLOW，未提供 Windows fallback
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：`read` / `write` / `edit` / `multi_edit` / `grep` / `glob` / `shell` / `fetch` + `todo`（进程内任务管理，不落盘）
+- 工具：`read` / `write` / `edit` / `multi_edit` / `grep` / `glob` / `shell`
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行
 
 ## 构建
@@ -130,7 +130,7 @@ make test       # go test -race ./...
 
 ## 工具清单
 
-文件与 shell 工具的约束取决于 `-mode`：default 模式下写工具（write/edit/multi_edit）限定在 workdir 子树、shell 拒 sudo/su 等 11 个提权器；auto 模式无任何约束。`todo` 为进程内任务管理（不落盘）。工具参数为 JSON 对象。
+文件与 shell 工具的约束取决于 `-mode`：default 模式下写工具（write/edit/multi_edit）限定在 workdir 子树、shell 拒 sudo/su 等 11 个提权器；auto 模式无任何约束。工具参数为 JSON 对象。
 
 ### `read`
 
@@ -216,29 +216,6 @@ make test       # go test -race ./...
 - 退出码：成功 `ExitCode=0`；命令非 0 退出 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；超时/启动失败 `IsError=true` + `ExitCode=-1`（`exitCodeNotSet`）。LLM 据 `ExitCode` 判命令成败
 - 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；另剥离变量名（大写后）含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT）的第三方凭证变量（PAT 排除含 PATH 的路径类变量如 `PATH`/`GITHUB_PATH`）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或用 `-key-file` 不经环境变量传 key（key 不在进程 env，`/proc/$PPID/environ` 读不到）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
-### `fetch`
-
-抓取 http(s) URL 转 plain text（剥 `<script>`/`<style>`/标签，反转义实体）。SSRF 防护：拒绝 loopback/私网/链路本地地址，限 http/https，重定向上限 5 跳（每跳重检目标）。
-
-| 参数 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| `url` | string | 是 | http(s) URL |
-
-约束：body 上限 200KB、输出超 20000 字符截断；不构成完整安全边界（DNS rebinding 等仍需调用方网络隔离）。
-
-### `todo`
-
-进程内任务清单（不落盘）。`action` 驱动：`add` 新增（返回 id）、`update` 改 status/subject、`list` 列出全部、`complete` 标记完成、`delete` 删除。
-
-| 参数 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| `action` | string | 是 | `add`\|`update`\|`list`\|`complete`\|`delete` |
-| `id` | int | 否 | `update`/`complete`/`delete` 时指定 |
-| `subject` | string | 否 | `add` 标题；`update` 新标题 |
-| `status` | string | 否 | `update` 时：`pending`\|`in_progress`\|`completed` |
-
-约束：进程内、`sync.Mutex` 保护（支持并行调用）；不进 session，进程结束即丢失。
-
 ## 会话接续（-session）
 
 缺省为无状态单次调用。传 `-session <id|path>` 后（id 在 `session.dir` 解析为 `<dir>/<id>.jsonl`；含 `/` 或 `.` 视为路径）：
@@ -295,8 +272,6 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `retryBaseDelay` / `retryMaxDelay` | 500ms / 8s | 重试指数退火基线 / 单次封顶 |
 | `exitCodeNotSet` | -1 | shell 超时/启动失败的 ExitCode 哨兵 |
 | `maxToolResultEventChars` | 2000 | `tool_result` 事件 output 截断字符数 |
-| `maxFetchBytes` / `fetchTimeout` | 200KB / 20s | fetch body 上限 / 超时 |
-| `maxFetchRedirects` | 5 | fetch 重定向上限（每跳重检 SSRF） |
 
 ## 完整调用示例
 

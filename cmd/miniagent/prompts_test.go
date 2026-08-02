@@ -12,12 +12,6 @@ func TestDefaultSystemPrompt_CoversWorkflow(t *testing.T) {
 			t.Errorf("default prompt missing %q", want)
 		}
 	}
-	// 输出格式约束：禁止多级标题与表格，防过度排版。
-	for _, forbid := range []string{"不用多级标题", "不用表格", "纯段落"} {
-		if !strings.Contains(defaultSystemPrompt, forbid) {
-			t.Errorf("output format constraint missing %q", forbid)
-		}
-	}
 }
 
 // subagentGuidance 默认 mode=default 时，生成的 fork 命令含 -mode default

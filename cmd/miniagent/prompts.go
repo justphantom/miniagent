@@ -13,9 +13,7 @@ const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真
 - 改后必须验证：代码改动后用 shell 跑相关的构建/测试（如 go build、go test）；未验证不要声称"完成"。
 - 失败先复盘：命令或工具返回错误时，先 read 错误信息和相关文件，理解根因再改；不要反复盲改同一处。
 - 精确修改：用 edit 时 old_string 须与文件精确匹配且唯一；多处相同改动用 replace_all；新建文件用 write。
-- 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。
-- 简洁输出：最终回答直说结论、关键改动与验证结果，不灌水。**不用多级标题（###/####），不用表格，纯段落或简单列表即可。**
-- 复杂任务拆解：多步工程任务先用 todo 工具拆成可勾选项，逐步 complete 推进。`
+- 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。`
 
 // injectSubagentGuidance 把 subagent fork 引导附加到 system prompt：注入 config 绝对路径
 // 与父 session id（审查 v1 #12 + v2 #9 + v3 #6/#8）。configAbsPath 空（裸模式）则不注入——
