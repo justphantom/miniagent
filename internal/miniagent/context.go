@@ -18,6 +18,19 @@ const (
 	summaryMaxTokens = 1024
 )
 
+// summaryMaxTokensOverride 允许配置覆盖内置默认；nil 用常量默认。
+var summaryMaxTokensOverride int
+
+// SetSummaryMaxTokens 覆盖摘要最大 token 数；测试用，正常流程由 Resolve 调用。
+func SetSummaryMaxTokens(n int) { if n > 0 { summaryMaxTokensOverride = n } }
+
+func getSummaryMaxTokens() int {
+	if summaryMaxTokensOverride > 0 {
+		return summaryMaxTokensOverride
+	}
+	return summaryMaxTokens
+}
+
 // summarizerSystem 是压缩专用 system prompt：要求把历史压成一段受限摘要，保留关键事实。
 // 默认值通过 LoopConfig.SummarizerPrompt 覆盖；调用方需传入 maxChars（summaryMaxChars）。
 const summarizerSystem = "你是会话压缩器。把以下对话历史压缩为一段不超过 %d 字符的中文摘要，保留关键事实、决策、文件改动与未决问题，不要复述全部对话，不要输出多余解释。"
@@ -106,7 +119,7 @@ func summarizeMiddle(ctx context.Context, llm *ChatClient, model, summarizerProm
 		Model:     model,
 		System:    fmt.Sprintf(system, maxChars),
 		Messages:  msgs,
-		MaxTokens: summaryMaxTokens,
+		MaxTokens: getSummaryMaxTokens(),
 	})
 	if err != nil {
 		return "", Usage{}, err
@@ -182,6 +195,19 @@ const perToolSchemaTokens = 60
 // contextTrimToolChars 是 context 超限时把每条 tool 结果 content 压到的字符上限。
 const contextTrimToolChars = 1000
 
+// contextTrimToolCharsOverride 允许配置覆盖内置默认；nil 用常量默认。
+var contextTrimToolCharsOverride int
+
+// SetContextTrimToolChars 覆盖 context 超限时 tool 结果压缩上限；测试用，正常流程由 Resolve 调用。
+func SetContextTrimToolChars(n int) { if n > 0 { contextTrimToolCharsOverride = n } }
+
+func getContextTrimToolChars() int {
+	if contextTrimToolCharsOverride > 0 {
+		return contextTrimToolCharsOverride
+	}
+	return contextTrimToolChars
+}
+
 // trimHistoryForContext 在端点返回 context_length_exceeded 时收紧历史，供 Run 单次重试。
 // 策略按「可丢失性」排序：1. 清空所有 reasoning；2. 每条 tool 结果 content 压到 contextTrimToolChars。
 // 不删消息：删 tool 消息会破坏 assistant.tool_calls / tool 配对，续跑会被端点 400。
@@ -191,7 +217,7 @@ func trimHistoryForContext(msgs []Message) []Message {
 	for i := range out {
 		out[i].Reasoning = ""
 		if out[i].Role == roleTool {
-			out[i].Content = truncate(strings.TrimSpace(out[i].Content), contextTrimToolChars, "…[context_trim]")
+			out[i].Content = truncate(strings.TrimSpace(out[i].Content), getContextTrimToolChars(), "…[context_trim]")
 		}
 	}
 	return out

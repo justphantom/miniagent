@@ -11,11 +11,24 @@ import (
 const (
 	memoryDir     = ".miniagent"
 	memoryFile    = "memory.jsonl"
-	memoryRecentN = 10 // system prompt 注入的最近记忆条数
+	memoryRecentN = 10 // system prompt 注入的最近记忆条数；可通过 SetMemoryRecentN 覆盖
 	// memoryPathToken 是 read/write 工具识别项目记忆的保留路径：path=="memory" 时
 	// 路由到 <workdir>/.miniagent/memory.jsonl（read 渲染记录、write 追加记录），不走普通文件路径。
 	memoryPathToken = "memory"
 )
+
+// memoryRecentNOverride 允许配置覆盖内置默认；nil 用常量默认。
+var memoryRecentNOverride int
+
+// SetMemoryRecentN 覆盖记忆注入条数；测试用，正常流程由 Resolve 调用。
+func SetMemoryRecentN(n int) { if n > 0 { memoryRecentNOverride = n } }
+
+func getMemoryRecentN() int {
+	if memoryRecentNOverride > 0 {
+		return memoryRecentNOverride
+	}
+	return memoryRecentN
+}
 
 // memoryRecord 是 .miniagent/memory.jsonl 的一条结构化记录（P5 项目级记忆）。
 type memoryRecord struct {
@@ -113,8 +126,8 @@ func FormatMemorySnippet(workdir string) string {
 		return ""
 	}
 	start := 0
-	if len(recs) > memoryRecentN {
-		start = len(recs) - memoryRecentN
+	if len(recs) > getMemoryRecentN() {
+		start = len(recs) - getMemoryRecentN()
 	}
 	recs = recs[start:]
 	var sb strings.Builder

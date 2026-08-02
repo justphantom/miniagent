@@ -23,6 +23,7 @@ type ResolvedRun struct {
 	Stream                                                                        *bool
 	MaxToolResultChars, MaxFileResultChars, MaxParallelTools, ContextKeepRecent, SummaryMaxChars *int
 	MaxReadFileBytes, MaxShellOutputChars, MaxSessionBytes                                      *int
+	SummaryMaxTokens, GrepMaxMatches, MemoryRecentN, ContextTrimToolChars                      *int
 }
 
 type Resolved struct {

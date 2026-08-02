@@ -312,11 +312,19 @@ repo/
     "shell_timeout": "30s",
     "file_op_timeout": "20s",
     "write_timeout": "10s",
+    "http_timeout": "180s",
     "max_tool_result_chars": 2000,
     "max_file_result_chars": 8000,
     "max_parallel_tools": 8,
     "context_keep_recent": 6,
-    "summary_max_chars": 2000
+    "summary_max_chars": 2000,
+    "summary_max_tokens": 512,
+    "max_read_file_bytes": 524288,
+    "max_shell_output_chars": 100000,
+    "max_session_bytes": 10485760,
+    "grep_max_matches": 500,
+    "memory_recent_n": 10,
+    "context_trim_tool_chars": 1000
   },
   "compaction": {
     "model": "gpt-4o-mini"

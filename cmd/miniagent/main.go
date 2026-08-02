@@ -124,6 +124,11 @@ func main() {
 	miniagent.SetMaxShellOutputChars(maxShellOutputCharsOf(resolved))
 	miniagent.SetMaxSessionBytes(maxSessionBytesOf(resolved))
 
+	miniagent.SetSummaryMaxTokens(into(resolved.Run.SummaryMaxTokens, 0))
+	miniagent.SetGrepMaxMatches(into(resolved.Run.GrepMaxMatches, 0))
+	miniagent.SetMemoryRecentN(into(resolved.Run.MemoryRecentN, 0))
+	miniagent.SetContextTrimToolChars(into(resolved.Run.ContextTrimToolChars, 0))
+
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
 	reader := bufio.NewReader(os.Stdin)

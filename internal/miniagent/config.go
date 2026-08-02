@@ -68,9 +68,13 @@ type RunConfig struct {
 	ContextKeepRecent   *int `json:"context_keep_recent,omitempty"`
 	SummaryMaxChars     *int `json:"summary_max_chars,omitempty"`
 	HTTPTimeout        *string `json:"http_timeout,omitempty"`
-	MaxReadFileBytes    *int    `json:"max_read_file_bytes,omitempty"`
-	MaxShellOutputChars *int    `json:"max_shell_output_chars,omitempty"`
-	MaxSessionBytes     *int    `json:"max_session_bytes,omitempty"`
+	MaxReadFileBytes   *int    `json:"max_read_file_bytes,omitempty"`
+	MaxShellOutputChars *int   `json:"max_shell_output_chars,omitempty"`
+	MaxSessionBytes    *int    `json:"max_session_bytes,omitempty"`
+	SummaryMaxTokens   *int    `json:"summary_max_tokens,omitempty"`
+	GrepMaxMatches     *int    `json:"grep_max_matches,omitempty"`
+	MemoryRecentN      *int    `json:"memory_recent_n,omitempty"`
+	ContextTrimToolChars *int  `json:"context_trim_tool_chars,omitempty"`
 }
 
 // CompactionModel 仅 model id（同 provider，不得含 /）。
