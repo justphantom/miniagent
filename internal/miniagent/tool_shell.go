@@ -18,13 +18,16 @@ import (
 // maxShellOutputChars 是 shell 命令输出字符上限：100KB 足够覆盖典型命令输出。
 // 可通过 SetMaxShellOutputChars 覆盖。n<=0 用默认。
 const maxShellOutputChars = 100000
-const maxShellOutputBytes = maxShellOutputChars * 4
 
 // maxShellOutputCharsOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
 var maxShellOutputCharsOverride int
 
 // SetMaxShellOutputChars 覆盖 shell 输出字符上限；测试用，正常流程由 Resolve 调用。
-func SetMaxShellOutputChars(n int) { if n > 0 { maxShellOutputCharsOverride = n } }
+func SetMaxShellOutputChars(n int) {
+	if n > 0 {
+		maxShellOutputCharsOverride = n
+	}
+}
 
 func shellOutputChars() int {
 	if maxShellOutputCharsOverride > 0 {
@@ -36,6 +39,7 @@ func shellOutputChars() int {
 func shellOutputBytes() int {
 	return shellOutputChars() * 4
 }
+
 const shellTimeout = 60 * time.Second
 
 // sudoSuRe 词边界匹配常见特权提升器（sudo/su/doas/pkexec/gsudo/run0）与专有特权/
@@ -53,7 +57,7 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 	}
 	return Tool{
 		Name:        "shell",
-		Description: "通过 sh -c 执行一条 shell 命令。返回 stdout+stderr 合并输出。命令最长运行 " + timeout.String() + "；输出超过 " + strconv.Itoa(maxShellOutputChars) + " 字符会被截断。",
+		Description: "通过 sh -c 执行一条 shell 命令。返回 stdout+stderr 合并输出。命令最长运行 " + timeout.String() + "；输出超过 " + strconv.Itoa(shellOutputChars()) + " 字符会被截断。",
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令"},
 		}, "command"),
@@ -130,7 +134,7 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 		_ = pw.Close()
 	}()
 	var out bytes.Buffer
-	limited := io.LimitReader(pr, maxShellOutputBytes)
+	limited := io.LimitReader(pr, int64(shellOutputBytes()))
 	n, _ := io.Copy(&out, limited)
 	if n >= int64(shellOutputBytes()) {
 		// 输出达上限：LimitReader 已 EOF，但子进程仍向写满的 pipe 继续写而阻塞，
@@ -142,7 +146,7 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	err := <-waitErr
 	// 兜底：正常退出后也整组清理一次，防后台 & 残留。
 	killProcessGroup(cmd)
-	return truncate(out.String(), maxShellOutputChars, "…"), err
+	return truncate(out.String(), shellOutputChars(), "…"), err
 }
 
 // scrubEnv 复制 env 并移除：所有 MINIAGENT_* 前缀条目，以及变量名（大写后）含

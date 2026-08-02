@@ -20,7 +20,11 @@ const maxSessionBytes = 10 << 20 // 10MB
 var maxSessionBytesOverride int
 
 // SetMaxSessionBytes 覆盖 session 文件大小上限；测试用，正常流程由 Resolve 调用。
-func SetMaxSessionBytes(n int) { if n > 0 { maxSessionBytesOverride = n } }
+func SetMaxSessionBytes(n int) {
+	if n > 0 {
+		maxSessionBytesOverride = n
+	}
+}
 
 func sessionBytes() int64 {
 	if maxSessionBytesOverride > 0 {

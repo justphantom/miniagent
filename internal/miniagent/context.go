@@ -22,7 +22,11 @@ const (
 var summaryMaxTokensOverride int
 
 // SetSummaryMaxTokens 覆盖摘要最大 token 数；测试用，正常流程由 Resolve 调用。
-func SetSummaryMaxTokens(n int) { if n > 0 { summaryMaxTokensOverride = n } }
+func SetSummaryMaxTokens(n int) {
+	if n > 0 {
+		summaryMaxTokensOverride = n
+	}
+}
 
 func getSummaryMaxTokens() int {
 	if summaryMaxTokensOverride > 0 {
@@ -199,7 +203,11 @@ const contextTrimToolChars = 1000
 var contextTrimToolCharsOverride int
 
 // SetContextTrimToolChars 覆盖 context 超限时 tool 结果压缩上限；测试用，正常流程由 Resolve 调用。
-func SetContextTrimToolChars(n int) { if n > 0 { contextTrimToolCharsOverride = n } }
+func SetContextTrimToolChars(n int) {
+	if n > 0 {
+		contextTrimToolCharsOverride = n
+	}
+}
 
 func getContextTrimToolChars() int {
 	if contextTrimToolCharsOverride > 0 {

@@ -21,7 +21,11 @@ const (
 var memoryRecentNOverride int
 
 // SetMemoryRecentN 覆盖记忆注入条数；测试用，正常流程由 Resolve 调用。
-func SetMemoryRecentN(n int) { if n > 0 { memoryRecentNOverride = n } }
+func SetMemoryRecentN(n int) {
+	if n > 0 {
+		memoryRecentNOverride = n
+	}
+}
 
 func getMemoryRecentN() int {
 	if memoryRecentNOverride > 0 {

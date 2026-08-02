@@ -19,11 +19,11 @@ type CLIOverrides struct {
 type ResolvedRun struct {
 	Workdir                                                                                      *string
 	MaxTokens, MaxIterations, MaxTotalTokens, ContextWindow                                      *int
-	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout, HTTPTimeout          *time.Duration
-	Stream                                                                        *bool
+	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout, HTTPTimeout                          *time.Duration
+	Stream                                                                                       *bool
 	MaxToolResultChars, MaxFileResultChars, MaxParallelTools, ContextKeepRecent, SummaryMaxChars *int
-	MaxReadFileBytes, MaxShellOutputChars, MaxSessionBytes                                      *int
-	SummaryMaxTokens, GrepMaxMatches, MemoryRecentN, ContextTrimToolChars                      *int
+	MaxReadFileBytes, MaxShellOutputChars, MaxSessionBytes                                       *int
+	SummaryMaxTokens, GrepMaxMatches, MemoryRecentN, ContextTrimToolChars                        *int
 }
 
 type Resolved struct {

@@ -45,7 +45,7 @@ func TestReadFile_Range(t *testing.T) {
 }
 
 func TestReadFile_Truncates(t *testing.T) {
-	long := strings.Repeat("a", maxReadFileChars+500)
+	long := strings.Repeat("a", readFileChars()+500)
 	dir := writeTemp(t, "big.txt", long)
 	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"big.txt"}`)
 	if res.IsError {
