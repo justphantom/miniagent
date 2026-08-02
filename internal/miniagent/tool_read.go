@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-// maxReadFileBytes 是 read 单文件读取上限：500KB 足够覆盖绝大多数代码文件，
+// maxReadFileBytes 是 read 单文件读取上限：1MB 覆盖大文件（generated code、大数据常量），
 // 同时防止超大日志/生成文件撑爆内存。可通过 SetMaxReadFileBytes 覆盖。n<=0 用默认。
-const maxReadFileBytes = 500 << 10 // 500KB
+const maxReadFileBytes = 1 << 20 // 1MB
 
 // maxReadFileBytesOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
 var maxReadFileBytesOverride int
