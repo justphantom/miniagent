@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -133,6 +134,60 @@ func warnKeyFilePerm(path string) {
 	}
 }
 
+// warnProviderInsecureURLs 对 provider 使用的 http（非 loopback）URL 发出明文传 key 警告。
+func warnProviderInsecureURLs(p miniagent.ProviderConfig) {
+	warnInsecureURL(p.ChatURL)
+	if p.ModelsURL != "" {
+		warnInsecureURL(p.ModelsURL)
+	}
+}
+
+func warnProvidersInsecureURLs(providers []miniagent.ProviderConfig) {
+	for _, p := range providers {
+		warnProviderInsecureURLs(p)
+	}
+}
+
+// httpTimeoutFromConfig 解析 config 中的 run.http_timeout；未配置返回 0。
+func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
+	if cfg.Run.HTTPTimeout == nil {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(*cfg.Run.HTTPTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("run.http_timeout %q: %w", *cfg.Run.HTTPTimeout, err)
+	}
+	return d, nil
+}
+
+// listAllModels 按 provider 解析 key 并复用统一 transport/timeout，聚合模型列表。
+func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, keyFile string, httpTimeout time.Duration, logger *slog.Logger) ([]string, error) {
+	keyFileKey := ""
+	if keyFile != "" {
+		var err error
+		keyFileKey, err = resolveAPIKey(keyFile, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
+			os.Exit(1)
+		}
+		warnKeyFilePerm(keyFile)
+	}
+	keyFor := func(p miniagent.ProviderConfig) string {
+		if keyFileKey != "" {
+			return keyFileKey
+		}
+		if p.Key != "" {
+			return p.Key
+		}
+		return os.Getenv("MINIAGENT_API_KEY")
+	}
+	if httpTimeout <= 0 {
+		httpTimeout = 120 * time.Second
+	}
+	httpClient := newHTTPClient(httpTimeout, newHTTPTransport())
+	return miniagent.ListAllModels(ctx, providers, keyFor, httpClient, logger)
+}
+
 // warnInsecureURL：http（非 loopback）时 API key 明文上链，stderr 警告。不强制拒绝。
 func warnInsecureURL(rawURL string) {
 	u, err := url.Parse(strings.TrimRight(rawURL, "/"))
@@ -157,8 +212,8 @@ func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, ht
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
 	}
-	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second}
-	chatClient := &http.Client{Timeout: httpTimeout, Transport: transport}
+	transport := newHTTPTransport()
+	chatClient := newHTTPClient(httpTimeout, transport)
 	streamClient := &http.Client{Transport: transport}
 	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger)
 	if err != nil {
@@ -171,6 +226,22 @@ func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, ht
 		os.Exit(1)
 	}
 	return chat, stream
+}
+
+// newHTTPTransport 返回复用的 *http.Transport，配置代理、dial、TLS、响应头超时。
+func newHTTPTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// newHTTPClient 返回带指定总 timeout 和 transport 的 *http.Client。
+func newHTTPClient(timeout time.Duration, transport *http.Transport) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
@@ -288,7 +359,7 @@ func emitRunResult(result miniagent.Result, model string, resultOnly bool, logge
 }
 
 // providerForListModels 解析 -list-models 所需 provider（不要求 -model，因 list 本就为发现模型）：
-// 按 -model/defaults.model/单一 provider。cfg 始终非 nil（S1 删裸模式）。
+// 按 -model/defaults.model/单一 provider。多 provider 时由 main.go 走聚合路径，此函数仅用于单 provider 分支。
 func providerForListModels(cfg *miniagent.Config, f *cliFlags) (miniagent.ProviderConfig, error) {
 	spec := ""
 	if f.model != nil && *f.model != "" {

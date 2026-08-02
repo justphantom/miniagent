@@ -170,6 +170,9 @@ func validateConfig(cfg *Config) error {
 		if p.Name == "" {
 			return fmt.Errorf("providers[%d].name 为空", i)
 		}
+		if strings.Contains(p.Name, "/") {
+			return fmt.Errorf("providers[%d].name %q 含 '/'，会导致 provider/model 解析歧义", i, p.Name)
+		}
 		if seen[p.Name] {
 			return fmt.Errorf("provider 名 %q 重复", p.Name)
 		}
