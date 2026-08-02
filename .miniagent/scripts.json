@@ -1,0 +1,10 @@
+{
+  "scripts": [
+    {"name": "build", "command": "make build", "description": "构建 bin/miniagent（version 来自 git describe）"},
+    {"name": "test", "command": "go test -race ./...", "description": "跑全部测试（含竞态检测）"},
+    {"name": "lint", "command": "golangci-lint run ./...", "description": "静态检查（0 issues 才通过）"},
+    {"name": "vet", "command": "go vet ./...", "description": "go vet"},
+    {"name": "fmt", "command": "gofmt -s -l .", "description": "检查格式（输出空=OK）"},
+    {"name": "verify", "command": "make build && go vet ./... && go test -race ./... && golangci-lint run ./...", "description": "完整 verify-gate（build+vet+test+lint）"}
+  ]
+}
