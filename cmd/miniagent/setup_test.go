@@ -13,7 +13,7 @@ import (
 // P4：buildLLM 返回 ChatClient（带 120s 总 Timeout，非流式 Do 兜底防挂死 #3）+ StreamClient
 // （无 Timeout，body 不被砍 P2-5），两者共享同一 *http.Transport（代理/dial/TLS 超时，#2）。
 func TestBuildLLM_ChatTimeoutStreamNoTimeoutSharedTransport(t *testing.T) {
-	chat, stream := buildLLM("sk", miniagent.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil)
+	chat, stream := buildLLM("sk", miniagent.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil, 0)
 	if chat.HTTP == nil {
 		t.Fatal("ChatClient.HTTP is nil, want injected client")
 	}

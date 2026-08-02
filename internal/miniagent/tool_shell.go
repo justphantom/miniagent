@@ -15,8 +15,27 @@ import (
 	"time"
 )
 
-const maxShellOutputChars = 20000
+// maxShellOutputChars 是 shell 命令输出字符上限：100KB 足够覆盖典型命令输出。
+// 可通过 SetMaxShellOutputChars 覆盖。n<=0 用默认。
+const maxShellOutputChars = 100000
 const maxShellOutputBytes = maxShellOutputChars * 4
+
+// maxShellOutputCharsOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
+var maxShellOutputCharsOverride int
+
+// SetMaxShellOutputChars 覆盖 shell 输出字符上限；测试用，正常流程由 Resolve 调用。
+func SetMaxShellOutputChars(n int) { if n > 0 { maxShellOutputCharsOverride = n } }
+
+func shellOutputChars() int {
+	if maxShellOutputCharsOverride > 0 {
+		return maxShellOutputCharsOverride
+	}
+	return maxShellOutputChars
+}
+
+func shellOutputBytes() int {
+	return shellOutputChars() * 4
+}
 const shellTimeout = 60 * time.Second
 
 // sudoSuRe 词边界匹配常见特权提升器（sudo/su/doas/pkexec/gsudo/run0）与专有特权/
@@ -113,7 +132,7 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	var out bytes.Buffer
 	limited := io.LimitReader(pr, maxShellOutputBytes)
 	n, _ := io.Copy(&out, limited)
-	if n >= maxShellOutputBytes {
+	if n >= int64(shellOutputBytes()) {
 		// 输出达上限：LimitReader 已 EOF，但子进程仍向写满的 pipe 继续写而阻塞，
 		// cmd.Wait 不返回、空等至 60s 超时。主动 kill 整组并关 pipe，让子进程
 		// 收 SIGPIPE/被杀后 Wait 立即返回，避免高输出命令被误判为"超时"。

@@ -61,12 +61,16 @@ type RunConfig struct {
 	FileOpTimeout  *string `json:"file_op_timeout,omitempty"`
 	WriteTimeout   *string `json:"write_timeout,omitempty"`
 	Stream         *bool   `json:"stream,omitempty"`
-	// S4 策略化常量（<=0 或缺省=内置默认，见 loop/context/tools 使用点）。
-	MaxToolResultChars *int `json:"max_tool_result_chars,omitempty"`
-	MaxFileResultChars *int `json:"max_file_result_chars,omitempty"`
-	MaxParallelTools   *int `json:"max_parallel_tools,omitempty"`
-	ContextKeepRecent  *int `json:"context_keep_recent,omitempty"`
-	SummaryMaxChars    *int `json:"summary_max_chars,omitempty"`
+	// S4 策略化常量（<=0 或缺省=内置默认）。
+	MaxToolResultChars  *int `json:"max_tool_result_chars,omitempty"`
+	MaxFileResultChars  *int `json:"max_file_result_chars,omitempty"`
+	MaxParallelTools    *int `json:"max_parallel_tools,omitempty"`
+	ContextKeepRecent   *int `json:"context_keep_recent,omitempty"`
+	SummaryMaxChars     *int `json:"summary_max_chars,omitempty"`
+	HTTPTimeout        *string `json:"http_timeout,omitempty"`
+	MaxReadFileBytes    *int    `json:"max_read_file_bytes,omitempty"`
+	MaxShellOutputChars *int    `json:"max_shell_output_chars,omitempty"`
+	MaxSessionBytes     *int    `json:"max_session_bytes,omitempty"`
 }
 
 // CompactionModel 仅 model id（同 provider，不得含 /）。

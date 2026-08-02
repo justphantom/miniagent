@@ -12,8 +12,25 @@ import (
 	"time"
 )
 
-const maxReadFileChars = 20000
-const maxReadFileBytes = maxReadFileChars * 4
+// maxReadFileBytes 是 read 单文件读取上限：500KB 足够覆盖绝大多数代码文件，
+// 同时防止超大日志/生成文件撑爆内存。可通过 SetMaxReadFileBytes 覆盖。n<=0 用默认。
+const maxReadFileBytes = 500 << 10 // 500KB
+
+// maxReadFileChars 是 read 输出字符上限（约 1/4 字节上限，留 UTF-8 余量）。
+const maxReadFileChars = maxReadFileBytes / 4
+
+// maxReadFileBytesOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
+var maxReadFileBytesOverride int
+
+// SetMaxReadFileBytes 覆盖 read 单文件读取上限；测试用，正常流程由 Resolve 调用。
+func SetMaxReadFileBytes(n int) { if n > 0 { maxReadFileBytesOverride = n } }
+
+func readFileBytes() int {
+	if maxReadFileBytesOverride > 0 {
+		return maxReadFileBytesOverride
+	}
+	return maxReadFileBytes
+}
 
 // fileOpTimeout 是 read/edit 的内置操作超时：IsRegular 已切断 FIFO 阻塞主因，
 // 此处兜底挂起的文件系统（NFS 服务端失联、坏盘、网络黑洞）。
@@ -128,7 +145,7 @@ func readFileContent(full string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
+	data, err := io.ReadAll(io.LimitReader(f, int64(readFileBytes())))
 	if err != nil {
 		return "", err
 	}

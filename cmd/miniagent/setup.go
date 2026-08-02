@@ -150,11 +150,15 @@ func warnInsecureURL(rawURL string) {
 }
 
 // buildLLM 构造 ChatClient（带总 Timeout，非流式 + models）与 StreamClient（无 Timeout，流式）。
-// 两者共享同一 *http.Transport（代理/dial/TLS 超时）；chat 的 120s Timeout 兜底防单次调用挂死（#3），
+// 两者共享同一 *http.Transport（代理/dial/TLS 超时）；chat 的 httpTimeout 兜底防单次调用挂死（#3），
 // stream 无 Timeout 避免 body 读取被砍（P2-5/P1-A，#2）——P4 拆分后由各自 client 持有。
-func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger) (*miniagent.ChatClient, *miniagent.StreamClient) {
+// httpTimeout<=0 用默认 120s。
+func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) (*miniagent.ChatClient, *miniagent.StreamClient) {
+	if httpTimeout <= 0 {
+		httpTimeout = 120 * time.Second
+	}
 	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second}
-	chatClient := &http.Client{Timeout: 120 * time.Second, Transport: transport}
+	chatClient := &http.Client{Timeout: httpTimeout, Transport: transport}
 	streamClient := &http.Client{Transport: transport}
 	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger)
 	if err != nil {
@@ -211,6 +215,34 @@ func fileOpTimeoutOf(resolved *miniagent.Resolved) time.Duration {
 func writeTimeoutOf(resolved *miniagent.Resolved) time.Duration {
 	if resolved.Run.WriteTimeout != nil {
 		return *resolved.Run.WriteTimeout
+	}
+	return 0
+}
+
+func httpTimeoutOf(resolved *miniagent.Resolved) time.Duration {
+	if resolved.Run.HTTPTimeout != nil {
+		return *resolved.Run.HTTPTimeout
+	}
+	return 0
+}
+
+func maxReadFileBytesOf(resolved *miniagent.Resolved) int {
+	if resolved.Run.MaxReadFileBytes != nil {
+		return *resolved.Run.MaxReadFileBytes
+	}
+	return 0
+}
+
+func maxShellOutputCharsOf(resolved *miniagent.Resolved) int {
+	if resolved.Run.MaxShellOutputChars != nil {
+		return *resolved.Run.MaxShellOutputChars
+	}
+	return 0
+}
+
+func maxSessionBytesOf(resolved *miniagent.Resolved) int {
+	if resolved.Run.MaxSessionBytes != nil {
+		return *resolved.Run.MaxSessionBytes
 	}
 	return 0
 }

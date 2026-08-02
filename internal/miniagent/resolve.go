@@ -19,9 +19,10 @@ type CLIOverrides struct {
 type ResolvedRun struct {
 	Workdir                                                                                      *string
 	MaxTokens, MaxIterations, MaxTotalTokens, ContextWindow                                      *int
-	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout                                       *time.Duration
-	Stream                                                                                       *bool
+	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout, HTTPTimeout          *time.Duration
+	Stream                                                                        *bool
 	MaxToolResultChars, MaxFileResultChars, MaxParallelTools, ContextKeepRecent, SummaryMaxChars *int
+	MaxReadFileBytes, MaxShellOutputChars, MaxSessionBytes                                      *int
 }
 
 type Resolved struct {
@@ -141,6 +142,13 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	if err != nil {
 		return r, err
 	}
+	r.HTTPTimeout, err = parseDur(strPtr(func(rc RunConfig) *string { return rc.HTTPTimeout }), "run.http_timeout")
+	if err != nil {
+		return r, err
+	}
+	r.MaxReadFileBytes = intPtr(func(rc RunConfig) *int { return rc.MaxReadFileBytes })
+	r.MaxShellOutputChars = intPtr(func(rc RunConfig) *int { return rc.MaxShellOutputChars })
+	r.MaxSessionBytes = intPtr(func(rc RunConfig) *int { return rc.MaxSessionBytes })
 	return r, nil
 }
 

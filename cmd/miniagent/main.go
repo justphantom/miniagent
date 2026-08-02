@@ -81,7 +81,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 			os.Exit(1)
 		}
-		chat, _ := buildLLM(resolveFinalKey(p.Key, *f.keyFile), p, logger)
+		chat, _ := buildLLM(resolveFinalKey(p.Key, *f.keyFile), p, logger, 0)
 		ids, err := miniagent.ListAvailableModels(context.Background(), chat, p)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
@@ -119,7 +119,12 @@ func main() {
 	resolved.System = mergeSystemPrompt(resolved.System, pr.persona, pr.rules, pr.memory, pr.hasAny())
 	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), meta.ID, resolved.Mode)
 
-	chat, stream := buildLLM(apiKey, resolved.Provider, logger)
+	// 应用运行时配置覆盖（优先级：config>builtin）。
+	miniagent.SetMaxReadFileBytes(maxReadFileBytesOf(resolved))
+	miniagent.SetMaxShellOutputChars(maxShellOutputCharsOf(resolved))
+	miniagent.SetMaxSessionBytes(maxSessionBytesOf(resolved))
+
+	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
 	reader := bufio.NewReader(os.Stdin)
 	hooks := buildHooks(*f.resultOnly)
