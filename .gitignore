@@ -37,3 +37,4 @@ REVIEW_REPORT.md
 LOC_ASSESSMENT.md
 .codegraph/
 docs/
+cmd/miniagent/.miniagent/
