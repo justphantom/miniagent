@@ -154,12 +154,12 @@ var ErrThinkingUnsupported = errors.New("miniagent: thinking parameter unsupport
 var ErrToolDenied = errors.New("miniagent: tool denied by caller")
 
 type LoopConfig struct {
-	Model          string
-	System         string
-	SummaryRequest string
+	Model            string
+	System           string
+	SummaryRequest   string
 	SummarizerPrompt string
-	MaxTokens      int
-	Tools          []Tool
+	MaxTokens        int
+	Tools            []Tool
 	// History 是本轮之前的会话历史，按序拼在新 user prompt 之前。
 	// Run 不修改其内容。
 	History []Message
@@ -180,6 +180,15 @@ type LoopConfig struct {
 	Thinking      *ThinkingMapping
 	// CompactionModel 是摘要压缩用的模型 id（同 provider）；空则回落 cfg.Model。
 	CompactionModel string
+	// 以下 5 项是 S4 策略化常量（config run.* 可覆盖，<=0 用内置默认）：
+	// MaxToolResultChars=tool 结果入历史默认字符上限（兜底 Tool.ResultLimit）；
+	// MaxFileResultChars=read/edit 等代码类工具结果上限（buildTools 注入 Tool.ResultLimit）；
+	// MaxParallelTools=单步并行工具上限；ContextKeepRecent/SummaryMaxChars=压缩保留轮数与摘要字符上限。
+	MaxToolResultChars int
+	MaxFileResultChars int
+	MaxParallelTools   int
+	ContextKeepRecent  int
+	SummaryMaxChars    int
 }
 
 // ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。

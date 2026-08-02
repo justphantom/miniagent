@@ -9,7 +9,7 @@
 - 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：仅 Linux/macOS（Unix）。`platform.go` 用 `//go:build !windows` 隔离 setpgid/killpg/O_NOFOLLOW，未提供 Windows fallback
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：`read` / `write` / `edit` / `multi_edit` / `grep` / `glob` / `shell`
+- 工具：`read` / `write` / `edit` / `grep` / `glob` / `shell`，外加 `.miniagent/scripts.json` 声明的项目脚本工具（`script_<name>`）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行
 
 ## 构建
@@ -25,42 +25,33 @@ make test       # go test -race ./...
 
 | 变量 | 用途 |
 |------|------|
-| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。裸模式必需（或用 `-key-file` / config `provider.key` / `${VAR}` 注入） |
+| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。config `provider.key` 未设时必需（或用 `-key-file` / `${VAR}` 注入） |
 | `<任意 VAR>` | config 文件中 `${VAR}` 展开来源（如 `provider.key` 用 `${MAIN_API_KEY}`，机密不入文件） |
 
 ## CLI 参数
 
-两种运行形态：**config 模式**（`-config <path>` 或默认 `./miniagent.json`，多 provider 全能力）与
-**裸 CLI 模式**（无需 config，`-chat-url` + `-model` + key 隐式构造单 provider，向后兼容）。默认 config
-不存在 = 软失败退裸模式；显式 `-config` 不存在 = 硬错误。
+**始终需要 config**（`-config <path>` 或默认 `./miniagent.json`）。默认 config 不存在时自动写一份最小模板再加载（用 `${CHAT_URL}`/`${MODEL}` 环境变量），显式 `-config` 不存在则报错。无裸 CLI 模式。
 
 ```
--char-url string         裸模式 chat completions 完整 URL（含 /v1/chat/completions）
--config string           配置文件路径（默认查 ./miniagent.json；不存在软失败退裸模式）
--context-window int      模型 context 上限（tokens）；>0 时主动摘要压缩历史，0=不限（默认）
+-config string           配置文件路径（默认查 ./miniagent.json；不存在则生成最小模板）
 -interactive             交互模式：循环读取 prompt（每行一个）；有 -session 时以文件为唯一真源
 -key-file string         从文件读 API key（优先级：cli -key-file > config provider.key > $MINIAGENT_API_KEY）
 -list-models             列出端点可用模型 id 后退出（config 静态 models 不发 GET，否则 GET models-url）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
--max-duration duration   整体墙钟上限（覆盖所有 LLM 调用 + 工具执行），0 表示不限（默认 0）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
--max-tokens-total int    单轮累计 token（输入+输出）上限（0=不限）；超限以 error 事件 + 退出码 1 终止。判定依赖端点返回的真实 usage（流式需端点 honor stream_options.include_usage，否则熔断静默失效仅 slog warn）
--migrate-session string  把 v2 JSON 会话转为 jsonl 后退出（传入旧 .json 路径）
 -mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
--model string            LLM 模型（config 模式 provider/id；裸模式裸 id）
--models-url string       裸模式 models 完整 URL（可选）
+-model string            LLM 模型（config 模式 provider/id）
 -result-only             仅输出 result.text（subagent fork 用）；与 -stream 互斥。失败输出 "error: <msg>" + 退出码 1
 -session string          session id 或路径（id 在 session.dir 解析为 .jsonl；含 / 或 . 视为路径）
--shell-timeout duration  单条 shell 命令超时（0=默认 60s）；仍受 -max-duration 总上限约束
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
--summary-request string  迭代上限时注入的总结引导 prompt（空=回落内置默认）
--summarizer-prompt string 摘要压缩专用 system prompt（空=回落内置默认）
 -system string           系统提示词（默认为面向工程代码开发的代码向 prompt）
 -thinking string         思考级别 off|minimal|low|medium|high|xhigh|max（默认 off，wire 透传 reasoning_effort）
 -version                 显示版本号并退出
--workdir string          工作目录（default 模式写工具边界 + shell 的 cwd）
+-workdir string          工作目录（default 模式写工具边界 + shell 的 cwd；也是 .miniagent/ 规则发现根）
 ```
+
+> v3.2 破坏性变更：删除裸 CLI 模式（`-chat-url`/`-models-url`）与 `-migrate-session` 子命令；`-summary-request`/`-summarizer-prompt`/`-max-tokens-total`/`-context-window`/`-max-duration`/`-shell-timeout` 移出 CLI、改为仅 `config`（`defaults.*` / `run.*`）；`multi_edit` 工具并入 `edit`（`edits` 数组）。这些参数仍在 `miniagent.json` 可配，仅不再暴露为 flag。
 
 > v3 破坏性变更：删除 `-base-url` / `-approve` / `-confine` 与 `$MINIAGENT_BASE_URL`；
 > `-model` 支持 `provider/id` 前缀；`-session` 改 jsonl append-only + id 解析；session 文件格式不可向后兼容。
@@ -69,11 +60,10 @@ make test       # go test -race ./...
 
 - `-version`：打印 `miniagent <version>`，退出码 0。
 - `-list-models`：列出端点模型 id 后退出。
-- `-migrate-session <old.json>`：v2 JSON → jsonl 转换后退出。
 
 ### 主对话流程的前置检查
 
-- 无法确定 endpoint/model（裸模式缺 `-chat-url`/`-model`，或 config 解析失败）→ stderr 报错，退出码 1
+- 无法确定 endpoint/model（config 缺 provider/defaults.model，或 config 解析失败）→ stderr 报错，退出码 1
 - API key 缺失（provider.key / -key-file / `$MINIAGENT_API_KEY` 均无）→ stderr 报错，退出码 1
 - `default` 模式无 `-workdir` → stderr 报错，退出码 1（用 `-mode auto` 放行）
 - `-stream` 与 `-result-only` 同传 → stderr 报错，退出码 1
@@ -132,7 +122,7 @@ make test       # go test -race ./...
 
 ## 工具清单
 
-文件与 shell 工具的约束取决于 `-mode`：default 模式下写工具（write/edit/multi_edit）限定在 workdir 子树、shell 拒 sudo/su 等 11 个提权器；auto 模式无任何约束。工具参数为 JSON 对象。
+文件与 shell 工具的约束取决于 `-mode`：default 模式下写工具（write/edit）限定在 workdir 子树、shell 拒 sudo/su 等 11 个提权器；auto 模式无任何约束。工具参数为 JSON 对象。
 
 ### `read`
 
@@ -159,27 +149,17 @@ make test       # go test -race ./...
 
 ### `edit`
 
-精确替换文件中的一段文本。`old_string` 须与文件精确匹配（含缩进和换行）。缺省要求唯一出现（出现 0 次或多次均失败）；设 `replace_all=true` 则替换全部匹配。拒绝编辑符号链接与非普通文件。
+精确替换文件中的一段或多段文本。单段形态：`old_string` 须与文件精确匹配（含缩进和换行），缺省要求唯一出现（0 次或多次失败），`replace_all=true` 替换全部。多段事务形态：传 `edits` 数组（与 `old_string`/`new_string` 互斥），按序应用、全部成功才写盘、任一失败不改。拒绝编辑符号链接与非普通文件。
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
 | `path` | string | 是 | 相对 `-workdir` 或绝对路径 |
-| `old_string` | string | 是 | 原文（精确匹配，含缩进和换行） |
-| `new_string` | string | 是 | 新文本 |
+| `old_string` | string | 单段必填 | 原文（精确匹配，含缩进和换行） |
+| `new_string` | string | 单段必填 | 新文本 |
 | `replace_all` | bool | 否 | true 时替换全部匹配处；缺省要求 old_string 唯一 |
+| `edits` | array | 多段必填 | 多段事务替换列表，每项 `{old_string, new_string, replace_all?}`；与 old_string/new_string 互斥 |
 
-约束：文件最大 10 MiB；保留原文件权限。
-
-### `multi_edit`
-
-对同一文件的多处文本顺序精确替换，事务性：`edits` 数组按序应用，全部成功才写盘，任一失败不改文件。每处基于前一处的结果匹配。
-
-| 参数 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| `path` | string | 是 | 相对 `-workdir` 或绝对路径 |
-| `edits` | array | 是 | 替换列表，每项 `{old_string, new_string, replace_all?}` |
-
-约束：文件最大 10 MiB；`old_string` 须精确匹配，缺省要求唯一（`replace_all=true` 替换该处全部）。先 `read` 查看内容再编辑。
+约束：文件最大 10 MiB；保留原文件权限。`edits` 与 `old_string`/`new_string` 同传报错。先 `read` 查看内容再编辑。
 
 ### `grep`
 
@@ -227,11 +207,10 @@ make test       # go test -race ./...
 - Run 成功后 **append-only 追加本轮 NewMessages**（user prompt + assistant/tool 往返 + 最终回答 + 可能的 summary），不重写全量（权限 0o600）。
 - Run 出错（LLM 失败/取消/超 window 终止）不追加——失败轮不固化，但工具副作用可能已发生且无记录。
 - **并发**：同一 session 文件同一时刻仅单写者。append 经 `flock` 跨进程互斥，但 rename 换 inode 场景（机会性 rewrite）下跨进程并发不保证；多进程同写同一 session 应避免。
-- **摘要压缩**（`-context-window > 0`）：Run 入口先用 `applyCompactionBarrier` 屏障掉最新 `kind=summary` 之前的旧历史（仍留 session 文件）；loop 每步前估算超 window 80% 时，把中段摘要为单条 `kind=summary` 消息（既进 context 又 append 落盘）。摘要失败/无中段回落有损 `compactHistory`，仍超则裁到最近轮，再超则报错终止（避免循环烧请求）。
+- **摘要压缩**（config `run.context_window > 0`）：Run 入口先用 `applyCompactionBarrier` 屏障掉最新 `kind=summary` 之前的旧历史（仍留 session 文件）；loop 每步前用 `FitHistory` 估算超 window 80% 时，把中段摘要为单条 `kind=summary` 消息（既进 context 又 append 落盘）。摘要失败/无中段回落有损 `compactHistory`，仍超则裁到最近轮，再超则报错终止（避免循环烧请求）。
 - 文件损坏（非法 JSON 行、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 4 MiB 上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
 - **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
 - 思考内容（reasoning）：wire 解析响应里的 `reasoning_content` / `reasoning`（双兼容），随 assistant 消息进入上下文并以 `reasoning_content` 回灌；**随 session 落盘**（与 content 同级）。
-- v2 升级：`-migrate-session <old.json>` 把旧 JSON 数组会话转为 jsonl（无 summary，纯历史）。
 - 交互模式（`-interactive`）有 `-session` 时以文件为唯一真源：每轮 LoadSession → Run → AppendNewMessages，不在内存累积。
 
 ## 退出码
@@ -254,13 +233,17 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 ## 内部约束（常量）
 
-| 常量 | 值 | 含义 |
-|------|----|------|
-| `maxIterations` | 20 | 单轮 LLM 调用上限（默认值，可被 `-max-iterations` 覆盖） |
-| `maxParallelTools` | 8 | 单步内并行工具并发上限 |
-| `maxToolResultInHistory` | 2000 | tool 结果进入历史消息的默认字符数（shell/grep/glob） |
-| `maxFileResultInHistory` | 8000 | read/edit 结果进入历史消息的字符数（代码内容，截断丢准确性） |
-| `contextTrimToolChars` | 1000 | context 超限降级时把 tool 结果压到的字符数 |
+下列前 5 项可经 `config` 的 `run.*` 覆盖（S4 策略化，`<=0` 或缺省用内置默认）：
+
+| 常量 | 值 | config 覆盖键 | 含义 |
+|------|----|------|------|
+| `maxIterations` | 20 | —（CLI `-max-iterations`） | 单轮 LLM 调用上限 |
+| `maxParallelTools` | 8 | `run.max_parallel_tools` | 单步内并行工具并发上限 |
+| `maxToolResultInHistory` | 2000 | `run.max_tool_result_chars` | tool 结果进入历史消息的默认字符数（shell/grep/glob） |
+| `maxFileResultInHistory` | 8000 | `run.max_file_result_chars` | read/edit 结果进入历史消息的字符数（代码内容，截断丢准确性） |
+| `contextTrimToolChars` | 1000 | — | context 超限降级时把 tool 结果压到的字符数 |
+| `contextKeepRecent` | 6 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
+| `summaryMaxChars` | 2000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
 | `contextKeepRecent` | 6 | 摘要/有损压缩保留的最近轮数（首轮之外） |
 | `summaryMaxChars` | 2000 | 摘要式压缩单条 summary 的字符上限 |
 | `maxGrepMatches` / `maxGlobEntries` | 200 / 500 | grep 命中行 / glob 命中条数上限 |
@@ -268,31 +251,55 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
 | `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | 写 / 编辑文件字节上限 |
 | `maxShellOutputChars` | 20000 | shell 输出字符上限 |
-| `shellTimeout` | 60s | shell 命令超时（默认值，可被 `-shell-timeout` 覆盖） |
+| `shellTimeout` | 60s | shell/script 命令超时（默认值，可被 `config run.shell_timeout` 覆盖） |
 | `maxChatBodyBytes` | 4 MiB | chat completions 响应 body 上限 |
 | `maxRetries` | 2 | LLM 调用最大重试次数（仅 429/500/502/503/504 + 网络错） |
 | `retryBaseDelay` / `retryMaxDelay` | 500ms / 8s | 重试指数退火基线 / 单次封顶 |
 | `exitCodeNotSet` | -1 | shell 超时/启动失败的 ExitCode 哨兵 |
 | `maxToolResultEventChars` | 2000 | `tool_result` 事件 output 截断字符数 |
 
+## 项目专属配置（`.miniagent/`）
+
+在 `workdir` 下放 `.miniagent/` 目录，agent 启动时自动发现并把项目专属行为注入——核心引擎本身不感知任何具体项目，只「知道如何发现项目规则」：
+
+| 文件 | 作用 |
+|------|------|
+| `.miniagent/persona.md` | 角色/语气/回答格式。存在时取代默认 system prompt 作身份基线（优先级 persona > rules > defaults.system_prompt） |
+| `.miniagent/rules.md` | 项目专属约束（编码规范、禁止事项、审查清单），追加到 system prompt 的「## 项目规则」段 |
+| `.miniagent/scripts.json` | `{"scripts":[{"name","command","description"}]}`；每条注册为 `script_<name>` 工具，复用 shell 的安全策略（mode 黑名单/env 剥离/超时/进程组） |
+| `.miniagent/memory.jsonl` | 项目级记忆（结构化记录）。`read`/`write` 工具的保留路径 `path="memory"` 路由到此文件：read 渲染记录、write **追加**一条 `{type:"note",content}`（特殊语义：追加而非覆盖）。最近 10 条记忆注入 system prompt |
+
+任一文件存在即触发 system prompt 末尾追加「（已加载 .miniagent/ 项目规则与脚本）」。该目录通常应加入 `.gitignore` 或按团队约定纳入版本控制。
+
+```bash
+# 项目仓库结构示例
+repo/
+  miniagent.json            # provider/defaults/run 配置
+  .miniagent/
+    persona.md              # 「你是 repo 的 Go 维护者…」
+    rules.md                # 「禁止提交未跑 go test 的改动…」
+    scripts.json            # {"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}
+    memory.jsonl            # {"type":"lesson","content":"…"}…
+```
+
 ## 完整调用示例
 
 ```bash
-# 单次无状态问答（裸 CLI 模式）
-echo "用一句话解释 goroutine" | MINIAGENT_API_KEY=sk-xxx \
-  ./bin/miniagent -chat-url https://api.openai.com/v1/chat/completions -model gpt-4o -mode auto
+# 单次问答（config 模式；机密经 ${VAR} 来自环境，不入文件）
+echo "用一句话解释 goroutine" | MAIN_API_KEY=sk-xxx \
+  ./bin/miniagent -config ./miniagent.json -mode auto
 
-# 带工具 + 指定工作目录（default 模式：写工具限 ./repo，shell cwd 为 ./repo）
-echo "在当前目录跑测试并总结失败原因" | MINIAGENT_API_KEY=sk-xxx \
-  ./bin/miniagent -chat-url https://api.openai.com/v1/chat/completions -model gpt-4o -workdir ./repo
+# 带工具 + 指定工作目录（default 模式：写工具限 ./repo，shell cwd 为 ./repo，.miniagent/ 从 ./repo 发现）
+echo "在当前目录跑测试并总结失败原因" | MAIN_API_KEY=sk-xxx \
+  ./bin/miniagent -config ./miniagent.json -workdir ./repo
 
-# config 模式：多 provider + 摘要压缩 + 思考级别（机密经 ${VAR} 来自环境，不入文件）
+# 思考级别 + 摘要压缩（run.context_window 在 config 配置）
 echo "重构这段代码" | MAIN_API_KEY=sk-xxx \
   ./bin/miniagent -config ./miniagent.json -workdir . -thinking high
 
-# 限制整体墙钟 5 分钟（防止 ReAct 循环失控烧 token）
-echo "跑全量测试并总结" | MINIAGENT_API_KEY=sk-xxx \
-  ./bin/miniagent -chat-url https://api.openai.com/v1/chat/completions -model gpt-4o -mode auto -max-duration 5m
+# 限制整体墙钟 5 分钟（防 ReAct 循环失控烧 token；config run.max_duration）
+echo "跑全量测试并总结" | MAIN_API_KEY=sk-xxx \
+  ./bin/miniagent -config ./miniagent.json -mode auto -workdir .
 
 # subagent fork：把可并行子任务再调一次 miniagent（仅输出结果文本）
 echo "<子任务>" | ./bin/miniagent -config ./miniagent.json -session <父id>-sub-1 -workdir . -mode default -result-only

@@ -34,27 +34,59 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// chatArgs 构造裸模式 e2e 的公共参数（auto 模式免 workdir，handler 忽略路径）。
-func chatArgs(srvURL string, extra ...string) []string {
-	return append([]string{
-		"-chat-url", srvURL + "/v1/chat/completions",
-		"-models-url", srvURL + "/v1/models",
-		"-model", "m",
-		"-mode", "auto",
-	}, extra...)
+// writeConfigFixture 写一份指向 srvURL 的临时 miniagent.json（mode=auto 免 workdir），
+// 返回其路径。runJSON 非空时原样作为 "run" 段（支持 max_tokens_total/max_duration 等仅 config 参数）。
+func writeConfigFixture(t *testing.T, srvURL, runJSON string) string {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
+	runField := ""
+	if runJSON != "" {
+		runField = `,"run":` + runJSON
+	}
+	body := `{"providers":[{"name":"p","chat_url":"` + srvURL + `/v1/chat/completions","models_url":"` + srvURL + `/v1/models"}],"defaults":{"model":"p/m","mode":"auto"}` + runField + `}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cfgPath
 }
 
-func TestBuildTools_AlwaysRegisters7(t *testing.T) {
-	tools := buildTools(t.TempDir(), 0, miniagent.ModeAuto)
-	if len(tools) != 7 {
-		t.Fatalf("got %d tools, want 7", len(tools))
+// configArgs 构造 e2e 的公共参数：写临时 config（替代旧裸模式 chatArgs），返回 -config <path> + extra。
+func configArgs(t *testing.T, srvURL string, extra ...string) []string {
+	t.Helper()
+	return append([]string{"-config", writeConfigFixture(t, srvURL, "")}, extra...)
+}
+
+func TestBuildTools_AlwaysRegisters6(t *testing.T) {
+	tools := buildTools(t.TempDir(), 0, miniagent.ModeAuto, 0, nil)
+	if len(tools) != 6 {
+		t.Fatalf("got %d tools, want 6", len(tools))
 	}
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
-	tools := buildTools("", 0, miniagent.ModeAuto)
-	if len(tools) != 7 {
-		t.Fatalf("got %d tools, want 7", len(tools))
+	tools := buildTools("", 0, miniagent.ModeAuto, 0, nil)
+	if len(tools) != 6 {
+		t.Fatalf("got %d tools, want 6", len(tools))
+	}
+}
+
+// S4：fileResultLimit>0 覆盖 read/edit 的 ResultLimit；<=0 保留构造器内置默认。
+func TestBuildTools_FileResultLimitOverride(t *testing.T) {
+	dir := t.TempDir()
+	byName := map[string]int{}
+	for _, tl := range buildTools(dir, 0, miniagent.ModeAuto, 4242, nil) {
+		byName[tl.Name] = tl.ResultLimit
+	}
+	for _, name := range []string{"read", "edit"} {
+		if byName[name] != 4242 {
+			t.Errorf("%s ResultLimit = %d, want 4242", name, byName[name])
+		}
+	}
+	// <=0：保留内置 maxFileResultInHistory（8000）。
+	for _, tl := range buildTools(dir, 0, miniagent.ModeAuto, 0, nil) {
+		if tl.Name == "read" && tl.ResultLimit != 8000 {
+			t.Errorf("read ResultLimit = %d, want builtin 8000 when limit<=0", tl.ResultLimit)
+		}
 	}
 }
 
@@ -100,20 +132,25 @@ func TestCLI_VersionExitsZero(t *testing.T) {
 	}
 }
 
-// 裸模式无 -chat-url → 报错。
-func TestCLI_NoChatURLExits1(t *testing.T) {
-	code, out := runMainBin(t, "prompt", nil)
+// 显式 -config 不存在 → 报错（S1 后 config 必须存在，不再退裸模式）。
+func TestCLI_ExplicitConfigMissingExits1(t *testing.T) {
+	code, out := runMainBin(t, "prompt", []string{"-config", filepath.Join(t.TempDir(), "nope.json")})
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "chat-url") {
-		t.Errorf("missing chat-url error: %s", out)
+	if !strings.Contains(out, "config") {
+		t.Errorf("missing config error: %s", out)
 	}
 }
 
-// 裸模式有 -chat-url 缺 -model → 报错。
+// config 无 defaults.model 且未传 -model → Resolve 报错。
 func TestCLI_MissingModelExits1(t *testing.T) {
-	code, out := runMainBin(t, "prompt", []string{"-chat-url", "http://127.0.0.1:1/v1/chat/completions"})
+	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
+	body := `{"providers":[{"name":"p","chat_url":"http://127.0.0.1:1/v1/chat/completions"}]}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -123,7 +160,7 @@ func TestCLI_MissingModelExits1(t *testing.T) {
 }
 
 func TestCLI_MissingAPIKeyExits1(t *testing.T) {
-	code, out := runMainBin(t, "prompt", chatArgs("http://127.0.0.1:1"))
+	code, out := runMainBin(t, "prompt", configArgs(t, "http://127.0.0.1:1"))
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -134,7 +171,7 @@ func TestCLI_MissingAPIKeyExits1(t *testing.T) {
 
 // default 模式无 workdir → 报错（需 -workdir 或 -mode auto）。
 func TestCLI_DefaultModeRequiresWorkdir(t *testing.T) {
-	args := []string{"-chat-url", "http://127.0.0.1:1/v1/chat/completions", "-model", "m", "-mode", "default"}
+	args := configArgs(t, "http://127.0.0.1:1", "-mode", "default")
 	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
@@ -146,7 +183,7 @@ func TestCLI_DefaultModeRequiresWorkdir(t *testing.T) {
 
 // -stream 与 -result-only 互斥。
 func TestCLI_StreamResultOnlyMutex(t *testing.T) {
-	args := chatArgs("http://127.0.0.1:1", "-stream", "-result-only")
+	args := configArgs(t, "http://127.0.0.1:1", "-stream", "-result-only")
 	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
@@ -157,7 +194,7 @@ func TestCLI_StreamResultOnlyMutex(t *testing.T) {
 }
 
 func TestCLI_EmptyStdinExits1(t *testing.T) {
-	code, out := runMainBin(t, "", chatArgs("http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "", configArgs(t, "http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -167,7 +204,7 @@ func TestCLI_EmptyStdinExits1(t *testing.T) {
 }
 
 func TestCLI_OversizedStdinExits1(t *testing.T) {
-	code, out := runMainBin(t, strings.Repeat("x", maxPromptBytes+1), chatArgs("http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, strings.Repeat("x", maxPromptBytes+1), configArgs(t, "http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -190,7 +227,7 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 	defer srv.Close()
 
 	sess := filepath.Join(t.TempDir(), "s.jsonl")
-	args := chatArgs(srv.URL, "-session", sess)
+	args := configArgs(t, srv.URL, "-session", sess)
 	code, out := runMainBin(t, "第一轮提问", args, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("turn1 code = %d, out = %s", code, out)
@@ -227,7 +264,7 @@ func TestCLI_CorruptSessionExits1(t *testing.T) {
 	if err := os.WriteFile(sess, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out := runMainBin(t, "prompt", chatArgs("http://127.0.0.1:1", "-session", sess), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "prompt", configArgs(t, "http://127.0.0.1:1", "-session", sess), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -237,7 +274,7 @@ func TestCLI_CorruptSessionExits1(t *testing.T) {
 }
 
 func TestCLI_InvalidLogLevelExits1(t *testing.T) {
-	code, out := runMainBin(t, "prompt", chatArgs("http://127.0.0.1:1", "-log-level", "bogus"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "prompt", configArgs(t, "http://127.0.0.1:1", "-log-level", "bogus"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -326,7 +363,7 @@ func TestCLI_KeyFileAuth(t *testing.T) {
 	if err := os.WriteFile(keyFile, []byte("sk-from-config-file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out := runMainBin(t, "ping", chatArgs(srv.URL, "-key-file", keyFile))
+	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-key-file", keyFile))
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -351,7 +388,7 @@ func TestCLI_InteractiveTwoTurns(t *testing.T) {
 	defer srv.Close()
 
 	sess := filepath.Join(t.TempDir(), "s.jsonl")
-	code, out := runMainBin(t, "第一问\n第二问\n", chatArgs(srv.URL, "-interactive", "-session", sess), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "第一问\n第二问\n", configArgs(t, srv.URL, "-interactive", "-session", sess), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -402,7 +439,7 @@ func TestCLI_ListModels(t *testing.T) {
 		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-3.5-turbo"}]}`)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "", []string{"-list-models", "-chat-url", srv.URL + "/v1/chat/completions", "-models-url", srv.URL + "/v1/models"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "", []string{"-list-models", "-config", writeConfigFixture(t, srv.URL, "")}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -417,7 +454,7 @@ func TestCLI_ResultOnly(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"纯结果"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "ping", chatArgs(srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -432,7 +469,7 @@ func TestCLI_ResultOnlyError(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "ping", chatArgs(srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -444,24 +481,20 @@ func TestCLI_ResultOnlyError(t *testing.T) {
 // buildTools(default) 后写工具对越界 path 返回 IsError（含「default 模式」）。
 func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
-	tools := buildTools(dir, 0, miniagent.ModeDefault)
+	tools := buildTools(dir, 0, miniagent.ModeDefault, 0, nil)
 	byName := map[string]miniagent.Tool{}
 	for _, tk := range tools {
 		byName[tk.Name] = tk
 	}
-	for _, name := range []string{"write", "edit", "multi_edit"} {
-		var args string
-		switch name {
-		case "write":
-			args = `{"path":"../escape.txt","content":"x"}`
-		case "edit":
-			args = `{"path":"../escape.txt","old_string":"a","new_string":"b"}`
-		default:
-			args = `{"path":"../escape.txt","edits":[{"old_string":"a","new_string":"b"}]}`
-		}
-		r := byName[name].Call(context.Background(), args)
+	cases := []struct{ name, args string }{
+		{"write", `{"path":"../escape.txt","content":"x"}`},
+		{"edit", `{"path":"../escape.txt","old_string":"a","new_string":"b"}`},
+		{"edit", `{"path":"../escape.txt","edits":[{"old_string":"a","new_string":"b"}]}`},
+	}
+	for _, c := range cases {
+		r := byName[c.name].Call(context.Background(), c.args)
 		if !r.IsError || !strings.Contains(r.Output, "default 模式") {
-			t.Errorf("%s escape should be rejected: %s", name, r.Output)
+			t.Errorf("%s escape should be rejected: %s", c.name, r.Output)
 		}
 	}
 }
@@ -500,29 +533,35 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	}
 }
 
-// loadConfigOrBare：默认 ./miniagent.json 不存在=软失败退裸模式（nil, nil）。
-// loadConfigOrBare 硬编码 "./miniagent.json"，须切到临时 cwd 才能控制其解析。
-func TestLoadConfigOrBare_DefaultMissingIsBare(t *testing.T) {
+// requireConfig：默认 ./miniagent.json 不存在时写最小模板再加载。须切到临时 cwd 控制。
+// 模板用 ${CHAT_URL}/${MODEL}，设置 env 后加载成功，且 provider.chat_url 来自 env。
+func TestRequireConfig_DefaultMissingWritesTemplate(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Chdir(oldWD)
-	if err := os.Chdir(t.TempDir()); err != nil {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfigOrBare("")
+	t.Setenv("CHAT_URL", "http://localhost:11434/v1/chat/completions")
+	t.Setenv("MODEL", "gpt-4o") // 模板 provider 名为 default，MODEL 须为裸 id（无 provider 前缀）
+	cfg, err := requireConfig("")
 	if err != nil {
-		t.Fatalf("missing default config should soft-fail to bare mode: %v", err)
+		t.Fatalf("requireConfig: %v", err)
 	}
-	if cfg != nil {
-		t.Errorf("expected nil cfg for missing default, got %+v", cfg)
+	if cfg == nil || cfg.Providers[0].ChatURL != "http://localhost:11434/v1/chat/completions" {
+		t.Errorf("template not loaded: %+v", cfg)
+	}
+	if _, statErr := os.Stat("./miniagent.json"); statErr != nil {
+		t.Errorf("template file not written: %v", statErr)
 	}
 }
 
-// loadConfigOrBare：默认 config 的 Stat 错误若非 fs.ErrNotExist（如自指符号链接触发
-// ELOOP、permission denied）按硬错误返回，不静默退裸模式（审查 P2-6）。
-func TestLoadConfigOrBare_DefaultStatErrorIsHardError(t *testing.T) {
+// requireConfig：默认 config 的 Stat 错误若非 fs.ErrNotExist（如自指符号链接触发
+// ELOOP、permission denied）按硬错误返回（审查 P2-6）。
+func TestRequireConfig_DefaultStatErrorIsHardError(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -536,7 +575,7 @@ func TestLoadConfigOrBare_DefaultStatErrorIsHardError(t *testing.T) {
 	if err := os.Symlink("./miniagent.json", "./miniagent.json"); err != nil {
 		t.Skipf("cannot create self-referential symlink: %v", err)
 	}
-	if _, err := loadConfigOrBare(""); err == nil {
+	if _, err := requireConfig(""); err == nil {
 		t.Fatal("expected hard error for non-ErrNotExist Stat failure, got nil")
 	}
 }
@@ -567,7 +606,7 @@ func TestCLI_InteractiveCrossTurnBudgetStops(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"a"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":2}}`)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "q1\nq2\nq3\n", chatArgs(srv.URL, "-interactive", "-max-tokens-total", "15"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "q1\nq2\nq3\n", []string{"-config", writeConfigFixture(t, srv.URL, `{"max_tokens_total":15}`), "-interactive"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1（跨轮预算超限 exit 1）; out=%s", code, out)
 	}
@@ -604,7 +643,7 @@ func TestCLI_InteractiveThinkingDowngradePersists(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"a"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "q1\nq2\n", chatArgs(srv.URL, "-interactive", "-thinking", "medium"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "q1\nq2\n", configArgs(t, srv.URL, "-interactive", "-thinking", "medium"), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
@@ -634,7 +673,7 @@ func TestCLI_SIGINTExits130(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], chatArgs(srv.URL)...)
+	cmd := exec.CommandContext(ctx, os.Args[0], configArgs(t, srv.URL)...)
 	cmd.Stdin = strings.NewReader("prompt")
 	env := []string{entrypointEnv}
 	for _, kv := range os.Environ() {

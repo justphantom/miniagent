@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"log/slog"
 )
@@ -12,26 +11,8 @@ import (
 // maxIterations：单轮 LLM 调用上限默认值，防工具循环烧 token；可经 MaxIterations 覆盖。
 const maxIterations = 20
 
-// maxToolResultInHistory：单条 tool 结果入历史字符上限，平衡可读性与上下文预算。
-const maxToolResultInHistory = 2000
-
-// maxParallelTools：同一步并行工具上限，防耗尽 FD/连接或触发目标限流。
-const maxParallelTools = 8
-
 // summaryRequestPrompt 在迭代上限前一步工具调用后注入，引导 LLM 输出总结性回复而非继续调用工具。
 const summaryRequestPrompt = "所有工具调用已完成。请输出一段总结性回复，说明完成了什么、关键结果是什么。不要在此之后继续调用工具。"
-
-func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args string) (res ToolResult) {
-	defer func() {
-		if r := recover(); r != nil {
-			if logger != nil {
-				logger.Error("tool panic recovered", "tool", name, "panic", r)
-			}
-			res = ToolResult{IsError: true, Output: fmt.Sprintf("工具 %q 内部错误", name)}
-		}
-	}()
-	return tool.Call(ctx, args)
-}
 
 // Run 单轮 ReAct 循环：把 userPrompt 发给 llm，模型若请求工具则执行后回灌，
 // 直到模型给出无 tool_calls 的最终文本或撞 maxIterations 上限。logger 为 nil 时静默。
@@ -39,9 +20,12 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 // Result.Messages 是截至返回的全量 transcript，所有 return 路径均带回。配对：OnToolUse 非
 // denied 的 error 路径尾部可能留下"有 tool_calls、无 tool 结果"的 assistant 消息（不可续跑）；
 // OnToolResult error 路径已补占位 tool 消息保配对完整（P2-1）。出错分支不应持久化。
-func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (result Result, err error) {
-	if llm == nil {
-		return Result{}, errors.New("miniagent: llm client is nil")
+func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (result Result, err error) {
+	if chat == nil {
+		return Result{}, errors.New("miniagent: chat client is nil")
+	}
+	if cfg.Stream && stream == nil {
+		return Result{}, errors.New("miniagent: stream client is nil in stream mode")
 	}
 	// thinkingDowngraded/compacted 跨循环累积，统一经 defer 写入命名返回 result 的对应字段，
 	// 避免在多个 return 点逐一展开赋值（loop.go 行数受限）。Compacted 任一步摘要成功即置位；
@@ -67,25 +51,45 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 	if iterLimit <= 0 {
 		iterLimit = maxIterations
 	}
+	// ContextBudget 一次构造、循环复用：摘要回调捕获 llm 与 maxChars，解耦 context.go 与 HTTPClient。
+	maxChars := cfg.SummaryMaxChars
+	if maxChars <= 0 {
+		maxChars = summaryMaxChars
+	}
+	budget := ContextBudget{
+		ContextWindow:    cfg.ContextWindow,
+		KeepRecent:       cfg.ContextKeepRecent,
+		SummarizerPrompt: cfg.SummarizerPrompt,
+		CompactionModel:  cfg.CompactionModel,
+		Model:            cfg.Model,
+		System:           cfg.System,
+		Tools:            cfg.Tools,
+		Summarize: func(ctx context.Context, model, sys string, middle []Message) (string, Usage, error) {
+			return summarizeMiddle(ctx, chat, model, sys, maxChars, middle)
+		},
+	}
 
 	for step := 1; step <= iterLimit; step++ {
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
 		}
-		// 阶段 2（loop 每 step 前）：超 window 摘要中段 + 有损 fallback + 终止（见 compactIfOverWindow）。
+		// 阶段 2（loop 每 step 前）：超 window 摘要中段 + 有损 fallback + 终止（见 FitHistory）。
 		// 摘要调用的 usage 累加入 total（MaxTotalTokens 预算含摘要调用——审查 P2 摘要 token 不入预算）；
-		// summarized=true 时记 compacted，供 defer 写 result.Compacted（交互层据此 rewrite session）。
-		summarized, sumUsage, cerr := compactIfOverWindow(ctx, llm, cfg, &msgs, &newMsgs, logger)
-		if cerr != nil {
-			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, cerr
+		// summarized=true 时记 compacted，供 defer 写 result.Compacted（交互层据此 rewrite session），
+		// 并把 summary 插入 newMsgs（insertSummaryIntoNewMsgs 保排序与去重）。
+		fitted, summaryMsg, summarized, sumUsage, fitErr := FitHistory(ctx, msgs, budget, logger)
+		if fitErr != nil {
+			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, fitErr
 		}
+		msgs = fitted
 		if summarized {
 			compacted = true
+			total.InputTokens += sumUsage.InputTokens
+			total.OutputTokens += sumUsage.OutputTokens
+			insertSummaryIntoNewMsgs(&newMsgs, summaryMsg)
 		}
-		total.InputTokens += sumUsage.InputTokens
-		total.OutputTokens += sumUsage.OutputTokens
 		// downgraded=true 时固化 cfg（P2-2：thinking 降级跨步生效，避免每步重撞 400）。
-		resp, downgraded, err := callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+		resp, downgraded, err := callLLMWithDowngrade(ctx, chat, stream, cfg, step, msgs, hooks, logger)
 		if downgraded {
 			cfg.ThinkingLevel, cfg.Thinking = "", nil
 			// 记录降级供 defer 写 result.ThinkingDowngraded：交互层据此清 baseCfg，
@@ -98,7 +102,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			if logger != nil {
 				logger.Warn("context length exceeded; trimmed history; retrying step", "step", step)
 			}
-			resp, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+			resp, _, err = callLLMWithDowngrade(ctx, chat, stream, cfg, step, msgs, hooks, logger)
 		}
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
@@ -123,7 +127,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
 		}
 
-		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, &newMsgs, hooks, logger)
+		msgs, err = handleToolCalls(ctx, cfg, step, resp, toolByName, msgs, &newMsgs, hooks, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
 		}
@@ -140,7 +144,7 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 			if logger != nil {
 				logger.Info("injecting summary request at iteration limit", "step", step)
 			}
-			resp2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, step+1, msgs, hooks, logger)
+			resp2, _, err2 := callLLMWithDowngrade(ctx, chat, stream, cfg, step+1, msgs, hooks, logger)
 			if err2 == nil && len(resp2.ToolCalls) == 0 {
 				appendMsg(&msgs, &newMsgs, Message{Role: roleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning})
 				total.InputTokens += resp2.Usage.InputTokens
@@ -162,163 +166,4 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 func appendMsg(msgs, newMsgs *[]Message, m Message) {
 	*msgs = append(*msgs, m)
 	*newMsgs = append(*newMsgs, m)
-}
-
-func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
-	toolByName := make(map[string]Tool, len(tools))
-	for _, t := range tools {
-		if _, dup := toolByName[t.Name]; dup && logger != nil {
-			// 重名静默覆盖会让前者不可达且无任何线索，路由歧义极难排查。
-			logger.Warn("duplicate tool name, last wins", "tool", t.Name)
-		}
-		toolByName[t.Name] = t
-	}
-	return toolByName
-}
-
-// callLLM 保持原签名供 thinking_test.go 直接调用，委托 callLLMWithDowngrade 并丢弃
-// downgraded。Run 改用 callLLMWithDowngrade 以跨步固化 thinking 降级（P2-2）。
-func callLLM(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, error) {
-	resp, _, err := callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
-	return resp, err
-}
-
-// callLLMWithDowngrade：callLLMOnce 之上做单步 thinking 降级重试，回传 downgraded 供 Run
-// 跨步固化 cfg；其余（重试一次、日志、截断告警）与原 callLLM 一致。
-func callLLMWithDowngrade(ctx context.Context, llm *HTTPClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, bool, error) {
-	if logger != nil {
-		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream, "thinking", cfg.ThinkingLevel)
-	}
-	resp, err := callLLMOnce(ctx, llm, cfg, step, msgs, hooks)
-	downgraded := false
-	// thinking 不被支持：去字段重试一次（仅当确实发了 thinking，避免无谓重试，审查 v2 #7）。
-	if errors.Is(err, ErrThinkingUnsupported) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
-		if logger != nil {
-			logger.Warn("thinking 不被端点支持，去字段重试一次", "step", step)
-		}
-		down := cfg
-		down.ThinkingLevel = ""
-		down.Thinking = nil
-		resp, err = callLLMOnce(ctx, llm, down, step, msgs, hooks)
-		downgraded = true
-	}
-	if err != nil {
-		if logger != nil {
-			logger.Warn("llm call failed", "step", step, "error", err)
-		}
-		return Response{}, downgraded, fmt.Errorf("llm call %d: %w", step, err)
-	}
-	if logger != nil {
-		logger.Info("llm call done", "step", step, "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
-	}
-	// finish_reason 非 stop/tool_calls 表示回答被 max_tokens 或内容过滤截断。
-	if logger != nil && resp.FinishReason != "" && resp.FinishReason != "stop" && resp.FinishReason != "tool_calls" {
-		logger.Warn("llm response truncated", "step", step, "finish_reason", resp.FinishReason)
-	}
-	return resp, downgraded, nil
-}
-
-func handleToolCalls(ctx context.Context, step int, resp Response, toolByName map[string]Tool, msgs []Message, newMsgs *[]Message, hooks LoopHooks, logger *slog.Logger) ([]Message, error) {
-	calls := make([]ToolCall, len(resp.ToolCalls))
-	for i, tc := range resp.ToolCalls {
-		calls[i] = tc
-		if calls[i].ID == "" {
-			calls[i].ID = fmt.Sprintf("synth_%d_%d", step, i)
-		}
-	}
-	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。
-	appendMsg(&msgs, newMsgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls})
-
-	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
-	// OnToolUse 返回 ErrToolDenied 表示拒绝该工具（如危险命令未确认）：记录后继续
-	// 通知其余工具，runToolsParallel 跳过被拒者；其他 error 仍终止循环。
-	denied := make(map[string]bool)
-	if hooks.OnToolUse != nil {
-		for _, tc := range calls {
-			if err := hooks.OnToolUse(tc.Name, tc.Args); err != nil {
-				if errors.Is(err, ErrToolDenied) {
-					denied[tc.ID] = true
-					continue
-				}
-				return msgs, err
-			}
-		}
-	}
-
-	// 同一步内 LLM 一次发起的多个 tool_call 相互独立，串行会让总耗时 = Σ 单工具
-	// 耗时（shell 可达数十秒）。并行执行，结果按原 index 回填，保证历史消息
-	// 与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
-	results := runToolsParallel(ctx, logger, calls, toolByName, denied)
-
-	for i, tc := range calls {
-		tres := results[i]
-		if logger != nil {
-			logger.Info("tool executed", "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
-		}
-		// 工具执行后通知消费方结果（含 ExitCode/is_error），供实时观察与校验。
-		if hooks.OnToolResult != nil {
-			if err := hooks.OnToolResult(tc.Name, tc.ID, tres); err != nil {
-				// 配对补全：下游不可写，剩余 calls（含当前 i）结果无法提交；但 assistant.tool_calls 已入历史，
-				// 须为每个补一条占位 tool 消息，否则 Messages 配对断裂、续跑被端点 400（P2-1）。
-				for j := i; j < len(calls); j++ {
-					appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误"})
-				}
-				return msgs, err
-			}
-		}
-		limit := 0
-		if t, ok := toolByName[tc.Name]; ok {
-			limit = t.ResultLimit
-		}
-		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit)})
-	}
-	return msgs, nil
-}
-
-// runToolsParallel 并行执行 calls，返回与 calls 同序的结果。
-// 各 goroutine 写入 results 的不同下标，无内存竞争；wg.Wait 提供 happens-before。
-// 未知工具在调度前短路，直接回填错误结果。每个 tool 的 panic 由 safeCall 兜底。
-// 用 buffered chan 做信号量限制同时在途的工具数（maxParallelTools）。
-func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall, toolByName map[string]Tool, denied map[string]bool) []ToolResult {
-	results := make([]ToolResult, len(calls))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxParallelTools)
-	for i, tc := range calls {
-		if denied[tc.ID] {
-			results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: "用户拒绝执行"}
-			continue
-		}
-		tool, ok := toolByName[tc.Name]
-		if !ok {
-			// ExitCode=exitCodeNotSet 与 denied 一致：未知工具从未真正执行，零值 0 会被事件层误读为成功（P3-4）。
-			results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
-			continue
-		}
-		wg.Add(1)
-		go func(i int, tc ToolCall, tool Tool) {
-			defer wg.Done()
-			// 信号量获取联动 ctx：取消后排队中的调用直接放弃，不再等空位；
-			// 否则一个不尊重 ctx 的阻塞工具会永久占位，wg.Wait 不返回、Run 挂死。
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				results[i] = ToolResult{IsError: true, Output: "已取消"}
-				return
-			}
-			defer func() { <-sem }()
-			results[i] = safeCall(ctx, logger, tool, tc.Name, tc.Args)
-		}(i, tc, tool)
-	}
-	wg.Wait()
-	return results
-}
-
-// trimForHistory 把工具结果裁到 limit 字符后入历史；limit<=0 用默认上限。
-// read/edit 等代码类工具经 Tool.ResultLimit 传高限，避免截断丢准确性。
-// C-2 的 context 降级复用同一裁剪语义（对更早的 tool content 用更小 limit 再裁）。
-func trimForHistory(s string, limit int) string {
-	if limit <= 0 {
-		limit = maxToolResultInHistory
-	}
-	return truncate(s, limit, "…[tool_result 已截断]")
 }

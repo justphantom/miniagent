@@ -55,7 +55,7 @@ func TestCLI_InteractiveErrorThenEOFExits1(t *testing.T) {
 	}))
 	defer srv.Close()
 	// "q\n"：首轮 readTurn 返 ("q", false)；次轮 read 读空 EOF 返 ("", true) 触发 eof 退出。
-	code, out := runMainBin(t, "q\n", chatArgs(srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "q\n", configArgs(t, srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1（EOF 前有 Run 失败轮应 exit 1）; out=%s", code, out)
 	}
@@ -73,7 +73,7 @@ func TestCLI_InteractiveMaxDurationExits1(t *testing.T) {
 	}))
 	defer srv.Close()
 	// 200ms deadline：子进程进入 Run 的 HTTP 阻塞后 ~200ms 到期，ctx.Err()=DeadlineExceeded。
-	code, out := runMainBin(t, "q\n", chatArgs(srv.URL, "-interactive", "-max-duration", "200ms"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "q\n", []string{"-config", writeConfigFixture(t, srv.URL, `{"max_duration":"200ms"}`), "-interactive"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1（-max-duration 到期 DeadlineExceeded→exit 1）; out=%s", code, out)
 	}
@@ -95,7 +95,7 @@ func TestCLI_InteractiveOversizedLineRejected(t *testing.T) {
 	defer srv.Close()
 	// 超过 maxPromptBytes 的无换行输入：触发读取过程中封顶（drain 到行尾即 EOF）。
 	big := strings.Repeat("a", maxPromptBytes+1)
-	code, out := runMainBin(t, big, chatArgs(srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, big, configArgs(t, srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
 	// 不 panic：超限行被丢弃 + 干净 EOF，无 Run 失败轮 → exit 0。
 	if code != 0 {
 		t.Errorf("code = %d, want 0（超限行跳过 + 干净 EOF）; out=%s", code, out)
@@ -118,7 +118,7 @@ func TestCLI_InteractiveShortLineStillProcessed(t *testing.T) {
 	}))
 	defer srv.Close()
 	// "hi\n"：readTurn 返 ("hi", false, false)，喂给 Run → LLM 500 → emit Run 错误。
-	code, out := runMainBin(t, "hi\n", chatArgs(srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "hi\n", configArgs(t, srv.URL, "-interactive"), "MINIAGENT_API_KEY=sk-test")
 	// 短输入不应触发 oversized 拒绝信号。
 	if strings.Contains(out, "超过大小上限") {
 		t.Errorf("短输入不应触发 oversized 拒绝: %s", out)

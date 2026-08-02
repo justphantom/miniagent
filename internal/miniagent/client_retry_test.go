@@ -48,7 +48,7 @@ func textResponseJSON(text string) string {
 }
 
 // 429 一次后 200：重试一次拿到结果，调用数=2。
-func TestHTTPClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
+func TestChatClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
 		body    string
@@ -56,7 +56,7 @@ func TestHTTPClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
 	}{
 		{status: http.StatusTooManyRequests, body: `{"error":"rate"}`, headers: map[string]string{"Retry-After": "0"}},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -70,7 +70,7 @@ func TestHTTPClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
 }
 
 // 503 三次：重试 maxRetries 次后仍失败，错误上抛，调用数=1+maxRetries。
-func TestHTTPClient_Do_RetriesExhaustedOn503(t *testing.T) {
+func TestChatClient_Do_RetriesExhaustedOn503(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
 		body    string
@@ -80,7 +80,7 @@ func TestHTTPClient_Do_RetriesExhaustedOn503(t *testing.T) {
 		{status: http.StatusServiceUnavailable, body: "busy"},
 		{status: http.StatusServiceUnavailable, body: "busy"},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")
@@ -99,7 +99,7 @@ func TestHTTPClient_Do_RetriesExhaustedOn503(t *testing.T) {
 
 // 500（Internal Server Error）也应重试——主流 LLM SDK 一致行为。
 // 这里验证：500 一次后第二次 200，能成功重试拿到结果。
-func TestHTTPClient_Do_RetriesOn500(t *testing.T) {
+func TestChatClient_Do_RetriesOn500(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
 		body    string
@@ -107,7 +107,7 @@ func TestHTTPClient_Do_RetriesOn500(t *testing.T) {
 	}{
 		{status: http.StatusInternalServerError, body: "boom"},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("expected retry success, got: %v", err)
@@ -121,7 +121,7 @@ func TestHTTPClient_Do_RetriesOn500(t *testing.T) {
 }
 
 // 400 立即返回不重试。
-func TestHTTPClient_Do_NoRetryOn400(t *testing.T) {
+func TestChatClient_Do_NoRetryOn400(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
 		body    string
@@ -129,7 +129,7 @@ func TestHTTPClient_Do_NoRetryOn400(t *testing.T) {
 	}{
 		{status: http.StatusBadRequest, body: `{"error":"bad"}`},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -140,7 +140,7 @@ func TestHTTPClient_Do_NoRetryOn400(t *testing.T) {
 }
 
 // Retry-After 秒数被尊重：服务器要求等 1s，Do 应等约 1s 后再重试。
-func TestHTTPClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
+func TestChatClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
 		body    string
@@ -148,7 +148,7 @@ func TestHTTPClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
 	}{
 		{status: http.StatusTooManyRequests, body: "", headers: map[string]string{"Retry-After": "1"}},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	start := time.Now()
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	elapsed := time.Since(start)
@@ -164,7 +164,7 @@ func TestHTTPClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
 }
 
 // ctx 取消中断重试循环，不继续烧请求。
-func TestHTTPClient_Do_RetryCancelledByCtx(t *testing.T) {
+func TestChatClient_Do_RetryCancelledByCtx(t *testing.T) {
 	// 用一个永远 503 + Retry-After: 60 的服务器，ctx 1ms 取消必然落到退避段。
 	srv, calls := retryServer(t, []struct {
 		status  int
@@ -175,7 +175,7 @@ func TestHTTPClient_Do_RetryCancelledByCtx(t *testing.T) {
 		{status: http.StatusServiceUnavailable, body: "", headers: map[string]string{"Retry-After": "60"}},
 		{status: http.StatusServiceUnavailable, body: "", headers: map[string]string{"Retry-After": "60"}},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_, err := c.Do(ctx, Request{Model: "m"})
@@ -189,7 +189,7 @@ func TestHTTPClient_Do_RetryCancelledByCtx(t *testing.T) {
 }
 
 // 网络错误（服务器关闭连接）也触发重试。
-func TestHTTPClient_Do_RetriesOnNetworkError(t *testing.T) {
+func TestChatClient_Do_RetriesOnNetworkError(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// hijack 后立即关闭连接，client.Do 返回 io.ErrUnexpectedEOF 类错误。
@@ -202,7 +202,7 @@ func TestHTTPClient_Do_RetriesOnNetworkError(t *testing.T) {
 		calls.Add(1)
 	}))
 	t.Cleanup(srv.Close)
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -241,7 +241,7 @@ func TestParseRetryAfter(t *testing.T) {
 }
 
 // P2-4：DoStream pre-delta 阶段 503 重试一次后拿到 200 SSE 流，成功聚合（pre-delta 失败可重试）。
-func TestHTTPClient_DoStream_RetriesOn503ThenSucceeds(t *testing.T) {
+func TestStreamClient_DoStream_RetriesOn503ThenSucceeds(t *testing.T) {
 	const okSSE = `data: {"choices":[{"delta":{"content":"recovered"}}]}
 data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
 data: [DONE]
@@ -254,7 +254,7 @@ data: [DONE]
 		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
 		{status: http.StatusOK, body: okSSE, headers: map[string]string{"Content-Type": "text/event-stream"}},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &StreamClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.DoStream(context.Background(), Request{Model: "m"}, nil)
 	if err != nil {
 		t.Fatalf("DoStream: %v", err)
@@ -268,7 +268,7 @@ data: [DONE]
 }
 
 // P2-4：DoStream pre-delta 503 持续，重试用尽后上抛含 "503" 与 "after N retries" 的错误。
-func TestHTTPClient_DoStream_RetriesExhaustedOn503(t *testing.T) {
+func TestStreamClient_DoStream_RetriesExhaustedOn503(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
 		body    string
@@ -278,7 +278,7 @@ func TestHTTPClient_DoStream_RetriesExhaustedOn503(t *testing.T) {
 		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
 		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
 	})
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &StreamClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.DoStream(context.Background(), Request{Model: "m"}, nil)
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")

@@ -11,7 +11,7 @@ import (
 )
 
 // write 对 FIFO 必须在 Lstat 阶段拒绝（IsRegular 校验），而非走到 Rename 才
-// 报含糊错误；与 edit/multi_edit 对齐（审查 P3-7）。
+// 报含糊错误；与 edit 对齐（审查 P3-7）。
 func TestWriteFile_RejectsFIFO(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "fifo")

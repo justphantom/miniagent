@@ -10,28 +10,34 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// P1-A：buildLLM 注入带总 Timeout 的 client（非流式 Do 需总超时兜底防挂死，#3）+ Transport
-// 级超时（连接/首字节/TLS）+ Proxy（与 fetch 对齐，#2）。流式 DoStream 经 streamHTTPClient
-// 改用其 Transport 另造无 Timeout client（body 不被砍）。
-func TestBuildLLM_HTTPClientTimeoutAndProxy(t *testing.T) {
-	llm := buildLLM("sk", miniagent.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil)
-	if llm.HTTP == nil {
-		t.Fatal("HTTPClient.HTTP is nil, want injected client")
+// P4：buildLLM 返回 ChatClient（带 120s 总 Timeout，非流式 Do 兜底防挂死 #3）+ StreamClient
+// （无 Timeout，body 不被砍 P2-5），两者共享同一 *http.Transport（代理/dial/TLS 超时，#2）。
+func TestBuildLLM_ChatTimeoutStreamNoTimeoutSharedTransport(t *testing.T) {
+	chat, stream := buildLLM("sk", miniagent.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil)
+	if chat.HTTP == nil {
+		t.Fatal("ChatClient.HTTP is nil, want injected client")
 	}
-	if llm.HTTP.Timeout != 120*time.Second {
-		t.Errorf("injected client Timeout = %v, want 120s（非流式 Do 总超时兜底，#3）", llm.HTTP.Timeout)
+	if chat.HTTP.Timeout != 120*time.Second {
+		t.Errorf("ChatClient Timeout = %v, want 120s（非流式 Do 总超时兜底，#3）", chat.HTTP.Timeout)
 	}
-	tr, ok := llm.HTTP.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("Transport = %T, want *http.Transport", llm.HTTP.Transport)
+	if stream.HTTP == nil || stream.HTTP.Timeout != 0 {
+		t.Errorf("StreamClient Timeout = %v, want 0（流式 body 不被砍，P2-5）", stream.HTTP.Timeout)
 	}
-	if tr.Proxy == nil {
-		t.Error("Transport.Proxy = nil, want http.ProxyFromEnvironment（#2，与 fetch 对齐）")
+	ctr, ok := chat.HTTP.Transport.(*http.Transport)
+	str, ok2 := stream.HTTP.Transport.(*http.Transport)
+	if !ok || !ok2 {
+		t.Fatalf("Transport = %T / %T, want *http.Transport", chat.HTTP.Transport, stream.HTTP.Transport)
 	}
-	if tr.DialContext == nil {
+	if ctr != str {
+		t.Error("ChatClient 与 StreamClient 应共享同一 *http.Transport")
+	}
+	if ctr.Proxy == nil {
+		t.Error("Transport.Proxy = nil, want http.ProxyFromEnvironment（#2）")
+	}
+	if ctr.DialContext == nil {
 		t.Error("Transport.DialContext not set（拨号超时）")
 	}
-	if tr.ResponseHeaderTimeout == 0 {
+	if ctr.ResponseHeaderTimeout == 0 {
 		t.Error("Transport.ResponseHeaderTimeout = 0, want >0")
 	}
 }

@@ -19,7 +19,7 @@ import (
 // 单轮错误不退出会话（emit error 后继续），仅 EOF/空输入/信号取消/-max-duration 到期/跨轮预算超限退出。
 // 返回退出码：0=干净 EOF（无任一轮 Run 失败）；1=跨轮预算超限/-max-duration 到期/EOF 前存在 Run 失败轮；
 // 130=信号取消（POSIX SIGINT 习惯，审查 P3）。
-func runInteractive(ctx context.Context, llm *miniagent.HTTPClient, baseCfg miniagent.LoopConfig, sessPath string, meta miniagent.SessionMeta, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader) int {
+func runInteractive(ctx context.Context, chat *miniagent.ChatClient, stream *miniagent.StreamClient, baseCfg miniagent.LoopConfig, sessPath string, meta miniagent.SessionMeta, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader) int {
 	var (
 		memHistory []miniagent.Message // 仅无 session 时用
 		totalUsage miniagent.Usage     // 跨轮累计，超 MaxTotalTokens 停止交互（审查 P2 交互无跨轮预算）
@@ -63,7 +63,7 @@ func runInteractive(ctx context.Context, llm *miniagent.HTTPClient, baseCfg mini
 		} else {
 			baseCfg.History = memHistory
 		}
-		result, err := miniagent.Run(ctx, llm, baseCfg, prompt, hooks, logger)
+		result, err := miniagent.Run(ctx, chat, stream, baseCfg, prompt, hooks, logger)
 		// 无条件消费 result 的 usage/thinking：Run 经 defer 在所有返回路径（含 err）写满这些字段，
 		// 故失败轮的花销也入跨轮预算、thinking 降级也在失败轮固化到 baseCfg（审查 P3 error 路径消费
 		// result——跨轮预算不再漏算失败轮花销）。Save（AppendMessages/RewriteMessages）仍只在 err==nil 做。

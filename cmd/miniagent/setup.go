@@ -27,26 +27,36 @@ func mustParseLogLevel(s string) slog.Level {
 	return level
 }
 
-// loadConfigOrBare：显式 -config 不存在=硬错误；默认 ./miniagent.json 不存在=软失败退裸模式
-// （审查 v3 #1/#7）。默认存在但非法=报错。
+// minimalConfigTemplate 是无 config 时写盘的最小模板：${CHAT_URL}/${MODEL} 来自 env
+// （忠实「始终存在 miniagent.json」，S1 删裸模式后的默认入口）。
+const minimalConfigTemplate = `{
+  "providers": [{"name": "default", "chat_url": "${CHAT_URL}"}],
+  "defaults": {"model": "${MODEL}"}}
+`
+
+// requireConfig：始终要求 config 存在（S1 删裸模式）。显式 -config 不存在=硬错误；
+// 默认 ./miniagent.json 不存在=写最小模板再加载（${CHAT_URL}/${MODEL} 须在 env，否则 expandVars 报错）。
 //
-// 默认 config 的 Stat 错误精确区分：仅 fs.ErrNotExist 退裸模式；permission denied/
+// 默认 config 的 Stat 错误精确区分：仅 fs.ErrNotExist 触发模板生成；permission denied/
 // ELOOP/ENOTDIR 等按硬错误上抛——否则用户在权限/路径异常下被静默切到无 tool 边界、
-// 无 system prompt 注入的裸模式（审查 P2-6）。
-func loadConfigOrBare(configPath string) (*miniagent.Config, error) {
+// 无 system prompt 注入的配置（审查 P2-6）。
+func requireConfig(configPath string) (*miniagent.Config, error) {
 	if configPath != "" {
 		return miniagent.LoadConfig(configPath)
 	}
 	if _, err := os.Stat("./miniagent.json"); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil // 不存在 → 裸模式（软失败）
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("stat 默认 config %q: %w", "./miniagent.json", err)
 		}
-		return nil, fmt.Errorf("stat 默认 config %q: %w", "./miniagent.json", err)
+		if werr := os.WriteFile("./miniagent.json", []byte(minimalConfigTemplate), 0o600); werr != nil {
+			return nil, fmt.Errorf("生成默认 config ./miniagent.json 失败：%w（可手写 miniagent.json 或用 -config）", werr)
+		}
 	}
 	return miniagent.LoadConfig("./miniagent.json")
 }
 
 // collectOverrides 用 flag.Visit 收集「显式传入」的 flag（未传入置 nil），供 Resolve 裁决。
+// P2 后仅保留 CLI 核心参数；策略参数（summary/duration/window 等）只在 config，不经 CLI。
 func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	set := map[string]bool{}
 	flag.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
@@ -63,41 +73,17 @@ func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	if set["system"] {
 		o.System = f.system
 	}
-	if set["summary-request"] {
-		o.SummaryRequest = f.summaryRequest
-	}
-	if set["summarizer-prompt"] {
-		o.SummarizerPrompt = f.summarizerPrompt
-	}
 	if set["workdir"] {
 		o.Workdir = f.workdir
 	}
 	if set["session"] {
 		o.Session = f.session
 	}
-	if set["chat-url"] {
-		o.ChatURL = f.chatURL
-	}
-	if set["models-url"] {
-		o.ModelsURL = f.modelsURL
-	}
 	if set["max-tokens"] {
 		o.MaxTokens = f.maxTokens
 	}
 	if set["max-iterations"] {
 		o.MaxIterations = f.maxIterations
-	}
-	if set["max-tokens-total"] {
-		o.MaxTotalTokens = f.maxTokensTotal
-	}
-	if set["context-window"] {
-		o.ContextWindow = f.contextWindow
-	}
-	if set["max-duration"] {
-		o.MaxDuration = f.maxDuration
-	}
-	if set["shell-timeout"] {
-		o.ShellTimeout = f.shellTimeout
 	}
 	if set["stream"] {
 		o.Stream = f.stream
@@ -163,16 +149,24 @@ func warnInsecureURL(rawURL string) {
 	fmt.Fprintf(os.Stderr, "miniagent: warning: endpoint %s uses plain http, API key sent unencrypted\n", u.Redacted())
 }
 
-func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger) *miniagent.HTTPClient {
-	// 注入带总 Timeout 的 client：非流式 Do 需总超时兜底防单次调用挂死（#3）；流式 DoStream
-	// 经 streamHTTPClient 改用其 Transport 另造无 Timeout client（P2-5/P1-A：body 不被砍，#2）。
-	httpClient := &http.Client{Timeout: 120 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second}}
-	llm, err := miniagent.NewHTTPClient(apiKey, p.ChatURL, p.ModelsURL, httpClient, logger)
+// buildLLM 构造 ChatClient（带总 Timeout，非流式 + models）与 StreamClient（无 Timeout，流式）。
+// 两者共享同一 *http.Transport（代理/dial/TLS 超时）；chat 的 120s Timeout 兜底防单次调用挂死（#3），
+// stream 无 Timeout 避免 body 读取被砍（P2-5/P1-A，#2）——P4 拆分后由各自 client 持有。
+func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger) (*miniagent.ChatClient, *miniagent.StreamClient) {
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second}
+	chatClient := &http.Client{Timeout: 120 * time.Second, Transport: transport}
+	streamClient := &http.Client{Transport: transport}
+	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)
 	}
-	return llm
+	stream, err := miniagent.NewStreamClient(apiKey, p.ChatURL, streamClient, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
+		os.Exit(1)
+	}
+	return chat, stream
 }
 
 func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
@@ -193,18 +187,18 @@ func effectiveWorkdir(resolved *miniagent.Resolved, f *cliFlags) string {
 	return *f.workdir
 }
 
-func maxDurationOf(resolved *miniagent.Resolved, f *cliFlags) time.Duration {
+func maxDurationOf(resolved *miniagent.Resolved) time.Duration {
 	if resolved.Run.MaxDuration != nil {
 		return *resolved.Run.MaxDuration
 	}
-	return *f.maxDuration
+	return 0
 }
 
-func shellTimeoutOf(resolved *miniagent.Resolved, f *cliFlags) time.Duration {
+func shellTimeoutOf(resolved *miniagent.Resolved) time.Duration {
 	if resolved.Run.ShellTimeout != nil {
 		return *resolved.Run.ShellTimeout
 	}
-	return *f.shellTimeout
+	return 0
 }
 
 func buildHooks(resultOnly bool) miniagent.LoopHooks {
@@ -248,40 +242,27 @@ func emitRunResult(result miniagent.Result, model string, resultOnly bool, logge
 }
 
 // providerForListModels 解析 -list-models 所需 provider（不要求 -model，因 list 本就为发现模型）：
-// config 模式按 -model/defaults.model/单一 provider；裸模式按 -chat-url。
+// 按 -model/defaults.model/单一 provider。cfg 始终非 nil（S1 删裸模式）。
 func providerForListModels(cfg *miniagent.Config, f *cliFlags) (miniagent.ProviderConfig, error) {
-	if cfg != nil {
-		spec := ""
-		if f.model != nil && *f.model != "" {
-			spec = *f.model
-		} else {
-			spec = cfg.Defaults.Model
-		}
-		if spec != "" {
-			p, _, err := miniagent.ParseModelSpec(spec, cfg)
-			return p, err
-		}
-		if len(cfg.Providers) == 1 {
-			return cfg.Providers[0], nil
-		}
-		return miniagent.ProviderConfig{}, errors.New("list-models 需 -model 或 defaults.model 或单一 provider")
+	spec := ""
+	if f.model != nil && *f.model != "" {
+		spec = *f.model
+	} else {
+		spec = cfg.Defaults.Model
 	}
-	if f.chatURL == nil || *f.chatURL == "" {
-		return miniagent.ProviderConfig{}, errors.New("list-models 需 -chat-url 或 -config")
+	if spec != "" {
+		p, _, err := miniagent.ParseModelSpec(spec, cfg)
+		return p, err
 	}
-	p := miniagent.ProviderConfig{Name: "cli", ChatURL: *f.chatURL}
-	if f.modelsURL != nil {
-		p.ModelsURL = *f.modelsURL
+	if len(cfg.Providers) == 1 {
+		return cfg.Providers[0], nil
 	}
-	return p, nil
+	return miniagent.ProviderConfig{}, errors.New("list-models 需 -model 或 defaults.model 或单一 provider")
 }
 
 // absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 ./miniagent.json），
-// 供 subagent fork 引导注入；裸模式返回空。
-func absConfigPath(configPath string, cfg *miniagent.Config) string {
-	if cfg == nil {
-		return ""
-	}
+// 供 subagent fork 引导注入。cfg 始终非 nil（S1 删裸模式）。
+func absConfigPath(configPath string) string {
 	p := configPath
 	if p == "" {
 		p = "./miniagent.json"

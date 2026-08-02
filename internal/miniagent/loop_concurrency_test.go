@@ -2,7 +2,6 @@ package miniagent
 
 import (
 	"context"
-	"net/http"
 	"testing"
 	"time"
 )
@@ -31,11 +30,11 @@ func TestRun_ToolsRunInParallel(t *testing.T) {
 		),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	chat, stream := testClients(tr)
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", LoopHooks{}, nil)
+		_, _ = Run(context.Background(), chat, stream, LoopConfig{Tools: tools}, "x", LoopHooks{}, nil)
 		close(done)
 	}()
 
@@ -65,13 +64,13 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 		),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	chat, stream := testClients(tr)
 	var uses []string
 	onToolUse := func(name, input string) error {
 		uses = append(uses, name)
 		return nil
 	}
-	_, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", LoopHooks{OnToolUse: onToolUse}, nil)
+	_, err := Run(context.Background(), chat, stream, LoopConfig{Tools: tools}, "x", LoopHooks{OnToolUse: onToolUse}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -84,8 +83,8 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 func TestRun_CancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
-	_, err := Run(ctx, llm, LoopConfig{}, "hi", LoopHooks{}, nil)
+	chat, stream := testClients(&fakeTransport{responses: []string{textResponse("x")}})
+	_, err := Run(ctx, chat, stream, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}

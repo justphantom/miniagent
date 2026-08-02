@@ -13,13 +13,13 @@ import (
 )
 
 // 正常文本回复：解析出 content、usage、finish_reason。
-func TestHTTPClient_Do_TextResponse(t *testing.T) {
+func TestChatClient_Do_TextResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":5}}`)
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -39,13 +39,13 @@ func TestHTTPClient_Do_TextResponse(t *testing.T) {
 }
 
 // 带 tool_calls 的回复：name/arguments/id 正确解析。
-func TestHTTPClient_Do_ToolCalls(t *testing.T) {
+func TestChatClient_Do_ToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -63,13 +63,13 @@ func TestHTTPClient_Do_ToolCalls(t *testing.T) {
 }
 
 // 空 choices（端点内容过滤/代理故障）必须报错，而非当作"成功的空回答"。
-func TestHTTPClient_Do_EmptyChoicesFails(t *testing.T) {
+func TestChatClient_Do_EmptyChoicesFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":0}}`)
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error for empty choices")
@@ -80,14 +80,14 @@ func TestHTTPClient_Do_EmptyChoicesFails(t *testing.T) {
 }
 
 // 非 200 状态码：返回错误，body 截断到 500 字。
-func TestHTTPClient_Do_NonOKStatus(t *testing.T) {
+func TestChatClient_Do_NonOKStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = fmt.Fprint(w, `{"error":{"message":"bad model"}}`)
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -98,13 +98,13 @@ func TestHTTPClient_Do_NonOKStatus(t *testing.T) {
 }
 
 // 超大 body 应报错，不撑爆内存也不静默截断。
-func TestHTTPClient_Do_RejectsOversizedBody(t *testing.T) {
+func TestChatClient_Do_RejectsOversizedBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(bytes.Repeat([]byte("a"), maxChatBodyBytes+1024))
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected oversize error")
@@ -115,8 +115,8 @@ func TestHTTPClient_Do_RejectsOversizedBody(t *testing.T) {
 }
 
 // 空 API key：prepareDo 阶段就报错。
-func TestHTTPClient_Do_EmptyAPIKey(t *testing.T) {
-	c := &HTTPClient{}
+func TestChatClient_Do_EmptyAPIKey(t *testing.T) {
+	c := &ChatClient{}
 	_, err := c.Do(context.Background(), Request{})
 	if err == nil {
 		t.Fatal("expected error for empty api key")
@@ -124,8 +124,8 @@ func TestHTTPClient_Do_EmptyAPIKey(t *testing.T) {
 }
 
 // BaseURL 缺 scheme：错误信息应提示 "http(s)://"。
-func TestHTTPClient_Do_BaseURLMissingScheme(t *testing.T) {
-	c := &HTTPClient{APIKey: "sk", ChatURL: "api.example.com"}
+func TestChatClient_Do_BaseURLMissingScheme(t *testing.T) {
+	c := &ChatClient{APIKey: "sk", ChatURL: "api.example.com"}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -137,8 +137,8 @@ func TestHTTPClient_Do_BaseURLMissingScheme(t *testing.T) {
 
 // BaseURL 用非 http(s) scheme（如 ftp）：必须在组请求前拒绝，而非等请求
 // 失败才报错。
-func TestHTTPClient_Do_BaseURLUnsupportedScheme(t *testing.T) {
-	c := &HTTPClient{APIKey: "sk", ChatURL: "ftp://example.com"}
+func TestChatClient_Do_BaseURLUnsupportedScheme(t *testing.T) {
+	c := &ChatClient{APIKey: "sk", ChatURL: "ftp://example.com"}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -149,7 +149,7 @@ func TestHTTPClient_Do_BaseURLUnsupportedScheme(t *testing.T) {
 }
 
 // 恰好达到上限的 body 不应被误报截断。
-func TestHTTPClient_Do_AcceptsLimitBody(t *testing.T) {
+func TestChatClient_Do_AcceptsLimitBody(t *testing.T) {
 	// 构造一个合法的 JSON，content 长度填到接近 maxChatBodyBytes。
 	// 用 padding 字段避免 JSON 结构本身超限。
 	padding := bytes.Repeat([]byte("a"), maxChatBodyBytes-200)
@@ -159,7 +159,7 @@ func TestHTTPClient_Do_AcceptsLimitBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	resp, err := c.Do(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -239,13 +239,13 @@ func TestParseChatResponse_Reasoning(t *testing.T) {
 }
 
 // 400 + context_length 特征 → ErrContextLength（供上层单次历史收紧重试）。
-func TestHTTPClient_Do_ContextLength400(t *testing.T) {
+func TestChatClient_Do_ContextLength400(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = fmt.Fprint(w, `{"error":{"message":"This model maximum context length is 8192 tokens"}}`)
 	}))
 	defer srv.Close()
-	c := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
+	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	_, err := c.Do(context.Background(), Request{Model: "m"})
 	if !errors.Is(err, ErrContextLength) {
 		t.Fatalf("err = %v, want ErrContextLength", err)
@@ -254,8 +254,8 @@ func TestHTTPClient_Do_ContextLength400(t *testing.T) {
 
 // P3-5：c.HTTP==nil 时 client() 缓存同一 *http.Client（首次 defaultTimeout 固化，后续忽略）；
 // 注入 HTTP 时沿用注入值。
-func TestHTTPClient_DefaultClientCached(t *testing.T) {
-	c := &HTTPClient{APIKey: "sk", ChatURL: "http://x"}
+func TestChatClient_DefaultClientCached(t *testing.T) {
+	c := &ChatClient{APIKey: "sk", ChatURL: "http://x"}
 	a := c.client(2 * time.Second)
 	b := c.client(5 * time.Second)
 	if a != b {
@@ -265,7 +265,7 @@ func TestHTTPClient_DefaultClientCached(t *testing.T) {
 		t.Errorf("Timeout = %v, want first-call 2s (cached value preserved)", a.Timeout)
 	}
 	inj := &http.Client{Timeout: 30 * time.Second}
-	c2 := &HTTPClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
+	c2 := &ChatClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
 	if c2.client(time.Second) != inj {
 		t.Error("injected HTTP client not used")
 	}

@@ -5,10 +5,31 @@
 
 ## [Unreleased]
 
+> 落地 `docs/architecture-evaluation-2026-08-02.md` 路线图：核心引擎重构（P3/P4）、减法（S1/S2/P2/S3）、
+> 常量策略化（S4）、自进化机制（P0/P1/P5）。**破坏性变更**见 Removed。跳过 P6（反馈闭环）与 S5（schema 生成）。
+
 ### Added
-- **迭代上限后注入总结 prompt**（`internal/miniagent/loop.go` 阶段 3）：当 `step == iterLimit` 且刚执行完工具时，注入一条系统消息请求 LLM 输出总结性回复（而非继续调工具）。允许 1 次额外 LLM 调用（`steps = maxIterations+1`）；若 LLM 仍请求工具或出错，回落 `finishMaxIterations`（`text` 为空）。
+- **项目级规则目录 `.miniagent/`**（P0/P1/P5，`cmd/miniagent/project.go` + `internal/miniagent/memory.go`/`tool_script.go`）：`workdir/.miniagent/` 下 `persona.md`（取代默认 system prompt 作身份基线，优先级 persona>rules>defaults）、`rules.md`（追加「## 项目规则」）、`scripts.json`（每条注册为 `script_<name>` 工具，复用 shell 的安全策略）、`memory.jsonl`（项目级记忆）。核心引擎不感知具体项目，只「知道如何发现项目规则」。
+- **项目记忆工具**（P5）：`read`/`write` 的保留路径 `path="memory"` 路由到 `.miniagent/memory.jsonl`——read 渲染记录、write **追加**一条 `{type:"note",content}`（特殊语义：追加而非覆盖）；最近 10 条记忆注入 system prompt。
+- **项目脚本工具**（P1）：`.miniagent/scripts.json` 声明的命令注册为 `script_<name>` 工具，复用从 shell 工具提取的共享 `runShellCommand`（mode 黑名单 / env 剥离 / 超时 / 进程组 / 输出截断），继承 default 模式约束。
+- **常量策略化**（S4，`config.go`/`resolve.go`/`types.go`）：`run.max_tool_result_chars`/`max_file_result_chars`/`max_parallel_tools`/`context_keep_recent`/`summary_max_chars` 五项可在 `miniagent.json` 覆盖（`<=0` 用内置默认）。
+- **`FitHistory` 单一上下文预算入口**（P3，新 `internal/miniagent/context.go`）：合并 `compaction.go`+`history.go`，暴露 `FitHistory(msgs, ContextBudget)` 返回 `(out, summary, summarized, usage, err)`；`ContextBudget.Summarize` 回调解耦与 client，便于测试注入。`loop.go` 的 compaction 穿插逻辑移出。
+- **拆分 `HTTPClient` → `ChatClient` + `StreamClient`**（P4，`client.go`/`stream.go`/`client_util.go`/`stream_parse.go`）：非流式（带总 Timeout）/流式（无 Timeout）各一简单类型，共享纯函数（`shouldRetryStatus`/`parseRetryAfter`/`capRetryDelay` 等），消除单一 client 的 `sync.Once` 双缓存复杂度。`Run(ctx, chat, stream, …)`。
+- **迭代上限后注入总结 prompt**（`internal/miniagent/loop.go` 阶段 3）：当 `step == iterLimit` 且刚执行完工具时，注入一条系统消息请求 LLM 输出总结性回复（而非继续调工具）。允许 1 次额外 LLM 调用；若仍请求工具或出错，回落 `finishMaxIterations`（`text` 为空）。
 - **输出格式约束**（`cmd/miniagent/prompts.go`）：默认 system prompt 新增约束——最终回答不用多级标题（`###/####`）、不用表格，纯段落或简单列表即可，防过度排版。
-- **提示词配置覆盖**（`config.go`/`resolve.go`/`loop.go`/`compaction.go`）：`defaults.summary_request` 可覆盖迭代上限时注入的总结引导 prompt；`defaults.summarizer_prompt` 可覆盖摘要压缩专用 system prompt。CLI 对应 `-summary-request` 和 `-summarizer-prompt`，优先级 CLI > config > builtin。
+
+### Changed
+- **`edit` 工具支持 `edits` 数组**（S3）：单段（`old_string`/`new_string`）与多段事务（`edits`，全部成功才写盘、任一失败不改）合一；`edits` 与 `old_string` 互斥，同传报错。
+- **`loop.go` 拆分**（修既有 324 行超限）：`loop.go`（Run+常量）/`loop_tools.go`（handleToolCalls/runToolsParallel 等）/`loop_extra.go`（callLLM*）；`callLLM` 符号保留供 `thinking_test.go`。
+- **`defaults.summary_request` / `defaults.summarizer_prompt` 配置覆盖**：移出 CLI（仅 config），优先级 config > builtin。
+
+### Removed（破坏性）
+- **裸 CLI 模式**（S1）：删除 `-chat-url` / `-models-url` 与「软失败退裸模式」。始终要求 config；默认 `./miniagent.json` 不存在时**写一份最小模板**（`${CHAT_URL}`/`${MODEL}`）再加载。`Resolve` 不再处理 `cfg==nil`。
+- **9 个 CLI flag**（P2/S1/S2）：`-chat-url`、`-models-url`、`-summary-request`、`-summarizer-prompt`、`-max-tokens-total`、`-context-window`、`-max-duration`、`-shell-timeout`、`-migrate-session`。这些参数仍在 `miniagent.json` 可配（`defaults.*` / `run.*`），仅不再暴露为 flag。
+- **`-migrate-session` 子命令 + `MigrateSession`/`loadLegacySession`**（S2）：v2 JSON 迁移为一次性需求，移除常驻 CLI。
+- **`multi_edit` 工具**（S3）：并入 `edit`（`edits` 数组）。
+- **`compaction.go` / `history.go`**（P3）：合并入 `context.go`。
+
 
 ## [3.0.0] - 2026-08-01
 

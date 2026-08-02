@@ -74,16 +74,3 @@ func warnSessionMismatch(meta miniagent.SessionMeta, modelSpec, workdir string) 
 		fmt.Fprintf(os.Stderr, "miniagent: warning: session workdir %q 与本次 %q 不一致\n", meta.Workdir, aw)
 	}
 }
-
-// runMigrate 处理 -migrate-session：v2 JSON 数组 → jsonl，打印写入路径。
-func runMigrate(srcPath, dstDir string) {
-	if dstDir == "" {
-		dstDir = defaultSessionDir
-	}
-	dst, err := miniagent.MigrateSession(srcPath, dstDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: migrate: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(dst)
-}

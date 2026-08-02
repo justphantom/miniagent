@@ -11,7 +11,7 @@ import (
 )
 
 // confineWrap 包装工具的 Call：执行前校验 args.path 落在 root 子树内，越界拒绝。
-// 仅用于写工具（write/edit/multi_edit），三者 args 都含 path 字段。
+// 仅用于写工具（write/edit），两者 args 都含 path 字段。
 //
 // TOCTOU 取舍（审查 P2-11）：checkConfine 是纯词法校验（Clean+Abs+HasPrefix），与
 // 后续 MkdirAll/Rename 之间存在窗口；runToolsParallel 并行执行时，shell 可在窗口内

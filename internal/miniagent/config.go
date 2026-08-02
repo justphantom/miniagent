@@ -40,11 +40,11 @@ type ProviderConfig struct {
 }
 
 type DefaultsConfig struct {
-	Model           string `json:"model,omitempty"`
-	Thinking        string `json:"thinking,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	SystemPrompt    string `json:"system_prompt,omitempty"`
-	SummaryRequest  string `json:"summary_request,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Thinking         string `json:"thinking,omitempty"`
+	Mode             string `json:"mode,omitempty"`
+	SystemPrompt     string `json:"system_prompt,omitempty"`
+	SummaryRequest   string `json:"summary_request,omitempty"`
 	SummarizerPrompt string `json:"summarizer_prompt,omitempty"`
 }
 
@@ -59,6 +59,12 @@ type RunConfig struct {
 	MaxDuration    *string `json:"max_duration,omitempty"`
 	ShellTimeout   *string `json:"shell_timeout,omitempty"`
 	Stream         *bool   `json:"stream,omitempty"`
+	// S4 策略化常量（<=0 或缺省=内置默认，见 loop/context/tools 使用点）。
+	MaxToolResultChars *int `json:"max_tool_result_chars,omitempty"`
+	MaxFileResultChars *int `json:"max_file_result_chars,omitempty"`
+	MaxParallelTools   *int `json:"max_parallel_tools,omitempty"`
+	ContextKeepRecent  *int `json:"context_keep_recent,omitempty"`
+	SummaryMaxChars    *int `json:"summary_max_chars,omitempty"`
 }
 
 // CompactionModel 仅 model id（同 provider，不得含 /）。
@@ -194,20 +200,20 @@ func validateConfig(cfg *Config) error {
 }
 
 // ParseModelSpec 拆分 "provider/model"。无 / 时仅当 provider 恰好 1 个才回落到它；
-// 否则要求显式前缀。cfg 可 nil（裸模式由 Resolve 直接构造隐式 provider，不经此函数）。
+// 否则要求显式前缀。cfg 必须非 nil（S1 删裸模式后始终有 config）。
 func ParseModelSpec(spec string, cfg *Config) (ProviderConfig, string, error) {
 	if spec == "" {
 		return ProviderConfig{}, "", errors.New("model spec 为空")
 	}
+	if cfg == nil {
+		return ProviderConfig{}, "", errors.New("ParseModelSpec: cfg 为 nil（S1 后 config 必须存在）")
+	}
 	name, modelID, hasSlash := strings.Cut(spec, "/")
 	if !hasSlash {
-		if cfg == nil || len(cfg.Providers) != 1 {
+		if len(cfg.Providers) != 1 {
 			return ProviderConfig{}, "", fmt.Errorf("model %q 缺 provider 前缀，且 provider 数非 1（用 provider/model）", spec)
 		}
 		return cfg.Providers[0], spec, nil
-	}
-	if cfg == nil {
-		return ProviderConfig{}, "", fmt.Errorf("model %q 含前缀但无 config", spec)
 	}
 	for _, p := range cfg.Providers {
 		if p.Name == name {

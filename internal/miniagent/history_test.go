@@ -2,7 +2,6 @@ package miniagent
 
 import (
 	"context"
-	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,10 +120,10 @@ func TestRun_SummaryReducesAndPersists(t *testing.T) {
 		)
 	}
 	tr := &fakeTransport{responses: []string{textResponse("ok"), textResponse("done")}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	chat, stream := testClients(tr)
 	// ContextWindow 取在「压缩前 > 80%、压缩后 ≤ 80%」之间；estimateTokens 现计入 system/tools
 	// 固定开销（systemOverheadTokens=400），256 的小窗口会使压缩后仍超 → 误报失败，故放到 750。
-	res, err := Run(context.Background(), llm, LoopConfig{ContextWindow: 750, History: hist}, "now", LoopHooks{}, nil)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{ContextWindow: 750, History: hist}, "now", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -157,8 +156,8 @@ func TestRun_OverWindowIrreducibleErrors(t *testing.T) {
 		textResponse("ok"),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, ContextWindow: 200}, "x", LoopHooks{}, nil)
+	chat, stream := testClients(tr)
+	_, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, ContextWindow: 200}, "x", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error when irreducibly over window")
 	}

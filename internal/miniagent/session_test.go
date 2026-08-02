@@ -211,31 +211,6 @@ func TestResolveSessionPath(t *testing.T) {
 	}
 }
 
-// v2 JSON 数组 → jsonl 迁移：内容逐条相等，落盘为 jsonl。
-func TestMigrateSession(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "old.json")
-	want := sampleTranscript()
-	arr, _ := json.Marshal(want)
-	if err := os.WriteFile(src, arr, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dst, err := MigrateSession(src, dir)
-	if err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	if !strings.HasSuffix(dst, "old.jsonl") {
-		t.Errorf("dst = %q", dst)
-	}
-	_, got, err := LoadSession(dst)
-	if err != nil {
-		t.Fatalf("load migrated: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("migrated mismatch:\n got %+v\nwant %+v", got, want)
-	}
-}
-
 // NewMessages 仅含本轮新增（不含 History），Messages 含 History 前缀。
 func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 	tool := Tool{Name: "echo", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "echoed"} }}
@@ -243,12 +218,12 @@ func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
 		textResponse("done"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	chat, stream := testClients(tr)
 	history := []Message{
 		{Role: "user", Content: "old"},
 		{Role: "assistant", Content: "oldans"},
 	}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -269,12 +244,12 @@ func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 // History 作为前缀拼在新 prompt 之前发给 LLM；Run 不修改调用方的 History。
 func TestRun_HistoryPrefixSent(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("a2")}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	chat, stream := testClients(tr)
 	history := []Message{
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
 	}
-	res, err := Run(context.Background(), llm, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -301,8 +276,8 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 // 最终 assistant 文本必须进入 Messages（接续对话依赖上一轮的回答）。
 func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("final answer")}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{}, "q", LoopHooks{}, nil)
+	chat, stream := testClients(tr)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -319,15 +294,15 @@ func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
 		textResponse("第一轮回答"),
 	}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	r1, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
+	chat, stream := testClients(tr)
+	r1, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn1: %v", err)
 	}
 
 	tr2 := &fakeTransport{responses: []string{textResponse("第二轮回答")}}
-	llm2 := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr2}}
-	_, err = Run(context.Background(), llm2, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
+	chat, stream = testClients(tr2)
+	_, err = Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn2: %v", err)
 	}
@@ -357,8 +332,8 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
 	}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{}, "hi", LoopHooks{}, nil)
+	chat, stream := testClients(tr)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -376,8 +351,8 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 		responses[i] = toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"})
 	}
 	tr := &fakeTransport{responses: responses}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	chat, stream := testClients(tr)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

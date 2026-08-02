@@ -194,22 +194,11 @@ func TestResolve_DefaultsModel(t *testing.T) {
 	}
 }
 
-func TestResolve_BareModeImplicitProvider(t *testing.T) {
-	chat := "https://api/v1/chat/completions"
-	model := "glm-5.2"
-	r, err := Resolve(nil, CLIOverrides{ChatURL: &chat, Model: &model})
-	if err != nil {
-		t.Fatalf("resolve bare: %v", err)
-	}
-	if r.Provider.Name != "cli" || r.Provider.ChatURL != chat || r.ModelID != model {
-		t.Errorf("bare provider wrong: %+v", r.Provider)
-	}
-}
-
-func TestResolve_BareModeRequiresChatURL(t *testing.T) {
+// S1 删裸模式：Resolve(nil, ...) 必须报错（cfg 必须非 nil）。
+func TestResolve_NilCfgErrors(t *testing.T) {
 	model := "glm"
 	if _, err := Resolve(nil, CLIOverrides{Model: &model}); err == nil {
-		t.Error("bare mode without chat-url should error")
+		t.Error("Resolve with nil cfg should error after S1")
 	}
 }
 
@@ -242,10 +231,70 @@ func TestResolve_BadDurationFromString(t *testing.T) {
 	}
 }
 
+// S4：5 个策略化常量经 config run.* 解析后透传到 ResolvedRun（仅 config 来源，不经 CLI）。
+func TestResolve_StrategyConstants(t *testing.T) {
+	mk := func(v int) *int { return &v }
+	cfg := &Config{
+		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
+		Defaults:  DefaultsConfig{Model: "p/m"},
+		Run: RunConfig{
+			MaxToolResultChars: mk(1234),
+			MaxFileResultChars: mk(9999),
+			MaxParallelTools:   mk(3),
+			ContextKeepRecent:  mk(8),
+			SummaryMaxChars:    mk(1500),
+		},
+	}
+	r, err := Resolve(cfg, CLIOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := []struct {
+		name string
+		got  *int
+		want int
+	}{
+		{"MaxToolResultChars", r.Run.MaxToolResultChars, 1234},
+		{"MaxFileResultChars", r.Run.MaxFileResultChars, 9999},
+		{"MaxParallelTools", r.Run.MaxParallelTools, 3},
+		{"ContextKeepRecent", r.Run.ContextKeepRecent, 8},
+		{"SummaryMaxChars", r.Run.SummaryMaxChars, 1500},
+	}
+	for _, c := range checks {
+		if c.got == nil || *c.got != c.want {
+			t.Errorf("%s = %v, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+// S4：config run.* JSON 标签 round-trip（max_tool_result_chars 等）。
+func TestLoadConfig_StrategyConstants(t *testing.T) {
+	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"model":"p/m"},"run":{"max_tool_result_chars":1234,"max_file_result_chars":9999,"max_parallel_tools":3,"context_keep_recent":8,"summary_max_chars":1500}}`
+	cfg, err := LoadConfig(writeTmpConfig(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		got  *int
+		want int
+	}{
+		{"max_tool_result_chars", cfg.Run.MaxToolResultChars, 1234},
+		{"max_file_result_chars", cfg.Run.MaxFileResultChars, 9999},
+		{"max_parallel_tools", cfg.Run.MaxParallelTools, 3},
+		{"context_keep_recent", cfg.Run.ContextKeepRecent, 8},
+		{"summary_max_chars", cfg.Run.SummaryMaxChars, 1500},
+	} {
+		if c.got == nil || *c.got != c.want {
+			t.Errorf("%s = %v, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
 func TestListAvailableModels_StaticNoGET(t *testing.T) {
 	// ModelsURL 空 + 静态 Models → 直接返回，绝不发 HTTP（用会真实失败的内嵌 url 证明不 GET）。
 	p := ProviderConfig{Name: "p", Models: []string{"a", "b"}}
-	llm := &HTTPClient{ChatURL: "http://127.0.0.1:1", ModelsURL: "http://127.0.0.1:1"} // 不可达
+	llm := &ChatClient{ChatURL: "http://127.0.0.1:1", ModelsURL: "http://127.0.0.1:1"} // 不可达
 	ids, err := ListAvailableModels(context.Background(), llm, p)
 	if err != nil {
 		t.Fatalf("static list: %v", err)
@@ -256,7 +305,7 @@ func TestListAvailableModels_StaticNoGET(t *testing.T) {
 }
 
 func TestListAvailableModels_StaticEmptyErrors(t *testing.T) {
-	if _, err := ListAvailableModels(context.Background(), &HTTPClient{}, ProviderConfig{Name: "p"}); err == nil {
+	if _, err := ListAvailableModels(context.Background(), &ChatClient{}, ProviderConfig{Name: "p"}); err == nil {
 		t.Error("empty static models should error")
 	}
 }
@@ -267,7 +316,7 @@ func TestListAvailableModels_GET(t *testing.T) {
 	}))
 	defer srv.Close()
 	p := ProviderConfig{Name: "p", ModelsURL: srv.URL + "/v1/models"}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}
+	llm := &ChatClient{APIKey: "sk", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}
 	ids, err := ListAvailableModels(context.Background(), llm, p)
 	if err != nil {
 		t.Fatalf("GET list: %v", err)
@@ -301,7 +350,7 @@ func TestResolve_PromptFields(t *testing.T) {
 
 // 缓存 parse：chatEndpoint 多次调用返回同一 *url.URL（不每请求重做，审查 v3 #10）。
 func TestChatEndpoint_CachedParse(t *testing.T) {
-	c := &HTTPClient{ChatURL: "https://api/v1/chat/completions"}
+	c := &ChatClient{ChatURL: "https://api/v1/chat/completions"}
 	_, u1, err := c.chatEndpoint(time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -315,7 +364,7 @@ func TestChatEndpoint_CachedParse(t *testing.T) {
 // 并发懒解析（直接 struct 构造、chatURL 未缓存）不应数据竞争（sync.Once 保护，修复 R4）。
 // go test -race 下验证：多 goroutine 首次触发的懒解析无竞争，且都返回同一缓存指针。
 func TestChatEndpoint_ConcurrentLazyParse(t *testing.T) {
-	c := &HTTPClient{ChatURL: "https://api/v1/chat/completions"}
+	c := &ChatClient{ChatURL: "https://api/v1/chat/completions"}
 	const n = 20
 	var wg sync.WaitGroup
 	seen := make([]*url.URL, n)

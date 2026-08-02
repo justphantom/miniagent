@@ -81,7 +81,7 @@ data: [DONE]
 		fmt.Fprint(w, sse)
 	}))
 	defer srv.Close()
-	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL}
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
 	var deltas []Delta
 	resp, err := llm.DoStream(context.Background(), Request{Model: "m"}, func(d Delta) { deltas = append(deltas, d) })
 	if err != nil {
@@ -110,7 +110,7 @@ func TestDoStream_NonOKErrors(t *testing.T) {
 		fmt.Fprint(w, "busy")
 	}))
 	defer srv.Close()
-	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL}
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
 	_, err := llm.DoStream(context.Background(), Request{Model: "m"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v, want 503", err)
@@ -135,7 +135,7 @@ func TestDoStream_ContextLengthAfterRetry(t *testing.T) {
 		fmt.Fprint(w, `{"error":{"message":"This model's maximum context length is 8192 tokens."}}`)
 	}))
 	defer srv.Close()
-	llm := &HTTPClient{APIKey: "sk", ChatURL: srv.URL}
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
 	_, err := llm.DoStream(context.Background(), Request{Model: "m"}, nil)
 	if err == nil {
 		t.Fatal("expected error")
@@ -207,23 +207,23 @@ func TestParseSSE_LongLine(t *testing.T) {
 	}
 }
 
-// P2-5/P1-A：c.HTTP==nil 时 streamHTTPClient 返回无 Timeout 的 client（流式总时长由 ctx 控制，
+// P2-5/P1-A：c.HTTP==nil 时 streamClient 返回无 Timeout 的 client（流式总时长由 ctx 控制，
 // http.Client.Timeout 覆盖 body 读取会砍断长流）；缓存同一实例；注入时沿用注入。
-// 注入契约（buildLLM 注入带 120s Timeout 的 client）：streamHTTPClient 须把注入 client 的
+// 注入契约（buildLLM 注入带 120s Timeout 的 client）：streamClient 须把注入 client 的
 // 总 Timeout 清零（P1-A：流式 body 不被砍），但保留其 Transport（代理/连接配置，#2）。
-func TestHTTPClient_StreamClientNoTimeout(t *testing.T) {
-	c := &HTTPClient{APIKey: "sk", ChatURL: "http://x"}
-	sc := c.streamHTTPClient()
+func TestStreamClient_StreamClientNoTimeout(t *testing.T) {
+	c := &StreamClient{APIKey: "sk", ChatURL: "http://x"}
+	sc := c.streamClient()
 	if sc.Timeout != 0 {
 		t.Errorf("stream client Timeout = %v, want 0", sc.Timeout)
 	}
-	if c.streamHTTPClient() != sc {
+	if c.streamClient() != sc {
 		t.Error("stream client not cached")
 	}
 	// 模拟新 buildLLM 注入：带 120s 总 Timeout + 自定义 Transport 的 client。
 	inj := &http.Client{Timeout: 120 * time.Second, Transport: &http.Transport{}}
-	c2 := &HTTPClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
-	got := c2.streamHTTPClient()
+	c2 := &StreamClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
+	got := c2.streamClient()
 	if got.Timeout != 0 {
 		t.Errorf("stream client Timeout = %v, want 0（流式清零总 Timeout）", got.Timeout)
 	}
@@ -239,13 +239,13 @@ data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
 data: [DONE]
 `
 	tr := &fakeTransport{responses: []string{sse}}
-	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	chat, stream := testClients(tr)
 	var deltas []string
 	hooks := LoopHooks{OnDelta: func(step int, kind DeltaKind, text string) error {
 		deltas = append(deltas, text)
 		return nil
 	}}
-	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", Stream: true}, "hi", hooks, nil)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", Stream: true}, "hi", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

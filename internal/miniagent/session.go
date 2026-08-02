@@ -262,39 +262,3 @@ func RewriteMessages(path string, meta SessionMeta, msgs []Message) error {
 		return os.Rename(tmpPath, path)
 	})
 }
-
-// MigrateSession 把 v2 JSON 数组 session 转为 jsonl，写到 {dstDir}/{base}.jsonl（metadata 仅含 id+type）。
-func MigrateSession(srcPath, dstDir string) (string, error) {
-	msgs, err := loadLegacySession(srcPath)
-	if err != nil {
-		return "", err
-	}
-	base := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
-	dst := filepath.Join(dstDir, base+".jsonl")
-	meta := SessionMeta{Type: sessionTypeSession, ID: base}
-	if err := AppendMessages(dst, meta, msgs); err != nil {
-		return "", err
-	}
-	return dst, nil
-}
-
-// loadLegacySession 读 v2 JSON 数组 session（向后兼容迁移用）。
-func loadLegacySession(path string) ([]Message, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("读 legacy session %q: %w", path, err)
-	}
-	var msgs []Message
-	if err := json.Unmarshal(data, &msgs); err != nil {
-		return nil, fmt.Errorf("legacy session %q 不是合法 JSON 数组：%w", path, err)
-	}
-	for i, m := range msgs {
-		if err := validateSessionMessage(m); err != nil {
-			return nil, fmt.Errorf("legacy session %q 第 %d 条消息非法：%w", path, i, err)
-		}
-	}
-	if err := validateToolPairing(msgs); err != nil {
-		return nil, fmt.Errorf("legacy session %q：%w", path, err)
-	}
-	return msgs, nil
-}
