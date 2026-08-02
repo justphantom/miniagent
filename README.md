@@ -244,8 +244,6 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `contextTrimToolChars` | 1000 | — | context 超限降级时把 tool 结果压到的字符数 |
 | `contextKeepRecent` | 6 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
 | `summaryMaxChars` | 2000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
-| `contextKeepRecent` | 6 | 摘要/有损压缩保留的最近轮数（首轮之外） |
-| `summaryMaxChars` | 2000 | 摘要式压缩单条 summary 的字符上限 |
 | `maxGrepMatches` / `maxGlobEntries` | 200 / 500 | grep 命中行 / glob 命中条数上限 |
 | `maxReadFileBytes` / `maxReadFileChars` | 80000 / 20000 | 读文件字节 / 输出字符上限 |
 | `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
@@ -281,6 +279,57 @@ repo/
     scripts.json            # {"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}
     memory.jsonl            # {"type":"lesson","content":"…"}…
 ```
+
+### 配置示例（miniagent.json）
+
+```json
+{
+  "providers": [
+    {
+      "name": "openai",
+      "chat_url": "${CHAT_URL}",
+      "models_url": "${MODELS_URL}",
+      "key": "${MAIN_API_KEY}",
+      "models": ["gpt-4o", "gpt-4o-mini"],
+      "thinking": {
+        "field": "reasoning_effort",
+        "map": {"low": "low", "medium": "medium", "high": "high"}
+      }
+    }
+  ],
+  "session": {"dir": ".sessions"},
+  "defaults": {
+    "model": "openai/gpt-4o",
+    "thinking": "medium",
+    "mode": "default",
+    "summary_request": "请按以下格式总结：...",
+    "summarizer_prompt": "你是代码审查助手。"
+  },
+  "run": {
+    "workdir": "./repo",
+    "max_tokens": 4096,
+    "max_iterations": 20,
+    "context_window": 128000,
+    "max_duration": "5m",
+    "shell_timeout": "30s",
+    "max_tool_result_chars": 2000,
+    "max_file_result_chars": 8000,
+    "max_parallel_tools": 8,
+    "context_keep_recent": 6,
+    "summary_max_chars": 2000
+  },
+  "compaction": {
+    "model": "gpt-4o-mini"
+  }
+}
+```
+
+**关键字段说明**：
+- `provider.chat_url` / `provider.models_url`：完整 OpenAI 兼容端点
+- `provider.key`：推荐用 `${VAR}` 注入（避免明文存储）
+- `defaults.model`：`provider/id` 格式；无 `/` 时默认选中唯一 provider
+- `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
+- `compaction.model`：摘要压缩使用的轻量模型
 
 ## 完整调用示例
 

@@ -3,7 +3,7 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [3.2.0] - 2026-08-02
 
 > 落地 `docs/architecture-evaluation-2026-08-02.md` 路线图：核心引擎重构（P3/P4）、减法（S1/S2/P2/S3）、
 > 常量策略化（S4）、自进化机制（P0/P1/P5）。**破坏性变更**见 Removed。跳过 P6（反馈闭环）与 S5（schema 生成）。
@@ -30,6 +30,18 @@
 - **`multi_edit` 工具**（S3）：并入 `edit`（`edits` 数组）。
 - **`compaction.go` / `history.go`**（P3）：合并入 `context.go`。
 
+
+## [3.1.0] - 2026-08-02
+
+> 迭代上限后注入总结 prompt、输出格式约束、常量策略化（S4）初版。
+
+### Added
+- **迭代上限后注入总结 prompt**（`loop.go` 阶段 3）：当 `step == iterLimit` 且刚执行完工具时，注入系统消息请求 LLM 输出总结性回复（而非继续调工具）。允许 1 次额外 LLM 调用；若仍请求工具或出错，回落 `finishMaxIterations`（`text` 为空）。
+- **输出格式约束**（`prompts.go`）：默认 system prompt 新增约束——最终回答不用多级标题（`###/####`）、不用表格，纯段落或简单列表。
+
+### Changed
+- **`edit` 工具支持 `edits` 数组**（S3）：单段（`old_string`/`new_string`）与多段事务（`edits`，全部成功才写盘、任一失败不改）合一。
+- **`loop.go` 拆分**：`loop.go`（Run+常量）/`loop_tools.go`（handleToolCalls/runToolsParallel 等）/`loop_extra.go`（callLLM*）。
 
 ## [3.0.0] - 2026-08-01
 
