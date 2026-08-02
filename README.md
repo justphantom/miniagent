@@ -97,7 +97,7 @@ make test       # go test -race ./...
 
 - `name`：工具名，见下文"工具清单"
 - `input`：工具参数的原始 JSON 字符串（LLM 透传）
-- `text`：完整回答文本（达到 `maxIterations` 上限被强制终止时为空字符串，键名仍在）。注意：回答被 `max_tokens` 截断（`finish_reason:length`）时 `text` 是半截文本，无专门字段标记，仅在 stderr 日志有 `llm response truncated` 警告
+- `text`：完整回答文本。正常结束（`finishStop`）时为最终回复；达到 `maxIterations` 上限时，loop 会先注入一条系统消息请求总结（阶段 3），若 LLM 返回文本则 `text` 为该总结；若仍请求工具调用则回落为 `finishMaxIterations`（`text` 为空）。回答被 `max_tokens` 截断（`finish_reason:length`）时 `text` 是半截文本，无专门字段标记，仅在 stderr 日志有 `llm response truncated` 警告
 - `model`：本次调用使用的模型 id
 - `input_tokens` / `output_tokens`：累计的 token 用量
 - `steps`：本轮 LLM 调用次数
