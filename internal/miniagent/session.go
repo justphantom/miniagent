@@ -12,9 +12,9 @@ import (
 	"strings"
 )
 
-// maxSessionBytes 是 session 文件默认大小上限：10MB 足够覆盖长会话，同时防止无限增长。
+// maxSessionBytes 是 session 文件默认大小上限：50MB 覆盖长会话，同时防止无限增长。
 // 可通过 SetMaxSessionBytes 覆盖。n<=0 用默认。
-const maxSessionBytes = 10 << 20 // 10MB
+const maxSessionBytes = 50 << 20 // 50MB
 
 // maxSessionBytesOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
 var maxSessionBytesOverride int

@@ -10,7 +10,7 @@ import (
 )
 
 // maxToolResultInHistory：单条 tool 结果入历史字符上限，平衡可读性与上下文预算。
-const maxToolResultInHistory = 2000
+const maxToolResultInHistory = 4000
 
 // maxParallelTools：同一步并行工具上限，防耗尽 FD/连接或触发目标限流。
 const maxParallelTools = 8

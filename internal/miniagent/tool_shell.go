@@ -40,7 +40,7 @@ func shellOutputBytes() int {
 	return shellOutputChars() * 4
 }
 
-const shellTimeout = 60 * time.Second
+const shellTimeout = 120 * time.Second
 
 // sudoSuRe 词边界匹配常见特权提升器（sudo/su/doas/pkexec/gsudo/run0）与专有特权/
 // 命名空间工具（setpriv/nsenter/unshare/chroot/machinectl）：覆盖 "cd /x && sudo ..."
