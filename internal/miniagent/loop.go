@@ -18,6 +18,9 @@ const maxToolResultInHistory = 2000
 // maxParallelTools：同一步并行工具上限，防耗尽 FD/连接或触发目标限流。
 const maxParallelTools = 8
 
+// summaryRequestPrompt 在迭代上限前一步工具调用后注入，引导 LLM 输出总结性回复而非继续调用工具。
+const summaryRequestPrompt = "所有工具调用已完成。请输出一段总结性回复，说明完成了什么、关键结果是什么。不要在此之后继续调用工具。"
+
 func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args string) (res ToolResult) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -123,6 +126,26 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 		msgs, err = handleToolCalls(ctx, step, resp, toolByName, msgs, &newMsgs, hooks, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
+		}
+		// 阶段 3（Option B：末尾工具调用后强制总结）。
+		// 若当前步已达迭代上限且刚执行完工具，注入总结请求让 LLM 输出最终文本而非继续调工具。
+		// 允许一次额外 LLM 调用（step+1），确保有总结性回复；若 LLM 仍要调工具或出错，
+		// 回落至 finishMaxIterations。
+		if step == iterLimit {
+			appendMsg(&msgs, &newMsgs, Message{Role: roleSystem, Content: summaryRequestPrompt})
+			if logger != nil {
+				logger.Info("injecting summary request at iteration limit", "step", step)
+			}
+			resp2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, step+1, msgs, hooks, logger)
+			if err2 == nil && len(resp2.ToolCalls) == 0 {
+				appendMsg(&msgs, &newMsgs, Message{Role: roleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning})
+				total.InputTokens += resp2.Usage.InputTokens
+				total.OutputTokens += resp2.Usage.OutputTokens
+				return Result{Text: resp2.Text, Usage: total, Steps: step + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
+			}
+			if err2 != nil && logger != nil {
+				logger.Warn("summary LLM call failed", "step", step+1, "error", err2)
+			}
 		}
 	}
 	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。

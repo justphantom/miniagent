@@ -367,7 +367,8 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 	}
 }
 
-// 撞 maxIterations：Messages 含全部累积的 tool 往返。
+// 撞 maxIterations：Messages 含全部累积的 tool 往返 + 末尾注入的 summary request。
+// Option B：在 iterLimit 步工具调用后注入 summaryRequestPrompt，故多一条 system 消息。
 func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	responses := make([]string, maxIterations+2)
@@ -380,8 +381,13 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if want := 1 + 2*maxIterations; len(res.Messages) != want {
+	// 1 (user) + 2*maxIterations (assistant+tool 各 maxIterations 轮) + 1 (summary request system)
+	if want := 1 + 2*maxIterations + 1; len(res.Messages) != want {
 		t.Errorf("Messages len = %d, want %d", len(res.Messages), want)
+	}
+	// 最后一条应是 summary request system 消息。
+	if res.Messages[len(res.Messages)-1].Role != roleSystem {
+		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, roleSystem)
 	}
 }
 
