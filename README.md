@@ -35,7 +35,7 @@ make test       # go test -race ./...
 不存在 = 软失败退裸模式；显式 `-config` 不存在 = 硬错误。
 
 ```
--chat-url string         裸模式 chat completions 完整 URL（含 /v1/chat/completions）
+-char-url string         裸模式 chat completions 完整 URL（含 /v1/chat/completions）
 -config string           配置文件路径（默认查 ./miniagent.json；不存在软失败退裸模式）
 -context-window int      模型 context 上限（tokens）；>0 时主动摘要压缩历史，0=不限（默认）
 -interactive             交互模式：循环读取 prompt（每行一个）；有 -session 时以文件为唯一真源
@@ -54,6 +54,8 @@ make test       # go test -race ./...
 -session string          session id 或路径（id 在 session.dir 解析为 .jsonl；含 / 或 . 视为路径）
 -shell-timeout duration  单条 shell 命令超时（0=默认 60s）；仍受 -max-duration 总上限约束
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
+-summary-request string  迭代上限时注入的总结引导 prompt（空=回落内置默认）
+-summarizer-prompt string 摘要压缩专用 system prompt（空=回落内置默认）
 -system string           系统提示词（默认为面向工程代码开发的代码向 prompt）
 -thinking string         思考级别 off|minimal|low|medium|high|xhigh|max（默认 off，wire 透传 reasoning_effort）
 -version                 显示版本号并退出

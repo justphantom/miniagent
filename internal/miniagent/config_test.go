@@ -277,6 +277,28 @@ func TestListAvailableModels_GET(t *testing.T) {
 	}
 }
 
+// 新字段：summary_request 和 summarizer_prompt 在 config 中正确解析。
+func TestResolve_PromptFields(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
+		Defaults: DefaultsConfig{
+			Model:            "p/m",
+			SummaryRequest:   "自定义总结引导",
+			SummarizerPrompt: "自定义压缩器",
+		},
+	}
+	r, err := Resolve(cfg, CLIOverrides{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if r.SummaryRequest != "自定义总结引导" {
+		t.Errorf("SummaryRequest = %q, want 自定义总结引导", r.SummaryRequest)
+	}
+	if r.SummarizerPrompt != "自定义压缩器" {
+		t.Errorf("SummarizerPrompt = %q, want 自定义压缩器", r.SummarizerPrompt)
+	}
+}
+
 // 缓存 parse：chatEndpoint 多次调用返回同一 *url.URL（不每请求重做，审查 v3 #10）。
 func TestChatEndpoint_CachedParse(t *testing.T) {
 	c := &HTTPClient{ChatURL: "https://api/v1/chat/completions"}

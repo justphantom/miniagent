@@ -153,12 +153,13 @@ var ErrThinkingUnsupported = errors.New("miniagent: thinking parameter unsupport
 // handleToolCalls 据此跳过该工具（回填拒绝结果）、不终止循环；其他 error 仍终止。
 var ErrToolDenied = errors.New("miniagent: tool denied by caller")
 
-// LoopConfig carries the per-turn LLM parameters.
 type LoopConfig struct {
-	Model     string
-	System    string
-	MaxTokens int
-	Tools     []Tool
+	Model          string
+	System         string
+	SummaryRequest string
+	SummarizerPrompt string
+	MaxTokens      int
+	Tools          []Tool
 	// History 是本轮之前的会话历史，按序拼在新 user prompt 之前。
 	// Run 不修改其内容。
 	History []Message

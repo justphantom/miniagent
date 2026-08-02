@@ -39,7 +39,7 @@ func TestCompactWithSummary_Success(t *testing.T) {
 		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	var newMsgs []Message
-	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 3, &newMsgs)
 	if err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 		{Role: roleUser, Content: "u4"},
 	}
 	var newMsgs []Message
-	_, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 1, &newMsgs)
+	_, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 1, &newMsgs)
 	if err == nil {
 		t.Fatal("expected pairing-break error")
 	}
@@ -87,7 +87,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 	msgs := []Message{{Role: roleUser, Content: "u1"}, {Role: roleUser, Content: "u2"}}
 	before := len(msgs)
 	var newMsgs []Message
-	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 6, &newMsgs)
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 6, &newMsgs)
 	if err != nil || summarized {
 		t.Fatalf("expected (false,nil), got (%v,%v)", summarized, err)
 	}
@@ -103,7 +103,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err == nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", []Message{{Role: roleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
 	}
 }
@@ -113,7 +113,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, usage, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}})
+	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", []Message{{Role: roleUser, Content: "q"}})
 	if err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
 	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", []Message{{Role: roleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", []Message{{Role: roleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
@@ -147,7 +147,7 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	// 模拟 loop.go Run：入口已把本轮 user_prompt 加入 newMsgs 与 msgs。
 	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
 	msgs = append(msgs, newMsgs...)
-	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 3, &newMsgs)
 	if err != nil || !summarized {
 		t.Fatalf("compactWithSummary: summarized=%v err=%v", summarized, err)
 	}
@@ -175,7 +175,7 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	}
 	newMsgs := []Message{{Role: roleUser, Content: "上一轮问题"}}
 	msgs = append(msgs, newMsgs...)
-	if _, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil {
+	if _, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 3, &newMsgs); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
 	// 模拟上一轮 Run 末尾把 assistant 最终回答加入 newMsgs（接续对话依赖上一轮答案）。
@@ -227,7 +227,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	msgs = append(msgs, newMsgs...)
 
 	// 第一次摘要压缩。
-	if summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil || !summarized {
+	if summarized, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 3, &newMsgs); err != nil || !summarized {
 		t.Fatalf("1st compactWithSummary: summarized=%v err=%v", summarized, err)
 	}
 	// 模拟步进：追加更多轮使再次超窗触发第二次压缩（Run 的 appendMsg 同时写 msgs/newMsgs）。
@@ -236,7 +236,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 		msgs = append(msgs, m)
 		newMsgs = append(newMsgs, m)
 	}
-	if summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs); err != nil || !summarized {
+	if summarized, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 3, &newMsgs); err != nil || !summarized {
 		t.Fatalf("2nd compactWithSummary: summarized=%v err=%v", summarized, err)
 	}
 
@@ -283,7 +283,7 @@ func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
 	msgs = append(msgs, newMsgs...)
 
-	summarized, _, err := compactWithSummary(context.Background(), llm, "m", &msgs, 3, &newMsgs)
+	summarized, _, err := compactWithSummary(context.Background(), llm, "m", "", &msgs, 3, &newMsgs)
 	if err != nil || !summarized {
 		t.Fatalf("compactWithSummary: summarized=%v err=%v", summarized, err)
 	}

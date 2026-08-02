@@ -706,3 +706,33 @@ func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 		t.Error("summary request not in messages")
 	}
 }
+
+// 阶段 3：迭代上限后注入自定义 summary request prompt（通过 LoopConfig 配置）。
+func TestRun_SummaryRequestPromptConfigurable(t *testing.T) {
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
+		textResponse("自定义总结"),
+	}}
+	customPrompt := "这是自定义总结引导"
+	llm := &HTTPClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	res, err := Run(context.Background(), llm, LoopConfig{
+		Tools:          []Tool{tool},
+		MaxIterations:  1,
+		SummaryRequest: customPrompt,
+	}, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Text != "自定义总结" {
+		t.Errorf("Text = %q, want '自定义总结'", res.Text)
+	}
+	// 验证使用了自定义 prompt 而非默认值。
+	secondBody := tr.bodies[1]
+	if !strings.Contains(secondBody, customPrompt) {
+		t.Errorf("second request missing custom summary prompt: %s", secondBody)
+	}
+	if strings.Contains(secondBody, summaryRequestPrompt) {
+		t.Errorf("second request should not contain default summary prompt: %s", secondBody)
+	}
+}

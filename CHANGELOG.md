@@ -8,6 +8,7 @@
 ### Added
 - **迭代上限后注入总结 prompt**（`internal/miniagent/loop.go` 阶段 3）：当 `step == iterLimit` 且刚执行完工具时，注入一条系统消息请求 LLM 输出总结性回复（而非继续调工具）。允许 1 次额外 LLM 调用（`steps = maxIterations+1`）；若 LLM 仍请求工具或出错，回落 `finishMaxIterations`（`text` 为空）。
 - **输出格式约束**（`cmd/miniagent/prompts.go`）：默认 system prompt 新增约束——最终回答不用多级标题（`###/####`）、不用表格，纯段落或简单列表即可，防过度排版。
+- **提示词配置覆盖**（`config.go`/`resolve.go`/`loop.go`/`compaction.go`）：`defaults.summary_request` 可覆盖迭代上限时注入的总结引导 prompt；`defaults.summarizer_prompt` 可覆盖摘要压缩专用 system prompt。CLI 对应 `-summary-request` 和 `-summarizer-prompt`，优先级 CLI > config > builtin。
 
 ## [3.0.0] - 2026-08-01
 

@@ -20,23 +20,25 @@ import (
 var version = "dev"
 
 type cliFlags struct {
-	model          *string
-	keyFile        *string
-	system         *string
-	maxTokens      *int
-	maxDuration    *time.Duration
-	workdir        *string
-	session        *string
-	logLevel       *string
-	showVer        *bool
-	maxIterations  *int
-	shellTimeout   *time.Duration
-	maxTokensTotal *int
-	stream         *bool
-	contextWindow  *int
-	interactive    *bool
-	listModels     *bool
-	migrateSession *string
+	model           *string
+	keyFile         *string
+	system          *string
+	summaryRequest  *string
+	summarizerPrompt *string
+	maxTokens       *int
+	maxDuration     *time.Duration
+	workdir         *string
+	session         *string
+	logLevel        *string
+	showVer         *bool
+	maxIterations   *int
+	shellTimeout    *time.Duration
+	maxTokensTotal  *int
+	stream          *bool
+	contextWindow   *int
+	interactive     *bool
+	listModels      *bool
+	migrateSession  *string
 	// v3 新增
 	configPath *string
 	chatURL    *string
@@ -57,6 +59,8 @@ func parseFlags() *cliFlags {
 	f.model = flag.String("model", "", "LLM model（config 模式 provider/id；裸模式裸 id）")
 	f.keyFile = flag.String("key-file", "", "从文件读 API key（首尾空白截断）；优先于 provider.key/$MINIAGENT_API_KEY")
 	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
+	f.summaryRequest = flag.String("summary-request", "", "迭代上限时注入的总结引导 prompt（空=回落内置默认）")
+	f.summarizerPrompt = flag.String("summarizer-prompt", "", "摘要压缩专用 system prompt（空=回落内置默认）")
 	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
 	f.maxDuration = flag.Duration("max-duration", 0, "overall wall-clock limit (0 = unlimited)")
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
@@ -199,18 +203,20 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 		compModel = resolved.ModelID
 	}
 	return miniagent.LoopConfig{
-		Model:           resolved.ModelID,
-		System:          system,
-		MaxTokens:       into(resolved.Run.MaxTokens, *f.maxTokens),
-		Tools:           tools,
-		History:         history,
-		MaxIterations:   into(resolved.Run.MaxIterations, *f.maxIterations),
-		MaxTotalTokens:  into(resolved.Run.MaxTotalTokens, *f.maxTokensTotal),
-		Stream:          intoBool(resolved.Run.Stream, *f.stream),
-		ContextWindow:   into(resolved.Run.ContextWindow, *f.contextWindow),
-		ThinkingLevel:   resolved.Thinking,
-		Thinking:        resolved.Provider.Thinking,
-		CompactionModel: compModel,
+		Model:            resolved.ModelID,
+		System:           system,
+		SummaryRequest:   resolved.SummaryRequest,
+		SummarizerPrompt: resolved.SummarizerPrompt,
+		MaxTokens:        into(resolved.Run.MaxTokens, *f.maxTokens),
+		Tools:            tools,
+		History:          history,
+		MaxIterations:    into(resolved.Run.MaxIterations, *f.maxIterations),
+		MaxTotalTokens:   into(resolved.Run.MaxTotalTokens, *f.maxTokensTotal),
+		Stream:           intoBool(resolved.Run.Stream, *f.stream),
+		ContextWindow:    into(resolved.Run.ContextWindow, *f.contextWindow),
+		ThinkingLevel:    resolved.Thinking,
+		Thinking:         resolved.Provider.Thinking,
+		CompactionModel:  compModel,
 	}
 }
 

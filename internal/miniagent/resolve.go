@@ -10,6 +10,7 @@ import (
 // 按 cli>config>builtin 优先级裁决。指针为 nil 表示未传入。
 type CLIOverrides struct {
 	Model, Thinking, Mode, System, Workdir, Session, ChatURL, ModelsURL *string
+	SummaryRequest, SummarizerPrompt                                   *string
 	MaxTokens, MaxIterations, MaxTotalTokens, ContextWindow             *int
 	MaxDuration, ShellTimeout                                           *time.Duration
 	Stream, ResultOnly                                                  *bool
@@ -24,14 +25,16 @@ type ResolvedRun struct {
 }
 
 type Resolved struct {
-	Provider   ProviderConfig
-	ModelID    string
-	Thinking   string
-	Mode       string
-	System     string
-	Session    SessionConfig
-	Compaction CompactionConfig
-	Run        ResolvedRun
+	Provider         ProviderConfig
+	ModelID          string
+	Thinking         string
+	Mode             string
+	System           string
+	SummaryRequest   string
+	SummarizerPrompt string
+	Session          SessionConfig
+	Compaction       CompactionConfig
+	Run              ResolvedRun
 }
 
 // Resolve 按 cli>config>builtin 裁决产出 Resolved。cfg 可 nil（裸模式：用 -chat-url 构造
@@ -95,6 +98,18 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		r.System = *o.System
 	case cfg != nil && cfg.Defaults.SystemPrompt != "":
 		r.System = cfg.Defaults.SystemPrompt
+	}
+	switch {
+	case o.SummaryRequest != nil && *o.SummaryRequest != "":
+		r.SummaryRequest = *o.SummaryRequest
+	case cfg != nil && cfg.Defaults.SummaryRequest != "":
+		r.SummaryRequest = cfg.Defaults.SummaryRequest
+	}
+	switch {
+	case o.SummarizerPrompt != nil && *o.SummarizerPrompt != "":
+		r.SummarizerPrompt = *o.SummarizerPrompt
+	case cfg != nil && cfg.Defaults.SummarizerPrompt != "":
+		r.SummarizerPrompt = cfg.Defaults.SummarizerPrompt
 	}
 
 	run, rerr := resolveRun(cfg, o)

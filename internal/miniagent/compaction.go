@@ -18,6 +18,7 @@ const (
 )
 
 // summarizerSystem 是压缩专用 system prompt：要求把历史压成一段受限摘要，保留关键事实。
+// 默认值通过 LoopConfig.SummarizerPrompt 覆盖；调用方需传入 maxChars（summaryMaxChars）。
 const summarizerSystem = "你是会话压缩器。把以下对话历史压缩为一段不超过 %d 字符的中文摘要，保留关键事实、决策、文件改动与未决问题，不要复述全部对话，不要输出多余解释。"
 
 // applyCompactionBarrier 定位最新一条 Kind=="summary" 消息，返回它及之后的消息；之前的
@@ -45,7 +46,7 @@ func compactIfOverWindow(ctx context.Context, llm *HTTPClient, cfg LoopConfig, m
 	if compModel == "" {
 		compModel = cfg.Model
 	}
-	summarized, sumUsage, serr := compactWithSummary(ctx, llm, compModel, msgs, contextKeepRecent, newMsgs)
+	summarized, sumUsage, serr := compactWithSummary(ctx, llm, compModel, cfg.SummarizerPrompt, msgs, contextKeepRecent, newMsgs)
 	if serr != nil {
 		if logger != nil {
 			logger.Warn("summarize 失败，回落有损压缩", "error", serr)
@@ -70,14 +71,18 @@ func compactIfOverWindow(ctx context.Context, llm *HTTPClient, cfg LoopConfig, m
 
 // summarizeMiddle 调 LLM 把中段 msgs 压成一段摘要文本（不带 tools）。返回经 summaryMaxChars
 // 截断的摘要 + 该次调用的 Usage（供上游累加入预算）。复用 HTTPClient.Do；调用方据 error 回落
-// 有损压缩（审查 v2 #6）。
-func summarizeMiddle(ctx context.Context, llm *HTTPClient, model string, msgs []Message) (string, Usage, error) {
+// 有损压缩（审查 v2 #6）。summarizerPrompt 空时回落默认 summarizerSystem。
+func summarizeMiddle(ctx context.Context, llm *HTTPClient, model string, summarizerPrompt string, msgs []Message) (string, Usage, error) {
 	if len(msgs) == 0 {
 		return "", Usage{}, errors.New("无中段可摘要")
 	}
+	system := summarizerSystem
+	if summarizerPrompt != "" {
+		system = summarizerPrompt
+	}
 	resp, err := llm.Do(ctx, Request{
 		Model:     model,
-		System:    fmt.Sprintf(summarizerSystem, summaryMaxChars),
+		System:    fmt.Sprintf(system, summaryMaxChars),
 		Messages:  msgs,
 		MaxTokens: summaryMaxTokens,
 	})
@@ -90,8 +95,8 @@ func summarizeMiddle(ctx context.Context, llm *HTTPClient, model string, msgs []
 // compactWithSummary 保留最早 1 轮 + 最近 keepRecent 轮，中段摘要为单条 KindSummary 消息
 // （既进 context 又经 newMsgs 落盘）。中段按完整轮切，切完 validateToolPairing 断言；断裂
 // 或 LLM 失败返回 error（调用方回落 compactHistory）。无中段可摘返回 (false, Usage{}, nil)。
-// 第二返回值是摘要调用的 Usage（供上游累加入预算）。
-func compactWithSummary(ctx context.Context, llm *HTTPClient, model string, msgs *[]Message, keepRecent int, newMsgs *[]Message) (bool, Usage, error) {
+// 第二返回值是摘要调用的 Usage（供上游累加入预算）。summarizerPrompt 空时回落默认格式。
+func compactWithSummary(ctx context.Context, llm *HTTPClient, model string, summarizerPrompt string, msgs *[]Message, keepRecent int, newMsgs *[]Message) (bool, Usage, error) {
 	rounds := splitRounds(*msgs)
 	if len(rounds) <= 1+keepRecent {
 		return false, Usage{}, nil // 无中段可摘
@@ -117,7 +122,7 @@ func compactWithSummary(ctx context.Context, llm *HTTPClient, model string, msgs
 	if err := validateToolPairing(middle); err != nil {
 		return false, Usage{}, fmt.Errorf("中段配对断裂，无法安全摘要：%w", err)
 	}
-	summary, sumUsage, err := summarizeMiddle(ctx, llm, model, middle)
+	summary, sumUsage, err := summarizeMiddle(ctx, llm, model, summarizerPrompt, middle)
 	if err != nil {
 		return false, Usage{}, err
 	}

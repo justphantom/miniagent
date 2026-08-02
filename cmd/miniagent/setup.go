@@ -63,6 +63,12 @@ func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	if set["system"] {
 		o.System = f.system
 	}
+	if set["summary-request"] {
+		o.SummaryRequest = f.summaryRequest
+	}
+	if set["summarizer-prompt"] {
+		o.SummarizerPrompt = f.summarizerPrompt
+	}
 	if set["workdir"] {
 		o.Workdir = f.workdir
 	}

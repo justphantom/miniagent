@@ -132,7 +132,11 @@ func Run(ctx context.Context, llm *HTTPClient, cfg LoopConfig, userPrompt string
 		// 允许一次额外 LLM 调用（step+1），确保有总结性回复；若 LLM 仍要调工具或出错，
 		// 回落至 finishMaxIterations。
 		if step == iterLimit {
-			appendMsg(&msgs, &newMsgs, Message{Role: roleSystem, Content: summaryRequestPrompt})
+			summaryReq := cfg.SummaryRequest
+			if summaryReq == "" {
+				summaryReq = summaryRequestPrompt
+			}
+			appendMsg(&msgs, &newMsgs, Message{Role: roleSystem, Content: summaryReq})
 			if logger != nil {
 				logger.Info("injecting summary request at iteration limit", "step", step)
 			}

@@ -40,10 +40,12 @@ type ProviderConfig struct {
 }
 
 type DefaultsConfig struct {
-	Model        string `json:"model,omitempty"`
-	Thinking     string `json:"thinking,omitempty"`
-	Mode         string `json:"mode,omitempty"`
-	SystemPrompt string `json:"system_prompt,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Thinking        string `json:"thinking,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	SystemPrompt    string `json:"system_prompt,omitempty"`
+	SummaryRequest  string `json:"summary_request,omitempty"`
+	SummarizerPrompt string `json:"summarizer_prompt,omitempty"`
 }
 
 // RunConfig 的 duration 字段用 *string（"30s"），Resolve 解析为 time.Duration，
