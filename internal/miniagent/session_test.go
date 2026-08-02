@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// 用较小上限覆盖内置 50MB，避免 race detector 下 JSON marshal 大字符串超时。
+func TestMain(m *testing.M) {
+	SetMaxSessionBytes(1 << 20) // 1MB，足够覆盖边界测试，race 下快速
+	os.Exit(m.Run())
+}
+
 func sampleTranscript() []Message {
 	return []Message{
 		{Role: "user", Content: "看下 a.txt"},
@@ -104,7 +110,7 @@ func TestLoadSession_ToolMissingCallIDFails(t *testing.T) {
 
 func TestLoadSession_OversizedFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "big.jsonl")
-	if err := os.WriteFile(path, make([]byte, maxSessionBytes+1), 0o600); err != nil {
+	if err := os.WriteFile(path, make([]byte, sessionBytes()+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := LoadSession(path); err == nil {
@@ -371,7 +377,7 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	meta := SessionMeta{ID: "s"}
-	big := strings.Repeat("x", maxSessionBytes/2+100)
+	big := strings.Repeat("x", int(sessionBytes()/2)+100)
 	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}); err != nil {
 		t.Fatalf("首次追加应成功: %v", err)
 	}
@@ -381,8 +387,8 @@ func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
 	}
 	// 第二次失败不应让文件越过上限（写侧预判在写入前）。
 	info, _ := os.Stat(path)
-	if info.Size() > maxSessionBytes {
-		t.Errorf("文件大小 %d 超 maxSessionBytes %d", info.Size(), maxSessionBytes)
+	if info.Size() > sessionBytes() {
+		t.Errorf("文件大小 %d 超 maxSessionBytes %d", info.Size(), sessionBytes())
 	}
 }
 
@@ -390,7 +396,7 @@ func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
 // 不再因 scanner ErrTooLong 致整会话不可读、append-only 无法修复。
 func TestLoadSession_LargeSingleLineOK(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	big := strings.Repeat("x", maxSessionBytes/2) // 2MiB，超过旧 1MiB 单行限制
+	big := strings.Repeat("x", int(sessionBytes()/2))
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}); err != nil {
 		t.Fatalf("AppendMessages: %v", err)
 	}
@@ -523,7 +529,7 @@ func TestRewriteMessages_EmptyMsgsWritesMeta(t *testing.T) {
 func TestRewriteMessages_OversizedFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
-	big := strings.Repeat("x", maxSessionBytes+1)
+	big := strings.Repeat("x", int(sessionBytes())+1)
 	if err := RewriteMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}); err == nil {
 		t.Fatal("超 maxSessionBytes 应报错")
 	}
