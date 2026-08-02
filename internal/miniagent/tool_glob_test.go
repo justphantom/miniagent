@@ -13,7 +13,7 @@ func TestGlobTool_Basic(t *testing.T) {
 		"b.txt":    "",
 		"sub/c.go": "",
 	})
-	res := GlobTool(dir).Call(context.Background(), `{"pattern":"*.go"}`)
+	res := GlobTool(dir, 0).Call(context.Background(), `{"pattern":"*.go"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -28,7 +28,7 @@ func TestGlobTool_Basic(t *testing.T) {
 func TestGlobTool_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"a.go": ""})
-	res := GlobTool(dir).Call(context.Background(), `{"pattern":"*.rs"}`)
+	res := GlobTool(dir, 0).Call(context.Background(), `{"pattern":"*.rs"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -39,7 +39,7 @@ func TestGlobTool_NoMatch(t *testing.T) {
 
 func TestGlobTool_InvalidPattern(t *testing.T) {
 	dir := t.TempDir()
-	res := GlobTool(dir).Call(context.Background(), `{"pattern":"["}`)
+	res := GlobTool(dir, 0).Call(context.Background(), `{"pattern":"["}`)
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
@@ -51,7 +51,7 @@ func TestGlobTool_SkipDotGit(t *testing.T) {
 		"a.go":      "",
 		".git/x.go": "",
 	})
-	res := GlobTool(dir).Call(context.Background(), `{"pattern":"*.go"}`)
+	res := GlobTool(dir, 0).Call(context.Background(), `{"pattern":"*.go"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}

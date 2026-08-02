@@ -86,11 +86,11 @@ func TestMemory_FormatSnippetEmpty(t *testing.T) {
 // read/write 工具的保留路径 "memory" 路由到项目记忆（绕过普通文件路径）。
 func TestReadWriteTools_MemoryTokenRouting(t *testing.T) {
 	dir := t.TempDir()
-	w := WriteFileTool(dir)
+	w := WriteFileTool(dir, 0)
 	if r := w.Call(context.Background(), `{"path":"memory","content":"一条记忆"}`); r.IsError {
 		t.Fatalf("write memory: %s", r.Output)
 	}
-	r := ReadFileTool(dir).Call(context.Background(), `{"path":"memory"}`)
+	r := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"memory"}`)
 	if r.IsError {
 		t.Fatalf("read memory: %s", r.Output)
 	}

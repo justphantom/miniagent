@@ -20,7 +20,7 @@ func TestWriteFile_RejectsFIFO(t *testing.T) {
 	if err := exec.CommandContext(ctx, "mkfifo", fifo).Run(); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"fifo","content":"x"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"fifo","content":"x"}`)
 	if !res.IsError {
 		t.Fatal("expected FIFO to be rejected")
 	}
@@ -35,7 +35,7 @@ func TestWriteFile_RejectsDirectory(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"sub","content":"x"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"sub","content":"x"}`)
 	if !res.IsError {
 		t.Fatal("expected directory target to be rejected")
 	}
@@ -50,7 +50,7 @@ func TestWriteFile_RejectsDevice(t *testing.T) {
 		t.Skipf("/dev/null unavailable: %v", err)
 	}
 	dir := t.TempDir()
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"/dev/null","content":"x"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"/dev/null","content":"x"}`)
 	if !res.IsError {
 		t.Fatal("expected device file to be rejected")
 	}
@@ -66,7 +66,7 @@ func TestWriteFile_OverwritesRegularFile(t *testing.T) {
 	if err := os.WriteFile(existing, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"old.txt","content":"new content"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"old.txt","content":"new content"}`)
 	if res.IsError {
 		t.Fatalf("overwrite regular file failed: %s", res.Output)
 	}

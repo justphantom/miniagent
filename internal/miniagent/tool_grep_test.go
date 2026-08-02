@@ -30,7 +30,7 @@ func TestGrepTool_Basic(t *testing.T) {
 		"b.txt":    "foo baz\n",
 		"sub/c.go": "bar foo\n",
 	})
-	res := GrepTool(dir).Call(context.Background(), `{"pattern":"foo"}`)
+	res := GrepTool(dir, 0).Call(context.Background(), `{"pattern":"foo"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -44,7 +44,7 @@ func TestGrepTool_Basic(t *testing.T) {
 func TestGrepTool_GlobFilter(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"a.go": "foo\n", "b.txt": "foo\n"})
-	res := GrepTool(dir).Call(context.Background(), `{"pattern":"foo","glob":"*.go"}`)
+	res := GrepTool(dir, 0).Call(context.Background(), `{"pattern":"foo","glob":"*.go"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -56,7 +56,7 @@ func TestGrepTool_GlobFilter(t *testing.T) {
 func TestGrepTool_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"a.go": "foo\n"})
-	res := GrepTool(dir).Call(context.Background(), `{"pattern":"zzz"}`)
+	res := GrepTool(dir, 0).Call(context.Background(), `{"pattern":"zzz"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -67,7 +67,7 @@ func TestGrepTool_NoMatch(t *testing.T) {
 
 func TestGrepTool_InvalidPattern(t *testing.T) {
 	dir := t.TempDir()
-	res := GrepTool(dir).Call(context.Background(), `{"pattern":"["}`)
+	res := GrepTool(dir, 0).Call(context.Background(), `{"pattern":"["}`)
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
@@ -80,7 +80,7 @@ func TestGrepTool_SkipDotGit(t *testing.T) {
 		".git/HEAD": "foo\n",
 		".git/cfg":  "foo\n",
 	})
-	res := GrepTool(dir).Call(context.Background(), `{"pattern":"foo"}`)
+	res := GrepTool(dir, 0).Call(context.Background(), `{"pattern":"foo"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -127,7 +127,7 @@ func TestGrepTool_SkipsOversizedFile(t *testing.T) {
 	}
 	_ = f.Close()
 	writeTree(t, dir, map[string]string{"small.go": "foo match\n"})
-	res := GrepTool(dir).Call(context.Background(), `{"pattern":"foo"}`)
+	res := GrepTool(dir, 0).Call(context.Background(), `{"pattern":"foo"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}

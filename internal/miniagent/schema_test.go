@@ -59,9 +59,9 @@ func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 	workdir := t.TempDir()
 	tools := []Tool{
-		ReadFileTool(workdir),
-		WriteFileTool(workdir),
-		EditFileTool(workdir),
+		ReadFileTool(workdir, 0),
+		WriteFileTool(workdir, 0),
+		EditFileTool(workdir, 0),
 		ShellTool(workdir, 0, ModeAuto),
 	}
 

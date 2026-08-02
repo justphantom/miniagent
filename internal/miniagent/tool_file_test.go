@@ -21,7 +21,7 @@ func writeTemp(t *testing.T, name, content string) string {
 
 func TestWriteFile_CreatesNew(t *testing.T) {
 	dir := t.TempDir()
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"a.txt","content":"hello"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"a.txt","content":"hello"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -33,7 +33,7 @@ func TestWriteFile_CreatesNew(t *testing.T) {
 
 func TestWriteFile_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"src/nested/deep/c.go","content":"x"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"src/nested/deep/c.go","content":"x"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -44,7 +44,7 @@ func TestWriteFile_CreatesParentDirs(t *testing.T) {
 
 func TestWriteFile_FileMode0644(t *testing.T) {
 	dir := t.TempDir()
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"m.txt","content":"x"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"m.txt","content":"x"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -58,7 +58,7 @@ func TestWriteFile_FileMode0644(t *testing.T) {
 func TestWriteFile_RejectsOversized(t *testing.T) {
 	dir := t.TempDir()
 	big := strings.Repeat("a", maxWriteFileBytes+1)
-	res := WriteFileTool(dir).Call(context.Background(), `{"path":"big.bin","content":"`+big+`"}`)
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"big.bin","content":"`+big+`"}`)
 	if !res.IsError {
 		t.Fatal("expected oversize error")
 	}
@@ -66,7 +66,7 @@ func TestWriteFile_RejectsOversized(t *testing.T) {
 
 func TestEditFile_UniqueReplacement(t *testing.T) {
 	dir := writeTemp(t, "e.txt", "hello world")
-	res := EditFileTool(dir).Call(context.Background(), `{"path":"e.txt","old_string":"hello","new_string":"hi"}`)
+	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"e.txt","old_string":"hello","new_string":"hi"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -78,7 +78,7 @@ func TestEditFile_UniqueReplacement(t *testing.T) {
 
 func TestEditFile_ZeroMatchesFails(t *testing.T) {
 	dir := writeTemp(t, "e.txt", "hello world")
-	res := EditFileTool(dir).Call(context.Background(), `{"path":"e.txt","old_string":"xyz","new_string":"abc"}`)
+	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"e.txt","old_string":"xyz","new_string":"abc"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
@@ -86,7 +86,7 @@ func TestEditFile_ZeroMatchesFails(t *testing.T) {
 
 func TestEditFile_MultipleMatchesFails(t *testing.T) {
 	dir := writeTemp(t, "e.txt", "xx yy xx")
-	res := EditFileTool(dir).Call(context.Background(), `{"path":"e.txt","old_string":"xx","new_string":"z"}`)
+	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"e.txt","old_string":"xx","new_string":"z"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
@@ -95,7 +95,7 @@ func TestEditFile_MultipleMatchesFails(t *testing.T) {
 // B-3：replace_all=true 替换全部匹配处。
 func TestEditFile_ReplaceAll(t *testing.T) {
 	dir := writeTemp(t, "e.txt", "xx yy xx")
-	res := EditFileTool(dir).Call(context.Background(), `{"path":"e.txt","old_string":"xx","new_string":"z","replace_all":true}`)
+	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"e.txt","old_string":"xx","new_string":"z","replace_all":true}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -108,7 +108,7 @@ func TestEditFile_ReplaceAll(t *testing.T) {
 // replace_all=true 但无匹配仍报错。
 func TestEditFile_ReplaceAllZeroMatchFails(t *testing.T) {
 	dir := writeTemp(t, "e.txt", "hello")
-	res := EditFileTool(dir).Call(context.Background(), `{"path":"e.txt","old_string":"zz","new_string":"z","replace_all":true}`)
+	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"e.txt","old_string":"zz","new_string":"z","replace_all":true}`)
 	if !res.IsError {
 		t.Fatal("expected error for zero matches")
 	}
@@ -124,7 +124,7 @@ func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "target.txt"), filepath.Join(dir, "link")); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	res := EditFileTool(dir).Call(context.Background(), `{"path":"link","old_string":"hello","new_string":"hi"}`)
+	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"link","old_string":"hello","new_string":"hi"}`)
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
@@ -144,7 +144,7 @@ func TestEditFile_RejectsNonRegular(t *testing.T) {
 	if err := exec.CommandContext(ctx, "mkfifo", fifo).Run(); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
-	res := EditFileTool(dir).Call(context.Background(), `{"path":"fifo","old_string":"x","new_string":"y"}`)
+	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"fifo","old_string":"x","new_string":"y"}`)
 	if !res.IsError {
 		t.Fatal("expected FIFO to be rejected")
 	}
@@ -159,9 +159,9 @@ func TestFileTools_RespectCancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for name, tool := range map[string]Tool{
-		"read":  ReadFileTool(dir),
-		"write": WriteFileTool(dir),
-		"edit":  EditFileTool(dir),
+		"read":  ReadFileTool(dir, 0),
+		"write": WriteFileTool(dir, 0),
+		"edit":  EditFileTool(dir, 0),
 	} {
 		args := `{"path":"x.txt"}`
 		switch name {
