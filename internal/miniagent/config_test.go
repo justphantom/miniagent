@@ -12,52 +12,6 @@ import (
 	"time"
 )
 
-func TestExpandVars(t *testing.T) {
-	t.Setenv("MA_TEST_K", "sk-123")
-	got, err := expandVars(`{"key":"${MA_TEST_K}"}`)
-	if err != nil {
-		t.Fatalf("expand: %v", err)
-	}
-	if !strings.Contains(got, "sk-123") {
-		t.Errorf("not expanded: %s", got)
-	}
-}
-
-func TestExpandVars_UnsetErrors(t *testing.T) {
-	if _, err := expandVars(`${MA_NOPE_XYZ}`); err == nil {
-		t.Error("unset var should error")
-	}
-}
-
-func TestExpandVars_EmptyErrors(t *testing.T) {
-	t.Setenv("MA_EMPTY", "")
-	if _, err := expandVars(`${MA_EMPTY}`); err == nil {
-		t.Error("empty var should error")
-	}
-}
-
-func TestExpandVars_RejectSpecialChar(t *testing.T) {
-	t.Setenv("MA_QUOTE", `a"b`)
-	if _, err := expandVars(`${MA_QUOTE}`); err == nil {
-		t.Error("quote in value should be rejected")
-	}
-}
-
-func TestExpandVars_RejectControlChar(t *testing.T) {
-	// 控制字符（换行/制表/回车等）裸内联会破坏 JSON 字符串结构，须拒绝。
-	// （NUL 不测：OS setenv 不允许值含 NUL，进不到 expandVars。）
-	for name, val := range map[string]string{
-		"MA_NL": "line1\nline2",
-		"MA_TB": "a\tb",
-		"MA_CR": "a\rb",
-	} {
-		t.Setenv(name, val)
-		if _, err := expandVars(`{"k":"${` + name + `}"}`); err == nil {
-			t.Errorf("%s: control char %q should be rejected", name, val)
-		}
-	}
-}
-
 func writeTmpConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -85,8 +39,8 @@ func TestLoadConfig_OK(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_VarExpanded(t *testing.T) {
-	t.Setenv("MA_KEY", "sk-expanded")
+// 配置文件中不再支持 ${VAR} 注入；key 按字面量读取。
+func TestLoadConfig_NoVarExpansion(t *testing.T) {
 	body := strings.ReplaceAll(validConfigBody(),
 		`"models":["glm"]`,
 		`"models":["glm"],"key":"${MA_KEY}"`)
@@ -94,8 +48,8 @@ func TestLoadConfig_VarExpanded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Providers[0].Key != "sk-expanded" {
-		t.Errorf("key not expanded: %q", cfg.Providers[0].Key)
+	if cfg.Providers[0].Key != "${MA_KEY}" {
+		t.Errorf("key should be literal, got %q", cfg.Providers[0].Key)
 	}
 }
 

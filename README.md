@@ -25,15 +25,14 @@ make test       # go test -race ./...
 
 | 变量 | 用途 |
 |------|------|
-| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。config `provider.key` 未设时必需（或用 `-key-file` / `${VAR}` 注入） |
-| `<任意 VAR>` | config 文件中 `${VAR}` 展开来源（如 `provider.key` 用 `${MAIN_API_KEY}`，机密不入文件） |
+| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。config `provider.key` 未设时必需（或用 `-key-file` 传入） |
 
 ## CLI 参数
 
-**始终需要 config**（`-config <path>` 或默认 `./miniagent.json`）。默认 config 查找顺序：1) `./miniagent.json`；2) `~/.miniagent/miniagent.json`；均不存在则报错。显式 `-config` 不存在同样报错。无裸 CLI 模式。
+**始终需要 config**（`-config <path>` 或默认 `~/.miniagent/miniagent.json`）。默认 config 查找路径：`~/.miniagent/miniagent.json`；不存在则报错。显式 `-config` 不存在同样报错。无裸 CLI 模式。
 
 ```
--config string           配置文件路径（默认查 ./miniagent.json；不存在则查 ~/.miniagent/miniagent.json；均不存在则报错）
+-config string           配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）
 -interactive             交互模式：循环读取 prompt（每行一个）；有 -session 时以文件为唯一真源
 -key-file string         从文件读 API key（优先级：cli -key-file > config provider.key > $MINIAGENT_API_KEY）
 -list-models             列出端点可用模型 id 后退出（config 静态 models 不发 GET，否则 GET models-url）
@@ -226,7 +225,7 @@ make test       # go test -race ./...
 miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、shell 词边界拒 11 个提权器（sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl，仍可被变量拼接/拆分绕过）。shell 可经 `cd`/绝对路径访问 workdir 外、读工具无约束。`-mode auto` 无任何限制。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
 
 - 用**专用低权限用户**运行；workdir 属该用户（或只读挂载），无关路径靠文件系统权限隔离。
-- 密钥**用 `-key-file` 从文件注入**或 config `provider.key` 经 `${VAR}` 展开（只读挂载、`0600`），而非环境变量——这样 key 不在进程 env，shell 子进程经 `/proc/$PPID/environ` 读不到它。`-key-file` 文件若可被 group/other 读会 stderr 警告。
+- 密钥**用 `-key-file` 从文件注入**（只读挂载、`0600`），而非写入 config `provider.key` 或环境变量——这样 key 不在进程 env，shell 子进程经 `/proc/$PPID/environ` 读不到它。`-key-file` 文件若可被 group/other 读会 stderr 警告。
 - 需要更强隔离时自行叠加容器 / 独立 UID / `hidepid` / 网络出口白名单等——这些**不在 miniagent 职责内**，由运行环境提供。
 
 > 一句话：miniagent 信任其运行用户的权限边界；default 模式仅拦误操作，越权访问的闸门是 OS 用户与文件权限。
@@ -287,9 +286,9 @@ repo/
   "providers": [
     {
       "name": "openai",
-      "chat_url": "${CHAT_URL}",
-      "models_url": "${MODELS_URL}",
-      "key": "${MAIN_API_KEY}",
+      "chat_url": "https://api.openai.com/v1/chat/completions",
+      "models_url": "https://api.openai.com/v1/models",
+      "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "models": ["gpt-4o", "gpt-4o-mini"],
       "thinking": {
         "field": "reasoning_effort",
@@ -336,7 +335,7 @@ repo/
 
 **关键字段说明**：
 - `provider.chat_url` / `provider.models_url`：完整 OpenAI 兼容端点
-- `provider.key`：推荐用 `${VAR}` 注入（避免明文存储）
+- `provider.key`：按字面量读取；建议用 `-key-file` 传入避免明文入文件
 - `defaults.model`：`provider/id` 格式；无 `/` 时默认选中唯一 provider
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
 - `compaction.model`：摘要压缩使用的轻量模型
@@ -344,24 +343,27 @@ repo/
 ## 完整调用示例
 
 ```bash
-# 单次问答（config 模式；机密经 ${VAR} 来自环境，不入文件）
-echo "用一句话解释 goroutine" | MAIN_API_KEY=sk-xxx \
-  ./bin/miniagent -config ./miniagent.json -mode auto
+# 单次问答（默认读取 ~/.miniagent/miniagent.json；用 -key-file 避免 key 入 env）
+echo "用一句话解释 goroutine" | \
+  ./bin/miniagent -key-file /path/to/key.txt -mode auto
+
+# 显式指定配置文件
+./bin/miniagent -config /path/to/miniagent.json -key-file /path/to/key.txt ...
 
 # 带工具 + 指定工作目录（default 模式：写工具限 ./repo，shell cwd 为 ./repo，.miniagent/ 从 ./repo 发现）
-echo "在当前目录跑测试并总结失败原因" | MAIN_API_KEY=sk-xxx \
-  ./bin/miniagent -config ./miniagent.json -workdir ./repo
+echo "在当前目录跑测试并总结失败原因" | \
+  ./bin/miniagent -key-file /path/to/key.txt -workdir ./repo
 
 # 思考级别 + 摘要压缩（run.context_window 在 config 配置）
-echo "重构这段代码" | MAIN_API_KEY=sk-xxx \
-  ./bin/miniagent -config ./miniagent.json -workdir . -thinking high
+echo "重构这段代码" | \
+  ./bin/miniagent -key-file /path/to/key.txt -workdir . -thinking high
 
 # 限制整体墙钟 5 分钟（防 ReAct 循环失控烧 token；config run.max_duration）
-echo "跑全量测试并总结" | MAIN_API_KEY=sk-xxx \
-  ./bin/miniagent -config ./miniagent.json -mode auto -workdir .
+echo "跑全量测试并总结" | \
+  ./bin/miniagent -key-file /path/to/key.txt -mode auto -workdir .
 
 # subagent fork：把可并行子任务再调一次 miniagent（仅输出结果文本）
-echo "<子任务>" | ./bin/miniagent -config ./miniagent.json -session <父id>-sub-1 -workdir . -mode default -result-only
+echo "<子任务>" | ./bin/miniagent -session <父id>-sub-1 -workdir . -mode default -result-only
 
 # 查看版本
 ./bin/miniagent -version

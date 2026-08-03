@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 )
 
@@ -84,54 +83,14 @@ type CompactionConfig struct {
 
 // CLIOverrides / ResolvedRun / Resolved / Resolve / resolveRun 见 resolve.go。
 
-var envVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
-
-// expandVars 把 raw 中所有 ${VAR} 替换为 os.Getenv(VAR)。未设置/空报错；值含 JSON
-// 特殊字符（" \）或控制字符（<0x20，含换行/制表/回车，RFC 8259 要求转义）拒绝内联，
-// 防止破坏 JSON 字符串结构（裸内联会让 json.Unmarshal 报「非法 JSON」，掩盖根因）。
-func expandVars(raw string) (string, error) {
-	var bad error
-	out := envVarRe.ReplaceAllStringFunc(raw, func(m string) string {
-		if bad != nil {
-			return m
-		}
-		name := m[2 : len(m)-1]
-		v, ok := os.LookupEnv(name)
-		if !ok || v == "" {
-			bad = fmt.Errorf("环境变量 %q 未设置或为空", name)
-			return m
-		}
-		if strings.ContainsAny(v, `"\`) || hasControlChar(v) {
-			bad = fmt.Errorf("环境变量 %q 含 JSON 特殊字符或控制字符，拒绝内联", name)
-			return m
-		}
-		return v
-	})
-	return out, bad
-}
-
-// hasControlChar 报告 s 是否含 JSON 控制字符（U+0000–U+001F，须转义）或 DEL(0x7f)。
-func hasControlChar(s string) bool {
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return true
-		}
-	}
-	return false
-}
-
-// LoadConfig 读 path、展开 ${VAR}、反序列化、校验。显式 -config 不存在由调用方区分硬错误。
+// LoadConfig 读 path、反序列化、校验。显式 -config 不存在由调用方区分硬错误。
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读 config %q: %w", path, err)
 	}
-	expanded, err := expandVars(string(data))
-	if err != nil {
-		return nil, fmt.Errorf("config %q: %w", path, err)
-	}
 	var cfg Config
-	if err := json.Unmarshal([]byte(expanded), &cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config %q 不是合法 JSON: %w", path, err)
 	}
 	if err := validateConfig(&cfg); err != nil {
@@ -184,11 +143,6 @@ func validateConfig(cfg *Config) error {
 			if _, err := validateURL(p.ModelsURL); err != nil {
 				return fmt.Errorf("provider %q models_url: %w", p.Name, err)
 			}
-		}
-		// key 明文入 config 与「机密不入文件」的承诺相悖；不强制拒绝（兼容现有
-		// 用法），仅 stderr 告警引导用 ${VAR} 注入（审查 P3-11）。
-		if p.Key != "" && !envVarRe.MatchString(p.Key) {
-			fmt.Fprintf(os.Stderr, "miniagent: warning: provider %q 的 key 明文写入 config，建议用 ${VAR} 注入避免机密入文件\n", p.Name)
 		}
 		// thinking.field 不得指向 buildChatBody 的保留 payload key：buildChatBody 用
 		// payload[field]=val 写思考级别（wire.go），命中保留 key 会 clobber 标准字段

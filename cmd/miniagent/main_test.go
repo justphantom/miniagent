@@ -624,7 +624,7 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	}
 }
 
-// requireConfig：无 config 且 workdir/.miniagent/miniagent.json 不存在时，应返回 error。
+// requireConfig：无 -config 且 ~/.miniagent/miniagent.json 不存在时，应返回 error。
 // 显式 -config 不存在=硬错误（通过 TestCLI_ExplicitConfigMissingExits1 覆盖）。
 func TestRequireConfig_NoConfigExits(t *testing.T) {
 	oldWD, err := os.Getwd()
@@ -661,8 +661,13 @@ func TestRequireConfig_DefaultStatErrorIsHardError(t *testing.T) {
 	}
 	// 用测试目录替代 HOME，避免加载真实的 ~/.miniagent/miniagent.json
 	t.Setenv("HOME", dir)
+	maDir := filepath.Join(dir, ".miniagent")
+	if err := os.MkdirAll(maDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(maDir, "miniagent.json")
 	// 自指符号链接：Stat 跟随 → ELOOP（非 fs.ErrNotExist）→ 硬错误。
-	if err := os.Symlink("./miniagent.json", "./miniagent.json"); err != nil {
+	if err := os.Symlink(cfgPath, cfgPath); err != nil {
 		t.Skipf("cannot create self-referential symlink: %v", err)
 	}
 	_, err = requireConfig("")

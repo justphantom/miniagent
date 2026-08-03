@@ -35,18 +35,12 @@ func requireConfig(configPath string) (*miniagent.Config, error) {
 	if p != "" {
 		return miniagent.LoadConfig(p)
 	}
-	return nil, errors.New("miniagent config 不存在（-config <path> 或 ./miniagent.json 或 ~/.miniagent/miniagent.json）")
+	return nil, errors.New("miniagent config 不存在（-config <path> 或 ~/.miniagent/miniagent.json）")
 }
 
-// findDefaultConfigPath 查找默认 config 路径：./miniagent.json > ~/.miniagent/miniagent.json。
+// findDefaultConfigPath 查找默认 config 路径：仅 ~/.miniagent/miniagent.json。
 // 返回找到的路径的绝对路径；若都未找到返回空字符串；若 stat 出错返回该错误。
 func findDefaultConfigPath() (string, error) {
-	if _, err := os.Stat("./miniagent.json"); err == nil {
-		abs, _ := filepath.Abs("./miniagent.json")
-		return abs, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("stat config %q: %w", "./miniagent.json", err)
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("定位 home 目录失败：%w", err)
@@ -272,9 +266,9 @@ func providerForListModels(cfg *miniagent.Config, f *cliFlags) (miniagent.Provid
 	return miniagent.ProviderConfig{}, errors.New("list-models 需 -model 或 defaults.model 或单一 provider")
 }
 
-// absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 workdir/home ~/.miniagent/miniagent.json），
+// absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 ~/.miniagent/miniagent.json），
 // 供 subagent fork 引导注入。cfg 始终非 nil（S1 删裸模式）。
-// 逻辑与 requireConfig 保持一致：显式 -config > workdir/.miniagent.json > ~/.miniagent/miniagent.json。
+// 逻辑与 requireConfig 保持一致：显式 -config > ~/.miniagent/miniagent.json。
 func absConfigPath(configPath string) string {
 	if configPath != "" {
 		abs, _ := filepath.Abs(configPath)
