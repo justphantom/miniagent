@@ -39,7 +39,7 @@ type cliFlags struct {
 
 func parseFlags() *cliFlags {
 	f := &cliFlags{}
-	f.configPath = flag.String("config", "", "配置文件路径（默认查 ./miniagent.json；不存在则查 ~/.miniagent/miniagent.json；均不存在则报错）")
+	f.configPath = flag.String("config", "", "配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）")
 	f.mode = flag.String("mode", "", "权限模式 default|auto（default 时 workdir 必填）；默认 default")
 	f.thinking = flag.String("thinking", "", "思考级别 off|minimal|low|medium|high|xhigh|max（默认 off）")
 	f.resultOnly = flag.Bool("result-only", false, "仅输出 result.text（subagent fork 用）；与 -stream 互斥")

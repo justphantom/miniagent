@@ -232,3 +232,37 @@ func TestChatEndpoint_ConcurrentLazyParse(t *testing.T) {
 		}
 	}
 }
+
+// v3.2.3 新增的 4 个策略化常量曾漏装配进 ResolvedRun（resolveRun 未赋值），config 值静默失效；
+// 修复后须从 config 透传到 ResolvedRun，main 的 Set* 才能据此覆盖内置默认。
+func TestResolve_StrategyConstantsLateWired(t *testing.T) {
+	mk := func(v int) *int { return &v }
+	cfg := &Config{
+		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
+		Defaults:  DefaultsConfig{Model: "p/m"},
+		Run: RunConfig{
+			SummaryMaxTokens:     mk(512),
+			GrepMaxMatches:       mk(500),
+			MemoryRecentN:        mk(7),
+			ContextTrimToolChars: mk(1234),
+		},
+	}
+	r, err := Resolve(cfg, CLIOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		got  *int
+		want int
+	}{
+		{"SummaryMaxTokens", r.Run.SummaryMaxTokens, 512},
+		{"GrepMaxMatches", r.Run.GrepMaxMatches, 500},
+		{"MemoryRecentN", r.Run.MemoryRecentN, 7},
+		{"ContextTrimToolChars", r.Run.ContextTrimToolChars, 1234},
+	} {
+		if c.got == nil || *c.got != c.want {
+			t.Errorf("%s = %v, want %d", c.name, c.got, c.want)
+		}
+	}
+}

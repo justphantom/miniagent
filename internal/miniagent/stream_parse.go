@@ -80,6 +80,9 @@ func parseSSE(r io.Reader, onDelta func(Delta)) (Response, error) {
 			continue
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue // 空 data 行（代理 keepalive），不中断流
+		}
 		if data == "[DONE]" {
 			break
 		}

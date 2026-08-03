@@ -153,6 +153,12 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	r.MaxReadFileBytes = intPtr(func(rc RunConfig) *int { return rc.MaxReadFileBytes })
 	r.MaxShellOutputChars = intPtr(func(rc RunConfig) *int { return rc.MaxShellOutputChars })
 	r.MaxSessionBytes = intPtr(func(rc RunConfig) *int { return rc.MaxSessionBytes })
+	// S4 策略化常量（接续上文，仅 config 来源）：与 MaxToolResultChars 等同批，须一并装配，
+	// 否则 config 值不入 ResolvedRun、main 的 Set* 收到 0 当作未设置而回落内置默认。
+	r.SummaryMaxTokens = intPtr(func(rc RunConfig) *int { return rc.SummaryMaxTokens })
+	r.GrepMaxMatches = intPtr(func(rc RunConfig) *int { return rc.GrepMaxMatches })
+	r.MemoryRecentN = intPtr(func(rc RunConfig) *int { return rc.MemoryRecentN })
+	r.ContextTrimToolChars = intPtr(func(rc RunConfig) *int { return rc.ContextTrimToolChars })
 	return r, nil
 }
 
@@ -171,6 +177,9 @@ func parseDur(cv *string, label string) (*time.Duration, error) {
 	d, err := time.ParseDuration(*cv)
 	if err != nil {
 		return nil, fmt.Errorf("config %s %q: %w", label, *cv, err)
+	}
+	if d < 0 {
+		return nil, fmt.Errorf("config %s %q: 负值不合法", label, *cv)
 	}
 	return &d, nil
 }

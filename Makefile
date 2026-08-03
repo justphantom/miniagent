@@ -1,6 +1,6 @@
 .PHONY: build test fmt lint clean deploy
 
-COMMIT := $(shell git describe --always --dirty)
+COMMIT := $(shell git describe --always --dirty --tags)
 
 build:
 	mkdir -p bin

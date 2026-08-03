@@ -3,9 +3,59 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [3.3.0] - 2026-08-03
+
+> 双层 `.miniagent/` 规则查找、多 provider `-list-models` 聚合、HTTP 工具抽离；修正发版前评估发现的旗舰示例不可加载与 run.* 配置键漏装配。
+
+### Added
+- **多 provider `-list-models` 聚合**（256c875）：多 provider 时聚合输出 `provider/model_id`，`-model` 可筛选单 provider；单 provider 保持纯 model id。
+- **双层 `.miniagent/` 规则查找**（1ac831e）：`persona.md`/`rules.md`/`scripts.json`/`memory.jsonl` 优先 workdir、回退 `~/.miniagent/`（workdir > home > 空）。
+- **HTTP 工具函数抽离**（1ac831e，`setup_http.go`）：`httpTimeoutFromConfig` 等供 list-models 与 buildLLM 复用。
+- **`config.example.json` 配置模板**（1c1687c）：带注释的旗舰示例。
+
+### Changed
+- **默认 config 查找简化**（c51d91c）：仅 `~/.miniagent/miniagent.json`，移除 `./miniagent.json` 回退与 `${VAR}` 展开；不存在则报错。
+- 测试文件按主题拆分为独立文件（bfab731）。
+
+### Fixed
+- **sandbox `checkConfine` 强化符号链接检查**（1c1687c）。
+- **`resolveRun` 漏装配 4 个 run.\* 配置键**：`summary_max_tokens`/`grep_max_matches`/`memory_recent_n`/`context_trim_tool_chars` 自 v3.2.3 声明但从未赋值，配置值静默失效（main 的 `Set*` 收到 0 当未设置而回落内置默认）；现已透传到 `ResolvedRun`，对应 `Set*` 生效。
+- **`config.example.json` 旗舰示例不可加载**：openai provider 显式 `thinking.field:"reasoning_effort"` 被 `thinkingFieldBlacklist` 拒（误配）；删除该映射块——默认即注入 `reasoning_effort`，无需显式声明。
+
+## [3.2.5] - 2026-08-02
+
+### Changed
+- 提升 tool 结果/shell 输出/session 等默认上限（494f5f2、44ed373）。
+
+### Fixed
+- `session_test` 大字符串触发 race 超时：TestMain 覆盖上限调整为 1MB（5571d48）。
+
+## [3.2.4] - 2026-08-02
+
+### Changed
+- 统一 timeout/limit 配置化实现模式（refactor，1bd76fb）。
+
+## [3.2.3] - 2026-08-02
+
+### Added
+- 新增 `summary_max_tokens`/`grep_max_matches`/`memory_recent_n`/`context_trim_tool_chars` 配置项（4044c65）。
+
+## [3.2.2] - 2026-08-02
+
+### Added
+- 文件读取/shell 输出/session 默认上限提升并实现可配置：`max_read_file_bytes`/`max_shell_output_chars`/`max_session_bytes` 等（f776bdd）。
+
+## [3.2.1] - 2026-08-02
+
+### Added
+- 文件操作（read/grep/glob/edit）与 write 超时可配置：`file_op_timeout`/`write_timeout`（000a54a）。
+
+### Internal
+- 测试适配新的工具构造函数超时参数（a2e1465）。
+
 ## [3.2.0] - 2026-08-02
 
-> 落地 `docs/architecture-evaluation-2026-08-02.md` 路线图：核心引擎重构（P3/P4）、减法（S1/S2/P2/S3）、
+> 落地内部架构评估路线图：核心引擎重构（P3/P4）、减法（S1/S2/P2/S3）、
 > 常量策略化（S4）、自进化机制（P0/P1/P5）。**破坏性变更**见 Removed。跳过 P6（反馈闭环）与 S5（schema 生成）。
 
 ### Added

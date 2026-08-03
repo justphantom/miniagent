@@ -238,20 +238,19 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 |------|----|------|------|
 | `maxIterations` | 20 | —（CLI `-max-iterations`） | 单轮 LLM 调用上限 |
 | `maxParallelTools` | 8 | `run.max_parallel_tools` | 单步内并行工具并发上限 |
-| `maxToolResultInHistory` | 2000 | `run.max_tool_result_chars` | tool 结果进入历史消息的默认字符数（shell/grep/glob） |
+| `maxToolResultInHistory` | 4000 | `run.max_tool_result_chars` | tool 结果进入历史消息的默认字符数（shell/grep/glob） |
 | `maxFileResultInHistory` | 8000 | `run.max_file_result_chars` | read/edit 结果进入历史消息的字符数（代码内容，截断丢准确性） |
 | `contextTrimToolChars` | 1000 | — | context 超限降级时把 tool 结果压到的字符数 |
 | `contextKeepRecent` | 6 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
-| `summaryMaxChars` | 2000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
-| `maxGrepMatches` / `maxGlobEntries` | 200 / 500 | grep 命中行 / glob 命中条数上限 |
-| `maxReadFileBytes` / `maxReadFileChars` | 80000 / 20000 | 读文件字节 / 输出字符上限 |
+| `summaryMaxChars` | 5000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
+| `maxGrepMatches` / `maxGlobEntries` | 500 / 500 | grep 命中行 / glob 命中条数上限 |
+| `maxReadFileBytes` / `maxReadFileChars` | 1MiB / 20000 | 读文件字节 / 输出字符上限 |
 | `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
 | `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | 写 / 编辑文件字节上限 |
-| `maxShellOutputChars` | 20000 | shell 输出字符上限 |
-| `shellTimeout` | 60s | `run.shell_timeout` | shell/script 命令超时（默认值，可被 config 覆盖） |
+| `maxShellOutputChars` | 100000 | shell 输出字符上限 |
+| `shellTimeout` | 120s | `run.shell_timeout` | shell/script 命令超时（默认值，可被 config 覆盖） |
 | `fileOpTimeout` | 30s | `run.file_op_timeout` | read/edit/grep/glob 文件操作超时（默认值，可被 config 覆盖） |
 | `writeOpTimeout` | 30s | `run.write_timeout` | write 原子写入超时（默认值，可被 config 覆盖） |
-| `maxGrepMatches` / `maxGlobEntries` | 200 / 500 | grep 命中行 / glob 命中条数上限 |
 
 ## 项目专属配置（`.miniagent/`）
 
@@ -289,11 +288,7 @@ repo/
       "chat_url": "https://api.openai.com/v1/chat/completions",
       "models_url": "https://api.openai.com/v1/models",
       "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "models": ["gpt-4o", "gpt-4o-mini"],
-      "thinking": {
-        "field": "reasoning_effort",
-        "map": {"low": "low", "medium": "medium", "high": "high"}
-      }
+      "models": ["gpt-4o", "gpt-4o-mini"]
     }
   ],
   "session": {"dir": ".sessions"},

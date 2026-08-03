@@ -1,6 +1,7 @@
 package miniagent
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -134,4 +135,29 @@ func TestLoadConfig_StrategyConstants(t *testing.T) {
 			t.Errorf("%s = %v, want %d", c.name, c.got, c.want)
 		}
 	}
+}
+
+// config.example.json 是发版旗舰示例：strip // 注释后必须可被 LoadConfig 加载
+// （曾因 openai provider 显式写 thinking.field:"reasoning_effort" 触发黑名单被拒）。
+func TestLoadConfig_ExampleFile(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.json")
+	if err != nil {
+		t.Fatalf("read example: %v", err)
+	}
+	if _, err := LoadConfig(writeTmpConfig(t, stripJSONComments(string(data)))); err != nil {
+		t.Fatalf("config.example.json strip 注释后应可加载: %v", err)
+	}
+}
+
+// stripJSONComments 去掉整行 // 注释（config.example.json 的注释均为独立行，故按行判断即可）。
+func stripJSONComments(in string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(in, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
