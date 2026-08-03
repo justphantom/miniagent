@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"log/slog"
@@ -94,43 +93,12 @@ func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	return o
 }
 
-// resolveFinalKey：cli(-key-file) > config(provider.Key) > env。机密不入 config 文件——
-// provider.Key 通常是 ${VAR} 展开，仍来自环境。
-func resolveFinalKey(providerKey, keyFile string) string {
-	if keyFile != "" {
-		key, err := resolveAPIKey(keyFile, "")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
-			os.Exit(1)
-		}
-		warnKeyFilePerm(keyFile)
-		return key
-	}
+// resolveFinalKey：config(provider.Key) > env。机密建议用环境变量注入，避免明文入 config。
+func resolveFinalKey(providerKey string) string {
 	if providerKey != "" {
 		return providerKey
 	}
 	return os.Getenv("MINIAGENT_API_KEY")
-}
-
-func resolveAPIKey(keyFile, envKey string) (string, error) {
-	if keyFile == "" {
-		return envKey, nil
-	}
-	data, err := readKeyFileNoFollow(keyFile)
-	if err != nil {
-		return "", fmt.Errorf("read key-file %q: %w", keyFile, err)
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
-func warnKeyFilePerm(path string) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		fmt.Fprintf(os.Stderr, "miniagent: warning: key-file %s readable by group/other (mode=%o); recommend 0600\n", path, info.Mode().Perm())
-	}
 }
 
 func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {

@@ -258,8 +258,8 @@ func TestCLI_MaxDurationExits1(t *testing.T) {
 	}
 }
 
-// e2e：仅靠 -key-file 提供 key，key 进入请求 Authorization。
-func TestCLI_KeyFileAuth(t *testing.T) {
+// e2e：config provider.key 提供 key，进入请求 Authorization。
+func TestCLI_ProviderKeyAuth(t *testing.T) {
 	var mu sync.Mutex
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -270,17 +270,18 @@ func TestCLI_KeyFileAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	keyFile := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(keyFile, []byte("sk-from-config-file\n"), 0o600); err != nil {
+	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
+	body := `{"providers":[{"name":"p","chat_url":"` + srv.URL + `/v1/chat/completions","key":"sk-from-config"}],"defaults":{"model":"p/m","mode":"auto"}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-key-file", keyFile))
+	code, out := runMainBin(t, "ping", []string{"-config", cfgPath})
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if gotAuth != "Bearer sk-from-config-file" {
+	if gotAuth != "Bearer sk-from-config" {
 		t.Errorf("Authorization = %q", gotAuth)
 	}
 }

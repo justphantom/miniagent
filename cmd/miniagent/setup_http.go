@@ -44,21 +44,10 @@ func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
 	return d, nil
 }
 
-// listAllModels 按 provider 解析 key 并复用统一 transport/timeout，聚合模型列表。
-func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, keyFile string, httpTimeout time.Duration, logger *slog.Logger) ([]string, error) {
-	keyFileKey := ""
-	if keyFile != "" {
-		var err error
-		keyFileKey, err = resolveAPIKey(keyFile, "")
-		if err != nil {
-			return nil, err
-		}
-		warnKeyFilePerm(keyFile)
-	}
+// listAllModels 按 provider 解析 key（provider.Key > $MINIAGENT_API_KEY）并复用统一
+// transport/timeout，聚合模型列表。
+func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]string, error) {
 	keyFor := func(p miniagent.ProviderConfig) string {
-		if keyFileKey != "" {
-			return keyFileKey
-		}
 		if p.Key != "" {
 			return p.Key
 		}

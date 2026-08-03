@@ -11,7 +11,8 @@
       "chat_url": "https://api.openai.com/v1/chat/completions",
       // models_url：可选；配置后 -list-models 会发 GET 请求，否则用静态 models 列表。
       "models_url": "https://api.openai.com/v1/models",
-      // key：API 密钥，按字面量读取；为避免明文入文件，建议使用 -key-file 传入。
+      // key：API 密钥，按字面量读取；明文入文件，注意权限（建议 0600）。
+      // 也可留空改用 $MINIAGENT_API_KEY 环境变量注入。
       "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       // models：静态模型列表；models_url 为空时 -list-models 直接返回该列表。
       "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"]

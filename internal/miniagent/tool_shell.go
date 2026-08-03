@@ -155,14 +155,15 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 // 模式 ${MAIN_API_KEY} 注入的来源变量（非 MINIAGENT_ 前缀但同样承载真实 key），以及
 // AWS_ACCESS_KEY_ID、GH_TOKEN/GITHUB_TOKEN/GITHUB_PAT/GITLAB_PAT、DATABASE_PASSWORD、
 // MYSQL_PWD、DB_PASS/REDIS_PASS、GPG_PASSPHRASE、BASIC_AUTH/AUTH_HEADER 等高频宿主凭证，
-// 降低非 -key-file 模式下 LLM echo 出密钥的概率。PWD/PASS/AUTH 等短关键字会扩大误伤面
+// 降低 LLM 经环境变量 echo 出密钥的概率。PWD/PASS/AUTH 等短关键字会扩大误伤面
 // （如 AUTHPROXY、PASSWORDLESS 中含 PASS/PASSWORD）——安全侧倾斜的已知取舍，倾向过度
 // 剥离而非泄漏。PAT 单独排除 PATH 族（PATH/PATHEXT/*_PATH），见 hasSecretKeyword 注释。
 //
-// 已知未覆盖（依赖 -key-file 与 OS 隔离兜底，不强制剥离以免误伤 agent 自身 shell 命令
+// 已知未覆盖（依赖调用方 OS 隔离兜底，不强制剥离以免误伤 agent 自身 shell 命令
 // 所需环境）：DATABASE_URL/SERVICE_URL（URL 过宽）、*_COOKIE、*_DSN、*_CONN。
 // 这些是增量泄漏面收窄，不是密钥隔离边界——未列出的凭证名仍继承，且子进程可经
-// /proc/$PPID/environ 读到 exec 前的完整环境快照。彻底方案是 -key-file（key 不进 env）。
+// /proc/$PPID/environ 读到 exec 前的完整环境快照。彻底方案是调用方隔离（容器/独立 UID）；
+// key 若经 $MINIAGENT_API_KEY 注入则必在进程 env，procfs 可读。
 func scrubEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

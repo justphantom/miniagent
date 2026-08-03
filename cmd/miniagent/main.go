@@ -20,7 +20,6 @@ var version = "3.4.0"
 
 type cliFlags struct {
 	model         *string
-	keyFile       *string
 	system        *string
 	maxTokens     *int
 	workdir       *string
@@ -44,7 +43,6 @@ func parseFlags() *cliFlags {
 	f.thinking = flag.String("thinking", "", "思考级别 off|minimal|low|medium|high|xhigh|max（默认 off）")
 	f.resultOnly = flag.Bool("result-only", false, "仅输出 result.text（subagent fork 用）；与 -stream 互斥")
 	f.model = flag.String("model", "", "LLM model（config 模式 provider/id）")
-	f.keyFile = flag.String("key-file", "", "从文件读 API key（首尾空白截断）；优先于 provider.key/$MINIAGENT_API_KEY")
 	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
 	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
@@ -96,7 +94,7 @@ func main() {
 			providers = []miniagent.ProviderConfig{p}
 		}
 		warnProvidersInsecureURLs(providers)
-		ids, err := listAllModels(ctx, providers, *f.keyFile, listHTTPTimeout, logger)
+		ids, err := listAllModels(ctx, providers, listHTTPTimeout, logger)
 		for _, id := range ids {
 			fmt.Println(id)
 		}
@@ -112,11 +110,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 		os.Exit(1)
 	}
-	apiKey := resolveFinalKey(resolved.Provider.Key, *f.keyFile)
+	apiKey := resolveFinalKey(resolved.Provider.Key)
 
 	validateConversation(resolved, f)
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: API key 缺失（provider.key / -key-file / $MINIAGENT_API_KEY）")
+		fmt.Fprintln(os.Stderr, "miniagent: API key 缺失（provider.key / $MINIAGENT_API_KEY）")
 		os.Exit(1)
 	}
 	warnInsecureURL(resolved.Provider.ChatURL)
@@ -149,7 +147,7 @@ func main() {
 	var compChat *miniagent.ChatClient
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
 		warnProviderInsecureURLs(resolved.CompactionProvider)
-		compKey := resolveFinalKey(resolved.CompactionProvider.Key, "")
+		compKey := resolveFinalKey(resolved.CompactionProvider.Key)
 		if compKey == "" {
 			fmt.Fprintln(os.Stderr, "miniagent: compaction provider API key 缺失（provider.key / $MINIAGENT_API_KEY）")
 			os.Exit(1)

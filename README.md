@@ -25,7 +25,7 @@ make test       # go test -race ./...
 
 | 变量 | 用途 |
 |------|------|
-| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。config `provider.key` 未设时必需（或用 `-key-file` 传入） |
+| `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。config `provider.key` 未设时必需 |
 
 ## CLI 参数
 
@@ -34,7 +34,6 @@ make test       # go test -race ./...
 ```
 -config string           配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）
 -interactive             交互模式：循环读取 prompt（每行一个）；有 -session 时以文件为唯一真源
--key-file string         从文件读 API key（优先级：cli -key-file > config provider.key > $MINIAGENT_API_KEY）
 -list-models             列出可用模型后退出，统一输出 provider/model_id（静态 models 不发 GET，否则 GET models-url；-model 可筛选单个 provider）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
@@ -63,7 +62,7 @@ make test       # go test -race ./...
 ### 主对话流程的前置检查
 
 - 无法确定 endpoint/model（config 缺 provider/defaults.model，或 config 解析失败）→ stderr 报错，退出码 1
-- API key 缺失（provider.key / -key-file / `$MINIAGENT_API_KEY` 均无）→ stderr 报错，退出码 1
+- API key 缺失（provider.key / `$MINIAGENT_API_KEY` 均无）→ stderr 报错，退出码 1
 - `default` 模式无 `-workdir` → stderr 报错，退出码 1（用 `-mode auto` 放行）
 - `-stream` 与 `-result-only` 同传 → stderr 报错，退出码 1
 - stdin 为空 → stderr 报错 `miniagent: stdin is empty (send prompt via pipe or redirect)`，退出码 1
@@ -195,7 +194,7 @@ make test       # go test -race ./...
 - 命令超时 60 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
 - 输出超过 20000 字符截断
 - 退出码：成功 `ExitCode=0`；命令非 0 退出 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；超时/启动失败 `IsError=true` + `ExitCode=-1`（`exitCodeNotSet`）。LLM 据 `ExitCode` 判命令成败
-- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；另剥离变量名（大写后）含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT）的第三方凭证变量（PAT 排除含 PATH 的路径类变量如 `PATH`/`GITHUB_PATH`）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID），或用 `-key-file` 不经环境变量传 key（key 不在进程 env，`/proc/$PPID/environ` 读不到）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
+- 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；另剥离变量名（大写后）含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT）的第三方凭证变量（PAT 排除含 PATH 的路径类变量如 `PATH`/`GITHUB_PATH`）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
 ## 会话接续（-session）
 
@@ -226,7 +225,7 @@ make test       # go test -race ./...
 miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、`read`/`grep`/`glob` 在 default 模式下被限制在 workdir 内、shell 词边界拒 11 个提权器（sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl，仍可被变量拼接/拆分绕过）。shell 可经 `cd`/绝对路径访问 workdir 外。`-mode auto` 无任何限制。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
 
 - 用**专用低权限用户**运行；workdir 属该用户（或只读挂载），无关路径靠文件系统权限隔离。
-- 密钥**用 `-key-file` 从文件注入**（只读挂载、`0600`），而非写入 config `provider.key` 或环境变量——这样 key 不在进程 env，shell 子进程经 `/proc/$PPID/environ` 读不到它。`-key-file` 以 `O_NOFOLLOW` 打开并拒绝最终分量为符号链接的文件，大小限制 64KiB；若可被 group/other 读会 stderr 警告。
+- 密钥经 `$MINIAGENT_API_KEY` 环境变量或 config `provider.key` 注入。**注意：无论哪种方式，shell 子进程都可经 `/proc/$PPID/environ` 或读 config 文件拿到 key**（环境变量剥离只挡 `echo $VAR` 这类直读，挡不住 procfs）。因此密钥隔离**依赖运行用户的 OS 权限**：专用低权限用户、config 文件 `0600`、必要时容器/独立 UID。不要再依赖已移除的 `-key-file`。
 - **session 保存受信号保护**：收到 `SIGINT`/`SIGTERM` 后，正在进行的 LLM/工具调用会被取消，但 `AppendMessages`/`RewriteMessages` 期间会临时忽略信号，保证 session 文件原子落盘，避免半写截断。
 - 需要更强隔离时自行叠加容器 / 独立 UID / `hidepid` / 网络出口白名单等——这些**不在 miniagent 职责内**，由运行环境提供。
 
@@ -332,7 +331,7 @@ repo/
 
 **关键字段说明**：
 - `provider.chat_url` / `provider.models_url`：完整 OpenAI 兼容端点
-- `provider.key`：按字面量读取；建议用 `-key-file` 传入避免明文入文件
+- `provider.key`：按字面量读取；明文入 config，注意文件权限（建议 `0600`），或改用 `$MINIAGENT_API_KEY`
 - `defaults.model`：`provider/id` 格式；无 `/` 时默认选中唯一 provider
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
 - `compaction.model`：摘要压缩使用的轻量模型；可写 `model_id`（同主模型 provider）或 `provider/model`（跨 provider）
@@ -340,24 +339,24 @@ repo/
 ## 完整调用示例
 
 ```bash
-# 单次问答（默认读取 ~/.miniagent/miniagent.json；用 -key-file 避免 key 入 env）
+# 单次问答（默认读取 ~/.miniagent/miniagent.json；key 经 $MINIAGENT_API_KEY 或 config provider.key 注入）
 echo "用一句话解释 goroutine" | \
-  ./bin/miniagent -key-file /path/to/key.txt -mode auto
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -mode auto
 
 # 显式指定配置文件
-./bin/miniagent -config /path/to/miniagent.json -key-file /path/to/key.txt ...
+MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -config /path/to/miniagent.json ...
 
 # 带工具 + 指定工作目录（default 模式：写工具限 ./repo，shell cwd 为 ./repo，.miniagent/ 从 ./repo 发现）
 echo "在当前目录跑测试并总结失败原因" | \
-  ./bin/miniagent -key-file /path/to/key.txt -workdir ./repo
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir ./repo
 
 # 思考级别 + 摘要压缩（run.context_window 在 config 配置）
 echo "重构这段代码" | \
-  ./bin/miniagent -key-file /path/to/key.txt -workdir . -thinking high
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir . -thinking high
 
 # 限制整体墙钟 5 分钟（防 ReAct 循环失控烧 token；config run.max_duration）
 echo "跑全量测试并总结" | \
-  ./bin/miniagent -key-file /path/to/key.txt -mode auto -workdir .
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -mode auto -workdir .
 
 # subagent fork：把可并行子任务再调一次 miniagent（仅输出结果文本）
 echo "<子任务>" | ./bin/miniagent -session <父id>-sub-1 -workdir . -mode default -result-only
