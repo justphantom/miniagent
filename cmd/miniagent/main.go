@@ -145,9 +145,10 @@ func main() {
 
 	// 若 compaction 使用不同 provider，需单独构建 ChatClient；摘要不走流式，故忽略 stream。
 	var compChat *miniagent.ChatClient
+	compKey := ""
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
 		warnProviderInsecureURLs(resolved.CompactionProvider)
-		compKey := resolveFinalKey(resolved.CompactionProvider.Key)
+		compKey = resolveFinalKey(resolved.CompactionProvider.Key)
 		if compKey == "" {
 			fmt.Fprintln(os.Stderr, "miniagent: compaction provider API key 缺失（provider.key / $MINIAGENT_API_KEY）")
 			os.Exit(1)
@@ -160,6 +161,24 @@ func main() {
 	baseCfg := loopCfg(resolved, f, history, tools)
 	baseCfg.CompactionChat = compChat
 
+	// 会话结束自动抽取项目记忆：复用 compaction 模型/client（compChat 非空时优先，否则主 chat），
+	// 默认 on（resolved.MemoryAutoUpdate）。secrets 用于剔除含 key 的记录。
+	secrets := []string{apiKey}
+	if compKey != "" {
+		secrets = append(secrets, compKey)
+	}
+	memExtractor := &memoryExtractor{
+		enabled: resolved.MemoryAutoUpdate,
+		workdir: workdir,
+		model:   resolved.CompactionModelID,
+		maxK:    resolved.MemoryMaxPerSession,
+		prompt:  resolved.MemoryExtractPrompt,
+		secrets: secrets,
+		chat:    chat,
+		comp:    compChat,
+		logger:  logger,
+	}
+
 	// runCtx 供单次运行与交互循环：含 -max-duration 超时（若有）；信号处理由各自路径自行注册。
 	runCtx := ctx
 	if d := maxDurationOf(resolved); d > 0 {
@@ -169,7 +188,7 @@ func main() {
 	}
 
 	if *f.interactive {
-		os.Exit(runInteractive(runCtx, chat, stream, baseCfg, sessPath, meta, hooks, logger, reader))
+		os.Exit(runInteractive(runCtx, chat, stream, baseCfg, sessPath, meta, hooks, logger, reader, memExtractor))
 	}
 
 	prompt := mustReadPrompt(reader)
@@ -199,6 +218,10 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	// 非交互：会话结束抽取记忆（best-effort，失败仅 warn，不影响退出码）。
+	// 使用 Background 避免 runCtx 已超时导致抽取立刻失败（-max-duration 已到）。
+	memExtractor.extract(context.Background(), result.Messages)
 }
 
 // loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig。System 空回落默认 prompt。

@@ -22,7 +22,7 @@ import (
 // 返回退出码：0=干净 EOF（无任一轮 Run 失败）；1=跨轮预算超限/-max-duration 到期/EOF 前存在 Run 失败轮；
 // 130=信号取消（POSIX SIGINT 习惯，审查 P3）。
 // runCtx 由调用方提供（含 -max-duration 超时）；本函数内部再注册 SIGINT/SIGTERM 信号处理。
-func runInteractive(runCtx context.Context, chat *miniagent.ChatClient, stream *miniagent.StreamClient, baseCfg miniagent.LoopConfig, sessPath string, meta miniagent.SessionMeta, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader) int {
+func runInteractive(runCtx context.Context, chat *miniagent.ChatClient, stream *miniagent.StreamClient, baseCfg miniagent.LoopConfig, sessPath string, meta miniagent.SessionMeta, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader, mem *memoryExtractor) int {
 	// 使用独立信号通道管理交互循环的取消，避免 main.go 的 NotifyContext 与 save 期间的
 	// signal.Ignore/Notify 互相干扰。save 前 Ignore 阻止重复 SIGINT 杀掉保存过程；save 后
 	// 重新 Notify 本通道，恢复信号取消能力。done 用于在 runInteractive 返回时结束监听 goroutine，
@@ -47,7 +47,20 @@ func runInteractive(runCtx context.Context, chat *miniagent.ChatClient, stream *
 		memHistory []miniagent.Message // 仅无 session 时用
 		totalUsage miniagent.Usage     // 跨轮累计，超 MaxTotalTokens 停止交互（审查 P2 交互无跨轮预算）
 		hadErr     bool                // 任一轮 Run 失败即置位；EOF 时据此返码 1（审查 P3 eof-on-error）
+		lastResult miniagent.Result    // 最近一次成功 Run 的结果，供 EOF 时抽取记忆
 	)
+	// 会话结束时（EOF/预算/超时）抽取一次记忆；用户信号中断（context.Canceled）不抽取。
+	defer func() {
+		if mem == nil {
+			return
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return
+		}
+		if len(lastResult.Messages) > 0 {
+			mem.extract(ctx, lastResult.Messages)
+		}
+	}()
 	for {
 		// 循环顶检查 ctx：readTurn 阻塞在 stdin 时不响应 ctx，下轮顶部兜底捕获 SIGINT(130)
 		// 与 -max-duration 到期(1)（审查 P3 -max-duration 识别 DeadlineExceeded）。
@@ -133,6 +146,7 @@ func runInteractive(runCtx context.Context, chat *miniagent.ChatClient, stream *
 		} else {
 			memHistory = result.Messages
 		}
+		lastResult = result
 		// 跨轮预算总闸：超限 emit error 后停止（与单轮 ErrBudgetExceeded 语义对齐，exit 1）。
 		// 失败轮的 usage 已在上面无条件累加，故预算含失败轮花销。
 		if baseCfg.MaxTotalTokens > 0 && totalUsage.InputTokens+totalUsage.OutputTokens > baseCfg.MaxTotalTokens {

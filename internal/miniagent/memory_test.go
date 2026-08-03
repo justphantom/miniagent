@@ -2,6 +2,7 @@ package miniagent
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -139,3 +140,77 @@ func TestMemory_SymlinkFileRejected(t *testing.T) {
 }
 
 // writeMemoryTool / readMemoryTool 包装内部函数，便于测试。
+func TestMessagesUseTools(t *testing.T) {
+	if MessagesUseTools([]Message{{Role: roleUser}, {Role: roleAssistant}}) {
+		t.Error("no tools: want false")
+	}
+	if !MessagesUseTools([]Message{{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "1"}}}}) {
+		t.Error("tool_calls: want true")
+	}
+	if !MessagesUseTools([]Message{{Role: roleTool}}) {
+		t.Error("role tool: want true")
+	}
+}
+
+func TestFilterMemoryRecords_DedupSecretCapDefaultType(t *testing.T) {
+	existing := []memoryRecord{{Type: "note", Content: "  重复  "}}
+	in := []memoryRecord{
+		{Topic: "构建", Content: "go build 用 ./..."},
+		{Content: "重复"},             // 与 existing 归一化重复 → 丢
+		{Content: "sk-secret-leak"}, // 含密钥 → 丢
+		{Content: "事实A"},
+		{Content: "事实B"},
+		{Content: "事实C"},
+		{Content: "事实D"}, // 超 maxRecords=3 → 丢
+	}
+	got := filterMemoryRecords(in, 3, existing, []string{"sk-secret-leak"})
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3: %+v", len(got), got)
+	}
+	if got[0].Topic != "构建" || got[0].Content != "go build 用 ./..." {
+		t.Errorf("rec0 = %+v", got[0])
+	}
+	if got[1].Content != "事实A" || got[2].Content != "事实B" {
+		t.Errorf("rec1/2 = %+v %+v", got[1], got[2])
+	}
+	for _, r := range got {
+		if r.Type == "" {
+			t.Error("type should default to note")
+		}
+		if strings.Contains(r.Content, "sk-secret") {
+			t.Error("secret leaked into record")
+		}
+	}
+}
+
+func TestExtractMemory_ParsesAndFilters(t *testing.T) {
+	arr := `[{"type":"note","topic":"构建","content":"go build 用 ./..."},{"content":"重复"},{"content":"sk-secret-leak"},{"content":"事实A"},{"content":"事实B"},{"content":"事实C"},{"content":"事实D"}]`
+	tr := &fakeTransport{responses: []string{textResponse(arr)}}
+	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	existing := []memoryRecord{{Type: "note", Content: "重复"}}
+	transcript := []Message{{Role: roleUser, Content: "跑构建"}, {Role: roleAssistant, Content: "ok"}}
+
+	recs, _, err := ExtractMemory(context.Background(), llm, "m", "", 3, existing, []string{"sk-secret-leak"}, transcript)
+	if err != nil {
+		t.Fatalf("ExtractMemory: %v", err)
+	}
+	if len(recs) != 3 {
+		t.Fatalf("len = %d, want 3: %+v", len(recs), recs)
+	}
+	if recs[0].Topic != "构建" {
+		t.Errorf("rec0 topic = %q", recs[0].Topic)
+	}
+}
+
+// 模型输出非法 JSON：解析失败应安静丢弃（返回空记录，不报错）。
+func TestExtractMemory_BadJSONReturnsEmpty(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("不是 JSON")}}
+	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	recs, _, err := ExtractMemory(context.Background(), llm, "m", "", 3, nil, nil, []Message{{Role: roleUser, Content: "x"}})
+	if err != nil {
+		t.Fatalf("want nil err on bad json, got %v", err)
+	}
+	if len(recs) != 0 {
+		t.Errorf("want 0 recs, got %+v", recs)
+	}
+}

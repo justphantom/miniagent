@@ -117,5 +117,15 @@
     // model：摘要压缩使用的模型 id。可写 model id（同主模型 provider），
     // 或 provider/model（跨 provider）。
     "model": "gpt-4o-mini"
+  },
+
+  // memory：会话结束自动抽取项目记忆（写入 .miniagent/memory.jsonl）。
+  "memory": {
+    // auto_update：默认 true。仅有过工具调用的会话才触发；复用 compaction 模型；
+    // best-effort（失败仅告警）；无 workdir 跳过；不计入 token 预算。
+    "auto_update": true,
+    // max_per_session：单会话最多抽取的条数（默认 3）。
+    "max_per_session": 3
+    // extract_prompt：留空用内置默认；可用 %d(最大条数)/%s(已有记忆)/%s(对话) 自定义。
   }
 }

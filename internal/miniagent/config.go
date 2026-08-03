@@ -24,6 +24,7 @@ type Config struct {
 	Defaults   DefaultsConfig   `json:"defaults"`
 	Run        RunConfig        `json:"run"`
 	Compaction CompactionConfig `json:"compaction"`
+	Memory     MemoryConfig     `json:"memory"`
 }
 
 type SessionConfig struct {
@@ -81,6 +82,14 @@ type RunConfig struct {
 // model 可以是 model id（与主模型同 provider），也可以是 provider/model（跨 provider）。
 type CompactionConfig struct {
 	Model string `json:"model,omitempty"`
+}
+
+// MemoryConfig 配置会话结束后的自动记忆抽取。
+// auto_update 缺省（nil）= true；max_per_session 缺省/<=0 = 3。抽取复用 compaction 模型。
+type MemoryConfig struct {
+	AutoUpdate    *bool  `json:"auto_update,omitempty"`
+	MaxPerSession *int   `json:"max_per_session,omitempty"`
+	ExtractPrompt string `json:"extract_prompt,omitempty"`
 }
 
 // CLIOverrides / ResolvedRun / Resolved / Resolve / resolveRun 见 resolve.go。

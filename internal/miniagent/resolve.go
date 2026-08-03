@@ -39,6 +39,10 @@ type Resolved struct {
 	SummarizerPrompt   string
 	Session            SessionConfig
 	Run                ResolvedRun
+	// 会话结束自动抽取记忆的生效配置（已应用默认值：AutoUpdate 缺省 true，MaxPerSession 缺省 3）。
+	MemoryAutoUpdate    bool
+	MemoryMaxPerSession int
+	MemoryExtractPrompt string
 }
 
 // Resolve 按 cli>config>builtin 裁决产出 Resolved。cfg 必须非 nil（S1 删裸模式后始终有 config）。
@@ -129,6 +133,17 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		return nil, rerr
 	}
 	r.Run = run
+
+	// 记忆抽取默认值：auto_update 缺省 true，max_per_session 缺省/<=0 = 3。
+	r.MemoryAutoUpdate = true
+	if cfg.Memory.AutoUpdate != nil {
+		r.MemoryAutoUpdate = *cfg.Memory.AutoUpdate
+	}
+	r.MemoryMaxPerSession = 3
+	if cfg.Memory.MaxPerSession != nil && *cfg.Memory.MaxPerSession > 0 {
+		r.MemoryMaxPerSession = *cfg.Memory.MaxPerSession
+	}
+	r.MemoryExtractPrompt = cfg.Memory.ExtractPrompt
 	return r, nil
 }
 
