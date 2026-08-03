@@ -29,15 +29,22 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		edit.ResultLimit = fileResultLimit
 	}
 	if mode == miniagent.ModeDefault && workdir != "" {
+		read = confineWrap(read, workdir)
 		write = confineWrap(write, workdir)
 		edit = confineWrap(edit, workdir)
+	}
+	grep := miniagent.GrepTool(workdir, fileOpTimeout)
+	glob := miniagent.GlobTool(workdir, fileOpTimeout)
+	if mode == miniagent.ModeDefault && workdir != "" {
+		grep = confineWrap(grep, workdir)
+		glob = confineWrap(glob, workdir)
 	}
 	tools := []miniagent.Tool{
 		read,
 		write,
 		edit,
-		miniagent.GrepTool(workdir, fileOpTimeout),
-		miniagent.GlobTool(workdir, fileOpTimeout),
+		grep,
+		glob,
 		miniagent.ShellTool(workdir, shellTimeout, shellMode),
 	}
 	// P1：项目脚本注册为 script_<name> 工具，复用 shell 的安全策略（runShellCommand）。

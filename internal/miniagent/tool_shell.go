@@ -61,6 +61,7 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令"},
 		}, "command"),
+		ResultLimit: maxToolResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
 			var a struct {
 				Command string `json:"command"`

@@ -91,7 +91,7 @@ func TestRun_ToolDeniedSkipped(t *testing.T) {
 	}
 }
 
-// P1-5：usage 全零（端点不返回 usage）时 Run 仍正常运行，并 warn 暴露预算熔断可能失效。
+// P1-5：usage 全零（端点不返回 usage）时 Run 用本地估算 fallback 并继续运行，同时 warn 暴露。
 func TestRun_ZeroUsageWarns(t *testing.T) {
 	// 响应不含 usage 字段 → parseChatResponse 得零值 Usage（流式端点常见的现实情形）。
 	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
@@ -99,16 +99,26 @@ func TestRun_ZeroUsageWarns(t *testing.T) {
 	chat, stream := testClients(tr)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", MaxTotalTokens: 100}, "q", LoopHooks{}, logger)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", MaxTotalTokens: 10000}, "q", LoopHooks{}, logger)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if res.Text != "hi" {
 		t.Errorf("Text = %q, want hi", res.Text)
 	}
-	// 预算熔断因 usage 全零不会触发；warn 是唯一的失效信号，必须出现。
 	if !strings.Contains(buf.String(), "llm returned no usage") {
 		t.Errorf("expected warn about missing usage, got logs: %s", buf.String())
+	}
+}
+
+// P1-5-b：usage 全零时本地估算仍触发 MaxTotalTokens 预算熔断。
+func TestRun_ZeroUsageBudgetEnforced(t *testing.T) {
+	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
+	tr := &fakeTransport{responses: []string{noUsage}}
+	chat, stream := testClients(tr)
+	_, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", MaxTotalTokens: 100}, "q", LoopHooks{}, nil)
+	if !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got %v", err)
 	}
 }
 

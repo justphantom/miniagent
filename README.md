@@ -244,7 +244,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `contextKeepRecent` | 6 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
 | `summaryMaxChars` | 5000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
 | `maxGrepMatches` / `maxGlobEntries` | 500 / 500 | grep 命中行 / glob 命中条数上限 |
-| `maxReadFileBytes` / `maxReadFileChars` | 1MiB / 20000 | 读文件字节 / 输出字符上限 |
+| `maxReadFileBytes` / `maxReadFileChars` | 1MiB / 262144 | 读文件字节 / 输出字符上限 |
 | `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
 | `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | 写 / 编辑文件字节上限 |
 | `maxShellOutputChars` | 100000 | shell 输出字符上限 |

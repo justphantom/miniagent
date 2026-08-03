@@ -76,7 +76,7 @@ func ResolveSessionPath(arg, dir string) (string, error) {
 // 文件不存在返回 (零 meta, nil, nil) 等同新会话。损坏（非法 JSON 行、role 未知、tool 消息
 // 缺 tool_call_id、配对断裂、超大小上限）返回 error，调用方应报错退出而非静默丢历史。
 func LoadSession(path string) (SessionMeta, []Message, error) {
-	f, err := os.Open(path)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return SessionMeta{}, nil, nil
 	}

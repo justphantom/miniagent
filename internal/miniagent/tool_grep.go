@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ import (
 const (
 	maxGrepMatches   = 500
 	maxGrepFileBytes = 50 << 20 // 单文件大小上限：超大文件（日志/生成物）逐行扫到 fileOpTimeout 才超时，浪费 IO，入口 Stat 直接跳过
+	// maxGrepRegexNodes 限制正则复杂度：AST 节点数超限直接拒绝，防止构造性慢正则消耗 CPU。
+	maxGrepRegexNodes = 100
 )
 
 // maxGrepMatchesOverride 允许配置覆盖内置默认；nil 用常量默认。
@@ -59,6 +62,7 @@ func GrepTool(workspaceRoot string, timeout time.Duration) Tool {
 			"path":    map[string]any{"type": "string", "description": "搜索根目录，相对 workdir 或绝对，默认 workdir"},
 			"glob":    map[string]any{"type": "string", "description": "文件名 include 过滤，filepath.Match 通配（如 *.go）"},
 		}, "pattern"),
+		ResultLimit: maxToolResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
@@ -80,6 +84,9 @@ func GrepTool(workspaceRoot string, timeout time.Duration) Tool {
 func runGrep(workspaceRoot, args string) ToolResult {
 	a, err := parseGrepArgs(args)
 	if err != nil {
+		return ToolResult{IsError: true, Output: err.Error()}
+	}
+	if err := validateGrepPattern(a.Pattern); err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
 	re, err := regexp.Compile(a.Pattern)
@@ -110,6 +117,29 @@ func runGrep(workspaceRoot, args string) ToolResult {
 		out += fmt.Sprintf("\n…（命中超过 %d 行，已停止收集）", getGrepMaxMatches())
 	}
 	return ToolResult{Output: out}
+}
+
+// validateGrepPattern 用 regexp/syntax 解析并限制 AST 节点数，防止构造性慢正则。
+func validateGrepPattern(pattern string) error {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return fmt.Errorf("正则解析失败：%w", err)
+	}
+	if n := countRegexNodes(re); n > maxGrepRegexNodes {
+		return fmt.Errorf("正则过于复杂：%d 个节点（上限 %d）", n, maxGrepRegexNodes)
+	}
+	return nil
+}
+
+func countRegexNodes(re *syntax.Regexp) int {
+	if re == nil {
+		return 0
+	}
+	n := 1
+	for _, sub := range re.Sub {
+		n += countRegexNodes(sub)
+	}
+	return n
 }
 
 func parseGrepArgs(args string) (grepArgs, error) {

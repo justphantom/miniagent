@@ -70,6 +70,15 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	case cfg.Defaults.Thinking != "":
 		r.Thinking = cfg.Defaults.Thinking
 	}
+	customKeys := map[string]bool{}
+	if r.Provider.Thinking != nil {
+		for k := range r.Provider.Thinking.Map {
+			customKeys[k] = true
+		}
+	}
+	if err := validateThinking(r.Thinking, customKeys); err != nil {
+		return nil, fmt.Errorf("thinking: %w", err)
+	}
 	switch {
 	case o.Mode != nil && *o.Mode != "":
 		r.Mode = *o.Mode

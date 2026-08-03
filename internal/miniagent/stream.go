@@ -60,9 +60,9 @@ func (c *StreamClient) streamClient() *http.Client {
 }
 
 // DoStream 流式调用 POST /v1/chat/completions（stream=true），onDelta 实时推增量，返回聚合 Response。
-// 重试：pre-delta 阶段（client.Do 失败或非 200，尚未流出 delta）复用 shouldRetryStatus+退避+Retry-After；
+// onDelta 返回 error 时立即中止流并返回该 error。重试：pre-delta 阶段（client.Do 失败或非 200，尚未流出 delta）复用 shouldRetryStatus+退避+Retry-After；
 // 进入 parseSSE（200，已流 delta）即不可撤回不重试（P2-4）。
-func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(Delta)) (Response, error) {
+func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(Delta) error) (Response, error) {
 	if c.APIKey == "" {
 		return Response{}, errors.New("miniagent: api_key is empty")
 	}

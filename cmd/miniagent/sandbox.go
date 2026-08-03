@@ -44,8 +44,14 @@ func checkConfine(root, p string) error {
 	if !filepath.IsAbs(p) {
 		full = filepath.Join(root, p)
 	}
-	absTarget, _ := filepath.Abs(filepath.Clean(full))
-	rootAbs, _ := filepath.Abs(filepath.Clean(root))
+	absTarget, err := filepath.Abs(filepath.Clean(full))
+	if err != nil {
+		return fmt.Errorf("解析路径 %q 失败：%w", p, err)
+	}
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return fmt.Errorf("解析 workdir %q 失败：%w", root, err)
+	}
 	sep := string(filepath.Separator)
 	// 拒绝 path="." 或等于 workdir 绝对路径：rename 覆盖目录会 EISDIR（错误含糊），
 	// 且若 MkdirAll/Rename 真生效将摧毁整个 workdir（审查 P3-8）。

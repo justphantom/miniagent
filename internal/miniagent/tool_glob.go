@@ -32,6 +32,7 @@ func GlobTool(workspaceRoot string, timeout time.Duration) Tool {
 			"pattern": map[string]any{"type": "string", "description": "filepath.Match 通配模式，如 *.go 或 *_test.go"},
 			"path":    map[string]any{"type": "string", "description": "根目录，相对 workdir 或绝对，默认 workdir"},
 		}, "pattern"),
+		ResultLimit: maxToolResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}

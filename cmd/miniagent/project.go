@@ -72,7 +72,7 @@ func loadProjectRulesFromDir(dir string) projectRules {
 	scriptsPath := filepath.Join(dir, "scripts.json")
 	if _, err := os.Stat(scriptsPath); err == nil {
 		pr.scriptsSet = true
-		if data, err := os.ReadFile(scriptsPath); err == nil {
+		if data, err := miniagent.ReadFileLimited(scriptsPath, maxProjectFileBytes); err == nil {
 			var s struct {
 				Scripts []scriptDef `json:"scripts"`
 			}
@@ -98,8 +98,11 @@ func mergeProjectRules(workdir, home projectRules) projectRules {
 	return home
 }
 
+// maxProjectFileBytes 是 persona.md/rules.md/scripts.json 等规则文件的字节上限。
+const maxProjectFileBytes = 1 << 20 // 1 MiB
+
 func readTrimmedFile(path string) string {
-	b, err := os.ReadFile(path)
+	b, err := miniagent.ReadFileLimited(path, maxProjectFileBytes)
 	if err != nil {
 		return ""
 	}

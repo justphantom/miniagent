@@ -30,7 +30,28 @@ func estimateTokens(msgs []Message, system string, tools []Tool) int {
 	return nonCJK/4 + cjk/2 + systemOverheadTokens + perToolSchemaTokens*len(tools)
 }
 
-// splitRounds 按「轮」切分 msgs：「带 tool_calls 的 assistant + 其后连续 tool 结果」为
+// estimateResponseTokens 基于响应文本/思考链/工具参数做本地 token 估算，
+// 供 provider 未返回 usage 时的预算熔断 fallback。
+func estimateResponseTokens(resp Response) int {
+	var nonCJK, cjk int
+	add := func(s string) {
+		for _, r := range s {
+			if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
+				unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+				cjk++
+			} else {
+				nonCJK++
+			}
+		}
+	}
+	add(resp.Text)
+	add(resp.Reasoning)
+	for _, tc := range resp.ToolCalls {
+		add(tc.Args)
+	}
+	return nonCJK/4 + cjk/2
+}
+
 // 一轮（成组，保 tool_calls/tool 配对）；user 与无 tool_calls 的 assistant 各自独立成轮。
 func splitRounds(msgs []Message) [][]Message {
 	var rounds [][]Message

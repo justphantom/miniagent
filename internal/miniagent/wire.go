@@ -28,6 +28,10 @@ type chatToolCall struct {
 	} `json:"function"`
 }
 
+// maxRequestBodyBytes 是 chat completion 请求体的字节上限，与响应上限对齐。
+// 超过此值的请求直接拒绝，避免超大请求 OOM/烧钱。
+const maxRequestBodyBytes = 4 << 20
+
 func buildChatBody(req Request) ([]byte, error) {
 	msgs := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -84,7 +88,14 @@ func buildChatBody(req Request) ([]byte, error) {
 		}
 		payload["tools"] = funcs
 	}
-	return json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxRequestBodyBytes {
+		return nil, fmt.Errorf("请求体 %d 字节超过上限 %d", len(body), maxRequestBodyBytes)
+	}
+	return body, nil
 }
 
 // chatCompletionResponse 只摘出循环需要的字段：首条 choice 的 message

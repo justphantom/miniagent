@@ -162,7 +162,7 @@ func TestShell_EmptyCommandRejected(t *testing.T) {
 }
 
 // 自定义超时：sleep 5 在 200ms 后被杀，返回 IsError 且含「超时」，1s 内返回。
-func TestShellTool_CustomTimeout(t *testing.T) {
+func TestShell_CustomTimeout(t *testing.T) {
 	s := ShellTool(t.TempDir(), 200*time.Millisecond, ModeAuto)
 	start := time.Now()
 	res := s.Call(context.Background(), `{"command":"sleep 5"}`)
@@ -182,7 +182,7 @@ func TestShellTool_CustomTimeout(t *testing.T) {
 }
 
 // timeout=0 用默认路径（不实际等 60s，只验正常执行）。
-func TestShellTool_ZeroTimeoutUsesDefault(t *testing.T) {
+func TestShell_ZeroTimeoutUsesDefault(t *testing.T) {
 	s := ShellTool(t.TempDir(), 0, ModeAuto)
 	res := s.Call(context.Background(), `{"command":"echo ok"}`)
 	if res.IsError {

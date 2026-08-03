@@ -29,7 +29,7 @@ func TestCLI_ListModels(t *testing.T) {
 	if !strings.Contains(out, "p/gpt-4o") || !strings.Contains(out, "p/gpt-3.5-turbo") {
 		t.Errorf("missing prefixed model ids: %s", out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if !strings.HasPrefix(line, "p/") {
 			t.Errorf("line missing provider prefix: %q", line)
 		}

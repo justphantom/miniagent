@@ -1,6 +1,7 @@
 package miniagent
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,12 +11,11 @@ import (
 )
 
 const (
-	memoryDir     = ".miniagent"
-	memoryFile    = "memory.jsonl"
-	memoryRecentN = 10 // system prompt 注入的最近记忆条数；可通过 SetMemoryRecentN 覆盖
-	// memoryPathToken 是 read/write 工具识别项目记忆的保留路径：path=="memory" 时
-	// 路由到 <workdir>/.miniagent/memory.jsonl（read 渲染记录、write 追加记录），不走普通文件路径。
-	memoryPathToken = "memory"
+	memoryDir        = ".miniagent"
+	memoryFile       = "memory.jsonl"
+	memoryRecentN    = 10 // system prompt 注入的最近记忆条数；可通过 SetMemoryRecentN 覆盖
+	memoryPathToken  = "memory"
+	maxMemoryFileBytes = 1 << 20 // 1 MiB；超限后丢弃旧记录轮转
 )
 
 // memoryRecentNOverride 允许配置覆盖内置默认；nil 用常量默认。
@@ -80,8 +80,14 @@ func checkMemoryPathSafe(workdir string) error {
 
 	// 非空 workdir 时路径须落在 workdir 子树内
 	if workdir != "" {
-		absPath, _ := filepath.Abs(filepath.Clean(path))
-		absWorkdir, _ := filepath.Abs(filepath.Clean(workdir))
+		absPath, err := filepath.Abs(filepath.Clean(path))
+		if err != nil {
+			return fmt.Errorf("解析 memory 路径 %q 失败：%w", path, err)
+		}
+		absWorkdir, err := filepath.Abs(filepath.Clean(workdir))
+		if err != nil {
+			return fmt.Errorf("解析 workdir %q 失败：%w", workdir, err)
+		}
 		sep := string(filepath.Separator)
 		if absPath != absWorkdir && !strings.HasPrefix(absPath+sep, absWorkdir+sep) {
 			return fmt.Errorf("memory 路径 %q 越出 workdir %q", path, workdir)
@@ -143,15 +149,68 @@ func appendMemoryRecord(workdir string, r memoryRecord) error {
 	if err != nil {
 		return err
 	}
+	line := append(b, '\n')
+	// 超限轮转：保留最近一半记录，避免无限增长。
+	if info, err := os.Lstat(path); err == nil && info.Size()+int64(len(line)) > maxMemoryFileBytes {
+		if rerr := rotateMemoryFile(path, line); rerr != nil {
+			return fmt.Errorf("memory 文件轮转失败：%w", rerr)
+		}
+		return nil
+	}
 	f, err := openNoFollow(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := f.Write(append(b, '\n')); err != nil {
+	if _, err := f.Write(line); err != nil {
 		return err
 	}
 	return f.Sync()
+}
+
+// rotateMemoryFile 读取现有记录，保留最近一半并追加新行，原子重写文件。
+func rotateMemoryFile(path string, newLine []byte) error {
+	recs, err := readMemoryRecordsFromPath(path)
+	if err != nil {
+		return err
+	}
+	keep := len(recs) / 2
+	keep = max(keep, 1)
+	recs = recs[len(recs)-keep:]
+	var buf bytes.Buffer
+	for _, rec := range recs {
+		b, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	buf.Write(newLine)
+	if int64(buf.Len()) > maxMemoryFileBytes {
+		return fmt.Errorf("单条 memory 记录 %d 字节超过文件上限 %d", len(newLine), maxMemoryFileBytes)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // readMemoryTool 渲染 memory.jsonl 为文本（每行 `[type] topic: content`），供 read 工具的

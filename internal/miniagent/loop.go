@@ -109,11 +109,16 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 		}
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
-		// usage 全零（流式端点常不 honor include_usage / 非流式缺失）：预算熔断静默失效，warn 暴露（P1-5）。
-		if logger != nil && resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0 {
-			logger.Warn("llm returned no usage; budget enforcement may be ineffective", "step", step)
+		// usage 全零（流式端点常不 honor include_usage / 非流式缺失）：用本地估算 fallback，
+		// 避免预算熔断静默失效（P1-5）。估算计入请求侧（msgs+system+tools）和响应侧。
+		if resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0 {
+			if logger != nil {
+				logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step)
+			}
+			total.InputTokens += estimateTokens(msgs, cfg.System, cfg.Tools)
+			total.OutputTokens += estimateResponseTokens(resp)
 		}
-		// 预算熔断：以端点返回的真实 usage 累计判定，超限即停（error 路径 + 退出码 1）。
+		// 预算熔断：以端点返回的真实 usage（或零 usage 时的本地估算）累计判定，超限即停。
 		if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, fmt.Errorf(
 				"%w: input=%d output=%d（累计超 MaxTotalTokens %d）",
@@ -140,7 +145,8 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 			if summaryReq == "" {
 				summaryReq = summaryRequestPrompt
 			}
-			appendMsg(&msgs, &newMsgs, Message{Role: roleSystem, Content: summaryReq})
+			// 总结请求是内部引导消息，不持久化到 session（LoadSession 拒绝 roleSystem）。
+			msgs = append(msgs, Message{Role: roleSystem, Content: summaryReq})
 			if logger != nil {
 				logger.Info("injecting summary request at iteration limit", "step", step)
 			}
@@ -149,6 +155,13 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 				appendMsg(&msgs, &newMsgs, Message{Role: roleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning})
 				total.InputTokens += resp2.Usage.InputTokens
 				total.OutputTokens += resp2.Usage.OutputTokens
+				if resp2.Usage.InputTokens == 0 && resp2.Usage.OutputTokens == 0 {
+					if logger != nil {
+						logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step+1)
+					}
+					total.InputTokens += estimateTokens(msgs, cfg.System, cfg.Tools)
+					total.OutputTokens += estimateResponseTokens(resp2)
+				}
 				return Result{Text: resp2.Text, Usage: total, Steps: step + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
 			}
 			if err2 != nil && logger != nil {

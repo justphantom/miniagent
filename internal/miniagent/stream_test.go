@@ -22,7 +22,7 @@ data: {"usage":{"prompt_tokens":5,"completion_tokens":2}}
 data: [DONE]
 `
 	var deltas []Delta
-	res, err := parseSSE(strings.NewReader(sse), func(d Delta) { deltas = append(deltas, d) })
+	res, err := parseSSE(strings.NewReader(sse), func(d Delta) error { deltas = append(deltas, d); return nil })
 	if err != nil {
 		t.Fatalf("parseSSE: %v", err)
 	}
@@ -83,7 +83,7 @@ data: [DONE]
 	defer srv.Close()
 	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
 	var deltas []Delta
-	resp, err := llm.DoStream(context.Background(), Request{Model: "m"}, func(d Delta) { deltas = append(deltas, d) })
+	resp, err := llm.DoStream(context.Background(), Request{Model: "m"}, func(d Delta) error { deltas = append(deltas, d); return nil })
 	if err != nil {
 		t.Fatalf("DoStream: %v", err)
 	}

@@ -53,20 +53,24 @@ type streamToolCall struct {
 	args     strings.Builder
 }
 
+// maxStreamResponseBytes 限制单个流式响应累积的字节数，防止恶意/异常 provider 无限流导致 OOM。
+const maxStreamResponseBytes = 4 << 20 // 4 MiB
+
 // streamAccum 把多个 chunk 聚合成完整 Response。
 type streamAccum struct {
-	text      strings.Builder
-	reasoning strings.Builder
-	calls     map[int]*streamToolCall // key = delta.index
-	callOrder []int                   // index 出现顺序，稳定聚合
-	finish    string
-	usage     Usage
-	sawChoice bool // 是否见过含 choices 的 chunk（空响应判定，P1-2）
+	text       strings.Builder
+	reasoning  strings.Builder
+	calls      map[int]*streamToolCall // key = delta.index
+	callOrder  []int                   // index 出现顺序，稳定聚合
+	finish     string
+	usage      Usage
+	sawChoice  bool // 是否见过含 choices 的 chunk（空响应判定，P1-2）
+	totalBytes int  // 累积字节数上限防护
 }
 
-// parseSSE 读 SSE 流：每个 content/reasoning 片段调 onDelta，结束时返回聚合 Response。
+// parseSSE 读 SSE 流：每个 content/reasoning 片段调 onDelta，onDelta 返回 error 时中止；结束时返回聚合 Response。
 // 行格式：以 "data: " 开头，载荷为 JSON；"data: [DONE]" 结束；空行/":" 注释忽略。
-func parseSSE(r io.Reader, onDelta func(Delta)) (Response, error) {
+func parseSSE(r io.Reader, onDelta func(Delta) error) (Response, error) {
 	acc := &streamAccum{calls: map[int]*streamToolCall{}}
 	sc := bufio.NewScanner(r)
 	// 放宽默认 64KB 行长到 4MB（与 maxChatBodyBytes 同级），避免超大单行 chunk 触发 ErrTooLong（P3-2）。
@@ -94,7 +98,9 @@ func parseSSE(r io.Reader, onDelta func(Delta)) (Response, error) {
 		if chunk.Error != nil {
 			return Response{}, fmt.Errorf("stream error from provider: %s", chunk.Error.Message)
 		}
-		acc.apply(chunk, onDelta)
+		if err := acc.apply(chunk, onDelta); err != nil {
+			return Response{}, err
+		}
 	}
 	if err := sc.Err(); err != nil {
 		return Response{}, fmt.Errorf("read sse: %w", err)
@@ -107,13 +113,13 @@ func parseSSE(r io.Reader, onDelta func(Delta)) (Response, error) {
 	return res, nil
 }
 
-func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta)) {
+func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta) error) error {
 	// usage 通常只在末 chunk（stream_options.include_usage）出现，无 choices。
 	if ch.Usage != nil {
 		a.usage = Usage{InputTokens: ch.Usage.PromptTokens, OutputTokens: ch.Usage.CompletionTokens}
 	}
 	if len(ch.Choices) == 0 {
-		return
+		return nil
 	}
 	a.sawChoice = true
 	c := ch.Choices[0]
@@ -121,9 +127,14 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta)) {
 		a.finish = c.FinishReason
 	}
 	if c.Delta.Content != "" {
+		if err := a.guardAdd(len(c.Delta.Content)); err != nil {
+			return err
+		}
 		a.text.WriteString(c.Delta.Content)
 		if onDelta != nil {
-			onDelta(Delta{Kind: DeltaText, Text: c.Delta.Content})
+			if err := onDelta(Delta{Kind: DeltaText, Text: c.Delta.Content}); err != nil {
+				return err
+			}
 		}
 	}
 	// reasoning 双兼容：DeepSeek reasoning_content，其他 reasoning；前者优先。
@@ -132,9 +143,14 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta)) {
 		rc = c.Delta.Reasoning
 	}
 	if rc != "" {
+		if err := a.guardAdd(len(rc)); err != nil {
+			return err
+		}
 		a.reasoning.WriteString(rc)
 		if onDelta != nil {
-			onDelta(Delta{Kind: DeltaReasoning, Text: rc})
+			if err := onDelta(Delta{Kind: DeltaReasoning, Text: rc}); err != nil {
+				return err
+			}
 		}
 	}
 	for _, tc := range c.Delta.ToolCalls {
@@ -151,9 +167,22 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta)) {
 			acc.name = tc.Function.Name
 		}
 		if tc.Function.Arguments != "" {
+			if err := a.guardAdd(len(tc.Function.Arguments)); err != nil {
+				return err
+			}
 			acc.args.WriteString(tc.Function.Arguments)
 		}
 	}
+	return nil
+}
+
+// guardAdd 检查再增加 n 字节是否会超过单响应上限。
+func (a *streamAccum) guardAdd(n int) error {
+	if a.totalBytes+n > maxStreamResponseBytes {
+		return fmt.Errorf("流式响应累积超过 %d 字节上限", maxStreamResponseBytes)
+	}
+	a.totalBytes += n
+	return nil
 }
 
 // response 按 index 升序聚合 tool_calls，与 handleToolCalls 顺序匹配契约一致。

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -83,9 +84,29 @@ type CompactionConfig struct {
 
 // CLIOverrides / ResolvedRun / Resolved / Resolve / resolveRun 见 resolve.go。
 
+// maxConfigFileBytes 是配置/规则文件的字节上限，防止多 GB 文件导致 OOM。
+const maxConfigFileBytes = 4 << 20 // 4 MiB
+
+// ReadFileLimited 读取 path 并限制大小；超过 maxBytes 返回错误。
+func ReadFileLimited(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("文件 %q 超过 %d 字节上限", path, maxBytes)
+	}
+	return data, nil
+}
+
 // LoadConfig 读 path、反序列化、校验。显式 -config 不存在由调用方区分硬错误。
 func LoadConfig(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := ReadFileLimited(path, maxConfigFileBytes)
 	if err != nil {
 		return nil, fmt.Errorf("读 config %q: %w", path, err)
 	}
@@ -118,6 +139,45 @@ var thinkingFieldBlacklist = map[string]bool{
 	"stop":              true,
 	"n":                 true,
 	"seed":              true,
+}
+
+// standardThinkingLevels 是 CLI/config 可直接使用的思考级别（空串/off 均表示关闭）。
+var standardThinkingLevels = map[string]bool{
+	ThinkingOff:   true,
+	"minimal":     true,
+	"low":         true,
+	"medium":      true,
+	"high":        true,
+	"xhigh":       true,
+	"max":         true,
+}
+
+// thinkingCustomKeys 聚合所有 provider 的 thinking.map 自定义 key，供 validateConfig 校验。
+func thinkingCustomKeys(cfg *Config) map[string]bool {
+	custom := map[string]bool{}
+	for _, p := range cfg.Providers {
+		if p.Thinking == nil {
+			continue
+		}
+		for k := range p.Thinking.Map {
+			custom[k] = true
+		}
+	}
+	return custom
+}
+
+// validateThinking 校验 thinking 取值：标准级别、customKeys 中的自定义 key，或空串/off 均合法。
+func validateThinking(thinking string, customKeys map[string]bool) error {
+	if thinking == "" || thinking == ThinkingOff {
+		return nil
+	}
+	if standardThinkingLevels[thinking] {
+		return nil
+	}
+	if customKeys[thinking] {
+		return nil
+	}
+	return fmt.Errorf("thinking %q 非法（支持：%s 或 provider.thinking.map 自定义键）", thinking, strings.Join([]string{ThinkingOff, "minimal", "low", "medium", "high", "xhigh", "max"}, ", "))
 }
 
 func validateConfig(cfg *Config) error {
@@ -159,6 +219,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != "default" && cfg.Defaults.Mode != "auto" {
 		return fmt.Errorf("defaults.mode %q 非法（default|auto）", cfg.Defaults.Mode)
+	}
+	if err := validateThinking(cfg.Defaults.Thinking, thinkingCustomKeys(cfg)); err != nil {
+		return fmt.Errorf("defaults.thinking: %w", err)
 	}
 	if cfg.Compaction.Model != "" && strings.Contains(cfg.Compaction.Model, "/") {
 		return errors.New("compaction.model 不得含 provider 前缀 '/'（同 provider）")

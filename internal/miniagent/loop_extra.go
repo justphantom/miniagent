@@ -73,10 +73,11 @@ func callLLMOnce(ctx context.Context, chat *ChatClient, stream *StreamClient, cf
 		Thinking:      cfg.Thinking,
 	}
 	if cfg.Stream {
-		return stream.DoStream(ctx, req, func(d Delta) {
+		return stream.DoStream(ctx, req, func(d Delta) error {
 			if hooks.OnDelta != nil {
-				_ = hooks.OnDelta(step, d.Kind, d.Text)
+				return hooks.OnDelta(step, d.Kind, d.Text)
 			}
+			return nil
 		})
 	}
 	return chat.Do(ctx, req)
