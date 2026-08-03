@@ -46,9 +46,9 @@ func memoryPath(workdir string) string {
 	return filepath.Join(workdir, memoryDir, memoryFile)
 }
 
-// readMemoryRecords 读 memory.jsonl（文件不存在返回 nil 无错；非法行跳过）。
-func readMemoryRecords(workdir string) ([]memoryRecord, error) {
-	data, err := os.ReadFile(memoryPath(workdir))
+// readMemoryRecordsFromPath 从指定路径读 memory.jsonl（文件不存在返回 nil 无错；非法行跳过）。
+func readMemoryRecordsFromPath(path string) ([]memoryRecord, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -68,6 +68,11 @@ func readMemoryRecords(workdir string) ([]memoryRecord, error) {
 		recs = append(recs, r)
 	}
 	return recs, nil
+}
+
+// readMemoryRecords 读 memory.jsonl（文件不存在返回 nil 无错；非法行跳过）。
+func readMemoryRecords(workdir string) ([]memoryRecord, error) {
+	return readMemoryRecordsFromPath(memoryPath(workdir))
 }
 
 // appendMemoryRecord 追加一条记录到 memory.jsonl（MkdirAll .miniagent，0o600）。
@@ -123,12 +128,34 @@ func writeMemoryTool(workdir, content string) ToolResult {
 	return ToolResult{Output: "已追加 1 条记忆到 .miniagent/memory.jsonl"}
 }
 
-// FormatMemorySnippet 把最近 memoryRecentN 条记忆格式化为 system prompt 注入片段；无记忆返回空串。
+// FormatMemorySnippet 把最近 memoryRecentN 条记忆格式化为 system prompt 注入片段。
+// 优先 workdir/.miniagent/memory.jsonl；不存在则从 ~/.miniagent/memory.jsonl 读。
+// 若 workdir 文件存在但读取失败，返回空串而不回退到 home，避免把个人记忆泄漏进项目。
 func FormatMemorySnippet(workdir string) string {
 	recs, err := readMemoryRecords(workdir)
+	if err != nil {
+		return ""
+	}
+	if len(recs) == 0 {
+		return FormatMemorySnippetFromHome()
+	}
+	return formatMemoryRecs(recs)
+}
+
+// FormatMemorySnippetFromHome 从 ~/.miniagent/memory.jsonl 读记忆并格式化。
+func FormatMemorySnippetFromHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	recs, err := readMemoryRecordsFromPath(filepath.Join(home, ".miniagent", memoryFile))
 	if err != nil || len(recs) == 0 {
 		return ""
 	}
+	return formatMemoryRecs(recs)
+}
+
+func formatMemoryRecs(recs []memoryRecord) string {
 	start := 0
 	if len(recs) > getMemoryRecentN() {
 		start = len(recs) - getMemoryRecentN()

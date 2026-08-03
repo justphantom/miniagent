@@ -17,11 +17,15 @@ type scriptDef struct {
 }
 
 // projectRules 是 loadProjectRules 的返回：persona/rules 文本、scripts 列表、memory 注入片段。
+// *_Set 标记表示对应文件在目录中显式存在（即使内容为空），用于 workdir 覆盖 home 时区分“未提供”与“提供空值”。
 type projectRules struct {
-	persona string
-	rules   string
-	scripts []scriptDef
-	memory  string
+	persona    string
+	personaSet bool
+	rules      string
+	rulesSet   bool
+	scripts    []scriptDef
+	scriptsSet bool
+	memory     string
 }
 
 // hasAny 报告是否加载到任意项目规则/脚本/记忆（决定是否在 system prompt 末尾告知 LLM）。
@@ -29,26 +33,69 @@ func (p projectRules) hasAny() bool {
 	return p.persona != "" || p.rules != "" || len(p.scripts) > 0 || p.memory != ""
 }
 
-// loadProjectRules 读 <workdir>/.miniagent/{persona.md, rules.md, scripts.json, memory.jsonl}。
-// 各文件可选（缺一不影响其余）。workdir 为空时返回零值（P0/P1/P5 仅在 workdir 下发现）。
+// loadProjectRules 读 <workdir>/.miniagent/ 和 ~/.miniagent/ 的项目规则与记忆。
+// 优先级：workdir/.miniagent/ > ~/.miniagent/ > 空。各文件单独覆盖（非合并）。
+// workdir 为空时仅从 home 目录读取。
 func loadProjectRules(workdir string) projectRules {
 	var pr projectRules
-	if workdir == "" {
-		return pr
+	// 从 home 目录读基线（若存在）
+	pr = loadProjectRulesFromDir("")
+	// workdir 覆盖基线
+	if workdir != "" {
+		pr = mergeProjectRules(loadProjectRulesFromDir(filepath.Join(workdir, ".miniagent")), pr)
 	}
-	dir := filepath.Join(workdir, ".miniagent")
-	pr.persona = readTrimmedFile(filepath.Join(dir, "persona.md"))
-	pr.rules = readTrimmedFile(filepath.Join(dir, "rules.md"))
+	// 记忆：FormatMemorySnippet 内部已处理 workdir→home 回退。
 	pr.memory = miniagent.FormatMemorySnippet(workdir)
-	if data, err := os.ReadFile(filepath.Join(dir, "scripts.json")); err == nil {
-		var s struct {
-			Scripts []scriptDef `json:"scripts"`
+	return pr
+}
+
+// loadProjectRulesFromDir 从指定目录读 persona/rules/scripts。
+// dir="" 是特殊哨兵，表示从 ~/.miniagent/ 读取（由函数内部解析 home 目录）。
+func loadProjectRulesFromDir(dir string) projectRules {
+	var pr projectRules
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			dir = filepath.Join(home, ".miniagent")
+		} else {
+			return pr
 		}
-		if json.Unmarshal(data, &s) == nil {
-			pr.scripts = s.Scripts
+	}
+	if _, err := os.Stat(filepath.Join(dir, "persona.md")); err == nil {
+		pr.personaSet = true
+		pr.persona = readTrimmedFile(filepath.Join(dir, "persona.md"))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "rules.md")); err == nil {
+		pr.rulesSet = true
+		pr.rules = readTrimmedFile(filepath.Join(dir, "rules.md"))
+	}
+	scriptsPath := filepath.Join(dir, "scripts.json")
+	if _, err := os.Stat(scriptsPath); err == nil {
+		pr.scriptsSet = true
+		if data, err := os.ReadFile(scriptsPath); err == nil {
+			var s struct {
+				Scripts []scriptDef `json:"scripts"`
+			}
+			if json.Unmarshal(data, &s) == nil {
+				pr.scripts = s.Scripts
+			}
 		}
 	}
 	return pr
+}
+
+// mergeProjectRules 用 workdir 的规则覆盖 home 规则（非合并，workdir 文件存在即覆盖，空文件也覆盖）。
+func mergeProjectRules(workdir, home projectRules) projectRules {
+	if workdir.personaSet {
+		home.persona = workdir.persona
+	}
+	if workdir.rulesSet {
+		home.rules = workdir.rules
+	}
+	if workdir.scriptsSet {
+		home.scripts = workdir.scripts
+	}
+	return home
 }
 
 func readTrimmedFile(path string) string {
@@ -74,7 +121,7 @@ func mergeSystemPrompt(base, persona, rules, memory string, hasAny bool) string 
 		parts = append(parts, memory)
 	}
 	if hasAny {
-		parts = append(parts, "（已加载 .miniagent/ 项目规则与脚本）")
+		parts = append(parts, "（已加载 .miniagent/ 项目规则、脚本或记忆）")
 	}
 	return strings.Join(parts, "\n\n")
 }

@@ -1,14 +1,10 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,32 +24,41 @@ func mustParseLogLevel(s string) slog.Level {
 	return level
 }
 
-// minimalConfigTemplate 是无 config 时写盘的最小模板：${CHAT_URL}/${MODEL} 来自 env
-// （忠实「始终存在 miniagent.json」，S1 删裸模式后的默认入口）。
-const minimalConfigTemplate = `{
-  "providers": [{"name": "default", "chat_url": "${CHAT_URL}"}],
-  "defaults": {"model": "${MODEL}"}}
-`
-
-// requireConfig：始终要求 config 存在（S1 删裸模式）。显式 -config 不存在=硬错误；
-// 默认 ./miniagent.json 不存在=写最小模板再加载（${CHAT_URL}/${MODEL} 须在 env，否则 expandVars 报错）。
-//
-// 默认 config 的 Stat 错误精确区分：仅 fs.ErrNotExist 触发模板生成；permission denied/
-// ELOOP/ENOTDIR 等按硬错误上抛——否则用户在权限/路径异常下被静默切到无 tool 边界、
-// 无 system prompt 注入的配置（审查 P2-6）。
 func requireConfig(configPath string) (*miniagent.Config, error) {
 	if configPath != "" {
 		return miniagent.LoadConfig(configPath)
 	}
-	if _, err := os.Stat("./miniagent.json"); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("stat 默认 config %q: %w", "./miniagent.json", err)
-		}
-		if werr := os.WriteFile("./miniagent.json", []byte(minimalConfigTemplate), 0o600); werr != nil {
-			return nil, fmt.Errorf("生成默认 config ./miniagent.json 失败：%w（可手写 miniagent.json 或用 -config）", werr)
-		}
+	p, err := findDefaultConfigPath()
+	if err != nil {
+		return nil, err
 	}
-	return miniagent.LoadConfig("./miniagent.json")
+	if p != "" {
+		return miniagent.LoadConfig(p)
+	}
+	return nil, errors.New("miniagent config 不存在（-config <path> 或 ./miniagent.json 或 ~/.miniagent/miniagent.json）")
+}
+
+// findDefaultConfigPath 查找默认 config 路径：./miniagent.json > ~/.miniagent/miniagent.json。
+// 返回找到的路径的绝对路径；若都未找到返回空字符串；若 stat 出错返回该错误。
+func findDefaultConfigPath() (string, error) {
+	if _, err := os.Stat("./miniagent.json"); err == nil {
+		abs, _ := filepath.Abs("./miniagent.json")
+		return abs, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("stat config %q: %w", "./miniagent.json", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("定位 home 目录失败：%w", err)
+	}
+	p := filepath.Join(home, ".miniagent", "miniagent.json")
+	if _, err := os.Stat(p); err == nil {
+		abs, _ := filepath.Abs(p)
+		return abs, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("stat config %q: %w", p, err)
+	}
+	return "", nil
 }
 
 // collectOverrides 用 flag.Visit 收集「显式传入」的 flag（未传入置 nil），供 Resolve 裁决。
@@ -132,116 +137,6 @@ func warnKeyFilePerm(path string) {
 	if info.Mode().Perm()&0o077 != 0 {
 		fmt.Fprintf(os.Stderr, "miniagent: warning: key-file %s readable by group/other (mode=%o); recommend 0600\n", path, info.Mode().Perm())
 	}
-}
-
-// warnProviderInsecureURLs 对 provider 使用的 http（非 loopback）URL 发出明文传 key 警告。
-func warnProviderInsecureURLs(p miniagent.ProviderConfig) {
-	warnInsecureURL(p.ChatURL)
-	if p.ModelsURL != "" {
-		warnInsecureURL(p.ModelsURL)
-	}
-}
-
-func warnProvidersInsecureURLs(providers []miniagent.ProviderConfig) {
-	for _, p := range providers {
-		warnProviderInsecureURLs(p)
-	}
-}
-
-// httpTimeoutFromConfig 解析 config 中的 run.http_timeout；未配置返回 0。
-func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
-	if cfg.Run.HTTPTimeout == nil {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(*cfg.Run.HTTPTimeout)
-	if err != nil {
-		return 0, fmt.Errorf("run.http_timeout %q: %w", *cfg.Run.HTTPTimeout, err)
-	}
-	return d, nil
-}
-
-// listAllModels 按 provider 解析 key 并复用统一 transport/timeout，聚合模型列表。
-func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, keyFile string, httpTimeout time.Duration, logger *slog.Logger) ([]string, error) {
-	keyFileKey := ""
-	if keyFile != "" {
-		var err error
-		keyFileKey, err = resolveAPIKey(keyFile, "")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
-			os.Exit(1)
-		}
-		warnKeyFilePerm(keyFile)
-	}
-	keyFor := func(p miniagent.ProviderConfig) string {
-		if keyFileKey != "" {
-			return keyFileKey
-		}
-		if p.Key != "" {
-			return p.Key
-		}
-		return os.Getenv("MINIAGENT_API_KEY")
-	}
-	if httpTimeout <= 0 {
-		httpTimeout = 120 * time.Second
-	}
-	httpClient := newHTTPClient(httpTimeout, newHTTPTransport())
-	return miniagent.ListAllModels(ctx, providers, keyFor, httpClient, logger)
-}
-
-// warnInsecureURL：http（非 loopback）时 API key 明文上链，stderr 警告。不强制拒绝。
-func warnInsecureURL(rawURL string) {
-	u, err := url.Parse(strings.TrimRight(rawURL, "/"))
-	if err != nil || u.Scheme != "http" {
-		return
-	}
-	host := u.Hostname()
-	if host == "localhost" {
-		return
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "miniagent: warning: endpoint %s uses plain http, API key sent unencrypted\n", u.Redacted())
-}
-
-// buildLLM 构造 ChatClient（带总 Timeout，非流式 + models）与 StreamClient（无 Timeout，流式）。
-// 两者共享同一 *http.Transport（代理/dial/TLS 超时）；chat 的 httpTimeout 兜底防单次调用挂死（#3），
-// stream 无 Timeout 避免 body 读取被砍（P2-5/P1-A，#2）——P4 拆分后由各自 client 持有。
-// httpTimeout<=0 用默认 120s。
-func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) (*miniagent.ChatClient, *miniagent.StreamClient) {
-	if httpTimeout <= 0 {
-		httpTimeout = 120 * time.Second
-	}
-	transport := newHTTPTransport()
-	chatClient := newHTTPClient(httpTimeout, transport)
-	streamClient := &http.Client{Transport: transport}
-	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-		os.Exit(1)
-	}
-	stream, err := miniagent.NewStreamClient(apiKey, p.ChatURL, streamClient, logger)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-		os.Exit(1)
-	}
-	return chat, stream
-}
-
-// newHTTPTransport 返回复用的 *http.Transport，配置代理、dial、TLS、响应头超时。
-func newHTTPTransport() *http.Transport {
-	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		ResponseHeaderTimeout: 30 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-}
-
-// newHTTPClient 返回带指定总 timeout 和 transport 的 *http.Client。
-func newHTTPClient(timeout time.Duration, transport *http.Transport) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
@@ -377,16 +272,14 @@ func providerForListModels(cfg *miniagent.Config, f *cliFlags) (miniagent.Provid
 	return miniagent.ProviderConfig{}, errors.New("list-models 需 -model 或 defaults.model 或单一 provider")
 }
 
-// absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 ./miniagent.json），
+// absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 workdir/home ~/.miniagent/miniagent.json），
 // 供 subagent fork 引导注入。cfg 始终非 nil（S1 删裸模式）。
+// 逻辑与 requireConfig 保持一致：显式 -config > workdir/.miniagent.json > ~/.miniagent/miniagent.json。
 func absConfigPath(configPath string) string {
-	p := configPath
-	if p == "" {
-		p = "./miniagent.json"
+	if configPath != "" {
+		abs, _ := filepath.Abs(configPath)
+		return abs
 	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return p
-	}
-	return abs
+	p, _ := findDefaultConfigPath()
+	return p
 }

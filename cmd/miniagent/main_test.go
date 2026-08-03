@@ -623,9 +623,9 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	}
 }
 
-// requireConfig：默认 ./miniagent.json 不存在时写最小模板再加载。须切到临时 cwd 控制。
-// 模板用 ${CHAT_URL}/${MODEL}，设置 env 后加载成功，且 provider.chat_url 来自 env。
-func TestRequireConfig_DefaultMissingWritesTemplate(t *testing.T) {
+// requireConfig：无 config 且 workdir/.miniagent/miniagent.json 不存在时，应返回 error。
+// 显式 -config 不存在=硬错误（通过 TestCLI_ExplicitConfigMissingExits1 覆盖）。
+func TestRequireConfig_NoConfigExits(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -635,17 +635,14 @@ func TestRequireConfig_DefaultMissingWritesTemplate(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CHAT_URL", "http://localhost:11434/v1/chat/completions")
-	t.Setenv("MODEL", "gpt-4o") // 模板 provider 名为 default，MODEL 须为裸 id（无 provider 前缀）
-	cfg, err := requireConfig("")
-	if err != nil {
-		t.Fatalf("requireConfig: %v", err)
+	// 用测试目录替代 HOME，避免加载真实的 ~/.miniagent/miniagent.json
+	t.Setenv("HOME", dir)
+	_, err = requireConfig("")
+	if err == nil {
+		t.Fatal("requireConfig should error when no config found")
 	}
-	if cfg == nil || cfg.Providers[0].ChatURL != "http://localhost:11434/v1/chat/completions" {
-		t.Errorf("template not loaded: %+v", cfg)
-	}
-	if _, statErr := os.Stat("./miniagent.json"); statErr != nil {
-		t.Errorf("template file not written: %v", statErr)
+	if !strings.Contains(err.Error(), "config 不存在") {
+		t.Errorf("error should mention config missing: %v", err)
 	}
 }
 
@@ -661,12 +658,19 @@ func TestRequireConfig_DefaultStatErrorIsHardError(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
+	// 用测试目录替代 HOME，避免加载真实的 ~/.miniagent/miniagent.json
+	t.Setenv("HOME", dir)
 	// 自指符号链接：Stat 跟随 → ELOOP（非 fs.ErrNotExist）→ 硬错误。
 	if err := os.Symlink("./miniagent.json", "./miniagent.json"); err != nil {
 		t.Skipf("cannot create self-referential symlink: %v", err)
 	}
-	if _, err := requireConfig(""); err == nil {
+	_, err = requireConfig("")
+	if err == nil {
 		t.Fatal("expected hard error for non-ErrNotExist Stat failure, got nil")
+	}
+	// 错误必须透传原始 stat 失败，而不是被吞成“config 不存在”。
+	if !strings.Contains(err.Error(), "stat config") && !strings.Contains(err.Error(), "too many levels of symbolic links") {
+		t.Errorf("expected hard stat error, got: %v", err)
 	}
 }
 

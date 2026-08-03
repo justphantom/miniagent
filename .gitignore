@@ -42,3 +42,6 @@ cmd/miniagent/.miniagent/
 # 用户配置文件（含机密）与工作目录项目配置
 miniagent.json
 **/.miniagent/
+
+# 构建产物
+miniagent

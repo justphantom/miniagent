@@ -30,10 +30,10 @@ make test       # go test -race ./...
 
 ## CLI 参数
 
-**始终需要 config**（`-config <path>` 或默认 `./miniagent.json`）。默认 config 不存在时自动写一份最小模板再加载（用 `${CHAT_URL}`/`${MODEL}` 环境变量），显式 `-config` 不存在则报错。无裸 CLI 模式。
+**始终需要 config**（`-config <path>` 或默认 `./miniagent.json`）。默认 config 查找顺序：1) `./miniagent.json`；2) `~/.miniagent/miniagent.json`；均不存在则报错。显式 `-config` 不存在同样报错。无裸 CLI 模式。
 
 ```
--config string           配置文件路径（默认查 ./miniagent.json；不存在则生成最小模板）
+-config string           配置文件路径（默认查 ./miniagent.json；不存在则查 ~/.miniagent/miniagent.json；均不存在则报错）
 -interactive             交互模式：循环读取 prompt（每行一个）；有 -session 时以文件为唯一真源
 -key-file string         从文件读 API key（优先级：cli -key-file > config provider.key > $MINIAGENT_API_KEY）
 -list-models             列出端点可用模型 id 后退出（config 静态 models 不发 GET，否则 GET models-url）
@@ -257,6 +257,8 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 ## 项目专属配置（`.miniagent/`）
 
 在 `workdir` 下放 `.miniagent/` 目录，agent 启动时自动发现并把项目专属行为注入——核心引擎本身不感知任何具体项目，只「知道如何发现项目规则」：
+
+项目规则文件（`persona.md`/`rules.md`/`scripts.json`/`memory.jsonl`）采用双层查找：优先从 `workdir/.miniagent/` 读，不存在则回退到 `~/.miniagent/`。优先级：workdir > home > 空。
 
 | 文件 | 作用 |
 |------|------|

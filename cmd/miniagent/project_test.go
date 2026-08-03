@@ -19,15 +19,71 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
-// loadProjectRules 读 persona/rules/scripts/memory；各文件可选。
-func TestLoadProjectRules_AllSources(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".miniagent", "persona.md"), "你是本项目专属 agent。")
-	writeFile(t, filepath.Join(dir, ".miniagent", "rules.md"), "禁止提交未跑测试的代码。")
-	writeFile(t, filepath.Join(dir, ".miniagent", "scripts.json"), `{"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}`)
-	writeFile(t, filepath.Join(dir, ".miniagent", "memory.jsonl"), `{"type":"lesson","topic":"t","content":"记忆A"}`+"\n")
+// loadProjectRules：workdir 有 .miniagent 时优先 workdir；无 workdir 时读 home 目录。
+// home 不存在时返回零值（不报错）。
+func TestLoadProjectRules_WorkdirOverridesHome(t *testing.T) {
+	homeDir := t.TempDir()
+	workdir := t.TempDir()
+	// home 目录有 rules
+	writeFile(t, filepath.Join(homeDir, ".miniagent", "rules.md"), "home-rule")
+	writeFile(t, filepath.Join(homeDir, ".miniagent", "persona.md"), "home-persona")
+	// workdir 有 rules（覆盖 home）
+	writeFile(t, filepath.Join(workdir, ".miniagent", "rules.md"), "workdir-rule")
+	writeFile(t, filepath.Join(workdir, ".miniagent", "persona.md"), "workdir-persona")
 
-	pr := loadProjectRules(dir)
+	// 临时切换 HOME 使 homeDir 成为 "home"
+	oldHome := os.Getenv("HOME")
+	t.Setenv("HOME", homeDir)
+	defer os.Setenv("HOME", oldHome)
+
+	pr := loadProjectRules(workdir)
+	if pr.rules != "workdir-rule" {
+		t.Errorf("rules should be from workdir: got %q", pr.rules)
+	}
+	if pr.persona != "workdir-persona" {
+		t.Errorf("persona should be from workdir: got %q", pr.persona)
+	}
+}
+
+func TestLoadProjectRules_UsesHomeWhenNoWorkdir(t *testing.T) {
+	homeDir := t.TempDir()
+	writeFile(t, filepath.Join(homeDir, ".miniagent", "rules.md"), "home-rule")
+	oldHome := os.Getenv("HOME")
+	t.Setenv("HOME", homeDir)
+	defer os.Setenv("HOME", oldHome)
+
+	pr := loadProjectRules("")
+	if pr.rules != "home-rule" {
+		t.Errorf("rules should be from home when workdir empty: got %q", pr.rules)
+	}
+}
+
+func TestLoadProjectRules_EmptyWorkdirNoHome(t *testing.T) {
+	homeDir := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	t.Setenv("HOME", homeDir)
+	defer os.Setenv("HOME", oldHome)
+
+	pr := loadProjectRules("/nonexistent")
+	if pr.hasAny() {
+		t.Error("should have no rules when workdir doesn't exist")
+	}
+}
+
+// loadProjectRules：workdir 有完整 .miniagent 设置时正确加载所有来源。
+func TestLoadProjectRules_AllWorkdirSources(t *testing.T) {
+	workdir := t.TempDir()
+	writeFile(t, filepath.Join(workdir, ".miniagent", "persona.md"), "你是本项目专属 agent。")
+	writeFile(t, filepath.Join(workdir, ".miniagent", "rules.md"), "禁止提交未跑测试的代码。")
+	writeFile(t, filepath.Join(workdir, ".miniagent", "scripts.json"), `{"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}`)
+	writeFile(t, filepath.Join(workdir, ".miniagent", "memory.jsonl"), `{"type":"lesson","topic":"t","content":"记忆A"}`+"\n")
+
+	// 隔离 home，避免真实 ~/.miniagent 干扰。
+	oldHome := os.Getenv("HOME")
+	t.Setenv("HOME", t.TempDir())
+	defer os.Setenv("HOME", oldHome)
+
+	pr := loadProjectRules(workdir)
 	if pr.persona != "你是本项目专属 agent。" {
 		t.Errorf("persona = %q", pr.persona)
 	}
@@ -45,14 +101,22 @@ func TestLoadProjectRules_AllSources(t *testing.T) {
 	}
 }
 
-// 缺少 .miniagent 目录 → 零值，hasAny=false（不污染 system prompt）。
-func TestLoadProjectRules_EmptyWorkdir(t *testing.T) {
-	pr := loadProjectRules(t.TempDir())
-	if pr.hasAny() {
-		t.Error("empty workdir should have no project rules")
+// mergeProjectRules：workdir 存在即覆盖 home，否则 home 保留。
+func TestMergeProjectRules_WorkdirWins(t *testing.T) {
+	home := projectRules{persona: "h-p", rules: "h-r"}
+	workdir := projectRules{persona: "w-p", personaSet: true, rules: "w-r", rulesSet: true}
+	merged := mergeProjectRules(workdir, home)
+	if merged.persona != "w-p" || merged.rules != "w-r" {
+		t.Errorf("workdir should win: got %+v", merged)
 	}
-	if pr.scripts != nil {
-		t.Errorf("scripts should be nil, got %+v", pr.scripts)
+}
+
+func TestMergeProjectRules_HomeKeptWhenWorkdirEmpty(t *testing.T) {
+	home := projectRules{persona: "h-p", rules: "h-r"}
+	workdir := projectRules{}
+	merged := mergeProjectRules(workdir, home)
+	if merged.persona != "h-p" || merged.rules != "h-r" {
+		t.Errorf("home should be kept: got %+v", merged)
 	}
 }
 
