@@ -113,7 +113,8 @@
 
   // compaction：长会话摘要压缩配置。
   "compaction": {
-    // model：摘要压缩使用的轻量模型 id（同 provider，不得含 /）。
+    // model：摘要压缩使用的模型 id。可写 model id（同主模型 provider），
+    // 或 provider/model（跨 provider）。
     "model": "gpt-4o-mini"
   }
 }

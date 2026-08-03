@@ -77,7 +77,8 @@ type RunConfig struct {
 	ContextTrimToolChars *int    `json:"context_trim_tool_chars,omitempty"`
 }
 
-// CompactionModel 仅 model id（同 provider，不得含 /）。
+// CompactionConfig 配置长会话摘要压缩模型。
+// model 可以是 model id（与主模型同 provider），也可以是 provider/model（跨 provider）。
 type CompactionConfig struct {
 	Model string `json:"model,omitempty"`
 }
@@ -143,13 +144,13 @@ var thinkingFieldBlacklist = map[string]bool{
 
 // standardThinkingLevels 是 CLI/config 可直接使用的思考级别（空串/off 均表示关闭）。
 var standardThinkingLevels = map[string]bool{
-	ThinkingOff:   true,
-	"minimal":     true,
-	"low":         true,
-	"medium":      true,
-	"high":        true,
-	"xhigh":       true,
-	"max":         true,
+	ThinkingOff: true,
+	"minimal":   true,
+	"low":       true,
+	"medium":    true,
+	"high":      true,
+	"xhigh":     true,
+	"max":       true,
 }
 
 // thinkingCustomKeys 聚合所有 provider 的 thinking.map 自定义 key，供 validateConfig 校验。
@@ -224,7 +225,9 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("defaults.thinking: %w", err)
 	}
 	if cfg.Compaction.Model != "" && strings.Contains(cfg.Compaction.Model, "/") {
-		return errors.New("compaction.model 不得含 provider 前缀 '/'（同 provider）")
+		if _, _, err := ParseModelSpec(cfg.Compaction.Model, cfg); err != nil {
+			return fmt.Errorf("compaction.model: %w", err)
+		}
 	}
 	return nil
 }

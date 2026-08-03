@@ -227,3 +227,55 @@ func TestResolve_StrategyConstantsLateWired(t *testing.T) {
 		}
 	}
 }
+
+// compaction.model 缺省时回落到主模型。
+func TestResolve_CompactionFallback(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{{Name: "main", ChatURL: "https://a/v1/chat/completions"}},
+		Defaults:  DefaultsConfig{Model: "main/glm"},
+	}
+	r, err := Resolve(cfg, CLIOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.CompactionProvider.Name != "main" {
+		t.Errorf("CompactionProvider.Name = %q, want main", r.CompactionProvider.Name)
+	}
+	if r.CompactionModelID != "glm" {
+		t.Errorf("CompactionModelID = %q, want glm", r.CompactionModelID)
+	}
+}
+
+// compaction.model 可指定跨 provider 的 model。
+func TestResolve_CompactionCrossProvider(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "main", ChatURL: "https://a/v1/chat/completions"},
+			{Name: "comp", ChatURL: "https://c/v1/chat/completions"},
+		},
+		Defaults:   DefaultsConfig{Model: "main/glm"},
+		Compaction: CompactionConfig{Model: "comp/glm-flash"},
+	}
+	r, err := Resolve(cfg, CLIOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.CompactionProvider.Name != "comp" {
+		t.Errorf("CompactionProvider.Name = %q, want comp", r.CompactionProvider.Name)
+	}
+	if r.CompactionModelID != "glm-flash" {
+		t.Errorf("CompactionModelID = %q, want glm-flash", r.CompactionModelID)
+	}
+}
+
+// compaction.model 带 / 但 provider 不存在时报错。
+func TestResolve_CompactionUnknownProviderErrors(t *testing.T) {
+	cfg := &Config{
+		Providers:  []ProviderConfig{{Name: "main", ChatURL: "https://a/v1/chat/completions"}},
+		Defaults:   DefaultsConfig{Model: "main/glm"},
+		Compaction: CompactionConfig{Model: "unknown/glm-flash"},
+	}
+	if _, err := Resolve(cfg, CLIOverrides{}); err == nil {
+		t.Error("compaction.model with unknown provider should error")
+	}
+}

@@ -47,14 +47,28 @@ func TestLoadConfig_NoVarExpansion(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_CompactionModelSlash(t *testing.T) {
+func TestLoadConfig_CompactionModelCrossProvider(t *testing.T) {
+	body := `{
+  "providers":[
+    {"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]},
+    {"name":"comp","chat_url":"https://comp/v1/chat/completions","models":["glm-flash"]}
+  ],
+  "defaults":{"model":"main/glm"},
+  "compaction":{"model":"comp/glm-flash"}
+}`
+	if _, err := LoadConfig(writeTmpConfig(t, body)); err != nil {
+		t.Errorf("compaction.model with valid provider/model should succeed: %v", err)
+	}
+}
+
+func TestLoadConfig_CompactionModelUnknownProvider(t *testing.T) {
 	body := `{
   "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]}],
   "defaults":{"model":"main/glm"},
-  "compaction":{"model":"main/glm-flash"}
+  "compaction":{"model":"unknown/glm-flash"}
 }`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
-		t.Error("compaction.model with / should error")
+		t.Error("compaction.model with unknown provider should error")
 	}
 }
 

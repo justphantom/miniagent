@@ -111,6 +111,19 @@ func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, ht
 	return chat, stream
 }
 
+// buildChatClient 为指定 provider 构造非流式 ChatClient（用于 compaction 等仅需 Do 的场景）。
+func buildChatClient(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) *miniagent.ChatClient {
+	if httpTimeout <= 0 {
+		httpTimeout = 120 * time.Second
+	}
+	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
+		os.Exit(1)
+	}
+	return chat
+}
+
 // newHTTPTransport 返回复用的 *http.Transport，配置代理、dial、TLS、响应头超时。
 func newHTTPTransport() *http.Transport {
 	return &http.Transport{

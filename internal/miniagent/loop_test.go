@@ -231,3 +231,42 @@ func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
 		t.Errorf("ThinkingDowngraded should be true after a downgrade occurred")
 	}
 }
+
+// compaction 使用不同 ChatClient 时，Run 应调用 CompactionChat 而非主 chat 做摘要。
+func TestRun_CompactionChatUsed(t *testing.T) {
+	mainTr := &fakeTransport{responses: []string{textResponse("final")}}
+	compTr := &fakeTransport{responses: []string{textResponse("compacted-by-other")}}
+
+	mainChat := &ChatClient{APIKey: "sk", ChatURL: "http://main", HTTP: &http.Client{Transport: mainTr}}
+	compChat := &ChatClient{APIKey: "sk", ChatURL: "http://comp", HTTP: &http.Client{Transport: compTr}}
+
+	var hist []Message
+	for range 10 {
+		hist = append(hist, Message{Role: roleUser, Content: strings.Repeat("q", 50)})
+	}
+
+	cfg := LoopConfig{
+		Model:           "main-model",
+		CompactionModel: "comp-model",
+		CompactionChat:  compChat,
+		ContextWindow:   600,
+		History:         hist,
+	}
+
+	res, err := Run(context.Background(), mainChat, nil, cfg, "hi", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Compacted {
+		t.Error("expected compaction to succeed")
+	}
+	if compTr.calls == 0 {
+		t.Error("compaction chat was not called")
+	}
+	if mainTr.calls == 0 {
+		t.Error("main chat was not called")
+	}
+	if res.Text != "final" {
+		t.Errorf("final text = %q, want final", res.Text)
+	}
+}

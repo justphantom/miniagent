@@ -178,8 +178,10 @@ type LoopConfig struct {
 	// ThinkingLevel / Thinking 透传到每次 callLLM 的 Request（思考级别 + 供应商映射）。
 	ThinkingLevel string
 	Thinking      *ThinkingMapping
-	// CompactionModel 是摘要压缩用的模型 id（同 provider）；空则回落 cfg.Model。
+	// CompactionModel 是摘要压缩用的模型 id；空则回落 cfg.Model。
 	CompactionModel string
+	// CompactionChat 是摘要压缩专用的 ChatClient；nil 则回落主 chat（同 provider）。
+	CompactionChat *ChatClient
 	// 以下 5 项是 S4 策略化常量（config run.* 可覆盖，<=0 用内置默认）：
 	// MaxToolResultChars=tool 结果入历史默认字符上限（兜底 Tool.ResultLimit）；
 	// MaxFileResultChars=read/edit 等代码类工具结果上限（buildTools 注入 Tool.ResultLimit）；

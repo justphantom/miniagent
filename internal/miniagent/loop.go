@@ -65,7 +65,11 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 		System:           cfg.System,
 		Tools:            cfg.Tools,
 		Summarize: func(ctx context.Context, model, sys string, middle []Message) (string, Usage, error) {
-			return summarizeMiddle(ctx, chat, model, sys, maxChars, middle)
+			c := chat
+			if cfg.CompactionChat != nil {
+				c = cfg.CompactionChat
+			}
+			return summarizeMiddle(ctx, c, model, sys, maxChars, middle)
 		},
 	}
 

@@ -3,6 +3,7 @@ package miniagent
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -27,16 +28,17 @@ type ResolvedRun struct {
 }
 
 type Resolved struct {
-	Provider         ProviderConfig
-	ModelID          string
-	Thinking         string
-	Mode             string
-	System           string
-	SummaryRequest   string
-	SummarizerPrompt string
-	Session          SessionConfig
-	Compaction       CompactionConfig
-	Run              ResolvedRun
+	Provider           ProviderConfig
+	ModelID            string
+	CompactionProvider ProviderConfig
+	CompactionModelID  string
+	Thinking           string
+	Mode               string
+	System             string
+	SummaryRequest     string
+	SummarizerPrompt   string
+	Session            SessionConfig
+	Run                ResolvedRun
 }
 
 // Resolve 按 cli>config>builtin 裁决产出 Resolved。cfg 必须非 nil（S1 删裸模式后始终有 config）。
@@ -45,7 +47,7 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	if cfg == nil {
 		return nil, errors.New("Resolve: cfg 为 nil（S1 后 config 必须存在）")
 	}
-	r := &Resolved{Session: cfg.Session, Compaction: cfg.Compaction}
+	r := &Resolved{Session: cfg.Session}
 
 	spec := ""
 	switch {
@@ -63,6 +65,24 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	}
 	r.Provider = p
 	r.ModelID = modelID
+
+	// compaction.model：空则回落主模型；含 '/' 按 provider/model 解析，否则与主模型同 provider。
+	if cfg.Compaction.Model != "" {
+		if strings.Contains(cfg.Compaction.Model, "/") {
+			cp, cmodelID, err := ParseModelSpec(cfg.Compaction.Model, cfg)
+			if err != nil {
+				return nil, fmt.Errorf("compaction.model: %w", err)
+			}
+			r.CompactionProvider = cp
+			r.CompactionModelID = cmodelID
+		} else {
+			r.CompactionProvider = p
+			r.CompactionModelID = cfg.Compaction.Model
+		}
+	} else {
+		r.CompactionProvider = p
+		r.CompactionModelID = modelID
+	}
 
 	switch {
 	case o.Thinking != nil:

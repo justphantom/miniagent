@@ -144,10 +144,23 @@ func main() {
 	miniagent.SetContextTrimToolChars(into(resolved.Run.ContextTrimToolChars, 0))
 
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
+
+	// 若 compaction 使用不同 provider，需单独构建 ChatClient；摘要不走流式，故忽略 stream。
+	var compChat *miniagent.ChatClient
+	if resolved.CompactionProvider.Name != resolved.Provider.Name {
+		warnProviderInsecureURLs(resolved.CompactionProvider)
+		compKey := resolveFinalKey(resolved.CompactionProvider.Key, "")
+		if compKey == "" {
+			fmt.Fprintln(os.Stderr, "miniagent: compaction provider API key 缺失（provider.key / $MINIAGENT_API_KEY）")
+			os.Exit(1)
+		}
+		compChat = buildChatClient(compKey, resolved.CompactionProvider, logger, httpTimeoutOf(resolved))
+	}
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
 	reader := bufio.NewReader(os.Stdin)
 	hooks := buildHooks(*f.resultOnly)
 	baseCfg := loopCfg(resolved, f, history, tools)
+	baseCfg.CompactionChat = compChat
 
 	// runCtx 供单次运行与交互循环：含 -max-duration 超时（若有）；信号处理由各自路径自行注册。
 	runCtx := ctx
@@ -196,7 +209,7 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 	if system == "" {
 		system = defaultSystemPrompt
 	}
-	compModel := resolved.Compaction.Model
+	compModel := resolved.CompactionModelID
 	if compModel == "" {
 		compModel = resolved.ModelID
 	}

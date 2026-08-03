@@ -335,7 +335,7 @@ repo/
 - `provider.key`：按字面量读取；建议用 `-key-file` 传入避免明文入文件
 - `defaults.model`：`provider/id` 格式；无 `/` 时默认选中唯一 provider
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
-- `compaction.model`：摘要压缩使用的轻量模型
+- `compaction.model`：摘要压缩使用的轻量模型；可写 `model_id`（同主模型 provider）或 `provider/model`（跨 provider）
 
 ## 完整调用示例
 

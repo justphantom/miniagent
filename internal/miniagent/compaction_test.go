@@ -138,3 +138,27 @@ func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 		t.Errorf("摘要请求未设置 max_tokens=1024: %s", tr.lastBody)
 	}
 }
+
+// compactWithSummary 应把 budget.CompactionModel 透传给 Summarize 回调。
+func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
+	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
+	var gotModel string
+	budget := ContextBudget{
+		Model:           "main-model",
+		CompactionModel: "compaction-model",
+		Summarize: func(ctx context.Context, model, sys string, middle []Message) (string, Usage, error) {
+			gotModel = model
+			return summarizeMiddle(ctx, llm, model, sys, summaryMaxChars, middle)
+		},
+	}
+	var msgs []Message
+	for i := range 10 {
+		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
+	}
+	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
+		t.Fatalf("compactWithSummary: %v", err)
+	}
+	if gotModel != "compaction-model" {
+		t.Errorf("Summarize model = %q, want compaction-model", gotModel)
+	}
+}
