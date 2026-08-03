@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-08-04
+
+> compaction/memory 跨 provider、会话结束自动记忆抽取、移除 `-key-file` CLI flag。
+
+### Breaking
+- **移除 `-key-file` flag**：API key 统一经 `provider.key`（config）或 `$MINIAGENT_API_KEY`（env）注入；`setup_keyfile_unix.go` / `setup_keyfile_windows.go` 已删除。密钥隔离依赖运行用户的 OS 权限与 config 文件 `0600`（`1da0de6`）。
+
+### Added
+- **compaction / memory 支持跨 provider 模型**：`compaction.model` / `memory.model` 可写 `provider/model`（三级回落：`X.model → defaults.model → 主会话模型`）；不同 provider 时自动新建独立 `ChatClient`（按 provider 名去重复用）（`59b759a`、`b6dcc00`）。
+- **会话结束自动抽取项目记忆**：复用到 `memory.model` 的 client，对有过工具调用的 transcript 调用 LLM 抽取 ≤`memory.max_per_session` 条事实写入 `.miniagent/memory.jsonl`；best-effort（失败仅 warn），不计入 token 预算，信号中断跳过（`623a241`）。
+
+### Fixed
+- **`SetMemoryRecentN` 在 `loadProjectRules` 前生效**：修复 `run.memory_recent_n` 对启动快照的注入顺序（`f49807d`）。
+
+### Changed
+- **`memoryExtractor.extract` 内部用 `context.Background()`**：避免 `-max-duration` 到期后抽取立即失败（`f49807d`）。
+- **`main.go` 提取 `secondaryClient` 闭包**：compaction / memory client 构建逻辑统一，减少重复（`b6dcc00`）。
+
 ## [3.4.0] - 2026-08-03
 
 > 安全与健壮性硬化（P0-P2）、Windows 平台补齐、集成测试与发版准备。

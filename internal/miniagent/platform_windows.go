@@ -41,7 +41,7 @@ func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 }
 
 var (
-	kernel32           = syscall.NewLazyDLL("kernel32.dll")
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
 	procLockFileEx   = kernel32.NewProc("LockFileEx")
 	procUnlockFileEx = kernel32.NewProc("UnlockFileEx")
 )
