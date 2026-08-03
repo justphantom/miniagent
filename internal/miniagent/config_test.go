@@ -152,7 +152,7 @@ func TestLoadConfig_ExampleFile(t *testing.T) {
 // stripJSONComments 去掉整行 // 注释（config.example.json 的注释均为独立行，故按行判断即可）。
 func stripJSONComments(in string) string {
 	var b strings.Builder
-	for _, line := range strings.Split(in, "\n") {
+	for line := range strings.SplitSeq(in, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "//") {
 			continue
 		}
