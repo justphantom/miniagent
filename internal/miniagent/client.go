@@ -58,7 +58,7 @@ func validateURL(raw string) (*url.URL, error) {
 }
 
 // NewChatClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
-// （ListAvailableModels 静态回落时不 GET）。
+// （ListAllModels 静态回落时不 GET）。
 func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger) (*ChatClient, error) {
 	chat, err := validateURL(chatURL)
 	if err != nil {

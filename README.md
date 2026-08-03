@@ -35,7 +35,7 @@ make test       # go test -race ./...
 -config string           配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）
 -interactive             交互模式：循环读取 prompt（每行一个）；有 -session 时以文件为唯一真源
 -key-file string         从文件读 API key（优先级：cli -key-file > config provider.key > $MINIAGENT_API_KEY）
--list-models             列出端点可用模型 id 后退出（config 静态 models 不发 GET，否则 GET models-url）
+-list-models             列出可用模型后退出，统一输出 provider/model_id（静态 models 不发 GET，否则 GET models-url；-model 可筛选单个 provider）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
@@ -58,7 +58,7 @@ make test       # go test -race ./...
 ### 子命令
 
 - `-version`：打印 `miniagent <version>`，退出码 0。
-- `-list-models`：列出端点模型 id 后退出。
+- `-list-models`：列出可用模型后退出，每行 `provider/model_id`。
 
 ### 主对话流程的前置检查
 

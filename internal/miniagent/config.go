@@ -191,4 +191,4 @@ func ParseModelSpec(spec string, cfg *Config) (ProviderConfig, string, error) {
 }
 
 // Resolve / resolveRun / pickInt / pickDur 见 resolve.go。
-// ListAvailableModels 见 models.go。
+// ListModels / ListAllModels 见 models.go。

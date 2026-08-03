@@ -79,33 +79,13 @@ func main() {
 
 	if *f.listModels {
 		// list-models 不要求 -model（本就为发现模型），故不走 Resolve。
-		// 单 provider 保持原有行为（输出纯 model id）；多 provider 聚合输出 "provider/model_id"。
+		// 统一输出 "provider/model_id"（单 provider 也带前缀），-model 可筛选单个 provider。
 		listHTTPTimeout, err := httpTimeoutFromConfig(cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: config: %v\n", err)
 			os.Exit(1)
 		}
 
-		if len(cfg.Providers) == 1 {
-			p, err := providerForListModels(cfg, f)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
-				os.Exit(1)
-			}
-			warnProviderInsecureURLs(p)
-			chat, _ := buildLLM(resolveFinalKey(p.Key, *f.keyFile), p, logger, listHTTPTimeout)
-			ids, err := miniagent.ListAvailableModels(ctx, chat, p)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
-				os.Exit(1)
-			}
-			for _, id := range ids {
-				fmt.Println(id)
-			}
-			return
-		}
-
-		// 多 provider：聚合所有 provider 的模型列表（-model 可筛选单个 provider）。
 		providers := cfg.Providers
 		if f.model != nil && *f.model != "" {
 			p, _, err := miniagent.ParseModelSpec(*f.model, cfg)

@@ -51,19 +51,7 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// ListAvailableModels 按 provider 解析可用模型：ModelsURL 空则直接返回静态 Models（不 GET），
-// 静态也空则报错；否则经 llm GET ModelsURL（审查 v3 #5）。调用方须保证 llm 与 p 同源。
-func ListAvailableModels(ctx context.Context, llm *ChatClient, p ProviderConfig) ([]string, error) {
-	if p.ModelsURL == "" {
-		if len(p.Models) == 0 {
-			return nil, fmt.Errorf("provider %q 无 models_url 且静态 models 为空", p.Name)
-		}
-		return append([]string(nil), p.Models...), nil
-	}
-	return llm.ListModels(ctx)
-}
-
-// ListAllModels 聚合多个 provider 的可用模型，输出 "provider/model_id" 格式。
+// ListAllModels 聚合多个 provider 的可用模型，统一输出 "provider/model_id" 格式。
 // 并发请求各 provider 的 ModelsURL（最多 8 路并发）；静态 models（无 ModelsURL）直接返回配置，不 GET。
 // 单个 provider 失败时记录警告但继续其他，最终返回首个错误（若有）。
 // keyFor 按 provider 返回最终 API key；httpClient 非 nil 时复用其 transport/timeout。

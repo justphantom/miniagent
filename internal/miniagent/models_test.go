@@ -38,6 +38,25 @@ func TestListModels_EmptyData(t *testing.T) {
 
 func keyForTest(_ ProviderConfig) string { return "sk-test" }
 
+func TestListAllModels_StaticNoGET(t *testing.T) {
+	// ModelsURL 空 + 静态 Models → 直接返回，绝不发 HTTP（无需 server 即证明不 GET）。
+	providers := []ProviderConfig{{Name: "p", Models: []string{"a", "b"}}}
+	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
+	if err != nil {
+		t.Fatalf("static list: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != "p/a" {
+		t.Errorf("ids = %v", ids)
+	}
+}
+
+func TestListAllModels_StaticEmptyErrors(t *testing.T) {
+	providers := []ProviderConfig{{Name: "p"}}
+	if _, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil); err == nil {
+		t.Error("empty static models should error")
+	}
+}
+
 func TestListAllModels_MultiProvider(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-3.5"}]}`)

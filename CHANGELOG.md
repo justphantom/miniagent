@@ -3,6 +3,11 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Changed
+- **`-list-models` 输出统一为 `provider/model_id`**：单 provider 也带前缀，与多 provider/`-model` 筛选路径格式一致；移除 `ListAvailableModels` 与 `providerForListModels`（静态回落逻辑并入 `ListAllModels`）。
+
 ## [3.3.0] - 2026-08-03
 
 > 双层 `.miniagent/` 规则查找、多 provider `-list-models` 聚合、HTTP 工具抽离；修正发版前评估发现的旗舰示例不可加载与 run.* 配置键漏装配。

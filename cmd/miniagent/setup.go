@@ -247,25 +247,6 @@ func emitRunResult(result miniagent.Result, model string, resultOnly bool, logge
 	}
 }
 
-// providerForListModels 解析 -list-models 所需 provider（不要求 -model，因 list 本就为发现模型）：
-// 按 -model/defaults.model/单一 provider。多 provider 时由 main.go 走聚合路径，此函数仅用于单 provider 分支。
-func providerForListModels(cfg *miniagent.Config, f *cliFlags) (miniagent.ProviderConfig, error) {
-	spec := ""
-	if f.model != nil && *f.model != "" {
-		spec = *f.model
-	} else {
-		spec = cfg.Defaults.Model
-	}
-	if spec != "" {
-		p, _, err := miniagent.ParseModelSpec(spec, cfg)
-		return p, err
-	}
-	if len(cfg.Providers) == 1 {
-		return cfg.Providers[0], nil
-	}
-	return miniagent.ProviderConfig{}, errors.New("list-models 需 -model 或 defaults.model 或单一 provider")
-}
-
 // absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 ~/.miniagent/miniagent.json），
 // 供 subagent fork 引导注入。cfg 始终非 nil（S1 删裸模式）。
 // 逻辑与 requireConfig 保持一致：显式 -config > ~/.miniagent/miniagent.json。

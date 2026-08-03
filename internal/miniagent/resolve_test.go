@@ -1,10 +1,6 @@
 package miniagent
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"sync"
 	"testing"
@@ -132,41 +128,6 @@ func TestResolve_StrategyConstants(t *testing.T) {
 		if c.got == nil || *c.got != c.want {
 			t.Errorf("%s = %v, want %d", c.name, c.got, c.want)
 		}
-	}
-}
-
-func TestListAvailableModels_StaticNoGET(t *testing.T) {
-	// ModelsURL 空 + 静态 Models → 直接返回，绝不发 HTTP（用会真实失败的内嵌 url 证明不 GET）。
-	p := ProviderConfig{Name: "p", Models: []string{"a", "b"}}
-	llm := &ChatClient{ChatURL: "http://127.0.0.1:1", ModelsURL: "http://127.0.0.1:1"} // 不可达
-	ids, err := ListAvailableModels(context.Background(), llm, p)
-	if err != nil {
-		t.Fatalf("static list: %v", err)
-	}
-	if len(ids) != 2 || ids[0] != "a" {
-		t.Errorf("ids = %v", ids)
-	}
-}
-
-func TestListAvailableModels_StaticEmptyErrors(t *testing.T) {
-	if _, err := ListAvailableModels(context.Background(), &ChatClient{}, ProviderConfig{Name: "p"}); err == nil {
-		t.Error("empty static models should error")
-	}
-}
-
-func TestListAvailableModels_GET(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"x"},{"id":"y"}]}`)
-	}))
-	defer srv.Close()
-	p := ProviderConfig{Name: "p", ModelsURL: srv.URL + "/v1/models"}
-	llm := &ChatClient{APIKey: "sk", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}
-	ids, err := ListAvailableModels(context.Background(), llm, p)
-	if err != nil {
-		t.Fatalf("GET list: %v", err)
-	}
-	if len(ids) != 2 {
-		t.Errorf("ids = %v", ids)
 	}
 }
 

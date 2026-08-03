@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// -list-models：GET models-url，打印 id。
+// -list-models：GET models-url，统一输出 "provider/model_id"（单 provider 也带前缀）。
 func TestCLI_ListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -26,8 +26,13 @@ func TestCLI_ListModels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
-	if !strings.Contains(out, "gpt-4o") || !strings.Contains(out, "gpt-3.5-turbo") {
-		t.Errorf("missing model ids: %s", out)
+	if !strings.Contains(out, "p/gpt-4o") || !strings.Contains(out, "p/gpt-3.5-turbo") {
+		t.Errorf("missing prefixed model ids: %s", out)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if !strings.HasPrefix(line, "p/") {
+			t.Errorf("line missing provider prefix: %q", line)
+		}
 	}
 }
 
