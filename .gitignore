@@ -34,4 +34,4 @@ go.work.sum
 
 .codegraph/
 docs/
-
+cmd/miniagent/.miniagent/
