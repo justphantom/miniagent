@@ -3,9 +3,11 @@ package miniagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -13,28 +15,58 @@ import (
 )
 
 // ListModels 调 GET ModelsURL，返回 id 列表。复用 ChatClient.modelsEndpoint/鉴权。
+// 对 429/5xx 与网络错误自动重试 maxRetries 次，退避策略与 Do 一致。
 func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	client, u, err := c.modelsEndpoint(30 * time.Second)
 	if err != nil {
 		return nil, err
 	}
+	backoff := retryBaseDelay
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ids, retryable, err := c.listModelsOnce(ctx, client, u)
+		if err == nil {
+			return ids, nil
+		}
+		if !retryable || attempt == maxRetries {
+			if attempt > 0 {
+				return nil, fmt.Errorf("after %d retries: %w", attempt, err)
+			}
+			return nil, err
+		}
+		delay := capRetryDelay(backoff, -1)
+		if c.Logger != nil {
+			c.Logger.Warn("list models failed, retrying", "failed_attempt", attempt+1, "delay_ms", delay.Milliseconds(), "error", err)
+		}
+		if waitErr := sleepCtx(ctx, delay); waitErr != nil {
+			return nil, waitErr
+		}
+		backoff *= 2
+	}
+	return nil, errors.New("list models retry loop exited unexpectedly")
+}
+
+// listModelsOnce 单次 GET /models，返回 (ids, retryable, error)。
+func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u *url.URL) ([]string, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, false, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("llm request: %w", err)
+		return nil, true, fmt.Errorf("llm request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		body := truncate(string(raw), 500, "…")
 		if readErr != nil {
-			return nil, fmt.Errorf("llm returned %d: read body: %w (partial: %s)", resp.StatusCode, readErr, body)
+			return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d: read body: %w (partial: %s)", resp.StatusCode, readErr, body)
 		}
-		return nil, fmt.Errorf("llm returned %d: %s", resp.StatusCode, body)
+		return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d: %s", resp.StatusCode, body)
 	}
 	var v struct {
 		Data []struct {
@@ -42,13 +74,13 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, false, fmt.Errorf("parse response: %w", err)
 	}
 	ids := make([]string, 0, len(v.Data))
 	for _, m := range v.Data {
 		ids = append(ids, m.ID)
 	}
-	return ids, nil
+	return ids, false, nil
 }
 
 // ListAllModels 聚合多个 provider 的可用模型，统一输出 "provider/model_id" 格式。

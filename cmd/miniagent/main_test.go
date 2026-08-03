@@ -184,6 +184,80 @@ func TestCLI_InvalidLogLevelExits1(t *testing.T) {
 	}
 }
 
+// e2e：单次非交互运行带 -session 会把对话追加到 session 文件。
+func TestCLI_SingleTurnSessionAppend(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	sessPath := filepath.Join(t.TempDir(), "s.jsonl")
+	args := configArgs(t, srv.URL, "-session", sessPath)
+	code, out := runMainBin(t, "hi", args, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	if !strings.Contains(out, `"type":"result"`) || !strings.Contains(out, `"text":"ok"`) {
+		t.Errorf("missing result event: %s", out)
+	}
+	data, err := os.ReadFile(sessPath)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if !strings.Contains(string(data), `"role":"user"`) || !strings.Contains(string(data), `"role":"assistant"`) {
+		t.Errorf("session missing messages: %s", data)
+	}
+}
+
+// e2e：交互模式两回合，session 文件累积两轮消息。
+func TestCLI_InteractiveSessionPersists(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		content := fmt.Sprintf("ok%d", calls)
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, content)
+	}))
+	defer srv.Close()
+
+	sessPath := filepath.Join(t.TempDir(), "s.jsonl")
+	args := configArgs(t, srv.URL, "-interactive", "-session", sessPath)
+	code, out := runMainBin(t, "hi\nhello\n", args, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	if strings.Count(out, `"type":"result"`) != 2 {
+		t.Errorf("want 2 result events, got: %s", out)
+	}
+	if calls != 2 {
+		t.Errorf("server calls = %d, want 2", calls)
+	}
+	data, err := os.ReadFile(sessPath)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if strings.Count(string(data), `"role":"user"`) != 2 {
+		t.Errorf("want 2 user messages, got: %s", data)
+	}
+	if strings.Count(string(data), `"role":"assistant"`) != 2 {
+		t.Errorf("want 2 assistant messages, got: %s", data)
+	}
+}
+
+// e2e：run.max_duration 到期时非交互路径返回 1。
+func TestCLI_MaxDurationExits1(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"late"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	cfgPath := writeConfigFixture(t, srv.URL, `{"max_duration":"1ns"}`)
+	code, out := runMainBin(t, "hi", []string{"-config", cfgPath}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1; out=%s", code, out)
+	}
+}
+
 // e2e：仅靠 -key-file 提供 key，key 进入请求 Authorization。
 func TestCLI_KeyFileAuth(t *testing.T) {
 	var mu sync.Mutex

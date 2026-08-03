@@ -12,6 +12,15 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
+func TestHTTPTimeoutFromConfig_RejectsNegative(t *testing.T) {
+	neg := "-1s"
+	cfg := &miniagent.Config{Run: miniagent.RunConfig{HTTPTimeout: &neg}}
+	_, err := httpTimeoutFromConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "负值") {
+		t.Fatalf("expected negative duration error, got %v", err)
+	}
+}
+
 // P4：buildLLM 返回 ChatClient（带 120s 总 Timeout，非流式 Do 兜底防挂死 #3）+ StreamClient
 // （无 Timeout，body 不被砍 P2-5），两者共享同一 *http.Transport（代理/dial/TLS 超时，#2）。
 func TestBuildLLM_ChatTimeoutStreamNoTimeoutSharedTransport(t *testing.T) {

@@ -65,9 +65,9 @@ func runGlob(workspaceRoot, args string) ToolResult {
 	root := resolveToolPath(workspaceRoot, a.Path)
 	var paths []string
 	truncated := false
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil //nolint:nilerr // 不可访问的子树跳过，保留可访问部分的结果
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
 		if d.IsDir() {
 			if d.Name() == ".git" || d.Type()&fs.ModeSymlink != 0 {
@@ -93,6 +93,9 @@ func runGlob(workspaceRoot, args string) ToolResult {
 		paths = append(paths, rel)
 		return nil
 	})
+	if walkErr != nil {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("列举 %q 失败：%v", a.Path, walkErr)}
+	}
 	if len(paths) == 0 {
 		return ToolResult{Output: "无匹配"}
 	}

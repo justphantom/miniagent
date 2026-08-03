@@ -5,6 +5,32 @@
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-08-03
+
+> 安全与健壮性硬化（P0-P2）、Windows 平台补齐、集成测试与发版准备。
+
+### Security
+- **session 保存期间忽略 SIGINT/SIGTERM**：非交互与交互模式均在 `AppendMessages`/`RewriteMessages` 期间临时忽略信号，防止 session 文件在半写状态被截断或残留临时文件；交互模式保存后重新注册信号通道（`cmd/miniagent/main.go`、`cmd/miniagent/interact.go`）。
+- **key-file 读取硬化**：通过 `O_NOFOLLOW` 拒绝最终分量为符号链接的文件，防止被指向敏感文件；限制文件大小 ≤64KiB；权限宽松时 stderr 警告（`cmd/miniagent/setup.go`）。
+- **default 模式路径约束**：`read`/`grep`/`glob` 在 default 模式下强制受限在 workdir 子树；`checkConfine` 强化符号链接检查；`glob` 不再吞掉 `WalkDir` 错误（`cmd/miniagent/tools.go`、`internal/miniagent/tool_glob.go`）。
+- **请求体大小双重护栏**：marshal 前按消息长度估算，marshal 后再校验实际 JSON 字节，超过 4MiB 直接拒绝，防止超大请求 OOM/烧钱（`internal/miniagent/wire.go`）。
+- **脚本/参数注入防护**：`script_<name>` 工具参数经 `shellQuote` 转义，禁止 `-` 开头参数，防止被构造进额外 flag（`internal/miniagent/tool_script.go`）。
+- **正则复杂度限制**：`grep` 工具对 `regexp/syntax` 解析后的 AST 统计节点数，超过阈值直接拒执行，防止 ReDoS（`internal/miniagent/tool_grep.go`）。
+
+### Fixed
+- **roleSystem 消息持久化**：summary request 等内部 system 消息原样落入 session（之前被过滤导致上下文/持久化不一致）（`internal/miniagent/loop.go`）。
+- **零 usage 预算熔断失效**：LLM 未返回 usage 时，用本地 token 估算兜底，避免 MaxTotalTokens 被静默绕过（`internal/miniagent/loop.go`）。
+- **流式 OnDelta 错误传播**：`OnDelta` 返回 error 时终止流解析并上抛，不再静默吞错（`internal/miniagent/stream_parse.go`）。
+- **ListModels 无重试**：对 429/5xx 与网络错误增加与 chat 调用一致的重试退避（`internal/miniagent/models.go`）。
+- **glob 缺失根目录错误**：`filepath.WalkDir` 的根不存在/不可读错误现在返回给调用方（`internal/miniagent/tool_glob.go`）。
+- **负 timeout 配置被接受**：`run.http_timeout`/`run.shell_timeout` 等负值在解析阶段报错（`cmd/miniagent/setup_http.go`）。
+- **thinking 级别未校验**：配置或 CLI 传入非法 thinking 值时返回明确错误（`internal/miniagent/config.go`、`resolve.go`）。
+- **memory.jsonl 无界增长**：增加 1MiB 上限与最近 N 条轮转（`internal/miniagent/memory.go`）。
+
+### Added
+- **Windows 平台实现**：新增 `internal/miniagent/platform_windows.go`，提供 `setPGID`/`killProcessGroup`/`openNoFollow`/`lockSession` 的 Windows 等价实现；Unix 专属测试迁移到 `*_unix_test.go`，新增 `platform_windows_test.go`。
+- **集成/冒烟测试**：新增 `cmd/miniagent/main_test.go` 的 e2e 用例覆盖单次 session 追加、交互模式两回合持久化、`-max-duration` 到期退出码。
+
 ### Changed
 - **`-list-models` 输出统一为 `provider/model_id`**：单 provider 也带前缀，与多 provider/`-model` 筛选路径格式一致；移除 `ListAvailableModels` 与 `providerForListModels`（静态回落逻辑并入 `ListAllModels`）。
 

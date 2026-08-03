@@ -61,3 +61,13 @@ func TestGlobTool_SkipDotGit(t *testing.T) {
 		t.Errorf(".git not skipped: %s", res.Output)
 	}
 }
+
+func TestGlobTool_MissingRootErrors(t *testing.T) {
+	res := GlobTool(t.TempDir(), 0).Call(context.Background(), `{"pattern":"*.go","path":"/nonexistent/dir"}`)
+	if !res.IsError {
+		t.Fatal("expected error for missing root")
+	}
+	if !strings.Contains(res.Output, "列举") {
+		t.Errorf("error message should mention glob failure: %q", res.Output)
+	}
+}

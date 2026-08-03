@@ -8,7 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
@@ -19,7 +21,28 @@ import (
 // 单轮错误不退出会话（emit error 后继续），仅 EOF/空输入/信号取消/-max-duration 到期/跨轮预算超限退出。
 // 返回退出码：0=干净 EOF（无任一轮 Run 失败）；1=跨轮预算超限/-max-duration 到期/EOF 前存在 Run 失败轮；
 // 130=信号取消（POSIX SIGINT 习惯，审查 P3）。
-func runInteractive(ctx context.Context, chat *miniagent.ChatClient, stream *miniagent.StreamClient, baseCfg miniagent.LoopConfig, sessPath string, meta miniagent.SessionMeta, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader) int {
+// runCtx 由调用方提供（含 -max-duration 超时）；本函数内部再注册 SIGINT/SIGTERM 信号处理。
+func runInteractive(runCtx context.Context, chat *miniagent.ChatClient, stream *miniagent.StreamClient, baseCfg miniagent.LoopConfig, sessPath string, meta miniagent.SessionMeta, hooks miniagent.LoopHooks, logger *slog.Logger, reader *bufio.Reader) int {
+	// 使用独立信号通道管理交互循环的取消，避免 main.go 的 NotifyContext 与 save 期间的
+	// signal.Ignore/Notify 互相干扰。save 前 Ignore 阻止重复 SIGINT 杀掉保存过程；save 后
+	// 重新 Notify 本通道，恢复信号取消能力。done 用于在 runInteractive 返回时结束监听 goroutine，
+	// 避免无信号时 goroutine 永久阻塞泄漏。
+	ctx, cancel := context.WithCancel(runCtx)
+	sigCh := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer func() {
+		close(done)
+		signal.Stop(sigCh)
+		cancel()
+	}()
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-done:
+		}
+	}()
 	var (
 		memHistory []miniagent.Message // 仅无 session 时用
 		totalUsage miniagent.Usage     // 跨轮累计，超 MaxTotalTokens 停止交互（审查 P2 交互无跨轮预算）
@@ -91,14 +114,17 @@ func runInteractive(ctx context.Context, chat *miniagent.ChatClient, stream *min
 			logger.Warn("emit result failed", "error", err)
 		}
 		// session 持久化：Compacted 时 rewrite 全量 transcript 真正丢弃被屏障中段（审查 P2 session
-		// 文件永不压缩）；否则 append-only 追加 NewMessages。save 失败经 NDJSON 让消费方感知（P2 交互 save 静默）。
+		// 文件永不压缩）；否则 append-only 追加 NewMessages。save 期间忽略信号，完成后重新 Notify
+		// 本通道，恢复后续 loop 的信号响应。
 		if sessPath != "" {
+			signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
 			var saveErr error
 			if result.Compacted {
 				saveErr = miniagent.RewriteMessages(sessPath, meta, result.Messages)
 			} else {
 				saveErr = miniagent.AppendMessages(sessPath, meta, result.NewMessages)
 			}
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 			if saveErr != nil {
 				if eerr := miniagent.EmitError(os.Stdout, "save session: "+saveErr.Error()); eerr != nil {
 					logger.Warn("emit error failed", "error", eerr)

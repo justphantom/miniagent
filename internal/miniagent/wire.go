@@ -32,7 +32,29 @@ type chatToolCall struct {
 // 超过此值的请求直接拒绝，避免超大请求 OOM/烧钱。
 const maxRequestBodyBytes = 4 << 20
 
+// estimateRequestBodySize 粗略估算 buildChatBody 将生成的 JSON 字节数，用于 marshal 前
+// 拦截超大请求，避免 OOM。按字符串总长度的 1.3 倍 + 固定信封开销估算，偏保守。
+func estimateRequestBodySize(req Request) int64 {
+	size := int64(256) // 模型、max_tokens、stream、stream_options、tools 等固定字段开销
+	size += int64(len(req.System))
+	for _, m := range req.Messages {
+		size += int64(len(m.Role) + len(m.Content) + len(m.Reasoning) + len(m.ToolCallID))
+		for _, tc := range m.ToolCalls {
+			size += int64(len(tc.ID) + len(tc.Name) + len(tc.Args))
+		}
+	}
+	for _, t := range req.Tools {
+		size += int64(len(t.Name) + len(t.Description))
+		// parameters 已是不定类型，这里只按最小估计；真正大的是 messages。
+		size += 64
+	}
+	return size * 13 / 10
+}
+
 func buildChatBody(req Request) ([]byte, error) {
+	if estimateRequestBodySize(req) > maxRequestBodyBytes {
+		return nil, fmt.Errorf("请求预估 %d 字节超过上限 %d", estimateRequestBodySize(req), maxRequestBodyBytes)
+	}
 	msgs := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
 		msgs = append(msgs, chatMessage{Role: roleSystem, Content: req.System})

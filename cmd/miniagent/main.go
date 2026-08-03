@@ -16,7 +16,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-var version = "dev"
+var version = "3.4.0"
 
 type cliFlags struct {
 	model         *string
@@ -149,18 +149,20 @@ func main() {
 	hooks := buildHooks(*f.resultOnly)
 	baseCfg := loopCfg(resolved, f, history, tools)
 
+	// runCtx 供单次运行与交互循环：含 -max-duration 超时（若有）；信号处理由各自路径自行注册。
+	runCtx := ctx
 	if d := maxDurationOf(resolved); d > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, d)
+		runCtx, cancel = context.WithTimeout(runCtx, d)
 		defer cancel()
 	}
 
 	if *f.interactive {
-		os.Exit(runInteractive(ctx, chat, stream, baseCfg, sessPath, meta, hooks, logger, reader))
+		os.Exit(runInteractive(runCtx, chat, stream, baseCfg, sessPath, meta, hooks, logger, reader))
 	}
 
 	prompt := mustReadPrompt(reader)
-	result, err := miniagent.Run(ctx, chat, stream, baseCfg, string(prompt), hooks, logger)
+	result, err := miniagent.Run(runCtx, chat, stream, baseCfg, string(prompt), hooks, logger)
 	if err != nil {
 		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。
 		if errors.Is(err, context.Canceled) {
@@ -171,14 +173,16 @@ func main() {
 	}
 	emitRunResult(result, resolved.ModelID, *f.resultOnly, logger)
 	if sessPath != "" {
-		// Compacted 时 rewrite 全量 transcript 丢弃被屏障中段（审查 P2 session 文件永不压缩）；
-		// 否则 append-only 追加 NewMessages。
+		// 保存期间忽略 SIGINT/SIGTERM：避免截断 session 文件或残留临时文件。
+		// 保存完成后进程即退出，signal.Reset 在之后恢复默认行为。
+		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
 		var saveErr error
 		if result.Compacted {
 			saveErr = miniagent.RewriteMessages(sessPath, meta, result.Messages)
 		} else {
 			saveErr = miniagent.AppendMessages(sessPath, meta, result.NewMessages)
 		}
+		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		if saveErr != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", saveErr)
 			os.Exit(1)

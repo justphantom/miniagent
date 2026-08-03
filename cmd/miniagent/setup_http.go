@@ -38,6 +38,9 @@ func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("run.http_timeout %q: %w", *cfg.Run.HTTPTimeout, err)
 	}
+	if d < 0 {
+		return 0, fmt.Errorf("run.http_timeout %q: 负值不合法", *cfg.Run.HTTPTimeout)
+	}
 	return d, nil
 }
 
