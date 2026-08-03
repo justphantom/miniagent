@@ -402,7 +402,7 @@ func TestCLI_InteractiveTwoTurns(t *testing.T) {
 	}
 }
 
-// 薄版 checkConfine：.. 越界拒；符号链接不追（不拒）。
+// checkConfine：.. 越界拒；已存在路径分量含符号链接亦拒（缩小 TOCTOU 窗口）。
 func TestCheckConfine(t *testing.T) {
 	dir := t.TempDir()
 	inner := filepath.Join(dir, "inner.txt")
@@ -423,9 +423,10 @@ func TestCheckConfine(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	// 薄版不追符号链接：link 路径在 workdir 子树内即放行（真隔离靠 OS）。
-	if err := checkConfine(dir, "link"); err != nil {
-		t.Errorf("thin checkConfine should not follow symlink: %v", err)
+	// 已存在分量是符号链接时拒绝，防止 IO 落到 workdir 外（default 模式仍是薄软约束，
+	// 真隔离仍靠 OS；但不再主动放行明显的软链越界）。
+	if err := checkConfine(dir, "link"); err == nil {
+		t.Error("existing symlink component should be rejected")
 	}
 }
 

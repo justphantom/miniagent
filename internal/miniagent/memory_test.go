@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -96,5 +97,68 @@ func TestReadWriteTools_MemoryTokenRouting(t *testing.T) {
 	}
 	if !strings.Contains(r.Output, "一条记忆") {
 		t.Errorf("read memory did not route to memory file: %s", r.Output)
+	}
+}
+
+// .miniagent 目录为符号链接时，read/write memory 均须拒绝，防止越界读写。
+func TestMemory_SymlinkDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(dir, ".miniagent")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if r := readMemoryTool(dir); !r.IsError {
+		t.Errorf("read should reject symlink .miniagent dir")
+	}
+	if r := writeMemoryTool(dir, "x"); !r.IsError {
+		t.Errorf("write should reject symlink .miniagent dir")
+	}
+}
+
+// memory.jsonl 自身为符号链接时，read/write memory 均须拒绝。
+func TestMemory_SymlinkFileRejected(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "real.jsonl")
+	if err := os.WriteFile(outside, []byte("leak"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	maDir := filepath.Join(dir, ".miniagent")
+	if err := os.MkdirAll(maDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(maDir, "memory.jsonl")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if r := readMemoryTool(dir); !r.IsError {
+		t.Errorf("read should reject symlink memory file")
+	}
+	if r := writeMemoryTool(dir, "x"); !r.IsError {
+		t.Errorf("write should reject symlink memory file")
+	}
+}
+
+// memory.jsonl 为非普通文件（如 FIFO）时须拒绝。
+func TestMemory_NonRegularFileRejected(t *testing.T) {
+	dir := t.TempDir()
+	maDir := filepath.Join(dir, ".miniagent")
+	if err := os.MkdirAll(maDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(maDir, "memory.jsonl")
+	if err := os.WriteFile(fifo, []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 先写一次正常文件确保流程通，再换成 FIFO
+	_ = os.Remove(fifo)
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("cannot create fifo: %v", err)
+	}
+	if r := readMemoryTool(dir); !r.IsError {
+		t.Errorf("read should reject FIFO memory file")
+	}
+	if r := writeMemoryTool(dir, "x"); !r.IsError {
+		t.Errorf("write should reject FIFO memory file")
 	}
 }

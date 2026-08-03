@@ -194,6 +194,28 @@ func TestResolve_DefaultsModel(t *testing.T) {
 	}
 }
 
+// CLI 传入非法 mode 必须报错，而非被静默当作 auto。
+func TestResolve_InvalidCliModeErrors(t *testing.T) {
+	cfg, _ := LoadConfig(writeTmpConfig(t, validConfigBody()))
+	badMode := "invalid_mode"
+	if _, err := Resolve(cfg, CLIOverrides{Mode: &badMode}); err == nil {
+		t.Error("invalid CLI mode should error, not silently become auto")
+	}
+}
+
+// config defaults.mode 已通过 validateConfig 校验，Resolve 对 CLI 覆盖做二次枚举校验。
+func TestResolve_AutoModeAllowed(t *testing.T) {
+	cfg, _ := LoadConfig(writeTmpConfig(t, validConfigBody()))
+	autoMode := "auto"
+	r, err := Resolve(cfg, CLIOverrides{Mode: &autoMode})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if r.Mode != "auto" {
+		t.Errorf("Mode = %q want auto", r.Mode)
+	}
+}
+
 // S1 删裸模式：Resolve(nil, ...) 必须报错（cfg 必须非 nil）。
 func TestResolve_NilCfgErrors(t *testing.T) {
 	model := "glm"

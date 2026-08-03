@@ -3,6 +3,7 @@ package miniagent
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,13 +47,62 @@ func memoryPath(workdir string) string {
 	return filepath.Join(workdir, memoryDir, memoryFile)
 }
 
+// checkMemoryPathSafe 校验 .miniagent/memory.jsonl 路径安全：父目录与文件自身
+// 不得为符号链接，文件（若存在）须为普通文件；非空 workdir 时路径还须落在 workdir 子树内。
+// 该检查在 IO 前执行，可缩小 TOCTOU 窗口，但非原子隔离（default 模式本就不是安全边界）。
+func checkMemoryPathSafe(workdir string) error {
+	path := memoryPath(workdir)
+	dir := filepath.Dir(path)
+
+	// 父目录存在时必须是真实目录（非软链）
+	if info, err := os.Lstat(dir); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf(".miniagent 目录 %q 是符号链接", dir)
+		}
+		if !info.Mode().IsDir() {
+			return fmt.Errorf(".miniagent 路径 %q 不是目录", dir)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查 .miniagent 目录 %q 失败：%w", dir, err)
+	}
+
+	// 目标文件存在时必须是普通文件（非软链/设备/FIFO）
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("memory 文件 %q 是符号链接", path)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("memory 文件 %q 不是普通文件", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查 memory 文件 %q 失败：%w", path, err)
+	}
+
+	// 非空 workdir 时路径须落在 workdir 子树内
+	if workdir != "" {
+		absPath, _ := filepath.Abs(filepath.Clean(path))
+		absWorkdir, _ := filepath.Abs(filepath.Clean(workdir))
+		sep := string(filepath.Separator)
+		if absPath != absWorkdir && !strings.HasPrefix(absPath+sep, absWorkdir+sep) {
+			return fmt.Errorf("memory 路径 %q 越出 workdir %q", path, workdir)
+		}
+	}
+	return nil
+}
+
 // readMemoryRecordsFromPath 从指定路径读 memory.jsonl（文件不存在返回 nil 无错；非法行跳过）。
+// 使用 O_NOFOLLOW 打开，防止目标文件或父目录被替换为符号链接后读到/写到预期外位置。
 func readMemoryRecordsFromPath(path string) ([]memoryRecord, error) {
-	data, err := os.ReadFile(path)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, int64(readFileBytes())))
+	if err != nil {
 		return nil, err
 	}
 	var recs []memoryRecord
@@ -76,16 +126,24 @@ func readMemoryRecords(workdir string) ([]memoryRecord, error) {
 }
 
 // appendMemoryRecord 追加一条记录到 memory.jsonl（MkdirAll .miniagent，0o600）。
+// 写入前后均校验路径安全，降低符号链接 TOCTOU 风险。
 func appendMemoryRecord(workdir string, r memoryRecord) error {
+	if err := checkMemoryPathSafe(workdir); err != nil {
+		return err
+	}
 	path := memoryPath(workdir)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("创建 .miniagent 目录：%w", err)
+	}
+	// MkdirAll 后再次确认父目录未被替换为符号链接（缩小 TOCTOU 窗口）。
+	if err := checkMemoryPathSafe(workdir); err != nil {
+		return err
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := openNoFollow(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -97,8 +155,12 @@ func appendMemoryRecord(workdir string, r memoryRecord) error {
 }
 
 // readMemoryTool 渲染 memory.jsonl 为文本（每行 `[type] topic: content`），供 read 工具的
-// 保留路径 "memory" 调用。绕过常规符号链接/二进制检查——这是项目自有结构化文件。
+// 保留路径 "memory" 调用。绕过常规符号链接/二进制检查——这是项目自有结构化文件，但仍
+// 须通过 checkMemoryPathSafe 防止 .miniagent/memory.jsonl 被软链指向 workdir 外。
 func readMemoryTool(workdir string) ToolResult {
+	if err := checkMemoryPathSafe(workdir); err != nil {
+		return ToolResult{IsError: true, Output: fmt.Sprintf("memory 路径检查失败：%v", err)}
+	}
 	recs, err := readMemoryRecords(workdir)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 memory 失败：%v", err)}

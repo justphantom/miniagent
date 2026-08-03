@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -36,7 +37,8 @@ func confineWrap(tool miniagent.Tool, root string) miniagent.Tool {
 }
 
 // checkConfine 薄版路径校验：p（相对 root 或绝对）经 Clean+Abs 后须落在 root 子树内。
-// 不做 EvalSymlinks 追检——default 是薄软约束，符号链接逃逸由调用方 OS 隔离兜底（审查 v3 §6.2）。
+// 额外检查从 root 到 target 的已存在路径分量均不得为符号链接，缩小 TOCTOU 窗口。
+// 不做 EvalSymlinks 追检——default 是薄软约束，符号链接逃逸由调用方 OS 隔离兜底。
 func checkConfine(root, p string) error {
 	full := p
 	if !filepath.IsAbs(p) {
@@ -52,6 +54,29 @@ func checkConfine(root, p string) error {
 	}
 	if !strings.HasPrefix(absTarget+sep, rootAbs+sep) {
 		return fmt.Errorf("路径 %q 越出 workdir（default 模式）", p)
+	}
+	// 检查已存在路径分量是否含符号链接：攻击者可能将某层目录替换为软链使最终
+	// IO 落到 workdir 外。该检查在 IO 前执行，可缩小但无法完全消除 TOCTOU。
+	rel, err := filepath.Rel(rootAbs, absTarget)
+	if err != nil {
+		return fmt.Errorf("路径 %q 相对 workdir 解析失败：%w", p, err)
+	}
+	current := rootAbs
+	for part := range strings.SplitSeq(rel, sep) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil // 剩余分量不存在，将由后续 MkdirAll/Create 创建
+			}
+			return fmt.Errorf("检查路径 %q 失败：%w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("路径 %q 含符号链接 %q（default 模式）", p, current)
+		}
 	}
 	return nil
 }

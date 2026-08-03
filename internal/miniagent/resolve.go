@@ -78,6 +78,9 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	default:
 		r.Mode = "default"
 	}
+	if r.Mode != ModeDefault && r.Mode != ModeAuto {
+		return nil, fmt.Errorf("mode %q 非法（%s|%s）", r.Mode, ModeDefault, ModeAuto)
+	}
 	switch {
 	case o.System != nil && *o.System != "":
 		r.System = *o.System
