@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -129,5 +133,102 @@ func TestCLI_InteractiveShortLineStillProcessed(t *testing.T) {
 	}
 	if code != 1 {
 		t.Errorf("code = %d, want 1（EOF 前有 Run 失败轮）", code)
+	}
+}
+
+// 交互模式：两轮对话，第二轮请求含第一轮回答。
+func TestCLI_InteractiveTwoTurns(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"回A"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	sess := filepath.Join(t.TempDir(), "s.jsonl")
+	code, out := runMainBin(t, "第一问\n第二问\n", configArgs(t, srv.URL, "-interactive", "-session", sess), "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("got %d requests, want 2", len(bodies))
+	}
+	if !strings.Contains(bodies[1], "回A") || !strings.Contains(bodies[1], "第二问") {
+		t.Errorf("turn2 missing accumulated context: %s", bodies[1])
+	}
+}
+
+// P2 交互无跨轮预算：-interactive 模式跨轮累计 usage 超 -max-tokens-total 时停止交互循环
+// （emit error + exit 1，与单轮 ErrBudgetExceeded 语义对齐）。单轮上限仍由 Run 管。
+func TestCLI_InteractiveCrossTurnBudgetStops(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		// 每轮 prompt=8 completion=2 共 10；-max-tokens-total=15 → 第二轮累计 20>15 停止。
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"a"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":2}}`)
+	}))
+	defer srv.Close()
+	code, out := runMainBin(t, "q1\nq2\nq3\n", []string{"-config", writeConfigFixture(t, srv.URL, `{"max_tokens_total":15}`), "-interactive"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1（跨轮预算超限 exit 1）; out=%s", code, out)
+	}
+	if !strings.Contains(out, "跨轮累计") {
+		t.Errorf("missing 跨轮累计 error: %s", out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// 应在第二轮后停止（第三轮 q3 不应再发请求）。
+	if len(bodies) > 2 {
+		t.Errorf("应在第二轮后停止，但发了 %d 请求", len(bodies))
+	}
+}
+
+// P2 thinking 跨轮固化（interact 侧）：第一轮 thinking 不支持降级后，第二轮请求不再含
+// reasoning_effort 字段。阶段 1 在 Run 内已固化（同轮多步不重撞 400），此测试覆盖跨轮：
+// interact 据 result.ThinkingDowngraded 清 baseCfg.ThinkingLevel。
+func TestCLI_InteractiveThinkingDowngradePersists(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		idx := callCount.Add(1)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		// 首次请求含 thinking → 返 400 reasoning_effort not supported。
+		if idx == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"reasoning_effort not supported","type":"invalid_request_error"}}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"a"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+	code, out := runMainBin(t, "q1\nq2\n", configArgs(t, srv.URL, "-interactive", "-thinking", "medium"), "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// bodies[0]=q1 thinking(400), bodies[1]=q1 retry no thinking, bodies[2]=q2 no thinking。
+	if len(bodies) < 3 {
+		t.Fatalf("bodies=%d: %s", len(bodies), bodies)
+	}
+	if !strings.Contains(bodies[2], "q2") {
+		t.Fatalf("bodies[2] 应为 q2 请求: %s", bodies[2])
+	}
+	if strings.Contains(bodies[2], "reasoning_effort") {
+		t.Errorf("第二轮仍含 reasoning_effort（thinking 跨轮未固化）: %s", bodies[2])
 	}
 }
