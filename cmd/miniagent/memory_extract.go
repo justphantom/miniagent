@@ -27,7 +27,10 @@ type memoryExtractor struct {
 }
 
 // extract 对 transcript 抽取并追加记忆。compaction client 非空时优先用它（轻量/廉价）。
-func (m *memoryExtractor) extract(ctx context.Context, transcript []miniagent.Message) {
+// 内部使用 context.Background() 而非调用方 ctx：runCtx 可能在 -max-duration 到期后已
+// DeadlineExceeded，复用会让抽取立刻失败；此处希望超时退出仍有机会抽取记忆。
+func (m *memoryExtractor) extract(transcript []miniagent.Message) {
+	ctx := context.Background()
 	if m == nil || !m.enabled || m.workdir == "" || m.chat == nil {
 		return
 	}

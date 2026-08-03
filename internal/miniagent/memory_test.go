@@ -214,3 +214,26 @@ func TestExtractMemory_BadJSONReturnsEmpty(t *testing.T) {
 		t.Errorf("want 0 recs, got %+v", recs)
 	}
 }
+
+// SetMemoryRecentN 必须在 FormatMemorySnippet 调用前生效（main.go 已调整为先 Set 再 load）。
+func TestFormatMemorySnippet_RespectsRecentNOverride(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 15 {
+		if err := appendMemoryRecord(dir, memoryRecord{Type: "note", Content: "m" + strconv.Itoa(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	SetMemoryRecentN(3)
+	defer SetMemoryRecentN(memoryRecentN) // 还原默认，避免污染其他测试
+	snip := FormatMemorySnippet(dir)
+	for _, want := range []string{"m12", "m13", "m14"} {
+		if !strings.Contains(snip, want) {
+			t.Errorf("snippet should include %s: %s", want, snip)
+		}
+	}
+	for _, old := range []string{"m0", "m11"} {
+		if strings.Contains(snip, old) {
+			t.Errorf("snippet should drop records beyond last N=3: %s", snip)
+		}
+	}
+}

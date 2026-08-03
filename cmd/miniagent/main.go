@@ -126,6 +126,9 @@ func main() {
 	workdir := effectiveWorkdir(resolved, f)
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
 	sessPath, meta, history := resolveSessionForRun(*f.session, sessionDir, modelSpec, workdir)
+	// memory_recent_n 必须在 loadProjectRules（内部 FormatMemorySnippet 已格式化注入片段）
+	// 之前生效，否则 run.memory_recent_n 对当前进程的注入无效（启动快照已用旧 N）。
+	miniagent.SetMemoryRecentN(into(resolved.Run.MemoryRecentN, 0))
 	// P0/P5：发现 .miniagent/ 项目规则与记忆，合并进 system prompt（persona>rules>defaults）。
 	pr := loadProjectRules(workdir)
 	resolved.System = mergeSystemPrompt(resolved.System, pr.persona, pr.rules, pr.memory, pr.hasAny())
@@ -138,7 +141,6 @@ func main() {
 
 	miniagent.SetSummaryMaxTokens(into(resolved.Run.SummaryMaxTokens, 0))
 	miniagent.SetGrepMaxMatches(into(resolved.Run.GrepMaxMatches, 0))
-	miniagent.SetMemoryRecentN(into(resolved.Run.MemoryRecentN, 0))
 	miniagent.SetContextTrimToolChars(into(resolved.Run.ContextTrimToolChars, 0))
 
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
@@ -220,8 +222,8 @@ func main() {
 	}
 
 	// 非交互：会话结束抽取记忆（best-effort，失败仅 warn，不影响退出码）。
-	// 使用 Background 避免 runCtx 已超时导致抽取立刻失败（-max-duration 已到）。
-	memExtractor.extract(context.Background(), result.Messages)
+	// 内部 use context.Background()，避免 -max-duration 到期导致抽取立刻失败。
+	memExtractor.extract(result.Messages)
 }
 
 // loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig。System 空回落默认 prompt。

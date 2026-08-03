@@ -58,7 +58,7 @@ func runInteractive(runCtx context.Context, chat *miniagent.ChatClient, stream *
 			return
 		}
 		if len(lastResult.Messages) > 0 {
-			mem.extract(ctx, lastResult.Messages)
+			mem.extract(lastResult.Messages) //nolint:contextcheck // extract 内部用 Background，有意忽略 runCtx 的 -max-duration 到期
 		}
 	}()
 	for {
