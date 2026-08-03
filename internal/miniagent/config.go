@@ -85,8 +85,11 @@ type CompactionConfig struct {
 }
 
 // MemoryConfig 配置会话结束后的自动记忆抽取。
-// auto_update 缺省（nil）= true；max_per_session 缺省/<=0 = 3。抽取复用 compaction 模型。
+// model 缺省回落链：memory.model → defaults.model → 主会话模型（同 compaction）。
+// 不带 '/' 表示与主会话同 provider，只换 model id；带 '/' 走 provider/model（可跨 provider）。
+// auto_update 缺省（nil）= true；max_per_session 缺省/<=0 = 3。
 type MemoryConfig struct {
+	Model         string `json:"model,omitempty"`
 	AutoUpdate    *bool  `json:"auto_update,omitempty"`
 	MaxPerSession *int   `json:"max_per_session,omitempty"`
 	ExtractPrompt string `json:"extract_prompt,omitempty"`
@@ -236,6 +239,11 @@ func validateConfig(cfg *Config) error {
 	if cfg.Compaction.Model != "" && strings.Contains(cfg.Compaction.Model, "/") {
 		if _, _, err := ParseModelSpec(cfg.Compaction.Model, cfg); err != nil {
 			return fmt.Errorf("compaction.model: %w", err)
+		}
+	}
+	if cfg.Memory.Model != "" && strings.Contains(cfg.Memory.Model, "/") {
+		if _, _, err := ParseModelSpec(cfg.Memory.Model, cfg); err != nil {
+			return fmt.Errorf("memory.model: %w", err)
 		}
 	}
 	return nil

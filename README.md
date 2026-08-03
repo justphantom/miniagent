@@ -334,8 +334,8 @@ repo/
 - `provider.key`：按字面量读取；明文入 config，注意文件权限（建议 `0600`），或改用 `$MINIAGENT_API_KEY`
 - `defaults.model`：`provider/id` 格式；无 `/` 时默认选中唯一 provider
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
-- `compaction.model`：摘要压缩使用的轻量模型；可写 `model_id`（同主模型 provider）或 `provider/model`（跨 provider）
-- `memory.auto_update`：会话结束自动抽取项目记忆到 `.miniagent/memory.jsonl`，默认 `true`。仅在有过工具调用的会话触发，复用 compaction 模型，best-effort（失败仅告警，不影响会话）；无 workdir 跳过。`memory.max_per_session` 单会话上限条数（默认 3）；`memory.extract_prompt` 可覆盖默认抽取提示词。抽取调用不计入 token 预算。注意：抽取自 transcript，可能含敏感信息——已剔除含 API key 字面量的记录，但并非安全边界，密钥隔离仍依赖 OS 权限。
+- `compaction.model`：摘要压缩模型。三级回落：`compaction.model` → `defaults.model` → 主会话模型。可写 `model_id`（同主模型 provider）或 `provider/model`（跨 provider）
+- `memory.*`：会话结束自动抽取项目记忆到 `.miniagent/memory.jsonl`。`memory.model` 同样三级回落（`memory.model` → `defaults.model` → 主会话模型），可跨 provider，默认与主会话/compaction 共用 client（按 provider 名去重）。`auto_update` 默认 `true`，仅在有过工具调用的会话触发，best-effort（失败仅告警）；无 workdir 跳过。`max_per_session` 单会话上限条数（默认 3）；`extract_prompt` 可覆盖默认提示词。抽取不计入 token 预算。注意：抽取自 transcript，已剔除含 API key 字面量的记录，但并非安全边界，密钥隔离仍依赖 OS 权限。
 
 ## 完整调用示例
 

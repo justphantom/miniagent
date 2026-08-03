@@ -114,14 +114,18 @@
 
   // compaction：长会话摘要压缩配置。
   "compaction": {
-    // model：摘要压缩使用的模型 id。可写 model id（同主模型 provider），
-    // 或 provider/model（跨 provider）。
+    // model：三级回落 compaction.model → defaults.model → 主会话模型。
+    // 可写 model id（同主模型 provider），或 provider/model（跨 provider）。
     "model": "gpt-4o-mini"
   },
 
   // memory：会话结束自动抽取项目记忆（写入 .miniagent/memory.jsonl）。
   "memory": {
-    // auto_update：默认 true。仅有过工具调用的会话才触发；复用 compaction 模型；
+    // model：三级回落 memory.model → defaults.model → 主会话模型。
+    // 同样可写 model id（同主模型 provider）或 provider/model（跨 provider，独立 client）。
+    // 留空时若与主/compaction 同 provider，则复用其 client。
+    "model": "gpt-4o-mini",
+    // auto_update：默认 true。仅有过工具调用的会话才触发；
     // best-effort（失败仅告警）；无 workdir 跳过；不计入 token 预算。
     "auto_update": true,
     // max_per_session：单会话最多抽取的条数（默认 3）。

@@ -32,6 +32,8 @@ type Resolved struct {
 	ModelID            string
 	CompactionProvider ProviderConfig
 	CompactionModelID  string
+	MemoryProvider     ProviderConfig
+	MemoryModelID      string
 	Thinking           string
 	Mode               string
 	System             string
@@ -70,22 +72,15 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	r.Provider = p
 	r.ModelID = modelID
 
-	// compaction.model：空则回落主模型；含 '/' 按 provider/model 解析，否则与主模型同 provider。
-	if cfg.Compaction.Model != "" {
-		if strings.Contains(cfg.Compaction.Model, "/") {
-			cp, cmodelID, err := ParseModelSpec(cfg.Compaction.Model, cfg)
-			if err != nil {
-				return nil, fmt.Errorf("compaction.model: %w", err)
-			}
-			r.CompactionProvider = cp
-			r.CompactionModelID = cmodelID
-		} else {
-			r.CompactionProvider = p
-			r.CompactionModelID = cfg.Compaction.Model
-		}
-	} else {
-		r.CompactionProvider = p
-		r.CompactionModelID = modelID
+	// compaction / memory 模型三级回落：显式配置 → defaults.model → 主会话模型。
+	// 显式项不带 '/' 表示与主会话同 provider（只换 model id）；defaults.model 层走完整解析。
+	if err := resolveSecondaryModel(cfg, p, modelID, cfg.Compaction.Model, "compaction.model",
+		&r.CompactionProvider, &r.CompactionModelID); err != nil {
+		return nil, err
+	}
+	if err := resolveSecondaryModel(cfg, p, modelID, cfg.Memory.Model, "memory.model",
+		&r.MemoryProvider, &r.MemoryModelID); err != nil {
+		return nil, err
 	}
 
 	switch {
@@ -145,6 +140,42 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	}
 	r.MemoryExtractPrompt = cfg.Memory.ExtractPrompt
 	return r, nil
+}
+
+// resolveSecondaryModel 解析 compaction/memory 的二级模型，三级回落：
+//  1. explicit（cfg.Compaction.Model / cfg.Memory.Model）：非空时，
+//     含 '/' → provider/model；不含 '/' → 主会话 provider + 该 model id（与主会话同 provider）。
+//  2. cfg.Defaults.Model：完整 provider/model 解析（默认模型层）。
+//  3. 主会话 provider + modelID（兜底）。
+//
+// label 用于错误信息（如 "compaction.model"）。结果写入 outProv/outModel。
+func resolveSecondaryModel(cfg *Config, mainProv ProviderConfig, mainModel, explicit, label string,
+	outProv *ProviderConfig, outModel *string) error {
+	// 第 1 级：显式配置。
+	if explicit != "" {
+		if strings.Contains(explicit, "/") {
+			cp, m, err := ParseModelSpec(explicit, cfg)
+			if err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+			*outProv, *outModel = cp, m
+			return nil
+		}
+		*outProv, *outModel = mainProv, explicit
+		return nil
+	}
+	// 第 2 级：defaults.model（默认模型，已由 validateConfig 校验存在可解析）。
+	if cfg.Defaults.Model != "" {
+		cp, m, err := ParseModelSpec(cfg.Defaults.Model, cfg)
+		if err != nil {
+			return fmt.Errorf("%s 回落 defaults.model: %w", label, err)
+		}
+		*outProv, *outModel = cp, m
+		return nil
+	}
+	// 第 3 级：主会话模型。
+	*outProv, *outModel = mainProv, mainModel
+	return nil
 }
 
 func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {

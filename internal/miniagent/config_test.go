@@ -175,3 +175,28 @@ func stripJSONComments(in string) string {
 	}
 	return b.String()
 }
+
+func TestLoadConfig_MemoryModelCrossProvider(t *testing.T) {
+	body := `{
+  "providers":[
+    {"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]},
+    {"name":"comp","chat_url":"https://comp/v1/chat/completions","models":["glm-mini"]}
+  ],
+  "defaults":{"model":"main/glm"},
+  "memory":{"model":"comp/glm-mini"}
+}`
+	if _, err := LoadConfig(writeTmpConfig(t, body)); err != nil {
+		t.Errorf("memory.model with valid provider/model should succeed: %v", err)
+	}
+}
+
+func TestLoadConfig_MemoryModelUnknownProvider(t *testing.T) {
+	body := `{
+  "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]}],
+  "defaults":{"model":"main/glm"},
+  "memory":{"model":"unknown/glm-mini"}
+}`
+	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
+		t.Error("memory.model with unknown provider should error")
+	}
+}

@@ -145,39 +145,59 @@ func main() {
 
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 
-	// 若 compaction 使用不同 provider，需单独构建 ChatClient；摘要不走流式，故忽略 stream。
+	// secondaryClient 为与主 provider 不同的二级 provider 解析 key + 建非流式 client（仅 Do）。
+	secondaryClient := func(label string, prov miniagent.ProviderConfig) (*miniagent.ChatClient, string) {
+		key := resolveFinalKey(prov.Key)
+		if key == "" {
+			fmt.Fprintf(os.Stderr, "miniagent: %s provider API key 缺失（provider.key / $MINIAGENT_API_KEY）\n", label)
+			os.Exit(1)
+		}
+		warnProviderInsecureURLs(prov)
+		return buildChatClient(key, prov, logger, httpTimeoutOf(resolved)), key
+	}
+
+	// compaction client：与主 provider 相同则留 nil（loop 回落主 chat），否则新建。
 	var compChat *miniagent.ChatClient
 	compKey := ""
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
-		warnProviderInsecureURLs(resolved.CompactionProvider)
-		compKey = resolveFinalKey(resolved.CompactionProvider.Key)
-		if compKey == "" {
-			fmt.Fprintln(os.Stderr, "miniagent: compaction provider API key 缺失（provider.key / $MINIAGENT_API_KEY）")
-			os.Exit(1)
-		}
-		compChat = buildChatClient(compKey, resolved.CompactionProvider, logger, httpTimeoutOf(resolved))
+		compChat, compKey = secondaryClient("compaction", resolved.CompactionProvider)
 	}
+
+	// memory client：按 provider 名去重复用——与主或 compaction 相同则复用对应 client，否则新建。
+	var memChat *miniagent.ChatClient
+	memKey := ""
+	switch resolved.MemoryProvider.Name {
+	case resolved.Provider.Name:
+		memChat = chat
+	case resolved.CompactionProvider.Name:
+		memChat = compChat // compaction==main 时本 case 不会命中（已被上一 case 接走）
+	default:
+		memChat, memKey = secondaryClient("memory", resolved.MemoryProvider)
+	}
+
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
 	reader := bufio.NewReader(os.Stdin)
 	hooks := buildHooks(*f.resultOnly)
 	baseCfg := loopCfg(resolved, f, history, tools)
 	baseCfg.CompactionChat = compChat
 
-	// 会话结束自动抽取项目记忆：复用 compaction 模型/client（compChat 非空时优先，否则主 chat），
-	// 默认 on（resolved.MemoryAutoUpdate）。secrets 用于剔除含 key 的记录。
+	// 会话结束自动抽取项目记忆：用 memory 专属 client（memChat，按 provider 去重后可能 == chat/compChat）。
+	// 默认 on（resolved.MemoryAutoUpdate）。secrets 收集所有用到的 key 字面量，用于剔除含 key 的记录。
 	secrets := []string{apiKey}
 	if compKey != "" {
 		secrets = append(secrets, compKey)
 	}
+	if memKey != "" {
+		secrets = append(secrets, memKey)
+	}
 	memExtractor := &memoryExtractor{
 		enabled: resolved.MemoryAutoUpdate,
 		workdir: workdir,
-		model:   resolved.CompactionModelID,
+		model:   resolved.MemoryModelID,
 		maxK:    resolved.MemoryMaxPerSession,
 		prompt:  resolved.MemoryExtractPrompt,
 		secrets: secrets,
-		chat:    chat,
-		comp:    compChat,
+		client:  memChat,
 		logger:  logger,
 	}
 
