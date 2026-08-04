@@ -80,6 +80,8 @@ type RunConfig struct {
 	ContextTrimToolChars *int    `json:"context_trim_tool_chars,omitempty"`
 	// ContextKeepReasoning 是主动 reasoning 清理保留的最近 assistant 条数（P1）；<=0/缺省=内置默认 1。
 	ContextKeepReasoning *int `json:"context_keep_reasoning,omitempty"`
+	// ContextKeepToolArgs 是主动 tool_call args 压缩保留的最近 assistant 条数（P4）；<=0/缺省=内置默认 2。
+	ContextKeepToolArgs *int `json:"context_keep_tool_args,omitempty"`
 }
 
 // CompactionConfig 配置长会话摘要压缩模型。

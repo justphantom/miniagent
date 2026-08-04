@@ -2,6 +2,7 @@ package miniagent
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -84,6 +85,118 @@ func TestStripStaleReasoning(t *testing.T) {
 	}
 }
 
+// stripStaleToolArgs（P4）：压缩非最近 N 条 assistant 的 write/edit 大 Args（content/old_string/
+// new_string）为前缀占位；保留最近 N 条原文；不碰配对/正文/ID；小 args 与非 write/edit 工具不动；
+// 无可压缩项原样返回（零拷贝）；不改调用方输入。
+func TestStripStaleToolArgs(t *testing.T) {
+	big := strings.Repeat("x", toolArgsCompressThreshold+100)
+	writeArgs := func(path string) string {
+		return `{"path":"` + path + `","content":"` + big + `"}`
+	}
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "write", Args: writeArgs("a.go")}}},
+		{Role: "tool", ToolCallID: "c1", Content: "已写入"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c2", Name: "write", Args: writeArgs("b.go")}}},
+		{Role: "tool", ToolCallID: "c2", Content: "已写入"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c3", Name: "write", Args: writeArgs("c.go")}}},
+	}
+	out := stripStaleToolArgs(msgs, 1) // 仅最近 1 条 assistant 保留原文
+	// 最近一条 assistant（c3）的 args 原样；更早的（c1）被压缩。
+	if out[5].ToolCalls[0].Args != msgs[5].ToolCalls[0].Args {
+		t.Errorf("最近 assistant args 应保留原文")
+	}
+	if len(out[1].ToolCalls[0].Args) >= len(big) {
+		t.Errorf("旧 write args 应被压缩: len=%d", len(out[1].ToolCalls[0].Args))
+	}
+	// 压缩后仍是合法 JSON 且保留 path；ID 与 tool 消息不动。
+	var m map[string]any
+	if err := json.Unmarshal([]byte(out[1].ToolCalls[0].Args), &m); err != nil {
+		t.Errorf("压缩后 args 非合法 JSON: %q (err %v)", out[1].ToolCalls[0].Args, err)
+	}
+	if m["path"] != "a.go" {
+		t.Errorf("path 应保留: got %v", m["path"])
+	}
+	if out[1].ToolCalls[0].ID != "c1" {
+		t.Errorf("ToolCallID 被改动")
+	}
+	if out[2].Content != "已写入" {
+		t.Errorf("tool 消息被改动: %q", out[2].Content)
+	}
+	// 调用方输入未被修改（仍含完整 big 原文）。
+	if !strings.Contains(msgs[1].ToolCalls[0].Args, big) {
+		t.Errorf("caller args 被修改")
+	}
+
+	// 小 args（< threshold）不压缩 → 原样返回（零拷贝）。
+	small := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c", Name: "write", Args: `{"path":"a","content":"short"}`}}},
+	}
+	if got := stripStaleToolArgs(small, 0); &got[0] != &small[0] {
+		t.Errorf("无可压缩大 args 应原样返回同一 slice")
+	}
+
+	// 非 write/edit 工具（read）不压缩 → 原样返回。
+	readMsgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c", Name: "read", Args: `{"path":"a"}`}}},
+	}
+	if got := stripStaleToolArgs(readMsgs, 0); &got[0] != &readMsgs[0] {
+		t.Errorf("非 write/edit 会话应原样返回")
+	}
+
+	// 全在保留窗口内 → 原样返回。
+	if got := stripStaleToolArgs(msgs, 10); &got[0] != &msgs[0] {
+		t.Errorf("全在保留窗口内应原样返回同一 slice")
+	}
+}
+
+// compressToolArgs（P4）：超阈值字段压成前缀 + 标记；阈值内不动；edits 数组同样处理；
+// path 保留；解析失败原样返回。
+func TestCompressToolArgs(t *testing.T) {
+	big := strings.Repeat("x", toolArgsCompressThreshold+10)
+	// write content 超阈值 → 压缩，path 保留。
+	got := compressToolArgs(`{"path":"a.go","content":"` + big + `"}`)
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("compressed args not valid JSON: %v %q", err, got)
+	}
+	if m["path"] != "a.go" {
+		t.Errorf("path should be preserved: %v", m["path"])
+	}
+	if c, _ := m["content"].(string); len(c) >= len(big) {
+		t.Errorf("content should be compressed: len=%d", len(c))
+	}
+
+	// 小 content（< threshold）→ 原样（无标记）。
+	small := `{"path":"a.go","content":"short"}`
+	if got := compressToolArgs(small); got != small {
+		t.Errorf("small args should be unchanged: got %q", got)
+	}
+
+	// edits 数组里的 old/new_string 超阈值也压。
+	got = compressToolArgs(`{"path":"a.go","edits":[{"old_string":"` + big + `","new_string":"` + big + `"}]}`)
+	var em map[string]any
+	if err := json.Unmarshal([]byte(got), &em); err != nil {
+		t.Fatalf("edits args not valid JSON: %v", err)
+	}
+	edits, _ := em["edits"].([]any)
+	if len(edits) != 1 {
+		t.Fatalf("edits lost: %+v", em)
+	}
+	e0, _ := edits[0].(map[string]any)
+	if oldS, _ := e0["old_string"].(string); len(oldS) >= len(big) {
+		t.Errorf("edits old_string should be compressed: len=%d", len(oldS))
+	}
+
+	// 非法 JSON → 原样返回。
+	bad := `{"path": broken`
+	if got := compressToolArgs(bad); got != bad {
+		t.Errorf("invalid JSON should be returned as-is: got %q", got)
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时仅加 systemOverheadTokens 固定开销。
 	if n := estimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+systemOverheadTokens {
@@ -108,9 +221,14 @@ func TestEstimateTokens_Overhead(t *testing.T) {
 	if got := estimateTokens(msgs, "abcd", nil) - base; got != 1 {
 		t.Errorf("system 4 chars should add 1 token, got delta %d", got)
 	}
-	// 每个工具 schema 加 perToolSchemaTokens。
-	if got := estimateTokens(msgs, "", []Tool{{}, {}}) - base; got != 2*perToolSchemaTokens {
-		t.Errorf("2 tools should add %d tokens, got delta %d", 2*perToolSchemaTokens, got)
+	// tools schema 按实际 JSON 体积估算（估算对齐）：description 越长 token 越多，非 flat 常量。
+	small := estimateTokens(msgs, "", []Tool{{Name: "t", Description: "abcd"}}) - base
+	large := estimateTokens(msgs, "", []Tool{{Name: "t", Description: strings.Repeat("a", 400)}}) - base
+	if large <= small {
+		t.Errorf("schema estimate should grow with description length: small=%d large=%d", small, large)
+	}
+	if small <= 0 {
+		t.Errorf("non-empty tool schema should add tokens: small=%d", small)
 	}
 	// system 内容随长度增长（防回归成纯常量）。
 	if got := estimateTokens(msgs, strings.Repeat("a", 40), nil) - base; got != 10 {

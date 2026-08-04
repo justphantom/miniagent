@@ -277,6 +277,7 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 		ContextKeepRecent:    into(resolved.Run.ContextKeepRecent, 0),
 		SummaryMaxChars:      into(resolved.Run.SummaryMaxChars, 0),
 		ContextKeepReasoning: into(resolved.Run.ContextKeepReasoning, 0),
+		ContextKeepToolArgs:  into(resolved.Run.ContextKeepToolArgs, 0),
 	}
 }
 

@@ -47,7 +47,10 @@ type ContextBudget struct {
 	KeepRecent    int // <=0 回落 contextKeepRecent
 	// KeepReasoning 是主动 reasoning 清理时保留的最近 assistant 消息条数（<=0 回落 contextKeepReasoning）。
 	// FitHistory 在 fitted 结果上清空非最近 N 条 assistant 的 Reasoning（P1）。
-	KeepReasoning    int
+	KeepReasoning int
+	// KeepToolArgs 是主动 tool_call args 压缩时保留的最近 assistant 条数（<=0 回落 contextKeepToolArgs）。
+	// FitHistory 在 fitted 结果上压缩非最近 N 条 assistant 的 write/edit 大 args（P4）。
+	KeepToolArgs     int
 	SummarizerPrompt string
 	CompactionModel  string // 空则回落 Model
 	Model            string
@@ -72,11 +75,17 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 	if keepReasoning <= 0 {
 		keepReasoning = contextKeepReasoning
 	}
+	keepToolArgs := budget.KeepToolArgs
+	if keepToolArgs <= 0 {
+		keepToolArgs = contextKeepToolArgs
+	}
 	if budget.ContextWindow <= 0 || estimateTokens(msgs, budget.System, budget.Tools) <= budget.ContextWindow*4/5 {
-		// P1：reasoning 主动清理是默认策略，即使未超窗/窗口未知也执行——旧 Reasoning 是思考模型下
-		// 隐性 token 大户，与 tool 配对无关，清空不丢可见事实（正文/tool_calls 不动）。无 reasoning
-		// 时 stripStaleReasoning 原样返回，零开销。
-		return stripStaleReasoning(msgs, keepReasoning), Message{}, false, Usage{}, nil
+		// P1/P4：reasoning 与 tool_call 大 args 的主动清理是默认策略，即使未超窗/窗口未知也执行——
+		// 旧 Reasoning 是思考模型下隐性 token 大户，write/edit 的大 args 写成功后纯占位重发；两者均与
+		// tool 配对无关，清/压不丢可见事实（正文/tool_calls ID 不动）。无可清/压项时各自原样返回，零开销。
+		out := stripStaleReasoning(msgs, keepReasoning)
+		out = stripStaleToolArgs(out, keepToolArgs)
+		return out, Message{}, false, Usage{}, nil
 	}
 	keepRecent := budget.KeepRecent
 	if keepRecent <= 0 {
@@ -95,10 +104,11 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 	if !summarized {
 		out = compactHistory(msgs, keepRecent)
 	}
-	// P1：在 fitted 结果上主动清空非最近 N 条 assistant 的 Reasoning。放在 window 检查前——
-	// 清理后 token 估计更低，更可能免于触发 trimRecentRounds/终止报错。中段（已并入 summary）
-	// 不经此处；最近 N 条 assistant 的 reasoning 保留，供模型延续当前推理上下文。
+	// P1/P4：在 fitted 结果上主动清空非最近 N 条 assistant 的 Reasoning（P1）并压缩 write/edit 大 args（P4）。
+	// 放在 window 检查前——清理后 token 估计更低，更可能免于触发 trimRecentRounds/终止报错。中段（已并入
+	// summary）不经此处；最近 N 条 assistant 的 reasoning 与写入 args 保留，供模型延续当前上下文。
 	out = stripStaleReasoning(out, keepReasoning)
+	out = stripStaleToolArgs(out, keepToolArgs)
 	if estimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
@@ -216,3 +226,17 @@ const contextKeepRecent = 4
 // contextKeepReasoning 是主动 reasoning 清理默认保留的最近 assistant 消息条数（P1）。
 // 1 = 仅保留最近一条 assistant 的思考链（当前推理上下文），更早的清空。
 const contextKeepReasoning = 1
+
+// contextKeepToolArgs 是主动 tool_call args 压缩默认保留的最近 assistant 条数（P4）。
+// write/edit 的 content/old/new_string 写成功后已落盘或被替换，非最近 N 条 assistant 的这类大 args
+// 压缩为前缀占位（仅改 context 侧拷贝，不动配对）。2 = 保留最近 2 条 assistant 的写入参数原文，
+// 覆盖「正在改的文件」上下文窗口；高准确度场景可经 config run.context_keep_tool_args 调高。
+const contextKeepToolArgs = 2
+
+// toolArgsCompressThreshold / toolArgsKeepChars 是 P4 写入参数压缩的内置阈值：
+// 字段超过 threshold（rune）才压缩，压成前 keepChars（rune）+ 省略标记；path 始终保留。
+// 取值平衡：阈值过低会压短改动、损失模型连续性；keepChars 过低丢失文件头部上下文（如 import/包声明）。
+const (
+	toolArgsCompressThreshold = 600
+	toolArgsKeepChars         = 200
+)

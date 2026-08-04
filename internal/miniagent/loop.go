@@ -60,6 +60,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 		ContextWindow:    cfg.ContextWindow,
 		KeepRecent:       cfg.ContextKeepRecent,
 		KeepReasoning:    cfg.ContextKeepReasoning,
+		KeepToolArgs:     cfg.ContextKeepToolArgs,
 		SummarizerPrompt: cfg.SummarizerPrompt,
 		CompactionModel:  cfg.CompactionModel,
 		Model:            cfg.Model,

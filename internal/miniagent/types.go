@@ -201,6 +201,11 @@ type LoopConfig struct {
 	// P1：非最近 N 条 assistant 的 Reasoning（思考链回灌）每轮原样发回，是思考模型下隐性 token 大户；
 	// 主动清空不碰 tool 配对、不丢可见事实（正文/tool_calls 不动）。高准确度场景可调高保留更多轮思考。
 	ContextKeepReasoning int
+	// ContextKeepToolArgs 是主动 tool_call args 压缩时保留的最近 assistant 条数（<=0 用内置默认 2）。
+	// P4：非最近 N 条 assistant 的 write/edit 大 Args（content/old_string/new_string）每轮原样回灌，
+	// 而写成功后已落盘或被替换，纯占位重发；压缩为前缀占位不碰配对、不丢 path（模型知道改过哪个文件）。
+	// 高准确度场景可调高保留更多轮写入参数原文。
+	ContextKeepToolArgs int
 }
 
 // ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。
