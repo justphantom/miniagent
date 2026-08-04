@@ -152,6 +152,33 @@ func TestMessagesUseTools(t *testing.T) {
 	}
 }
 
+func TestMessagesUseWriteOrEdit(t *testing.T) {
+	// 无工具调用：false
+	if MessagesUseWriteOrEdit([]Message{{Role: roleUser, Content: "hi"}, {Role: roleAssistant, Content: "hello"}}) {
+		t.Error("no write/edit: want false")
+	}
+	// read/grep/glob/shell：false
+	if MessagesUseWriteOrEdit([]Message{{Role: roleAssistant, ToolCalls: []ToolCall{{Name: "read"}}}}) {
+		t.Error("read tool: want false")
+	}
+	if MessagesUseWriteOrEdit([]Message{{Role: roleAssistant, ToolCalls: []ToolCall{{Name: "glob"}}}}) {
+		t.Error("glob tool: want false")
+	}
+	if MessagesUseWriteOrEdit([]Message{{Role: roleAssistant, ToolCalls: []ToolCall{{Name: "grep"}}}}) {
+		t.Error("grep tool: want false")
+	}
+	if MessagesUseWriteOrEdit([]Message{{Role: roleAssistant, ToolCalls: []ToolCall{{Name: "shell"}}}}) {
+		t.Error("shell tool: want false")
+	}
+	// write/edit：true
+	if !MessagesUseWriteOrEdit([]Message{{Role: roleAssistant, ToolCalls: []ToolCall{{Name: "write"}}}}) {
+		t.Error("write tool: want true")
+	}
+	if !MessagesUseWriteOrEdit([]Message{{Role: roleAssistant, ToolCalls: []ToolCall{{Name: "edit"}}}}) {
+		t.Error("edit tool: want true")
+	}
+}
+
 func TestFilterMemoryRecords_DedupSecretCapDefaultType(t *testing.T) {
 	existing := []memoryRecord{{Type: "note", Content: "  重复  "}}
 	in := []memoryRecord{

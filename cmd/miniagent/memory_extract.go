@@ -33,7 +33,7 @@ func (m *memoryExtractor) extract(transcript []miniagent.Message) {
 	if m == nil || !m.enabled || m.workdir == "" || m.client == nil {
 		return
 	}
-	if !miniagent.MessagesUseTools(transcript) {
+	if !miniagent.MessagesUseWriteOrEdit(transcript) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, memoryExtractTimeout)

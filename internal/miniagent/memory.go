@@ -326,6 +326,20 @@ func MessagesUseTools(msgs []Message) bool {
 	return false
 }
 
+// MessagesUseWriteOrEdit 报告 messages 中是否出现 write 或 edit 工具调用。
+// 仅 write/edit 真正修改项目文件，read/grep/glob/shell 是读-only 探索，不值得
+// 为后者额外跑一次 LLM 抽取记忆。
+func MessagesUseWriteOrEdit(msgs []Message) bool {
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			if tc.Name == "write" || tc.Name == "edit" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // memoryExtractMaxTokens 限制抽取请求的输出 token：仅产 ≤K 条短 JSON，无需长输出。
 const memoryExtractMaxTokens = 768
 
