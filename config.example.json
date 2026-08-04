@@ -130,6 +130,7 @@
     "auto_update": true,
     // max_per_session：单会话最多抽取的条数（默认 3）。
     "max_per_session": 3
-    // extract_prompt：留空用内置默认；可用 %d(最大条数)/%s(已有记忆)/%s(对话) 自定义。
+    // extract_prompt：留空用内置默认；可用 %d(最大条数)/%s(已有记忆) 自定义
+    //   （对话作为 user message 附加，不进 prompt；旧版第 3 个 %s 对话占位符已移除）。
   }
 }

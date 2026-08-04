@@ -215,6 +215,31 @@ func TestExtractMemory_BadJSONReturnsEmpty(t *testing.T) {
 	}
 }
 
+// ExtractMemory 必须把 transcript 作为 user message 传入，而非全塞 system——
+// 要求 user role 的端点（如 agnes）对仅 system 的请求会 400 "No user query found in messages"。
+func TestExtractMemory_SendsTranscriptAsUserMessage(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse(`[{"content":"事实A"}]`)}}
+	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	transcript := []Message{{Role: roleUser, Content: "跑构建 go build"}, {Role: roleAssistant, Content: "ok"}}
+
+	if _, _, err := ExtractMemory(context.Background(), llm, "m", "", 3, nil, nil, transcript); err != nil {
+		t.Fatalf("ExtractMemory: %v", err)
+	}
+	if tr.calls != 1 {
+		t.Fatalf("calls = %d, want 1", tr.calls)
+	}
+	body := tr.lastBody
+	if !strings.Contains(body, `"role":"user"`) {
+		t.Errorf("request missing user message: %s", body)
+	}
+	if !strings.Contains(body, "跑构建 go build") {
+		t.Errorf("user message missing transcript content: %s", body)
+	}
+	if strings.Count(body, `"role":"system"`) != 1 {
+		t.Errorf("want exactly 1 system message, body: %s", body)
+	}
+}
+
 // SetMemoryRecentN 必须在 FormatMemorySnippet 调用前生效（main.go 已调整为先 Set 再 load）。
 func TestFormatMemorySnippet_RespectsRecentNOverride(t *testing.T) {
 	dir := t.TempDir()

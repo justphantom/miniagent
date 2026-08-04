@@ -331,8 +331,10 @@ const memoryExtractMaxTokens = 768
 
 func getMemoryExtractMaxTokens() int { return memoryExtractMaxTokens }
 
-// defaultMemoryExtractPrompt 是抽取记忆的默认 system prompt（%d=最大条数，%s=已有记忆，%s=对话）。
-const defaultMemoryExtractPrompt = `你是对话记忆抽取器。从下列对话中抽取不超过 %d 条值得长期记住的项目事实，严格只输出一个 JSON 数组，每个元素形如 {"type":"note","topic":"可选主题","content":"事实"}，不要输出任何解释或多余文字。
+// defaultMemoryExtractPrompt 是抽取记忆的默认 system prompt（%d=最大条数，%s=已有记忆）。
+// 对话内容不进 system，而是作为 user message 传入（见 ExtractMemory）——某些端点（如 agnes）
+// 要求 messages 含 user role，仅 system 会被 400 "No user query found in messages" 拒绝。
+const defaultMemoryExtractPrompt = `你是对话记忆抽取器。从用户消息提供的对话中抽取不超过 %d 条值得长期记住的项目事实，严格只输出一个 JSON 数组，每个元素形如 {"type":"note","topic":"可选主题","content":"事实"}，不要输出任何解释或多余文字。
 
 规则：
 1. 只抽稳定长期事实：架构决策、约定规范、目录/接口结构、已踩坑与规避方法、用户偏好。不抽临时过程、单次命令输出、闲聊或易变状态。
@@ -341,12 +343,12 @@ const defaultMemoryExtractPrompt = `你是对话记忆抽取器。从下列对�
 4. 没有值得记的事实时，输出 []。
 
 已有记忆：
-%s
-
-对话：
 %s`
 
 // ExtractMemory 调 llm 从 transcript 抽取至多 maxRecords 条记忆。
+// system 放角色/规则/已有记忆锚点（prompt 占位符：%d=条数、%s=已有记忆）；
+// transcript 经 renderTranscript 渲染后作为单条 user message 传入——某些端点（如 agnes）
+// 要求 messages 含 user role，仅 system 会被 400 拒绝。
 // existing 用于去重锚点；secrets 中的字面量若出现在某条 content 内则该条被丢弃。
 // 返回待追加记录与该次调用 Usage。模型输出解析失败时返回 (nil, usage, nil)——丢弃但不视为错误。
 func ExtractMemory(ctx context.Context, llm *ChatClient, model, prompt string, maxRecords int, existing []MemoryRecord, secrets []string, transcript []Message) ([]MemoryRecord, Usage, error) {
@@ -359,10 +361,11 @@ func ExtractMemory(ctx context.Context, llm *ChatClient, model, prompt string, m
 	if strings.TrimSpace(prompt) == "" {
 		prompt = defaultMemoryExtractPrompt
 	}
-	sys := fmt.Sprintf(prompt, maxRecords, formatExistingForDedup(existing), renderTranscript(transcript))
+	sys := fmt.Sprintf(prompt, maxRecords, formatExistingForDedup(existing))
 	resp, err := llm.Do(ctx, Request{
 		Model:     model,
 		System:    sys,
+		Messages:  []Message{{Role: roleUser, Content: renderTranscript(transcript)}},
 		MaxTokens: getMemoryExtractMaxTokens(),
 	})
 	if err != nil {
@@ -376,7 +379,7 @@ func ExtractMemory(ctx context.Context, llm *ChatClient, model, prompt string, m
 	return recs, resp.Usage, nil
 }
 
-// renderTranscript 把对话渲染为紧凑文本供抽取 prompt 使用（每条内容截断，整体有上限）。
+// renderTranscript 把对话渲染为紧凑文本供抽取 user message 使用（每条内容截断，整体有上限）。
 func renderTranscript(msgs []Message) string {
 	const perMsgCap = 1500
 	const totalCap = 20000

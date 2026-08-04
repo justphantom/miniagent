@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+### Breaking
+- **`memory.extract_prompt` 移除第 3 个占位符 `%s`(对话)**：对话内容现作为 user message 传入（不再内联进 system prompt），以兼容要求 messages 含 user role 的端点（如 agnes，此前会 400 `No user query found in messages`）。自定义 `extract_prompt` 现仅支持 `%d`(条数)/`%s`(已有记忆) 两个占位符。
+
+### Fixed
+- **会话结束记忆抽取对 agnes 等端点必失败**：`ExtractMemory` 此前把对话全塞 system 且不发 user message，要求 user query 的端点直接 400、记忆永不落盘（best-effort warn 仅走 stderr，常被调用方吞掉）。现 transcript 经 `renderTranscript` 渲染后作为单条 user message 传入。
+
 ## [3.5.0] - 2026-08-04
 
 > compaction/memory 跨 provider、会话结束自动记忆抽取、移除 `-key-file` CLI flag。
