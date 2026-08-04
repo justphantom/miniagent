@@ -30,6 +30,7 @@ type ChatClient struct {
 	APIKey            string
 	ChatURL           string
 	ModelsURL         string
+	Headers           map[string]string // 自定义请求头，不覆盖 Authorization / Content-Type
 	chatURL           *url.URL
 	chatOnce          sync.Once
 	chatErr           error
@@ -58,13 +59,13 @@ func validateURL(raw string) (*url.URL, error) {
 }
 
 // NewChatClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
-// （ListAllModels 静态回落时不 GET）。
-func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger) (*ChatClient, error) {
+// （ListAllModels 静态回落时不 GET）。headers 为 provider 自定义请求头，可为 nil。
+func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*ChatClient, error) {
 	chat, err := validateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
-	c := &ChatClient{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: chat, HTTP: httpClient, Logger: logger}
+	c := &ChatClient{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: chat, HTTP: httpClient, Logger: logger, Headers: headers}
 	if modelsURL != "" {
 		m, err := validateURL(modelsURL)
 		if err != nil {
@@ -175,6 +176,10 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 	// 重定向安全：依赖标准库默认 CheckRedirect——跨域重定向前自动剥离 Authorization
 	// 等敏感头。若未来自定义 CheckRedirect，必须保留该语义。
 	httpReq.Header.Set("Content-Type", "application/json")
+	// 注入 provider 自定义头；Authorization / Content-Type 不在此覆盖。
+	for k, v := range c.Headers {
+		httpReq.Header.Set(k, v)
+	}
 
 	callStart := time.Now()
 	resp, err := client.Do(httpReq)

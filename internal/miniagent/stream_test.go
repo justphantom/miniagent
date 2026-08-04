@@ -288,3 +288,33 @@ func TestEmitDelta(t *testing.T) {
 		t.Errorf("event = %+v", ev)
 	}
 }
+
+// DoStream 携带自定义请求头。
+func TestDoStream_CustomHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Custom") != "stream-val" {
+			t.Errorf("X-Custom = %q, want stream-val", r.Header.Get("X-Custom"))
+		}
+		if r.Header.Get("Authorization") != "Bearer sk" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"hi"}}]}
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`)
+	}))
+	defer srv.Close()
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL, Headers: map[string]string{"X-Custom": "stream-val"}}
+	var deltas []Delta
+	resp, err := llm.DoStream(context.Background(), Request{Model: "m"}, func(d Delta) error { deltas = append(deltas, d); return nil })
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+	if resp.Text != "hi" {
+		t.Errorf("Text = %q", resp.Text)
+	}
+	if len(deltas) != 1 || deltas[0].Text != "hi" {
+		t.Errorf("deltas = %+v", deltas)
+	}
+}

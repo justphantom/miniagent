@@ -55,6 +55,10 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 		return nil, false, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	// 注入 provider 自定义头；Authorization 不在此覆盖。
+	for k, v := range c.Headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, true, fmt.Errorf("llm request: %w", err)
@@ -115,7 +119,7 @@ func ListAllModels(ctx context.Context, providers []ProviderConfig, keyFor func(
 					ids = append([]string(nil), p.Models...)
 				}
 			} else {
-				llm, e := NewChatClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger)
+				llm, e := NewChatClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger, p.Headers)
 				if e != nil {
 					err = e
 				} else {

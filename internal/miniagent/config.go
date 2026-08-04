@@ -38,6 +38,8 @@ type ProviderConfig struct {
 	Key       string           `json:"key,omitempty"`
 	Models    []string         `json:"models,omitempty"`
 	Thinking  *ThinkingMapping `json:"thinking,omitempty"`
+	// Headers 是每 provider 的自定义请求头，随请求注入；不覆盖 Authorization / Content-Type。
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 type DefaultsConfig struct {

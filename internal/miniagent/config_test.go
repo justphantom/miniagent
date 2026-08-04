@@ -200,3 +200,22 @@ func TestLoadConfig_MemoryModelUnknownProvider(t *testing.T) {
 		t.Error("memory.model with unknown provider should error")
 	}
 }
+
+// headers 字段 round-trip：provider 自定义头被正确解析。
+func TestLoadConfig_ProviderHeaders(t *testing.T) {
+	body := `{
+  "providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","headers":{"X-Custom":"abc","Authorization":"Bearer override"}}],
+  "defaults":{"model":"p/m"}
+}`
+	cfg, err := LoadConfig(writeTmpConfig(t, body))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("want 1 provider")
+	}
+	h := cfg.Providers[0].Headers
+	if len(h) != 2 || h["X-Custom"] != "abc" || h["Authorization"] != "Bearer override" {
+		t.Errorf("headers = %+v", h)
+	}
+}

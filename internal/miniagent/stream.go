@@ -19,6 +19,7 @@ import (
 type StreamClient struct {
 	APIKey            string
 	ChatURL           string
+	Headers           map[string]string // 自定义请求头，不覆盖 Authorization / Content-Type
 	chatURL           *url.URL
 	chatOnce          sync.Once
 	chatErr           error
@@ -28,13 +29,13 @@ type StreamClient struct {
 	defaultClientOnce sync.Once
 }
 
-// NewStreamClient 构造时 parse 并缓存 chatURL。
-func NewStreamClient(apiKey, chatURL string, httpClient *http.Client, logger *slog.Logger) (*StreamClient, error) {
+// NewStreamClient 构造时 parse 并缓存 chatURL。headers 为 provider 自定义请求头，可为 nil。
+func NewStreamClient(apiKey, chatURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*StreamClient, error) {
 	chat, err := validateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
-	return &StreamClient{APIKey: apiKey, ChatURL: chatURL, chatURL: chat, HTTP: httpClient, Logger: logger}, nil
+	return &StreamClient{APIKey: apiKey, ChatURL: chatURL, chatURL: chat, HTTP: httpClient, Logger: logger, Headers: headers}, nil
 }
 
 // chatEndpoint 返回缓存的 chatURL（懒解析兜底直接构造，sync.Once 保证并发安全）。
@@ -91,6 +92,10 @@ func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(D
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 		httpReq.Header.Set("Content-Type", "application/json")
+		// 注入 provider 自定义头；Authorization / Content-Type 不在此覆盖。
+		for k, v := range c.Headers {
+			httpReq.Header.Set(k, v)
+		}
 		resp, err := client.Do(httpReq)
 		if err != nil {
 			if c.Logger != nil {

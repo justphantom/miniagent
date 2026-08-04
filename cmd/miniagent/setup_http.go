@@ -87,12 +87,12 @@ func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, ht
 	transport := newHTTPTransport()
 	chatClient := newHTTPClient(httpTimeout, transport)
 	streamClient := &http.Client{Transport: transport}
-	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger)
+	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger, p.Headers)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)
 	}
-	stream, err := miniagent.NewStreamClient(apiKey, p.ChatURL, streamClient, logger)
+	stream, err := miniagent.NewStreamClient(apiKey, p.ChatURL, streamClient, logger, p.Headers)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)
@@ -105,7 +105,7 @@ func buildChatClient(apiKey string, p miniagent.ProviderConfig, logger *slog.Log
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
 	}
-	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger)
+	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)

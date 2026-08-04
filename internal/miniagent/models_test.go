@@ -207,3 +207,27 @@ func TestListAllModels_DeterministicOrder(t *testing.T) {
 		}
 	}
 }
+
+// ListModels 携带自定义请求头。
+func TestChatClient_ListModels_CustomHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Custom") != "xyz" {
+			t.Errorf("X-Custom = %q, want xyz", r.Header.Get("X-Custom"))
+		}
+		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"}]}`)
+	}))
+	defer srv.Close()
+	c := &ChatClient{
+		APIKey:    "sk",
+		ChatURL:   srv.URL,
+		ModelsURL: srv.URL + "/v1/models",
+		Headers:   map[string]string{"X-Custom": "xyz"},
+	}
+	ids, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "gpt-4o" {
+		t.Errorf("ids = %v", ids)
+	}
+}

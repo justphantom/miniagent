@@ -27,6 +27,11 @@
       "models_url": "https://api.anthropic.com/v1/models",
       "key": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
       "models": ["claude-sonnet-4", "claude-opus-4"],
+      "headers": {
+        // 部分代理/网关要求额外认证头或租户标识。
+        "anthropic-version": "2023-06-01",
+        "X-Tenant-Id": "my-tenant"
+      },
       "thinking": {
         "field": "thinking",
         "map": {
