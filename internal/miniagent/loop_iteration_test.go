@@ -76,17 +76,60 @@ func TestRun_MaxIterationsNonPositiveUsesDefault(t *testing.T) {
 	}
 }
 
-// trimForHistory：显式 limit 装裁到该值；limit<=0 用默认 maxToolResultInHistory。
+// trimForHistory：显式 limit 装裁到该值；limit<=0 用默认 maxToolResultInHistory。split=false 走 head-only。
 func TestTrimForHistory_PerLimit(t *testing.T) {
 	big := strings.Repeat("x", 10000)
-	got := trimForHistory(big, 8000)
+	got := trimForHistory(big, 8000, false)
 	if len(got) <= 8000 || !strings.Contains(got, "截断") {
 		t.Errorf("limit=8000: len=%d, marker missing: %q", len(got), got[:min(len(got), 40)])
 	}
-	got0 := trimForHistory(big, 0)
+	got0 := trimForHistory(big, 0, false)
 	// 默认裁到 maxToolResultInHistory：长度应略大于该值（含 marker），远小于 8000。
 	if len(got0) <= maxToolResultInHistory || len(got0) >= 8000 {
 		t.Errorf("limit=0: len=%d, want in (%d, 8000)", len(got0), maxToolResultInHistory)
+	}
+}
+
+// trimForHistory split=true（shell/grep）：头尾分段截断，保留尾部错误结论标记，总长落在 limit 附近。
+func TestTrimForHistory_SplitKeepsTail(t *testing.T) {
+	// 头部上下文 + 大段中间噪声 + 尾部错误结论。head-only 会丢掉 FAIL 行。
+	body := "CMD: build\n" + strings.Repeat("log\n", 2000) + "FAIL: exit status 1"
+	got := trimForHistory(body, 4000, true)
+	if !strings.Contains(got, "省略中间段") {
+		t.Errorf("split 应含中段省略标记: %q", got[:min(len(got), 60)])
+	}
+	if !strings.Contains(got, "FAIL: exit status 1") {
+		t.Errorf("split 应保留尾部错误结论: tail=%q", got[max(0, len(got)-80):])
+	}
+	if !strings.Contains(got, "CMD: build") {
+		t.Errorf("split 应保留头部上下文: head=%q", got[:min(len(got), 40)])
+	}
+	if len(got) > 4200 { // 头 n/4 + 尾 3n/4 + marker，应略超 limit
+		t.Errorf("split 总长应接近 limit: len=%d", len(got))
+	}
+}
+
+// truncateHeadTail：头 n/4 + 尾 3n/4 + 中段 marker；短输入不截；n<=0 原样返回。
+func TestTruncateHeadTail(t *testing.T) {
+	s := "H" + strings.Repeat("m", 100) + "T" // 头 H，尾 T，中间噪声
+	got := truncateHeadTail(s, 40, "…[省略中间段]")
+	if !strings.HasPrefix(got, "H") || !strings.HasSuffix(got, "T") {
+		t.Errorf("应保留首尾字符: %q", got)
+	}
+	if !strings.Contains(got, "…[省略中间段]") {
+		t.Errorf("应含中段 marker: %q", got)
+	}
+	// 头占 n/4=10，尾占 30。
+	if !strings.HasPrefix(got, "H"+strings.Repeat("m", 9)) {
+		t.Errorf("头部应占 n/4: %q", got[:min(len(got), 12)])
+	}
+	// 短输入不截断（无 marker）。
+	if got := truncateHeadTail("short", 100, "…"); strings.Contains(got, "…") {
+		t.Errorf("短输入不应截断: %q", got)
+	}
+	// n<=0 原样返回。
+	if got := truncateHeadTail(s, 0, "…"); got != s {
+		t.Errorf("n<=0 应原样返回")
 	}
 }
 

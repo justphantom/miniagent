@@ -59,6 +59,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 	budget := ContextBudget{
 		ContextWindow:    cfg.ContextWindow,
 		KeepRecent:       cfg.ContextKeepRecent,
+		KeepReasoning:    cfg.ContextKeepReasoning,
 		SummarizerPrompt: cfg.SummarizerPrompt,
 		CompactionModel:  cfg.CompactionModel,
 		Model:            cfg.Model,

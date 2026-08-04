@@ -145,3 +145,45 @@ func trimHistoryForContext(msgs []Message) []Message {
 	}
 	return out
 }
+
+// stripStaleReasoning 主动清空非最近 keepN 条 assistant 消息的 Reasoning（P1）。
+// 思考模型单次 reasoning 常达正文数倍，每轮原样回灌是隐性 token 大户；而模型下一步决策几乎不需
+// 回看更早的思考——结论已凝结在当时的 assistant 正文 / tool_calls 里。Reasoning 与 tool_calls/tool
+// 配对无关（配对要求的是 tool_calls ↔ tool 一一对应），故清空不破坏配对、不丢任何可见事实。
+//
+// 与 trimHistoryForContext（被动、撞上限才清全部）互补：本函数主动、常态化、仅清「非最近 N 条」，
+// 保留当前推理上下文。仅改 context 侧拷贝——入参 msgs/newMsgs/session 不被改动（持久化仍留原 reasoning）。
+// keepN<0 视作 0；无非空 reasoning 可清、或全部在保留窗口内时原样返回（零拷贝）。
+func stripStaleReasoning(msgs []Message, keepN int) []Message {
+	if keepN < 0 {
+		keepN = 0
+	}
+	nAssistant := 0
+	hasReasoning := false
+	for _, m := range msgs {
+		if m.Role == roleAssistant {
+			nAssistant++
+			if m.Reasoning != "" {
+				hasReasoning = true
+			}
+		}
+	}
+	if !hasReasoning || nAssistant <= keepN {
+		return msgs // 无可清 / 全在保留窗口内
+	}
+	out := make([]Message, len(msgs))
+	copy(out, msgs)
+	// 从后往前保留最近 keepN 条 assistant 的 reasoning，更早的清空。
+	kept := 0
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Role != roleAssistant {
+			continue
+		}
+		if kept < keepN {
+			kept++
+			continue
+		}
+		out[i].Reasoning = ""
+	}
+	return out
+}

@@ -92,15 +92,17 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			}
 		}
 		limit := 0
+		split := false
 		if t, ok := toolByName[tc.Name]; ok {
 			limit = t.ResultLimit
+			split = t.SplitTruncate
 		}
 		// 工具未声明 ResultLimit 时回落 cfg.MaxToolResultChars（S4 可覆盖）；trimForHistory
-		// 仍有 <=0→maxToolResultInHistory 的最终兜底，双保险。
+		// 仍有 <=0→maxToolResultInHistory 的最终兜底，双保险。split 对 shell/grep 类工具走头尾分段截断。
 		if limit <= 0 {
 			limit = cfg.MaxToolResultChars
 		}
-		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit)})
+		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit, split)})
 	}
 	return msgs, nil
 }
@@ -144,11 +146,15 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 }
 
 // trimForHistory 把工具结果裁到 limit 字符后入历史；limit<=0 用默认上限。
-// read/edit 等代码类工具经 Tool.ResultLimit 传高限，避免截断丢准确性。
+// split=true（shell/grep/script 等尾部关键的工具）走头尾分段截断，保留尾部错误结论；
+// 否则 head-only（read/edit 等带行号的代码类工具，前截断符合分段读大文件语义）。
 // C-2 的 context 降级复用同一裁剪语义（对更早的 tool content 用更小 limit 再裁）。
-func trimForHistory(s string, limit int) string {
+func trimForHistory(s string, limit int, split bool) string {
 	if limit <= 0 {
 		limit = maxToolResultInHistory
+	}
+	if split {
+		return truncateHeadTail(s, limit, "…[省略中间段]")
 	}
 	return truncate(s, limit, "…[tool_result 已截断]")
 }

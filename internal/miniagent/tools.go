@@ -31,6 +31,26 @@ func truncate(s string, n int, marker string) string {
 	return string(r[:n]) + marker
 }
 
+// truncateHeadTail 把 s 截到约 n 个 rune，保留「头 headN + 尾 tailN」，中间用 marker 连接。
+// 用于 shell/grep 等关键信息在尾部的工具结果：head-only 会丢掉编译/测试错误汇总、命中上限提示等
+// 最该让模型看到的诊断信息。头占 n/4（前段提供上下文/命令回显），尾占 3n/4（错误结论集中处）。
+// n<=0 原样返回；长度<=n 不截。marker 置于中段省略处（与 truncate 的尾部 marker 语义不同）。
+func truncateHeadTail(s string, n int, marker string) string {
+	if n <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	headN := max(n/4, 1)
+	tailN := max(n-headN, 1)
+	if headN+tailN >= len(r) {
+		return s // 头尾窗口已覆盖全部，无需截断（marker 反而增噪）
+	}
+	return string(r[:headN]) + marker + string(r[len(r)-tailN:])
+}
+
 // object 构造 JSON Schema 的 object 描述。required 为空时省略键：JSON Schema
 // 规范规定省略 required 等同空数组，所有合规后端都接受；而把 nil slice 写进
 // map 会被序列化成 "required":null，触发严格后端（如 OpenAI）的 400。

@@ -102,11 +102,12 @@ func TestResolve_StrategyConstants(t *testing.T) {
 		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
 		Defaults:  DefaultsConfig{Model: "p/m"},
 		Run: RunConfig{
-			MaxToolResultChars: mk(1234),
-			MaxFileResultChars: mk(9999),
-			MaxParallelTools:   mk(3),
-			ContextKeepRecent:  mk(8),
-			SummaryMaxChars:    mk(1500),
+			MaxToolResultChars:   mk(1234),
+			MaxFileResultChars:   mk(9999),
+			MaxParallelTools:     mk(3),
+			ContextKeepRecent:    mk(8),
+			SummaryMaxChars:      mk(1500),
+			ContextKeepReasoning: mk(2),
 		},
 	}
 	r, err := Resolve(cfg, CLIOverrides{})
@@ -123,6 +124,7 @@ func TestResolve_StrategyConstants(t *testing.T) {
 		{"MaxParallelTools", r.Run.MaxParallelTools, 3},
 		{"ContextKeepRecent", r.Run.ContextKeepRecent, 8},
 		{"SummaryMaxChars", r.Run.SummaryMaxChars, 1500},
+		{"ContextKeepReasoning", r.Run.ContextKeepReasoning, 2},
 	}
 	for _, c := range checks {
 		if c.got == nil || *c.got != c.want {

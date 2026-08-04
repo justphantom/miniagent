@@ -129,7 +129,7 @@ func TestParseModelSpec_BareMultiProviderErrors(t *testing.T) {
 
 // S4：config run.* JSON 标签 round-trip（max_tool_result_chars 等）。
 func TestLoadConfig_StrategyConstants(t *testing.T) {
-	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"model":"p/m"},"run":{"max_tool_result_chars":1234,"max_file_result_chars":9999,"max_parallel_tools":3,"context_keep_recent":8,"summary_max_chars":1500}}`
+	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"model":"p/m"},"run":{"max_tool_result_chars":1234,"max_file_result_chars":9999,"max_parallel_tools":3,"context_keep_recent":8,"summary_max_chars":1500,"context_keep_reasoning":2}}`
 	cfg, err := LoadConfig(writeTmpConfig(t, body))
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +144,7 @@ func TestLoadConfig_StrategyConstants(t *testing.T) {
 		{"max_parallel_tools", cfg.Run.MaxParallelTools, 3},
 		{"context_keep_recent", cfg.Run.ContextKeepRecent, 8},
 		{"summary_max_chars", cfg.Run.SummaryMaxChars, 1500},
+		{"context_keep_reasoning", cfg.Run.ContextKeepReasoning, 2},
 	} {
 		if c.got == nil || *c.got != c.want {
 			t.Errorf("%s = %v, want %d", c.name, c.got, c.want)

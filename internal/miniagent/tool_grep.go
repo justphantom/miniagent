@@ -64,7 +64,8 @@ func GrepTool(workspaceRoot string, timeout time.Duration) Tool {
 			"path":    map[string]any{"type": "string", "description": "搜索根目录，相对 workdir 或绝对，默认 workdir"},
 			"glob":    map[string]any{"type": "string", "description": "文件名 include 过滤，filepath.Match 通配（如 *.go）"},
 		}, "pattern"),
-		ResultLimit: maxToolResultInHistory,
+		ResultLimit:   maxToolResultInHistory,
+		SplitTruncate: true, // 命中上限/无匹配等汇总在尾部，前截断会丢失
 		Call: func(ctx context.Context, args string) ToolResult {
 			if err := ctx.Err(); err != nil {
 				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}

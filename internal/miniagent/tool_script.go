@@ -34,7 +34,8 @@ func ScriptTool(name, description, command, workdir string, timeout time.Duratio
 		Parameters: object(map[string]any{
 			"args": map[string]any{"type": "string", "description": "可选：追加到脚本命令末尾的参数（空格分隔）"},
 		}),
-		ResultLimit: maxToolResultInHistory,
+		ResultLimit:   maxToolResultInHistory,
+		SplitTruncate: true, // 复用 runShellCommand，输出语义同 shell（错误结论在尾部）
 		Call: func(ctx context.Context, args string) ToolResult {
 			var a struct {
 				Args string `json:"args,omitempty"`

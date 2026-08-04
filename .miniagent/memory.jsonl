@@ -3,3 +3,11 @@
 {"type":"note","topic":"覆盖变量线程安全","content":"context/history_util/memory/session/tool_grep/tool_read/tool_shell 的 override 变量统一改用 atomic.Int64，消除 -race 检测告警"}
 {"type":"note","topic":"memory 抽取","content":"ExtractMemory 将 transcript 作为 user message 传入（而非全塞 system），以兼容要求 user role 的端点（如 agnes），否则 400 'No user query found in messages'"}
 {"type":"note","topic":"memory 配置","content":"extract_prompt 仅支持 %d（最大条数）和 %s（已有记忆）两个占位符，旧版第 3 个 %s（对话）已移除，对话现通过 user message 传递"}
+{"type":"note","topic":"session 文件格式","content":"session 文件为 JSONL 格式，首行为 SessionMeta（type/session/id/model/workdir/provider/created），后续每行为 sessionLine（type/message）包裹 Message，含 KindSummary 标记以结构化识别摘要消息"}
+{"type":"note","topic":"session 锁机制","content":"Linux 用 flock(LOCK_EX|LOCK_NB) 排他 advisory 锁 + 5s 短轮询，Windows 用字节区间锁；withSessionLock 保护所有读写与 rewrite 操作，防止多进程同时写入损坏"}
+{"type":"note","topic":"session 文件大小上限","content":"默认 maxSessionBytes = 50MB，可通过 SetMaxSessionBytes / config.max_session_bytes 覆盖，rewrite 后超出上限直接报错拒绝"}
+{"type":"note","topic":"token数据来源","content":"会话token数据来自LLM API响应：非流式走ChatClient.parseChatResponse，流式走StreamClient解析SSE chunk中的usage字段（prompt_tokens/completion_tokens），两者均聚合到result.Usage中供上层跨轮累计"}
+{"type":"note","topic":"token预算控制","content":"token预算分两层：单轮MaxTokens（flag --max-tokens默认4096，控制单次LLM调用输出上限）和跨轮MaxTotalTokens（interact.go中totalUsage累计input+output，超限则停止交互）"}
+{"type":"note","topic":"上下文压缩机制","content":"summaryMaxTokens=1024 限制摘要请求输出 token，避免生成超长输出后被字符截断白烧 token；ContextBudget 是 FitHistory 的单参数包，含 ContextWindow/K/SummarizerPrompt/Model/EstimateTokens 回调，解耦 context.go 与 HTTPClient"}
+{"type":"note","topic":"Token 估算启发式","content":"estimateTokens 对 CJK 字符估算为 1 token/2 字符，其他字符 1 token/4 字符；estimateRequestBodySize 按字符串总长 1.3 倍 + 256 字节固定开销估算，用于 marshal 前拦截超大请求防 OOM（上限 4MiB）"}
+{"type":"note","topic":"历史消息截断策略","content":"read/edit 等代码工具结果 maxFileResultInHistory=8000 字符（高于通用 maxToolResultInHistory=4000，因代码截断损准确性）；summaryRequestPrompt 在 maxIterations=20 前一步工具调用后注入，引导 LLM 输出总结而非继续调工具"}

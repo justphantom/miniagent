@@ -43,8 +43,11 @@ const summarizerSystem = "你是会话压缩器。把以下对话历史压缩为
 // 以及把中段压成摘要的可注入回调（解耦 context.go 与 HTTPClient，便于测试注入假摘要）。
 // System/Tools 用于 estimateTokens 估算（计入 system prompt 与工具 schema 的固定开销）。
 type ContextBudget struct {
-	ContextWindow    int // 0 = 不主动压缩
-	KeepRecent       int // <=0 回落 contextKeepRecent
+	ContextWindow int // 0 = 不主动压缩
+	KeepRecent    int // <=0 回落 contextKeepRecent
+	// KeepReasoning 是主动 reasoning 清理时保留的最近 assistant 消息条数（<=0 回落 contextKeepReasoning）。
+	// FitHistory 在 fitted 结果上清空非最近 N 条 assistant 的 Reasoning（P1）。
+	KeepReasoning    int
 	SummarizerPrompt string
 	CompactionModel  string // 空则回落 Model
 	Model            string
@@ -65,8 +68,15 @@ type ContextBudget struct {
 //
 // 不触碰 newMsgs——持久化层的 summary 插入/去重由 Run 用返回的 summary 完成（见 insertSummaryIntoNewMsgs）。
 func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logger *slog.Logger) (out []Message, summary Message, summarized bool, usage Usage, err error) {
+	keepReasoning := budget.KeepReasoning
+	if keepReasoning <= 0 {
+		keepReasoning = contextKeepReasoning
+	}
 	if budget.ContextWindow <= 0 || estimateTokens(msgs, budget.System, budget.Tools) <= budget.ContextWindow*4/5 {
-		return msgs, Message{}, false, Usage{}, nil
+		// P1：reasoning 主动清理是默认策略，即使未超窗/窗口未知也执行——旧 Reasoning 是思考模型下
+		// 隐性 token 大户，与 tool 配对无关，清空不丢可见事实（正文/tool_calls 不动）。无 reasoning
+		// 时 stripStaleReasoning 原样返回，零开销。
+		return stripStaleReasoning(msgs, keepReasoning), Message{}, false, Usage{}, nil
 	}
 	keepRecent := budget.KeepRecent
 	if keepRecent <= 0 {
@@ -85,6 +95,10 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 	if !summarized {
 		out = compactHistory(msgs, keepRecent)
 	}
+	// P1：在 fitted 结果上主动清空非最近 N 条 assistant 的 Reasoning。放在 window 检查前——
+	// 清理后 token 估计更低，更可能免于触发 trimRecentRounds/终止报错。中段（已并入 summary）
+	// 不经此处；最近 N 条 assistant 的 reasoning 保留，供模型延续当前推理上下文。
+	out = stripStaleReasoning(out, keepReasoning)
 	if estimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
@@ -195,4 +209,10 @@ const systemOverheadTokens = 400
 const perToolSchemaTokens = 60
 
 // contextKeepRecent 是 compactHistory/compactWithSummary 默认保留的最近轮数。
-const contextKeepRecent = 6
+// P3：从 6 下调到 4——稳态占用降一截，更早的轮次由 summary（已含关键事实）承载；配置钩子
+// cfg.Run.ContextKeepRecent 仍在，长 ReAct 场景可调回更高值。
+const contextKeepRecent = 4
+
+// contextKeepReasoning 是主动 reasoning 清理默认保留的最近 assistant 消息条数（P1）。
+// 1 = 仅保留最近一条 assistant 的思考链（当前推理上下文），更早的清空。
+const contextKeepReasoning = 1

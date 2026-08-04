@@ -198,6 +198,21 @@ linters:
         # G204 tainted 子进程：shell 工具的本质就是执行 LLM 命令，已有
         # 60s 超时 + 进程组 SIGKILL 清理；真正隔离依赖调用方。
         - G204
+        # G115 整数溢出转换：platform.go flock/fd 操作在 int↔uintptr 间转换是
+        # syscall API 要求，fd 值域远未溢出，无实际风险。
+        - G115
+        # G117 字段名匹配密钥模式：APIKey 是结构体字段名（从环境变量/配置注入），
+        # 非硬编码密钥常量，属命名需要。
+        - G117
+        # G703 路径遍历污点：memory/session 的 tmpPath 由 os.CreateTemp 生成，
+        # 非 LLM/用户输入；与 G304 的 user-facing 路径不同。
+        - G703
+        # G704 SSRF 污点：请求 URL 来自 config（可信配置），非 LLM 输出；
+        # miniagent 是 CLI 工具，URL 信任边界由调用方控制。
+        - G704
+        # G705 XSS 污点：fmt.Fprintf 到 os.Stderr（非 HTTP 响应体），
+        # CLI 工具的 stderr 输出无 XSS 攻击面。
+        - G705
 
   exclusions:
     # gosec 内置的 preset，已包含常见误报

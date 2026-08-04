@@ -55,6 +55,12 @@ type Tool struct {
 	// ResultLimit 是该工具结果进入历史消息的字符上限（<=0 用 maxToolResultInHistory
 	// 默认）。read/edit 等代码类工具设高限，避免截断丢准确性。不参与工具 schema 序列化。
 	ResultLimit int
+	// SplitTruncate 为 true 时，工具结果按「头 N/4 + 尾 3N/4」分段截断（中间用省略标记连接），
+	// 而非默认的 head-only。shell/grep/script 类工具的关键结论常在尾部（编译/测试错误汇总、
+	// 命中上限提示），纯前截断会丢掉最该让模型看到的诊断信息、逼模型重跑（反而多烧 token）。
+	// read/edit 等带行号的代码类工具保持 head-only（false）：前截断才符合「分段读大文件」语义。
+	// 不参与工具 schema 序列化（与 ResultLimit 同属入历史策略，非 LLM 可见参数）。
+	SplitTruncate bool
 	// Call 加 json:"-"：防未来误 json.Marshal(Tool) 时报 unsupported type。
 	Call func(ctx context.Context, args string) ToolResult `json:"-"`
 }
@@ -191,6 +197,10 @@ type LoopConfig struct {
 	MaxParallelTools   int
 	ContextKeepRecent  int
 	SummaryMaxChars    int
+	// ContextKeepReasoning 是主动 reasoning 清理时保留的最近 assistant 消息条数（<=0 用内置默认 1）。
+	// P1：非最近 N 条 assistant 的 Reasoning（思考链回灌）每轮原样发回，是思考模型下隐性 token 大户；
+	// 主动清空不碰 tool 配对、不丢可见事实（正文/tool_calls 不动）。高准确度场景可调高保留更多轮思考。
+	ContextKeepReasoning int
 }
 
 // ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。

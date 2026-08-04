@@ -78,6 +78,8 @@ type RunConfig struct {
 	GrepMaxMatches       *int    `json:"grep_max_matches,omitempty"`
 	MemoryRecentN        *int    `json:"memory_recent_n,omitempty"`
 	ContextTrimToolChars *int    `json:"context_trim_tool_chars,omitempty"`
+	// ContextKeepReasoning 是主动 reasoning 清理保留的最近 assistant 条数（P1）；<=0/缺省=内置默认 1。
+	ContextKeepReasoning *int `json:"context_keep_reasoning,omitempty"`
 }
 
 // CompactionConfig 配置长会话摘要压缩模型。

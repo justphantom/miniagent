@@ -63,7 +63,8 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令"},
 		}, "command"),
-		ResultLimit: maxToolResultInHistory,
+		ResultLimit:   maxToolResultInHistory,
+		SplitTruncate: true, // shell 输出的错误结论（exit status / FAIL）常在尾部，前截断会丢失
 		Call: func(ctx context.Context, args string) ToolResult {
 			var a struct {
 				Command string `json:"command"`

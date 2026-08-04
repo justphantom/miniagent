@@ -34,6 +34,56 @@ func TestTrimHistoryForContext(t *testing.T) {
 	}
 }
 
+// stripStaleReasoning（P1）：清空非最近 N 条 assistant 的 Reasoning，保留正文/tool_calls/最近 N 条思考；
+// 不改调用方输入；无 reasoning 或全在保留窗口内时零拷贝原样返回。
+func TestStripStaleReasoning(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "a1", Reasoning: "think1", ToolCalls: []ToolCall{{ID: "c1", Name: "read", Args: "{}"}}},
+		{Role: "tool", ToolCallID: "c1", Content: "r1"},
+		{Role: "assistant", Content: "a2", Reasoning: "think2"},
+		{Role: "assistant", Content: "a3", Reasoning: "think3"},
+	}
+	out := stripStaleReasoning(msgs, 1)
+	// 仅最近一条 assistant（a3）保留 reasoning，更早的清空。
+	if out[1].Reasoning != "" || out[3].Reasoning != "" {
+		t.Errorf("旧 reasoning 未清空: out[1]=%q out[3]=%q", out[1].Reasoning, out[3].Reasoning)
+	}
+	if out[4].Reasoning != "think3" {
+		t.Errorf("最近 reasoning 应保留: got %q", out[4].Reasoning)
+	}
+	// 正文 / tool_calls / tool 消息不动（结论与配对完整）。
+	if out[1].Content != "a1" || len(out[1].ToolCalls) != 1 {
+		t.Errorf("正文/tool_calls 被改动: %+v", out[1])
+	}
+	if out[2].Content != "r1" {
+		t.Errorf("tool 消息被改动: %q", out[2].Content)
+	}
+	// 调用方输入未被修改。
+	if msgs[1].Reasoning != "think1" {
+		t.Errorf("caller reasoning mutated")
+	}
+
+	// keepN 覆盖全部 assistant → 原样返回（不拷贝）。
+	if got := stripStaleReasoning(msgs, 10); &got[0] != &msgs[0] {
+		t.Errorf("全在保留窗口内应原样返回同一 slice")
+	}
+
+	// 无 reasoning 的历史（非思考模型）→ 原样返回。
+	plain := []Message{{Role: "user", Content: "q"}, {Role: "assistant", Content: "a"}}
+	if got := stripStaleReasoning(plain, 1); &got[0] != &plain[0] {
+		t.Errorf("无 reasoning 应原样返回同一 slice")
+	}
+
+	// keepN=0 → 清空全部 assistant reasoning。
+	out0 := stripStaleReasoning(msgs, 0)
+	for i, m := range out0 {
+		if m.Role == roleAssistant && m.Reasoning != "" {
+			t.Errorf("keepN=0 应清空所有 reasoning: out[%d]=%q", i, m.Reasoning)
+		}
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时仅加 systemOverheadTokens 固定开销。
 	if n := estimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+systemOverheadTokens {
