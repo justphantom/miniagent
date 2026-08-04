@@ -1,0 +1,5 @@
+{"type":"note","topic":"项目路径","content":"Go 项目 miniagent，仓库路径 github.com/justphantom/miniagent，主程序 cmd/miniagent，核心逻辑 internal/miniagent"}
+{"type":"note","topic":"sandbox 越界校验","content":"confineWrap 仅对非空 path 做越界校验，空/缺省 path 直通原工具自校验；此前对空 path 一律拒绝会误伤 grep/glob（path 可选）"}
+{"type":"note","topic":"覆盖变量线程安全","content":"context/history_util/memory/session/tool_grep/tool_read/tool_shell 的 override 变量统一改用 atomic.Int64，消除 -race 检测告警"}
+{"type":"note","topic":"memory 抽取","content":"ExtractMemory 将 transcript 作为 user message 传入（而非全塞 system），以兼容要求 user role 的端点（如 agnes），否则 400 'No user query found in messages'"}
+{"type":"note","topic":"memory 配置","content":"extract_prompt 仅支持 %d（最大条数）和 %s（已有记忆）两个占位符，旧版第 3 个 %s（对话）已移除，对话现通过 user message 传递"}
