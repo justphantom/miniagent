@@ -335,7 +335,7 @@ repo/
 - `defaults.model`：`provider/id` 格式；无 `/` 时默认选中唯一 provider
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
 - `compaction.model`：摘要压缩模型。三级回落：`compaction.model` → `defaults.model` → 主会话模型。可写 `model_id`（同主模型 provider）或 `provider/model`（跨 provider）
-- `memory.*`：会话结束自动抽取项目记忆到 `.miniagent/memory.jsonl`。`memory.model` 同样三级回落（`memory.model` → `defaults.model` → 主会话模型），可跨 provider，默认与主会话/compaction 共用 client（按 provider 名去重）。`auto_update` 默认 `true`，仅在有过工具调用的会话触发，best-effort（失败仅告警）；无 workdir 跳过。`max_per_session` 单会话上限条数（默认 3）；`extract_prompt` 可覆盖默认提示词。抽取不计入 token 预算。注意：抽取自 transcript，已剔除含 API key 字面量的记录，但并非安全边界，密钥隔离仍依赖 OS 权限。
+- `memory.*`：会话结束自动抽取项目记忆到 `.miniagent/memory.jsonl`。`memory.model` 同样三级回落（`memory.model` → `defaults.model` → 主会话模型），可跨 provider，默认与主会话/compaction 共用 client（按 provider 名去重）。`auto_update` 默认 `true`，仅在有过工具调用的会话触发，best-effort（失败仅告警）；无 workdir 跳过。`max_per_session` 单会话上限条数（默认 3）；`extract_prompt` 可覆盖默认提示词（**v3.5.1 起仅支持 `%d`(条数)/`%s`(已有记忆) 两个占位符；对话内容改为以 user message 传入，旧版第 3 个 `%s` 占位符已移除**）。抽取不计入 token 预算。注意：抽取自 transcript，已剔除含 API key 字面量的记录，但并非安全边界，密钥隔离仍依赖 OS 权限。
 
 ## 完整调用示例
 

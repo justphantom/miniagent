@@ -3,13 +3,16 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [3.5.1] - 2026-08-04
+
+> 沙箱 confineWrap 空 path 直通、memory 抽取兼容 agnes 等要求 user role 的端点。
 
 ### Breaking
 - **`memory.extract_prompt` 移除第 3 个占位符 `%s`(对话)**：对话内容现作为 user message 传入（不再内联进 system prompt），以兼容要求 messages 含 user role 的端点（如 agnes，此前会 400 `No user query found in messages`）。自定义 `extract_prompt` 现仅支持 `%d`(条数)/`%s`(已有记忆) 两个占位符。
 
 ### Fixed
 - **会话结束记忆抽取对 agnes 等端点必失败**：`ExtractMemory` 此前把对话全塞 system 且不发 user message，要求 user query 的端点直接 400、记忆永不落盘（best-effort warn 仅走 stderr，常被调用方吞掉）。现 transcript 经 `renderTranscript` 渲染后作为单条 user message 传入。
+- **沙箱 confineWrap 误伤 grep/glob**：此前对空 path 一律拒绝，导致 grep/glob（path 可选，默认 workdir）在 default 模式下基本不可用。改为仅当 args 能解析出非空 path 时才做越界校验，path 缺省/空或 JSON 非法时直通 orig（各工具自身校验 path）。
 
 ## [3.5.0] - 2026-08-04
 
