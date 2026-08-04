@@ -6,7 +6,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// buildTools 注册 6 个内置工具 + N 个项目脚本工具（P1：.miniagent/scripts.json），按 mode 调整约束：
+// buildTools 注册 7 个内置工具 + N 个项目脚本工具（P1：.miniagent/scripts.json），按 mode 调整约束：
 //   - default：写工具（write/edit）经 confineWrap 限定在 workdir 子树；
 //     shell/script 以 mode=default 注册（拒 sudo/su）。workdir 必填（main 入口校验）。
 //   - auto：无任何约束（shell/script mode=auto，写工具不包装）。
@@ -35,9 +35,11 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	}
 	grep := miniagent.GrepTool(workdir, fileOpTimeout)
 	glob := miniagent.GlobTool(workdir, fileOpTimeout)
+	codemap := miniagent.CodemapTool(workdir, fileOpTimeout)
 	if mode == miniagent.ModeDefault && workdir != "" {
 		grep = confineWrap(grep, workdir)
 		glob = confineWrap(glob, workdir)
+		codemap = confineWrap(codemap, workdir)
 	}
 	tools := []miniagent.Tool{
 		read,
@@ -45,6 +47,7 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		edit,
 		grep,
 		glob,
+		codemap,
 		miniagent.ShellTool(workdir, shellTimeout, shellMode),
 	}
 	// P1：项目脚本注册为 script_<name> 工具，复用 shell 的安全策略（runShellCommand）。

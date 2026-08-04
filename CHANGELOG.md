@@ -3,6 +3,11 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Added
+- **`codemap` 工具**：递归输出带缩进层级的目录树概览（目录标注子条目数），填补 glob 扁平列举与 read 单文件之间的结构感知缺口。参数 `path`（默认 workdir）+ `depth`（默认 3，<=0 不限）；条目上限 500，排除 `.git` 与符号链接，default 模式经 confineWrap 限定 workdir 子树。
+
 ## [3.5.1] - 2026-08-04
 
 > 沙箱 confineWrap 空 path 直通、memory 抽取兼容 agnes 等要求 user role 的端点。

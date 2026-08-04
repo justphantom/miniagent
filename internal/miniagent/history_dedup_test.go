@@ -10,11 +10,11 @@ import (
 // 保留窗口内不动；无 read 零拷贝；不改调用方输入。
 func TestDedupReadResults(t *testing.T) {
 	msgs := []Message{
-		{Role: "user", Content: "q"},                                                      // 0
+		{Role: "user", Content: "q"}, // 0
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}}, // 1
-		{Role: "tool", ToolCallID: "r1", Content: "first read"},                           // 2
+		{Role: "tool", ToolCallID: "r1", Content: "first read"},                                       // 2
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r2", Name: "read", Args: `{"path":"a.go"}`}}}, // 3
-		{Role: "tool", ToolCallID: "r2", Content: "second read"},                          // 4
+		{Role: "tool", ToolCallID: "r2", Content: "second read"},                                      // 4
 	}
 	out := dedupReadResults(msgs, 1) // 保留最近 1 条 assistant（idx3）
 	if out[2].Content == "first read" {

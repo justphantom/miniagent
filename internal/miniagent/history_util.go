@@ -626,7 +626,10 @@ func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
 	if len(succ) == 0 {
 		return msgs
 	}
-	type we struct{ msgIdx, tcIdx int; path string }
+	type we struct {
+		msgIdx, tcIdx int
+		path          string
+	}
 	var list []we
 	for i, m := range msgs {
 		if m.Role != roleAssistant {
@@ -721,7 +724,10 @@ func dedupShellCommands(msgs []Message, keepN int) []Message {
 		return msgs
 	}
 	windowStart := windowStartOf(msgs, keepN)
-	type se struct{ msgIdx, tcIdx, order int; key string }
+	type se struct {
+		msgIdx, tcIdx, order int
+		key                  string
+	}
 	var list []se
 	order := 0
 	for i, m := range msgs {
