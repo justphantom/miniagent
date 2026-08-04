@@ -52,8 +52,9 @@ func estimateRequestBodySize(req Request) int64 {
 }
 
 func buildChatBody(req Request) ([]byte, error) {
-	if estimateRequestBodySize(req) > maxRequestBodyBytes {
-		return nil, fmt.Errorf("请求预估 %d 字节超过上限 %d", estimateRequestBodySize(req), maxRequestBodyBytes)
+	size := estimateRequestBodySize(req)
+	if size > maxRequestBodyBytes {
+		return nil, fmt.Errorf("请求预估 %d 字节超过上限 %d", size, maxRequestBodyBytes)
 	}
 	msgs := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {

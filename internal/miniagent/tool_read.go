@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,19 +17,19 @@ import (
 // 同时防止超大日志/生成文件撑爆内存。可通过 SetMaxReadFileBytes 覆盖。n<=0 用默认。
 const maxReadFileBytes = 1 << 20 // 1MB
 
-// maxReadFileBytesOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
-var maxReadFileBytesOverride int
+// maxReadFileBytesOverride 允许测试/配置覆盖内置上限；用 atomic 保护并发 Set/Get，防 -race。
+var maxReadFileBytesOverride atomic.Int64
 
 // SetMaxReadFileBytes 覆盖 read 单文件读取上限；测试用，正常流程由 Resolve 调用。
 func SetMaxReadFileBytes(n int) {
 	if n > 0 {
-		maxReadFileBytesOverride = n
+		maxReadFileBytesOverride.Store(int64(n))
 	}
 }
 
 func readFileBytes() int {
-	if maxReadFileBytesOverride > 0 {
-		return maxReadFileBytesOverride
+	if v := maxReadFileBytesOverride.Load(); v > 0 {
+		return int(v)
 	}
 	return maxReadFileBytes
 }

@@ -14,6 +14,7 @@ import (
 	"regexp/syntax"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,18 +26,19 @@ const (
 )
 
 // maxGrepMatchesOverride 允许配置覆盖内置默认；nil 用常量默认。
-var maxGrepMatchesOverride int
+// 用 atomic 保护并发 Set/Get，防 -race 检测告警。
+var maxGrepMatchesOverride atomic.Int64
 
 // SetGrepMaxMatches 覆盖 grep 命中上限；测试用，正常流程由 Resolve 调用。
 func SetGrepMaxMatches(n int) {
 	if n > 0 {
-		maxGrepMatchesOverride = n
+		maxGrepMatchesOverride.Store(int64(n))
 	}
 }
 
 func getGrepMaxMatches() int {
-	if maxGrepMatchesOverride > 0 {
-		return maxGrepMatchesOverride
+	if v := maxGrepMatchesOverride.Load(); v > 0 {
+		return int(v)
 	}
 	return maxGrepMatches
 }

@@ -12,7 +12,13 @@ import (
 )
 
 // confineWrap 包装工具的 Call：执行前校验 args.path 落在 root 子树内，越界拒绝。
-// 仅用于写工具（write/edit），两者 args 都含 path 字段。
+// 用于 read/write/edit/grep/glob——其中 read/write/edit 的 path 必填，grep/glob 的
+// path 可选（默认 workdir，已被 workspaceRoot 约束）。
+//
+// 仅当 args 能解析出非空 path 时做越界校验；path 缺省/空或 JSON 非法时直通 orig：
+// 各工具自身会校验 path（write/edit 空路径报错；read 必填；grep/glob 空路径回落
+// workspaceRoot）。此前对空 path 一律拒绝会误伤 grep/glob（path 可选）使 default
+// 模式下基本不可用。
 //
 // TOCTOU 取舍（审查 P2-11）：checkConfine 是纯词法校验（Clean+Abs+HasPrefix），与
 // 后续 MkdirAll/Rename 之间存在窗口；runToolsParallel 并行执行时，shell 可在窗口内

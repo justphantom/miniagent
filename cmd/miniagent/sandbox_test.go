@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +105,58 @@ func TestConfineWrap_AllowsRegularPath(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(root, "sub", "ok.txt"))
 	if err != nil || string(got) != "hello" {
 		t.Errorf("file not written correctly: %q err=%v", got, err)
+	}
+}
+
+// confineWrap 对缺省/空 path 直通 orig：各工具自校验 path（write 空路径报错），
+// 不会产生未约束的成功写入。回归守卫：此前对空 path 一律拒绝曾误伤 grep/glob。
+func TestConfineWrap_EmptyPathFallsThroughToOrig(t *testing.T) {
+	root := t.TempDir()
+	wrapped := confineWrap(miniagent.WriteFileTool(root, 0), root)
+	// 非 JSON / 缺 path / 空 path：均应由 orig(write) 报错，不得成功写入。
+	for _, args := range []string{`not-json`, `{"content":"x"}`, `{"path":""}`} {
+		r := wrapped.Call(context.Background(), args)
+		if !r.IsError {
+			t.Errorf("args %q: want orig to reject, got success: %+v", args, r)
+		}
+	}
+	// root 内不应出现任何被写入的文件（安全属性：无未约束写入）。
+	if ents, _ := os.ReadDir(root); len(ents) != 0 {
+		t.Errorf("expected empty root after rejected writes, got %+v", ents)
+	}
+}
+
+// 回归：grep 的 path 可选（默认 workdir），confineWrap 不得因无 path 拒绝。
+func TestConfineWrap_GrepWithoutPathWorks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello foo bar"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	grep := confineWrap(miniagent.GrepTool(root, 0), root)
+	r := grep.Call(context.Background(), `{"pattern":"foo"}`)
+	if r.IsError {
+		t.Fatalf("grep without path should work (default workdir), got error: %+v", r)
+	}
+	if !strings.Contains(r.Output, "foo") {
+		t.Errorf("grep should match: %+v", r)
+	}
+}
+
+// 回归：confinement 仍生效——显式 path 越出 workdir（绝对路径或 ..）必须被拒。
+func TestConfineWrap_ConfinesEscapePath(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	// write 带 .. 越界
+	wrapped := confineWrap(miniagent.WriteFileTool(root, 0), root)
+	r := wrapped.Call(context.Background(), `{"path":"../escape.txt","content":"x"}`)
+	if !r.IsError || !strings.Contains(r.Output, "越出 workdir") {
+		t.Errorf("write escaping workdir should be rejected: %+v", r)
+	}
+	// grep 带绝对路径越界（grep 用 workspaceRoot 仍需 confine 防绝对路径逃逸）
+	grep := confineWrap(miniagent.GrepTool(root, 0), root)
+	r = grep.Call(context.Background(), fmt.Sprintf(`{"pattern":"x","path":%q}`, outside))
+	if !r.IsError || !strings.Contains(r.Output, "越出 workdir") {
+		t.Errorf("grep escaping workdir should be rejected: %+v", r)
 	}
 }
 

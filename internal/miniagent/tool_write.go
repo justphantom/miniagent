@@ -92,6 +92,8 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpName) }
+	// 先写再 Chmod：CreateTemp 默认 0600，写入期间 temp 保持最窄权限；写完后再设为
+	// 目标 perm（常见 0644），避免在写入过程中就以宽权限暴露未完成内容。
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		cleanup()

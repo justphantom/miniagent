@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -21,18 +22,19 @@ const (
 )
 
 // memoryRecentNOverride 允许配置覆盖内置默认；nil 用常量默认。
-var memoryRecentNOverride int
+// 用 atomic 保护并发 Set/Get，防 -race 检测告警。
+var memoryRecentNOverride atomic.Int64
 
 // SetMemoryRecentN 覆盖记忆注入条数；测试用，正常流程由 Resolve 调用。
 func SetMemoryRecentN(n int) {
 	if n > 0 {
-		memoryRecentNOverride = n
+		memoryRecentNOverride.Store(int64(n))
 	}
 }
 
 func getMemoryRecentN() int {
-	if memoryRecentNOverride > 0 {
-		return memoryRecentNOverride
+	if v := memoryRecentNOverride.Load(); v > 0 {
+		return int(v)
 	}
 	return memoryRecentN
 }
@@ -198,6 +200,7 @@ func rotateMemoryFile(path string, newLine []byte) error {
 		return err
 	}
 	tmpPath := tmp.Name()
+	// CreateTemp 默认 0600，已是 memory.jsonl 所需权限，无需再 Chmod；rename 保留该权限。
 	if _, err := tmp.Write(buf.Bytes()); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)

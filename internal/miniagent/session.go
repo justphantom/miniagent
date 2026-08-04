@@ -10,25 +10,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
 // maxSessionBytes 是 session 文件默认大小上限：50MB 覆盖长会话，同时防止无限增长。
 // 可通过 SetMaxSessionBytes 覆盖。n<=0 用默认。
 const maxSessionBytes = 50 << 20 // 50MB
 
-// maxSessionBytesOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
-var maxSessionBytesOverride int
+// maxSessionBytesOverride 允许测试/配置覆盖内置上限；用 atomic 保护并发 Set/Get，防 -race。
+var maxSessionBytesOverride atomic.Int64
 
 // SetMaxSessionBytes 覆盖 session 文件大小上限；测试用，正常流程由 Resolve 调用。
 func SetMaxSessionBytes(n int) {
 	if n > 0 {
-		maxSessionBytesOverride = n
+		maxSessionBytesOverride.Store(int64(n))
 	}
 }
 
 func sessionBytes() int64 {
-	if maxSessionBytesOverride > 0 {
-		return int64(maxSessionBytesOverride)
+	if v := maxSessionBytesOverride.Load(); v > 0 {
+		return v
 	}
 	return int64(maxSessionBytes)
 }

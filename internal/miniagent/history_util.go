@@ -2,6 +2,7 @@ package miniagent
 
 import (
 	"strings"
+	"sync/atomic"
 	"unicode"
 )
 
@@ -113,18 +114,19 @@ func trimRecentRounds(msgs []Message, keepRecent int) []Message {
 const contextTrimToolChars = 2000
 
 // contextTrimToolCharsOverride 允许配置覆盖内置默认；nil 用常量默认。
-var contextTrimToolCharsOverride int
+// 用 atomic 保护并发 Set/Get，防 -race 检测告警。
+var contextTrimToolCharsOverride atomic.Int64
 
 // SetContextTrimToolChars 覆盖 context 超限时 tool 结果压缩上限；测试用，正常流程由 Resolve 调用。
 func SetContextTrimToolChars(n int) {
 	if n > 0 {
-		contextTrimToolCharsOverride = n
+		contextTrimToolCharsOverride.Store(int64(n))
 	}
 }
 
 func getContextTrimToolChars() int {
-	if contextTrimToolCharsOverride > 0 {
-		return contextTrimToolCharsOverride
+	if v := contextTrimToolCharsOverride.Load(); v > 0 {
+		return int(v)
 	}
 	return contextTrimToolChars
 }

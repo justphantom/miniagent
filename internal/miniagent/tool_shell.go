@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,18 +21,19 @@ import (
 const maxShellOutputChars = 100000
 
 // maxShellOutputCharsOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
-var maxShellOutputCharsOverride int
+// 用 atomic 保护并发 Set/Get，防 -race 检测告警。
+var maxShellOutputCharsOverride atomic.Int64
 
 // SetMaxShellOutputChars 覆盖 shell 输出字符上限；测试用，正常流程由 Resolve 调用。
 func SetMaxShellOutputChars(n int) {
 	if n > 0 {
-		maxShellOutputCharsOverride = n
+		maxShellOutputCharsOverride.Store(int64(n))
 	}
 }
 
 func shellOutputChars() int {
-	if maxShellOutputCharsOverride > 0 {
-		return maxShellOutputCharsOverride
+	if v := maxShellOutputCharsOverride.Load(); v > 0 {
+		return int(v)
 	}
 	return maxShellOutputChars
 }

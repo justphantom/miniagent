@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -17,19 +18,19 @@ const (
 	summaryMaxTokens = 1024
 )
 
-// summaryMaxTokensOverride 允许配置覆盖内置默认；nil 用常量默认。
-var summaryMaxTokensOverride int
+// summaryMaxTokensOverride 允许配置覆盖内置默认；用 atomic 保护并发 Set/Get，防 -race。
+var summaryMaxTokensOverride atomic.Int64
 
 // SetSummaryMaxTokens 覆盖摘要最大 token 数；测试用，正常流程由 Resolve 调用。
 func SetSummaryMaxTokens(n int) {
 	if n > 0 {
-		summaryMaxTokensOverride = n
+		summaryMaxTokensOverride.Store(int64(n))
 	}
 }
 
 func getSummaryMaxTokens() int {
-	if summaryMaxTokensOverride > 0 {
-		return summaryMaxTokensOverride
+	if v := summaryMaxTokensOverride.Load(); v > 0 {
+		return int(v)
 	}
 	return summaryMaxTokens
 }
