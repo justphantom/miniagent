@@ -9,8 +9,10 @@ import (
 )
 
 // memoryExtractTimeout 是抽取调用的独立超时：不复用 runCtx（其 -max-duration 到期会让抽取
-// 立刻失败），也不计入会话 token 预算（会话已结束）。
-const memoryExtractTimeout = 30 * time.Second
+// 立刻失败），也不计入会话 token 预算（会话已结束）。曾为 30s，但 agnes 等慢端点常在等响应头
+// 阶段就超时，连带重试（maxRetries=2）无机会；放宽到 300s。注意真正卡点在 transport 的
+// ResponseHeaderTimeout（见 setup_http.go），须一并放宽，否则本值到不了。
+const memoryExtractTimeout = 300 * time.Second
 
 // memoryExtractor 封装会话结束后的记忆抽取。extract 是 best-effort：任何失败仅 warn，
 // 不影响会话退出码与已保存的 session。无 workdir / client / 未启用 / 无工具使用时跳过。
