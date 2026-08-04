@@ -206,6 +206,9 @@ type LoopConfig struct {
 	// 而写成功后已落盘或被替换，纯占位重发；压缩为前缀占位不碰配对、不丢 path（模型知道改过哪个文件）。
 	// 高准确度场景可调高保留更多轮写入参数原文。
 	ContextKeepToolArgs int
+	// ContextKeepReasoningChars 是保留窗口内单条 Reasoning 的字符上限（P7，rune）。超过则头尾分段截断
+	// （压中段发散、留两端）。0=用内置默认 4000；<0=关闭；>0=自定义阈值。高准确度/长思考链场景可调高。
+	ContextKeepReasoningChars int
 }
 
 // ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。

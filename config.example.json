@@ -99,6 +99,12 @@
     "max_parallel_tools": 8,
     // context_keep_recent：上下文压缩时保留的最近轮数。
     "context_keep_recent": 6,
+    // context_keep_reasoning：主动 reasoning 清理保留的最近 assistant 条数（P1）；<=0=内置默认 1。
+    "context_keep_reasoning": 1,
+    // context_keep_tool_args：主动 write/edit 大 args 压缩保留的最近 assistant 条数（P4）；<=0=内置默认 2。
+    "context_keep_tool_args": 2,
+    // context_keep_reasoning_chars：保留窗口内单条 reasoning 字符上限（P7），超过则头尾分段截断（压中段、留两端）；负数=关闭。
+    "context_keep_reasoning_chars": 4000,
     // summary_max_chars：摘要压缩输出字符上限。
     "summary_max_chars": 2000,
     // summary_max_tokens：摘要 LLM 调用 max_tokens。

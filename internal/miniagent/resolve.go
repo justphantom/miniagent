@@ -27,6 +27,7 @@ type ResolvedRun struct {
 	SummaryMaxTokens, GrepMaxMatches, MemoryRecentN, ContextTrimToolChars                        *int
 	ContextKeepReasoning                                                                         *int
 	ContextKeepToolArgs                                                                          *int
+	ContextKeepReasoningChars                                                                    *int
 }
 
 type Resolved struct {
@@ -238,6 +239,7 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	r.ContextTrimToolChars = intPtr(func(rc RunConfig) *int { return rc.ContextTrimToolChars })
 	r.ContextKeepReasoning = intPtr(func(rc RunConfig) *int { return rc.ContextKeepReasoning })
 	r.ContextKeepToolArgs = intPtr(func(rc RunConfig) *int { return rc.ContextKeepToolArgs })
+	r.ContextKeepReasoningChars = intPtr(func(rc RunConfig) *int { return rc.ContextKeepReasoningChars })
 	return r, nil
 }
 

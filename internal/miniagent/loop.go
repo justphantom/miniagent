@@ -57,15 +57,16 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 		maxChars = summaryMaxChars
 	}
 	budget := ContextBudget{
-		ContextWindow:    cfg.ContextWindow,
-		KeepRecent:       cfg.ContextKeepRecent,
-		KeepReasoning:    cfg.ContextKeepReasoning,
-		KeepToolArgs:     cfg.ContextKeepToolArgs,
-		SummarizerPrompt: cfg.SummarizerPrompt,
-		CompactionModel:  cfg.CompactionModel,
-		Model:            cfg.Model,
-		System:           cfg.System,
-		Tools:            cfg.Tools,
+		ContextWindow:      cfg.ContextWindow,
+		KeepRecent:         cfg.ContextKeepRecent,
+		KeepReasoning:      cfg.ContextKeepReasoning,
+		KeepToolArgs:       cfg.ContextKeepToolArgs,
+		KeepReasoningChars: cfg.ContextKeepReasoningChars,
+		SummarizerPrompt:   cfg.SummarizerPrompt,
+		CompactionModel:    cfg.CompactionModel,
+		Model:              cfg.Model,
+		System:             cfg.System,
+		Tools:              cfg.Tools,
 		Summarize: func(ctx context.Context, model, sys string, middle []Message) (string, Usage, error) {
 			c := chat
 			if cfg.CompactionChat != nil {

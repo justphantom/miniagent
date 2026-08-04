@@ -50,12 +50,16 @@ type ContextBudget struct {
 	KeepReasoning int
 	// KeepToolArgs 是主动 tool_call args 压缩时保留的最近 assistant 条数（<=0 回落 contextKeepToolArgs）。
 	// FitHistory 在 fitted 结果上压缩非最近 N 条 assistant 的 write/edit 大 args（P4）。
-	KeepToolArgs     int
-	SummarizerPrompt string
-	CompactionModel  string // 空则回落 Model
-	Model            string
-	System           string
-	Tools            []Tool
+	KeepToolArgs int
+	// KeepReasoningChars 是保留窗口内单条 Reasoning 的字符上限（P7）。FitHistory 在 stripStaleReasoning
+	// 之后对保留的最近 N 条 assistant 的超长 Reasoning 做头尾分段（threshold rune）。0=回落
+	// contextKeepReasoningChars；<0=关闭（不截）；>0=自定义阈值。
+	KeepReasoningChars int
+	SummarizerPrompt   string
+	CompactionModel    string // 空则回落 Model
+	Model              string
+	System             string
+	Tools              []Tool
 	// Summarize 把中段 middle 压成摘要文本（已截断到 maxChars）+ 该次调用 Usage。
 	// Run 注入：func(ctx, model, summarizerPrompt, middle) → summarizeMiddle(...)。
 	Summarize func(ctx context.Context, model, summarizerPrompt string, middle []Message) (string, Usage, error)
@@ -79,11 +83,18 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 	if keepToolArgs <= 0 {
 		keepToolArgs = contextKeepToolArgs
 	}
+	keepReasoningChars := budget.KeepReasoningChars
+	if keepReasoningChars == 0 {
+		keepReasoningChars = contextKeepReasoningChars
+	}
+	// keepReasoningChars < 0 → truncateKeptReasoning 内部 threshold<=0 原样返回（关闭）。
 	if budget.ContextWindow <= 0 || estimateTokens(msgs, budget.System, budget.Tools) <= budget.ContextWindow*4/5 {
-		// P1/P4：reasoning 与 tool_call 大 args 的主动清理是默认策略，即使未超窗/窗口未知也执行——
-		// 旧 Reasoning 是思考模型下隐性 token 大户，write/edit 的大 args 写成功后纯占位重发；两者均与
-		// tool 配对无关，清/压不丢可见事实（正文/tool_calls ID 不动）。无可清/压项时各自原样返回，零开销。
+		// P1/P4/P7：reasoning 与 tool_call 大 args 的主动清理 + 保留窗口内超长 reasoning 的体积裁剪，均为
+		// 默认策略，即使未超窗/窗口未知也执行——旧 Reasoning 是思考模型下隐性 token 大户（P1 清条、P7 裁保留
+		// 条体积），write/edit 的大 args 写成功后纯占位重发（P4）；三者均与 tool 配对无关，清/压不丢可见事实
+		// （正文/tool_calls ID 不动）。无可清/压项时各自原样返回，零开销。
 		out := stripStaleReasoning(msgs, keepReasoning)
+		out = truncateKeptReasoning(out, keepReasoning, keepReasoningChars)
 		out = stripStaleToolArgs(out, keepToolArgs)
 		return out, Message{}, false, Usage{}, nil
 	}
@@ -104,10 +115,12 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 	if !summarized {
 		out = compactHistory(msgs, keepRecent)
 	}
-	// P1/P4：在 fitted 结果上主动清空非最近 N 条 assistant 的 Reasoning（P1）并压缩 write/edit 大 args（P4）。
-	// 放在 window 检查前——清理后 token 估计更低，更可能免于触发 trimRecentRounds/终止报错。中段（已并入
-	// summary）不经此处；最近 N 条 assistant 的 reasoning 与写入 args 保留，供模型延续当前上下文。
+	// P1/P4/P7：在 fitted 结果上主动清空非最近 N 条 assistant 的 Reasoning（P1）、裁保留窗口内超长 reasoning
+	// 体积（P7）、压缩 write/edit 大 args（P4）。放在 window 检查前——清理后 token 估计更低，更可能免于触发
+	// trimRecentRounds/终止报错。中段（已并入 summary）不经此处；最近 N 条 assistant 的 reasoning 与写入 args
+	// 保留，供模型延续当前上下文（P7 仅压超长中段，两端保留）。
 	out = stripStaleReasoning(out, keepReasoning)
+	out = truncateKeptReasoning(out, keepReasoning, keepReasoningChars)
 	out = stripStaleToolArgs(out, keepToolArgs)
 	if estimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
@@ -215,6 +228,16 @@ func insertSummaryIntoNewMsgs(newMsgs *[]Message, summary Message) {
 
 const systemOverheadTokens = 400
 
+// envelopePerMsgTokens / envelopePerToolCallTokens 是请求信封的线性化 token 估算（信封对齐）。
+// systemOverheadTokens 是固定 base；这两项随消息数与 tool_call 数线性增长——每条 message 的
+// role/字段名/标点、每个 tool_call 嵌套的 {id,type,function{name,arguments}} 对象随会话累积，长 ReAct
+// 会话远超 flat 400。原先单一常数系统性低估、压缩触发偏晚、更易撞 context_length_exceeded 白烧一次失败
+// 往返。取值偏保守（略高估信封使压缩略早触发，优于撞墙往返）。
+const (
+	envelopePerMsgTokens      = 4
+	envelopePerToolCallTokens = 20
+)
+
 // perToolSchemaTokens 粗估单个工具的 schema（name+description+parameters JSON）入请求的 token 数。
 const perToolSchemaTokens = 60
 
@@ -226,6 +249,12 @@ const contextKeepRecent = 4
 // contextKeepReasoning 是主动 reasoning 清理默认保留的最近 assistant 消息条数（P1）。
 // 1 = 仅保留最近一条 assistant 的思考链（当前推理上下文），更早的清空。
 const contextKeepReasoning = 1
+
+// contextKeepReasoningChars 是保留窗口内单条 Reasoning 的字符上限（P7，rune）。超过则做头尾分段
+// （复用 truncateHeadTail 的头 1/4 + 尾 3/4），把思考模型超长 reasoning 的中段发散压掉、两端保留。
+// 4000 rune ≈ 2000 token：仅 >4000 的超长思考链才截，绝大多数短 reasoning 零影响。0=未配置回落本默认；
+// config run.context_keep_reasoning_chars 设负数关闭、正数自定义阈值。
+const contextKeepReasoningChars = 4000
 
 // contextKeepToolArgs 是主动 tool_call args 压缩默认保留的最近 assistant 条数（P4）。
 // write/edit 的 content/old/new_string 写成功后已落盘或被替换，非最近 N 条 assistant 的这类大 args

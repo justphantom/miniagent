@@ -82,6 +82,9 @@ type RunConfig struct {
 	ContextKeepReasoning *int `json:"context_keep_reasoning,omitempty"`
 	// ContextKeepToolArgs 是主动 tool_call args 压缩保留的最近 assistant 条数（P4）；<=0/缺省=内置默认 2。
 	ContextKeepToolArgs *int `json:"context_keep_tool_args,omitempty"`
+	// ContextKeepReasoningChars 是保留窗口内单条 Reasoning 字符上限（P7）；缺省=内置默认 4000，超过则头尾
+	// 分段；负数=关闭，正数=自定义阈值。
+	ContextKeepReasoningChars *int `json:"context_keep_reasoning_chars,omitempty"`
 }
 
 // CompactionConfig 配置长会话摘要压缩模型。

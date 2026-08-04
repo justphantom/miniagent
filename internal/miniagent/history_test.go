@@ -85,6 +85,57 @@ func TestStripStaleReasoning(t *testing.T) {
 	}
 }
 
+// truncateKeptReasoning（P7）：对保留窗口内（最近 keepN 条 assistant）的超长 Reasoning 做头尾分段，
+// 压中段发散、留两端（头 threshold/4 + 尾 3*threshold/4 + 标记）；短 reasoning 不动；threshold<=0 关闭；
+// 保留窗口外的不动（清空非保留是 P1 的职责）；无超长项零拷贝原样返回；不改调用方输入。
+func TestTruncateKeptReasoning(t *testing.T) {
+	threshold := 100
+	long := strings.Repeat("x", threshold+200) // 超 threshold
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "a1", Reasoning: long}, // 保留窗口外（keepN=1）
+		{Role: "assistant", Content: "a2", Reasoning: long}, // 最近 1 条 → 保留并截断
+	}
+
+	// keepN=1：仅最近一条 assistant 的超长 reasoning 被截断；更早的（窗口外）不动。
+	out := truncateKeptReasoning(msgs, 1, threshold)
+	if len(out[2].Reasoning) >= len(long) {
+		t.Errorf("最近超长 reasoning 应被截断: len=%d", len(out[2].Reasoning))
+	}
+	if !strings.Contains(out[2].Reasoning, "推理中段已省略") {
+		t.Errorf("截断应含中段省略标记: %q", out[2].Reasoning)
+	}
+	// 截断后体积约等于 threshold（头 1/4 + 尾 3/4 + marker）。
+	if len([]rune(out[2].Reasoning)) > threshold+50 {
+		t.Errorf("截断后应约等于 threshold: got %d runes", len([]rune(out[2].Reasoning)))
+	}
+	// 窗口外（a1）的 reasoning 原样——truncateKeptReasoning 只管保留窗口内。
+	if out[1].Reasoning != long {
+		t.Errorf("窗口外 reasoning 不应被动: len=%d", len(out[1].Reasoning))
+	}
+	// 调用方输入未被修改。
+	if msgs[2].Reasoning != long {
+		t.Errorf("caller reasoning mutated")
+	}
+
+	// 短 reasoning（< threshold）不动 → 原样返回（零拷贝）。
+	short := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "a", Reasoning: strings.Repeat("y", threshold-1)},
+	}
+	if got := truncateKeptReasoning(short, 1, threshold); &got[0] != &short[0] {
+		t.Errorf("无超长项应原样返回同一 slice")
+	}
+
+	// threshold<=0 / <0 → 关闭，原样返回。
+	if got := truncateKeptReasoning(msgs, 1, 0); &got[0] != &msgs[0] {
+		t.Errorf("threshold=0 应原样返回")
+	}
+	if got := truncateKeptReasoning(msgs, 1, -1); &got[0] != &msgs[0] {
+		t.Errorf("threshold<0 应原样返回（关闭）")
+	}
+}
+
 // stripStaleToolArgs（P4）：压缩非最近 N 条 assistant 的 write/edit 大 Args（content/old_string/
 // new_string）为前缀占位；保留最近 N 条原文；不碰配对/正文/ID；小 args 与非 write/edit 工具不动；
 // 无可压缩项原样返回（零拷贝）；不改调用方输入。
@@ -198,17 +249,17 @@ func TestCompressToolArgs(t *testing.T) {
 }
 
 func TestEstimateTokens(t *testing.T) {
-	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时仅加 systemOverheadTokens 固定开销。
-	if n := estimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+systemOverheadTokens {
-		t.Errorf("ascii 8 chars = %d, want %d", n, 2+systemOverheadTokens)
+	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时 = 内容 + systemOverhead + 每条消息信封。
+	if n := estimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+systemOverheadTokens+envelopePerMsgTokens {
+		t.Errorf("ascii 8 chars = %d, want %d", n, 2+systemOverheadTokens+envelopePerMsgTokens)
 	}
 	// 纯中文：2 字符 ≈ 1 token
-	if n := estimateTokens([]Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+systemOverheadTokens {
-		t.Errorf("cjk 4 chars = %d, want %d", n, 2+systemOverheadTokens)
+	if n := estimateTokens([]Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+systemOverheadTokens+envelopePerMsgTokens {
+		t.Errorf("cjk 4 chars = %d, want %d", n, 2+systemOverheadTokens+envelopePerMsgTokens)
 	}
-	// tool_calls.Args 计入估算
-	if n := estimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+systemOverheadTokens {
-		t.Errorf("args 4 chars = %d, want %d", n, 1+systemOverheadTokens)
+	// tool_calls.Args 计入估算；每个 tool_call 额外计信封（嵌套 function 对象）。
+	if n := estimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+systemOverheadTokens+envelopePerMsgTokens+envelopePerToolCallTokens {
+		t.Errorf("args 4 chars = %d, want %d", n, 1+systemOverheadTokens+envelopePerMsgTokens+envelopePerToolCallTokens)
 	}
 }
 

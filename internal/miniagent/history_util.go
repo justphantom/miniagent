@@ -8,9 +8,15 @@ import (
 )
 
 // estimateTokens 估算一次请求的 token 数，仅用于历史裁剪决策。启发式：CJK ≈ 1 token/2 字符，
-// 其他 ≈ 1 token/4 字符。除 msgs 内容外，计入 system prompt 文本 + 固定请求开销（信封 + 工具 schema）。
+// 其他 ≈ 1 token/4 字符。除 msgs 内容外，计入 system prompt 文本 + 请求信封 + 工具 schema。
+//
+// 信封对齐：固定开销除 systemOverheadTokens（base）外，再按消息数与 tool_call 数线性增长——
+// 每条 message 的 role/字段名/标点、每个 tool_call 嵌套的 function 对象（id/type/function{name,
+// arguments}）随会话长度累积，长 ReAct 会话远超 flat 400，原先单一常数系统性低估、压缩触发偏晚、
+// 更易撞 context_length_exceeded 白烧一次失败往返。
 func estimateTokens(msgs []Message, system string, tools []Tool) int {
 	var nonCJK, cjk int
+	var toolCalls int
 	add := func(s string) {
 		for _, r := range s {
 			if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
@@ -24,12 +30,15 @@ func estimateTokens(msgs []Message, system string, tools []Tool) int {
 	for _, m := range msgs {
 		add(m.Content)
 		add(m.Reasoning)
+		toolCalls += len(m.ToolCalls)
 		for _, tc := range m.ToolCalls {
 			add(tc.Args)
 		}
 	}
 	add(system)
-	return nonCJK/4 + cjk/2 + systemOverheadTokens + schemaTokens(tools)
+	return nonCJK/4 + cjk/2 + systemOverheadTokens +
+		envelopePerMsgTokens*len(msgs) + envelopePerToolCallTokens*toolCalls +
+		schemaTokens(tools)
 }
 
 // schemaTokens 按 tools 实际 JSON schema 体积估算固定 token 开销，替代早期的 flat
@@ -220,6 +229,56 @@ func stripStaleReasoning(msgs []Message, keepN int) []Message {
 			continue
 		}
 		out[i].Reasoning = ""
+	}
+	return out
+}
+
+// truncateKeptReasoning（P7）对保留窗口内（最近 keepN 条 assistant）的超长 Reasoning 做头尾分段截断。
+// 与 stripStaleReasoning 互补：后者清空「非保留」条（减条数），本函数裁「保留」条的单条体积——
+// 思考模型单条 Reasoning 常达数千~数万 token，是单条最大的上下文项；stripStaleReasoning 的「全有/全无」
+// 逻辑使保留的那条仍逐字全量回灌（wire.go 的 reasoning_content 字段），P1–P4 完全没减这部分体积。
+//
+// 仅当 Reasoning 超 threshold（rune）才截：复用 truncateHeadTail 的头 1/4 + 尾 3/4 比例——两端高价值
+// （开头建立问题框架、收尾收敛到结论/动作），中段多为发散探索/试错/自我纠正，参考价值最低。threshold<=0
+// 视作关闭原样返回；未超阈值、或保留窗口内无超长项时零拷贝原样返回。仅改 context 侧拷贝——Reasoning 是
+// string（不可变），改 out[i].Reasoning 不污染调用方输入/newMsgs/session；不动正文/tool_calls/配对。
+func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
+	if threshold <= 0 || keepN <= 0 {
+		return msgs
+	}
+	// 预扫：从后往前遍历保留窗口（最近 keepN 条 assistant），检查是否有超长 Reasoning。
+	kept := 0
+	hasOversized := false
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != roleAssistant {
+			continue
+		}
+		if kept >= keepN {
+			break
+		}
+		kept++
+		if len([]rune(msgs[i].Reasoning)) > threshold {
+			hasOversized = true
+			break
+		}
+	}
+	if !hasOversized {
+		return msgs
+	}
+	out := make([]Message, len(msgs))
+	copy(out, msgs)
+	kept = 0
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Role != roleAssistant {
+			continue
+		}
+		if kept >= keepN {
+			break
+		}
+		kept++
+		if len([]rune(out[i].Reasoning)) > threshold {
+			out[i].Reasoning = truncateHeadTail(out[i].Reasoning, threshold, "…[推理中段已省略]")
+		}
 	}
 	return out
 }
