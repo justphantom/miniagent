@@ -154,3 +154,77 @@ func TestDedupShellCommands(t *testing.T) {
 		t.Errorf("全在窗口内应原样返回")
 	}
 }
+
+// foldStaleReadResults（P11）：同 path 更晚成功 write/edit 触发折叠更早 read 结果；
+// 更晚失败不触发；不同 path 不触发；write 同样触发；保留窗口内不动；无 read/无写入零拷贝；不改调用方输入。
+func TestFoldStaleReadResults(t *testing.T) {
+	// read(a) → edit(a) 成功：旧 read 结果折叠。
+	msgs := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
+		{Role: "tool", ToolCallID: "r1", Content: "old content of a.go"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "e1", Name: "edit", Args: `{"path":"a.go","old_string":"x","new_string":"y"}`}}},
+		{Role: "tool", ToolCallID: "e1", Content: "ok", IsError: false},
+	}
+	out := foldStaleReadResults(msgs, 1) // 保留最近 1 条 assistant（idx2）
+	if out[1].Content == "old content of a.go" {
+		t.Errorf("edit 成功后旧 read 结果应折叠，got %q", out[1].Content)
+	}
+	if !strings.Contains(out[1].Content, "已被后续编辑取代") || !strings.Contains(out[1].Content, "a.go") {
+		t.Errorf("折叠占位应含 path 与取代说明，got %q", out[1].Content)
+	}
+	if msgs[1].Content != "old content of a.go" {
+		t.Errorf("调用方输入被修改")
+	}
+
+	// edit 失败：不折叠（文件未改，旧 read 仍有效）。
+	failEdit := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
+		{Role: "tool", ToolCallID: "r1", Content: "content"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "e1", Name: "edit", Args: `{"path":"a.go","old_string":"x","new_string":"y"}`}}},
+		{Role: "tool", ToolCallID: "e1", Content: "err", IsError: true},
+	}
+	if got := foldStaleReadResults(failEdit, 1); got[1].Content != "content" {
+		t.Errorf("edit 失败时旧 read 不应折叠，got %q", got[1].Content)
+	}
+
+	// 不同 path：不折叠。
+	diffPath := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
+		{Role: "tool", ToolCallID: "r1", Content: "a"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "e1", Name: "edit", Args: `{"path":"b.go","old_string":"x","new_string":"y"}`}}},
+		{Role: "tool", ToolCallID: "e1", Content: "ok"},
+	}
+	if got := foldStaleReadResults(diffPath, 1); got[1].Content != "a" {
+		t.Errorf("不同 path 的 edit 不应触发 read 折叠，got %q", got[1].Content)
+	}
+
+	// write 成功同样触发（整文件覆盖，旧 read 必 stale）。
+	writeMsgs := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
+		{Role: "tool", ToolCallID: "r1", Content: "old"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"new"}`}}},
+		{Role: "tool", ToolCallID: "w1", Content: "ok"},
+	}
+	if out2 := foldStaleReadResults(writeMsgs, 1); !strings.Contains(out2[1].Content, "已被后续编辑取代") {
+		t.Errorf("write 成功后旧 read 也应折叠，got %q", out2[1].Content)
+	}
+
+	// 保留窗口内的 read 不动（keepN 覆盖 read 所在 assistant）。
+	if got := foldStaleReadResults(msgs, 2); got[1].Content != "old content of a.go" {
+		t.Errorf("保留窗口内的 read 不应折叠，got %q", got[1].Content)
+	}
+
+	// 无 read → 零拷贝。
+	noRead := []Message{{Role: "assistant", ToolCalls: []ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"x"}`}}}}
+	if got := foldStaleReadResults(noRead, 1); &got[0] != &noRead[0] {
+		t.Errorf("无 read 会话应原样返回")
+	}
+	// 无 write/edit → 零拷贝。
+	noWrite := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
+		{Role: "tool", ToolCallID: "r1", Content: "x"},
+	}
+	if got := foldStaleReadResults(noWrite, 1); &got[0] != &noWrite[0] {
+		t.Errorf("无 write/edit 会话应原样返回")
+	}
+}

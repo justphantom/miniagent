@@ -584,19 +584,49 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 	return out
 }
 
-// foldStaleWriteEditArgs（P8'）对保留窗口外的 write/edit tool_call，若同 path 上存在更晚的
-// 成功 write/edit，把其 args 折叠为「path + 占位」。依赖 tool 消息 IsError 判定成功——失败
-// 写入不改文件，前置 write/edit 正文仍有效，不能折叠（v5 §2 P8' 与 P4 的关键区别）。
-// 与 P4（compressToolArgs 压成前缀）互补：P4 减单条体积，P8' 在「被后续同 path 写入取代」时
-// 整条折叠。无可折叠项零拷贝；深拷贝被改 assistant 的 ToolCalls slice，不污染持久化层。
-func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
+// successWriteEditPaths 扫描 msgs，返回 path → 成功 write/edit 的 assistant msgIdx 升序列表。
+// 成功 = 对应 tool 消息 IsError=false（失败写入不改文件，不计入）。供 P8'/P11 判定
+// 「同 path 是否存在更晚的成功写入」——P8' 据此折叠更早的 write/edit args，P11 折叠更早的 read 结果。
+func successWriteEditPaths(msgs []Message) map[string][]int {
 	isErrOf := map[string]bool{}
 	for _, m := range msgs {
 		if m.Role == roleTool && m.ToolCallID != "" {
 			isErrOf[m.ToolCallID] = m.IsError
 		}
 	}
-	type we struct{ msgIdx, tcIdx int; callID, path string }
+	succ := map[string][]int{}
+	for i, m := range msgs {
+		if m.Role != roleAssistant {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.Name != "write" && tc.Name != "edit" {
+				continue
+			}
+			if isErrOf[tc.ID] { // 失败写入不改文件，不计入「成功写入」
+				continue
+			}
+			p, ok := argPath(tc.Args)
+			if !ok {
+				continue
+			}
+			succ[normalizePath(p)] = append(succ[normalizePath(p)], i)
+		}
+	}
+	return succ
+}
+
+// foldStaleWriteEditArgs（P8'）对保留窗口外的 write/edit tool_call，若同 path 上存在更晚的
+// 成功 write/edit，把其 args 折叠为「path + 占位」。成功判定经 successWriteEditPaths（依赖
+// tool 消息 IsError）——失败写入不改文件，前置 write/edit 正文仍有效，不能折叠（v5 §2 P8' 与
+// P4 的关键区别）。与 P4（compressToolArgs 压成前缀）互补：P4 减单条体积，P8' 在「被后续同 path
+// 写入取代」时整条折叠。无可折叠项零拷贝；深拷贝被改 assistant 的 ToolCalls slice。
+func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
+	succ := successWriteEditPaths(msgs)
+	if len(succ) == 0 {
+		return msgs
+	}
+	type we struct{ msgIdx, tcIdx int; path string }
 	var list []we
 	for i, m := range msgs {
 		if m.Role != roleAssistant {
@@ -610,28 +640,21 @@ func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
 			if !ok {
 				continue
 			}
-			list = append(list, we{i, j, tc.ID, normalizePath(p)})
+			list = append(list, we{i, j, normalizePath(p)})
 		}
 	}
 	if len(list) < 2 {
 		return msgs
 	}
 	windowStart := windowStartOf(msgs, keepN)
-	// 按 path 收集成功 write/edit 的 list index（升序）。
-	successAt := map[string][]int{}
-	for k, e := range list {
-		if !isErrOf[e.callID] {
-			successAt[e.path] = append(successAt[e.path], k)
-		}
-	}
 	type foldKey struct{ msgIdx, tcIdx int }
 	toFold := map[foldKey]string{}
-	for k, e := range list {
+	for _, e := range list {
 		if e.msgIdx >= windowStart {
 			continue
 		}
-		for _, sk := range successAt[e.path] {
-			if sk > k { // 同 path 更晚的成功写入存在 → 本条 args 折叠
+		for _, wIdx := range succ[e.path] {
+			if wIdx > e.msgIdx { // 同 path 更晚的成功写入存在 → 本条 args 折叠
 				toFold[foldKey{e.msgIdx, e.tcIdx}] = e.path
 				break
 			}
@@ -754,6 +777,62 @@ func dedupShellCommands(msgs []Message, keepN int) []Message {
 			}
 		}
 		out[i].ToolCalls = calls
+	}
+	return out
+}
+
+// foldStaleReadResults（P11）对保留窗口外的 read 结果，若同 path 上存在更晚的成功 write/edit，
+// 把其 Content 折叠为占位。edit/write 成功后文件已变，更早的 read 读到的是旧版本（stale，可能
+// 误导）；P6 需「再次 read 同 (path,offset)」才清前置 read（P6b），P8' 只清 write/edit args——
+// 二者都漏「edit 后未再 read」的旧 read（v6 §4 实测：占 payload 36%）。P11 与 P8' 对称补全：同
+// path 更晚成功写入触发，按 path 不限 offset（edit 可影响任意行，同 path 所有 offset 的旧 read 均
+// 过期）。成功判定经 successWriteEditPaths（IsError）。无可压项零拷贝；仅改 tool 消息 Content 拷贝。
+func foldStaleReadResults(msgs []Message, keepN int) []Message {
+	readPathOf := map[string]string{}
+	for _, m := range msgs {
+		if m.Role != roleAssistant {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.Name != "read" {
+				continue
+			}
+			if p, ok := argPath(tc.Args); ok {
+				readPathOf[tc.ID] = normalizePath(p)
+			}
+		}
+	}
+	if len(readPathOf) == 0 {
+		return msgs
+	}
+	succ := successWriteEditPaths(msgs)
+	if len(succ) == 0 {
+		return msgs
+	}
+	windowStart := windowStartOf(msgs, keepN)
+	toFold := map[int]string{}
+	for i, m := range msgs {
+		if m.Role != roleTool || i >= windowStart {
+			continue
+		}
+		rp, ok := readPathOf[m.ToolCallID]
+		if !ok {
+			continue
+		}
+		for _, wIdx := range succ[rp] {
+			if wIdx > i { // 同 path 更晚的成功写入存在 → 旧 read 结果折叠
+				toFold[i] = "…[此前的 read(" + rp + ") 结果已被后续编辑取代]"
+				break
+			}
+		}
+	}
+	if len(toFold) == 0 {
+		return msgs
+	}
+	out := make([]Message, len(msgs))
+	copy(out, msgs)
+	for i, marker := range toFold {
+		out[i].Content = marker
 	}
 	return out
 }
