@@ -86,7 +86,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 				// 配对补全：下游不可写，剩余 calls（含当前 i）结果无法提交；但 assistant.tool_calls 已入历史，
 				// 须为每个补一条占位 tool 消息，否则 Messages 配对断裂、续跑被端点 400（P2-1）。
 				for j := i; j < len(calls); j++ {
-					appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误"})
+					appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
 				}
 				return msgs, err
 			}
@@ -102,7 +102,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 		if limit <= 0 {
 			limit = cfg.MaxToolResultChars
 		}
-		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit, split)})
+		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit, split), IsError: tres.IsError})
 	}
 	return msgs, nil
 }

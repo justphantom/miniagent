@@ -19,6 +19,11 @@ type Message struct {
 	Reasoning  string     `json:"reasoning,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// IsError 标记 tool 消息对应工具执行是否失败（ToolResult.IsError）。仅 tool 角色有意义；
+	// wire 的 chatMessage 不含此字段（buildChatBody 不输出，不泄漏给 LLM），仅 session 持久化
+	// 与历史裁剪（P8' 成功判定：同 path 更晚的成功 write/edit 才折叠更早的 args）用。
+	// omitempty 向后兼容旧 session（缺失=零值 false=视为成功）。
+	IsError bool `json:"is_error,omitempty"`
 	// Kind 是 session 层标记（如 KindSummary），仅持久化与上下文屏障识别用；
 	// wire 的 chatMessage 不含此字段——buildChatBody 独立构造，绝不泄漏给 LLM。
 	Kind string `json:"kind,omitempty"`
