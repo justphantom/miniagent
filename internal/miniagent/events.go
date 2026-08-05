@@ -56,6 +56,16 @@ func EmitError(w io.Writer, msg string) error {
 	return json.NewEncoder(w).Encode(errorEvent{Type: "error", Message: msg})
 }
 
+// EmitSession 写一条 session 事件（NDJSON 流首条，type=session）。-save-session 新建会话时
+// 在 Run 之前 emit，结构同 session jsonl 首行 metadata（id/model/workdir/provider/created），
+// 供消费方从 stdout 第一行程序化捕获会话元数据接续下轮（替代 stderr 文本 grep）。
+func EmitSession(w io.Writer, meta SessionMeta) error {
+	if meta.Type == "" {
+		meta.Type = sessionTypeSession
+	}
+	return json.NewEncoder(w).Encode(meta)
+}
+
 // maxToolResultEventChars 是 tool_result 事件里 output 的字符上限：事件给消费方看
 // 概要，完整结果仍经 trimForHistory 入历史回灌 LLM。与历史裁剪上限解耦。
 const maxToolResultEventChars = 2000

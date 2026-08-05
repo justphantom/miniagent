@@ -107,6 +107,10 @@ func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
 		fmt.Fprintln(os.Stderr, "miniagent: -save-session 与 -session 互斥")
 		os.Exit(1)
 	}
+	if *f.saveSession && *f.resultOnly {
+		fmt.Fprintln(os.Stderr, "miniagent: -save-session 与 -result-only 互斥（subagent fork 无状态，不落盘会话）")
+		os.Exit(1)
+	}
 	if resolved.Mode == miniagent.ModeDefault && effectiveWorkdir(resolved, f) == "" {
 		fmt.Fprintln(os.Stderr, "miniagent: default 模式需 -workdir（或 config run.workdir，或用 -mode auto）")
 		os.Exit(1)

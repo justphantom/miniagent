@@ -124,6 +124,14 @@ func main() {
 	workdir := effectiveWorkdir(resolved, f)
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
 	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, workdir)
+	if *f.saveSession {
+		// 新建会话：session 元数据作为 stdout NDJSON 首条事件（与 jsonl 首行同构），供消费方程序化捕获接续 id。
+		// 互斥保证 -result-only 下不会触发，不污染 subagent 的纯文本 stdout。
+		if err := miniagent.EmitSession(os.Stdout, meta); err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: emit session: %v\n", err)
+			os.Exit(1)
+		}
+	}
 	// memory_recent_n 必须在 loadProjectRules（内部 FormatMemorySnippet 已格式化注入片段）
 	// 之前生效，否则 run.memory_recent_n 对当前进程的注入无效（启动快照已用旧 N）。
 	miniagent.SetMemoryRecentN(into(resolved.Run.MemoryRecentN, 0))

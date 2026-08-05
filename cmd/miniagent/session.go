@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
@@ -15,7 +16,7 @@ import (
 const defaultSessionDir = ".miniagent/sessions"
 
 // resolveSessionForRun 按三态裁决会话（互斥由 validateConversation 保证不会同时真）：
-//   - saveNew=true：新建会话，generateSessionID 生成 id 并 stderr 打印，构造 meta，history=nil。
+//   - saveNew=true：新建会话，generateSessionID 生成 id，构造 meta（id 的 stdout NDJSON 输出由 main 的 EmitSession 负责），history=nil。
 //   - sessionArg!=""：接续，校验 id 后 LoadSession；文件不存在（meta.Type==""）报错防 typo 建垃圾会话。
 //   - 两者皆空：无状态，返回空 path（main 据此跳过落盘）。
 func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, workdir string) (string, miniagent.SessionMeta, []miniagent.Message) {
@@ -25,7 +26,6 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, workd
 	id := sessionArg
 	if saveNew {
 		id = generateSessionID()
-		fmt.Fprintf(os.Stderr, "miniagent: session id: %s\n", id)
 	}
 	sessPath, err := miniagent.ResolveSessionPath(id, sessionDir)
 	if err != nil {
@@ -58,12 +58,13 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, workd
 }
 
 // generateSessionID 生成新会话 id：时间戳 + 随机 hex，仅含拉丁字母/数字/-（满足 ValidateSessionID）。
-// crypto/rand 失败极罕见，回落纯时间戳（仍合法）。
+// 随机段 8 字节（64 bit）：同秒并发新建的碰撞阈值抬到 2^32 量级，覆盖 CI 矩阵/批量 fork 场景。
+// crypto/rand 失败极罕见，回落时间戳+pid（仍合法；pid 区分同秒不同进程，避免裸时间戳必碰撞）。
 func generateSessionID() string {
 	ts := time.Now().Format("20060102-150405")
-	var b [4]byte
+	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return ts
+		return ts + "-" + strconv.Itoa(os.Getpid())
 	}
 	return ts + "-" + hex.EncodeToString(b[:])
 }

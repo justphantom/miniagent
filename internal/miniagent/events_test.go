@@ -75,6 +75,32 @@ func TestEmitError(t *testing.T) {
 	}
 }
 
+// Type 空时补 "session"，且全字段（id/model/workdir/provider/created）输出——与 jsonl 首行 metadata 同构。
+func TestEmitSession(t *testing.T) {
+	var buf bytes.Buffer
+	meta := SessionMeta{
+		ID:       "20240105-120000-aabbccddeeff0011",
+		Model:    "openai/gpt-4o",
+		Workdir:  "/repo",
+		Provider: "openai",
+		Created:  "2024-01-05T12:00:00Z",
+	}
+	if err := EmitSession(&buf, meta); err != nil {
+		t.Fatalf("EmitSession: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev["type"] != "session" {
+		t.Errorf("type = %v, want session (Type 空时应补全)", ev["type"])
+	}
+	if ev["id"] != meta.ID || ev["model"] != meta.Model || ev["workdir"] != meta.Workdir ||
+		ev["provider"] != meta.Provider || ev["created"] != meta.Created {
+		t.Errorf("event = %+v", ev)
+	}
+}
+
 func TestEmitToolResult_ShellExitCode(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EmitToolResult(&buf, "shell", "c1", ToolResult{Output: "out", ExitCode: 7}); err != nil {
