@@ -89,19 +89,8 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 	}
 	// keepReasoningChars < 0 → truncateKeptReasoning 内部 threshold<=0 原样返回（关闭）。
 	if budget.ContextWindow <= 0 || estimateTokens(msgs, budget.System, budget.Tools) <= budget.ContextWindow*4/5 {
-		// P1/P4/P6/P7/P8'/P9b/P11：reasoning 与 tool_call args 的主动清理 + 保留窗口内超长 reasoning 体积裁剪 +
-		// 跨消息去重/折叠，均为默认策略，即使未超窗/窗口未知也执行——旧 Reasoning 是思考模型下隐性 token 大户
-		// （P1 清条、P7 裁保留条体积）；write/edit 大 args 写成功后纯占位重发（P4 压前缀、P8' 被后续同 path 成功
-		// 写入取代时整条折叠）；重复 read 结果（P6 按 path+offset 保留最后一次）、同义 shell command（P9b）压占位；
-		// edit/write 成功后同 path 的更早 read 结果（P11）折叠。均与 tool 配对无关，清/压/去重不丢可见事实（正文/
-		// tool_calls ID 不动）。无可处理项时各自原样返回，零开销。
-		out := stripStaleReasoning(msgs, keepReasoning)
-		out = truncateKeptReasoning(out, keepReasoning, keepReasoningChars)
-		out = stripStaleToolArgs(out, keepToolArgs)
-		out = dedupReadResults(out, keepToolArgs)
-		out = foldStaleReadResults(out, keepToolArgs)
-		out = foldStaleWriteEditArgs(out, keepToolArgs)
-		out = dedupShellCommands(out, keepToolArgs)
+		// P1/P4/P6/P7/P8'/P9b/P11 主动裁剪（各阶段语义见 applyContextStrips；Debug level 记录节省 token）。
+		out := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
 		return out, Message{}, false, Usage{}, nil
 	}
 	keepRecent := budget.KeepRecent
@@ -121,19 +110,9 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 	if !summarized {
 		out = compactHistory(msgs, keepRecent)
 	}
-	// P1/P4/P6/P7/P8'/P9b/P11：在 fitted 结果上主动清空非最近 N 条 assistant 的 Reasoning（P1）、裁保留窗口内超长
-	// reasoning 体积（P7）、压缩 write/edit 大 args（P4）、read 结果按 path+offset 去重（P6）、被后续同 path 成功
-	// 写入取代的 write/edit args 折叠（P8'）、同义 shell command 去重（P9b）、被后续同 path 成功写入取代的旧 read
-	// 结果折叠（P11）。放在 window 检查前——清理后 token 估计更低，更可能免于触发 trimRecentRounds/终止报错。
-	// 中段（已并入 summary）不经此处；最近 N 条 assistant 的 reasoning 与写入 args 保留，供模型延续当前上下文
-	// （P7 仅压超长中段，两端保留）。
-	out = stripStaleReasoning(out, keepReasoning)
-	out = truncateKeptReasoning(out, keepReasoning, keepReasoningChars)
-	out = stripStaleToolArgs(out, keepToolArgs)
-	out = dedupReadResults(out, keepToolArgs)
-	out = foldStaleReadResults(out, keepToolArgs)
-	out = foldStaleWriteEditArgs(out, keepToolArgs)
-	out = dedupShellCommands(out, keepToolArgs)
+	// P1/P4/P6/P7/P8'/P9b/P11 主动裁剪（语义见 applyContextStrips；放在 window 检查前——清理后 token 估计更低，
+	// 更可能免于触发 trimRecentRounds/终止报错。中段已并入 summary 不经此处）。
+	out = applyContextStrips(ctx, out, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
 	if estimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
@@ -144,6 +123,38 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 		return out, sm, summarized, sumUsage, fmt.Errorf("history 超 context window（约 %d tokens）即使有损裁剪后仍超——终止以避免循环烧请求", estimateTokens(out, budget.System, budget.Tools))
 	}
 	return out, sm, summarized, sumUsage, nil
+}
+
+// applyContextStrips 跑全部主动裁剪（P1/P4/P6/P7/P8'/P9b/P11），仅改 context 侧拷贝，供 FitHistory
+// 未超窗/超窗两分支复用（原两处内联序列一致，抽此避免重复 + 统一可观测）。logger 为 Debug level
+// （CLI -log-level debug）时，记录各阶段节省的 token（estimateTokens 差值）与 fit 前后总量，供 v11 §6
+// 的「确实省了」运行时确认；Info level（默认）不算差值、零开销。各阶段语义见各 strip 函数 doc。
+func applyContextStrips(ctx context.Context, msgs []Message, keepReasoning, keepReasoningChars, keepToolArgs int, logger *slog.Logger, sys string, tools []Tool) []Message {
+	dbg := logger != nil && logger.Enabled(ctx, slog.LevelDebug)
+	strip := func(stage string, fn func([]Message) []Message, in []Message) []Message {
+		if !dbg {
+			return fn(in)
+		}
+		before := estimateTokens(in, sys, tools)
+		o := fn(in)
+		if after := estimateTokens(o, sys, tools); before > after {
+			logger.Debug("context budget: strip saved",
+				"stage", stage, "saved_tokens", before-after, "before_msgs", len(in), "after_msgs", len(o))
+		}
+		return o
+	}
+	out := strip("P1_reasoning", func(m []Message) []Message { return stripStaleReasoning(m, keepReasoning) }, msgs)
+	out = strip("P7_reasoningTrunc", func(m []Message) []Message { return truncateKeptReasoning(m, keepReasoning, keepReasoningChars) }, out)
+	out = strip("P4_toolArgs", func(m []Message) []Message { return stripStaleToolArgs(m, keepToolArgs) }, out)
+	out = strip("P6_dedupRead", func(m []Message) []Message { return dedupReadResults(m, keepToolArgs) }, out)
+	out = strip("P11_foldRead", func(m []Message) []Message { return foldStaleReadResults(m, keepToolArgs) }, out)
+	out = strip("P8p_foldWriteEdit", func(m []Message) []Message { return foldStaleWriteEditArgs(m, keepToolArgs) }, out)
+	out = strip("P9b_dedupShell", func(m []Message) []Message { return dedupShellCommands(m, keepToolArgs) }, out)
+	if dbg {
+		logger.Debug("context budget: fit done",
+			"before_tokens", estimateTokens(msgs, sys, tools), "after_tokens", estimateTokens(out, sys, tools), "msgs", len(out))
+	}
+	return out
 }
 
 // applyCompactionBarrier 定位最新一条 Kind=="summary" 消息，返回它及之后的消息；之前的

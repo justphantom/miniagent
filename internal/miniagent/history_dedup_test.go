@@ -1,7 +1,10 @@
 package miniagent
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -226,5 +229,37 @@ func TestFoldStaleReadResults(t *testing.T) {
 	}
 	if got := foldStaleReadResults(noWrite, 1); &got[0] != &noWrite[0] {
 		t.Errorf("无 write/edit 会话应原样返回")
+	}
+}
+
+// applyContextStrips：Debug level 记录各 strip 阶段节省 token（P11 触发）；Info level 零输出。
+func TestApplyContextStrips_Debug(t *testing.T) {
+	big := strings.Repeat("x", 4000)
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
+		{Role: "tool", ToolCallID: "r1", Content: big},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"` + big + `"}`}}},
+		{Role: "tool", ToolCallID: "w1", Content: "ok"},
+		{Role: "assistant", Content: "done1"},
+		{Role: "assistant", Content: "done2"},
+	}
+	// Debug level：P11 应折叠 read r1（被 write w1 取代，窗口外），日志含 stage + saved_tokens + fit done。
+	var buf bytes.Buffer
+	dbg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	applyContextStrips(context.Background(), msgs, 1, 0, 2, dbg, "", nil)
+	logs := buf.String()
+	if !strings.Contains(logs, "P11_foldRead") || !strings.Contains(logs, "saved_tokens") {
+		t.Errorf("Debug 日志应含 P11_foldRead 与 saved_tokens，got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "fit done") {
+		t.Errorf("Debug 日志应含 fit done 总结")
+	}
+	// Info level：无 strip saved 日志（零开销）。
+	var buf2 bytes.Buffer
+	info := slog.New(slog.NewTextHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	applyContextStrips(context.Background(), msgs, 1, 0, 2, info, "", nil)
+	if strings.Contains(buf2.String(), "strip saved") {
+		t.Errorf("Info level 不应输出 strip saved")
 	}
 }
