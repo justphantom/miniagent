@@ -1,9 +1,8 @@
-// Command miniagent runs an agent turn (or interactive loop) from stdin and
+// Command miniagent runs an agent turn from stdin and
 // emits NDJSON events to stdout.
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -28,7 +27,6 @@ type cliFlags struct {
 	showVer       *bool
 	maxIterations *int
 	stream        *bool
-	interactive   *bool
 	listModels    *bool
 	configPath    *string
 	mode          *string
@@ -50,7 +48,6 @@ func parseFlags() *cliFlags {
 	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
 	f.maxIterations = flag.Int("max-iterations", 0, "单轮 LLM 调用上限（0=默认 20）")
 	f.stream = flag.Bool("stream", false, "流式输出（SSE）；默认非流式")
-	f.interactive = flag.Bool("interactive", false, "交互模式：循环读取 prompt（每行一个）")
 	f.listModels = flag.Bool("list-models", false, "列出端点可用模型 id 后退出")
 	f.showVer = flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -59,7 +56,6 @@ func parseFlags() *cliFlags {
 
 func main() {
 	f := parseFlags()
-
 	if *f.showVer {
 		fmt.Printf("miniagent %s\n", version)
 		os.Exit(0)
@@ -176,7 +172,6 @@ func main() {
 	}
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
-	reader := bufio.NewReader(os.Stdin)
 	hooks := buildHooks(*f.resultOnly)
 	baseCfg := loopCfg(resolved, f, history, tools)
 	baseCfg.CompactionChat = compChat
@@ -201,7 +196,7 @@ func main() {
 		logger:  logger,
 	}
 
-	// runCtx 供单次运行与交互循环：含 -max-duration 超时（若有）；信号处理由各自路径自行注册。
+	// runCtx 含 -max-duration 超时（若有）；信号处理由 main 顶部的 NotifyContext 提供。
 	runCtx := ctx
 	if d := maxDurationOf(resolved); d > 0 {
 		var cancel context.CancelFunc
@@ -209,11 +204,7 @@ func main() {
 		defer cancel()
 	}
 
-	if *f.interactive {
-		os.Exit(runInteractive(runCtx, chat, stream, baseCfg, sessPath, meta, hooks, logger, reader, memExtractor))
-	}
-
-	prompt := mustReadPrompt(reader)
+	prompt := mustReadPrompt(os.Stdin)
 	result, err := miniagent.Run(runCtx, chat, stream, baseCfg, string(prompt), hooks, logger)
 	if err != nil {
 		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。

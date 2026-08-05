@@ -210,37 +210,30 @@ func TestCLI_SingleTurnSessionAppend(t *testing.T) {
 	}
 }
 
-// e2e：交互模式两回合，session 文件累积两轮消息。
-func TestCLI_InteractiveSessionPersists(t *testing.T) {
+// e2e：stdin 全部内容作为一个 turn 的完整 prompt（多行不拆分），一次 LLM 调用返回一个 result。
+func TestCLI_MultiLineStdinSingleTurn(t *testing.T) {
 	var calls int
+	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		content := fmt.Sprintf("ok%d", calls)
-		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, content)
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer srv.Close()
 
-	sessPath := filepath.Join(t.TempDir(), "s.jsonl")
-	args := configArgs(t, srv.URL, "-interactive", "-session", sessPath)
-	code, out := runMainBin(t, "hi\nhello\n", args, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "hi\nhello\n", configArgs(t, srv.URL), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
-	if strings.Count(out, `"type":"result"`) != 2 {
-		t.Errorf("want 2 result events, got: %s", out)
+	if calls != 1 {
+		t.Errorf("server calls = %d, want 1（多行 stdin 应合成一个 turn）", calls)
 	}
-	if calls != 2 {
-		t.Errorf("server calls = %d, want 2", calls)
+	if strings.Count(out, `"type":"result"`) != 1 {
+		t.Errorf("want 1 result event, got: %s", out)
 	}
-	data, err := os.ReadFile(sessPath)
-	if err != nil {
-		t.Fatalf("read session: %v", err)
-	}
-	if strings.Count(string(data), `"role":"user"`) != 2 {
-		t.Errorf("want 2 user messages, got: %s", data)
-	}
-	if strings.Count(string(data), `"role":"assistant"`) != 2 {
-		t.Errorf("want 2 assistant messages, got: %s", data)
+	if !strings.Contains(gotBody, `hi\nhello`) {
+		t.Errorf("prompt 应保留多行原文: %s", gotBody)
 	}
 }
 

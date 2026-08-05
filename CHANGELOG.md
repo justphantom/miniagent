@@ -8,6 +8,9 @@
 ### Added
 - **`codemap` 工具**：递归输出带缩进层级的目录树概览（目录标注子条目数），填补 glob 扁平列举与 read 单文件之间的结构感知缺口。参数 `path`（默认 workdir）+ `depth`（默认 3，<=0 不限）；条目上限 500，排除 `.git` 与符号链接，default 模式经 confineWrap 限定 workdir 子树。
 
+### Breaking
+- **移除 `-interactive` flag**：交互循环（`readTurn` 逐行 turn、跨轮预算/信号管理）与单轮 stdin 读取冗余。多轮对话通过多次调用同一 `-session` 实现；每次调用 stdin 的全部内容（含多行）作为一个 turn 的完整 prompt。
+
 ## [3.5.1] - 2026-08-04
 
 > 沙箱 confineWrap 空 path 直通、memory 抽取兼容 agnes 等要求 user role 的端点。

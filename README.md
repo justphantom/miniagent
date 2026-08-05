@@ -33,7 +33,6 @@ make test       # go test -race ./...
 
 ```
 -config string           配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）
--interactive             交互模式：循环读取 prompt（每行一个）；有 -session 时以文件为唯一真源
 -list-models             列出可用模型后退出，统一输出 provider/model_id（静态 models 不发 GET，否则 GET models-url；-model 可筛选单个 provider）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
@@ -221,7 +220,7 @@ make test       # go test -race ./...
 - 文件损坏（非法 JSON 行、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 4 MiB 上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
 - **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
 - 思考内容（reasoning）：wire 解析响应里的 `reasoning_content` / `reasoning`（双兼容），随 assistant 消息进入上下文并以 `reasoning_content` 回灌；**随 session 落盘**（与 content 同级）。
-- 交互模式（`-interactive`）有 `-session` 时以文件为唯一真源：每轮 LoadSession → Run → AppendNewMessages，不在内存累积。
+- 多轮对话通过多次调用同一 `-session` 实现：每次调用 stdin 的全部内容作为一个 turn 的完整 prompt。
 
 ## 退出码
 
