@@ -15,3 +15,9 @@
 {"type":"note","topic":"工具结果截断策略","content":"trimForHistory 新增 split 参数：shell/grep/script 走头 N/4 + 尾 3N/4 分段截断保留尾部错误结论；read/edit 保持 head-only 符合分段读大文件语义"}
 {"type":"note","topic":"跨消息去重/折叠策略","content":"P6 dedupReadResults：保留窗口外同(path,offset)的read结果按最后一次保留，更早压占位；P8' foldStaleWriteEditArgs：被更晚同path成功写入取代的write/edit args整条折叠；P9b dedupShellCommands：规范化同义shell command去重（按空白拆token、小写、重join）。loop_tools写入tool消息时回填IsError字段（仅session持久化与P8'成功判定用，不泄漏给LLM）。新增history_dedup_test覆盖三函数分支。"}
 {"type":"note","topic":"token估算信封线性化","content":"estimateTokens信封开销改为按消息数(envelopePerMsgTokens)与tool_call数(envelopePerToolCallTokens)线性增长，替代原先单一常数(400)——长ReAct会话中tool_call嵌套function对象随长度累积，原先flat估算系统性低估、压缩触发偏晚、更易撞context_length_exceeded白烧一次失败往返。"}
+{"type":"note","topic":"交互模式","content":"miniagent支持-interactive flag触发runInteractive循环：stdin按行读取，每行非空作为一个turn，空行跳过，EOF退出；单轮失败不中断会话，仅预算/超时/信号/EOF退出"}
+{"type":"note","topic":"工具注册架构","content":"buildTools注册6个内置工具(read/write/edit/grep/glob/shell)+N个脚本工具；支持default(auto约束写入+拒sudo)和auto(无约束)两种模式；fileResultLimit可覆盖read/edit的ResultLimit"}
+{"type":"note","topic":"代码地图功能","content":"用户评估实现简单检索代码地图功能的可行性（进行中，非已实现功能）"}
+{"type":"note","topic":"codemap工具落地","content":"codemap工具已实现并提交(fe17ea3)：CodemapTool(workdir,timeout)输出缩进目录树(目录标注子条目数)，depth默认3/<=0不限，maxCodemapEntries=500提前SkipAll，跳过.git与符号链接，SplitTruncate=true(截断提示在尾部)。工具数6→7，cmd/miniagent/tools_test.go断言同步更新。根路径非目录时返回IsError(显式stat预检，与glob行为一致)。"}
+{"type":"note","topic":"codemap工具注册","content":"codemap工具已注册到buildTools：default模式下与glob/grep一样走confineWrap限定workdir；tools数组从6个扩展到7个(read/write/edit/grep/glob/codemap/shell)"}
+{"type":"note","topic":"codemap测试修复","content":"TestCodemapTool_MissingRootErrors因根路径非目录时未返回IsError而失败，已通过预检stat修复；cmd/miniagent/tools_test.go中TestBuildTools_AlwaysRegisters6/EmptyWorkdirStillRegisters断言从6改为7"}
