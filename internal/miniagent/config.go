@@ -24,7 +24,6 @@ type Config struct {
 	Defaults   DefaultsConfig   `json:"defaults"`
 	Run        RunConfig        `json:"run"`
 	Compaction CompactionConfig `json:"compaction"`
-	Memory     MemoryConfig     `json:"memory"`
 }
 
 type SessionConfig struct {
@@ -80,7 +79,6 @@ type RunConfig struct {
 	MaxSessionBytes        *int `json:"max_session_bytes,omitempty"`
 	SummaryMaxTokens       *int `json:"summary_max_tokens,omitempty"`
 	GrepMaxMatches         *int `json:"grep_max_matches,omitempty"`
-	MemoryRecentN          *int `json:"memory_recent_n,omitempty"`
 	ContextTrimToolChars   *int `json:"context_trim_tool_chars,omitempty"`
 	// ContextKeepReasoning 是主动 reasoning 清理保留的最近 assistant 条数（P1）；<=0/缺省=内置默认 1。
 	ContextKeepReasoning *int `json:"context_keep_reasoning,omitempty"`
@@ -112,17 +110,6 @@ type CompactionConfig struct {
 	// Reserved 是从 ContextWindow 预留的输出/增长缓冲（对标 opencode compaction.reserved）。
 	// <=0/缺省回落 min(compactionBuffer=20000, run.max_tokens)。
 	Reserved *int `json:"reserved,omitempty"`
-}
-
-// MemoryConfig 配置会话结束后的自动记忆抽取。Provider/Model 规则同 CompactionConfig；
-// 与主/compaction 同 provider 时复用其 client。
-// auto_update 缺省（nil）= true；max_per_session 缺省/<=0 = 3。
-type MemoryConfig struct {
-	Provider      string `json:"provider,omitempty"`
-	Model         string `json:"model,omitempty"`
-	AutoUpdate    *bool  `json:"auto_update,omitempty"`
-	MaxPerSession *int   `json:"max_per_session,omitempty"`
-	ExtractPrompt string `json:"extract_prompt,omitempty"`
 }
 
 // CLIOverrides / ResolvedRun / Resolved / Resolve / resolveRun 见 resolve.go。
@@ -266,9 +253,6 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("defaults.thinking: %w", err)
 	}
 	if _, _, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel); err != nil {
-		return err
-	}
-	if _, _, err := resolveOptionalPair(cfg, "memory", cfg.Memory.Provider, cfg.Memory.Model, defProv, defModel); err != nil {
 		return err
 	}
 	return nil

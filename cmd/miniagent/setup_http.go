@@ -149,7 +149,7 @@ func newHTTPTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:       http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		// 曾为 30s：慢端点（如 agnes）常在此砍断请求，致 memory 抽取等长输入场景失败。
+		// 曾为 30s：慢端点（如 agnes）常在此砍断请求，致 compaction 摘要等长输入场景失败。
 		// 放宽到 300s；副作用是任意 provider 的慢请求都会挂更久（与 http.Client.Timeout 共同生效）。
 		ResponseHeaderTimeout: 300 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,

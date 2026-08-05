@@ -93,10 +93,6 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
-	// P5：保留路径 "memory" → 读项目记忆（.miniagent/memory.jsonl），绕过常规文件检查。
-	if a.Path == memoryPathToken {
-		return readMemoryTool(workspaceRoot)
-	}
 	full := resolveToolPath(workspaceRoot, a.Path)
 	// Lstat 而非 Stat：与 edit/openNoFollow 对齐，对最终路径分量是符号链接直接拒
 	// （Stat 会跟随软链读目标，与「拒绝符号链接」描述不符）。中间目录的 symlink

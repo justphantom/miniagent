@@ -191,7 +191,6 @@ func TestResolve_StrategyConstantsLateWired(t *testing.T) {
 	cfg.Run = RunConfig{
 		SummaryMaxTokens:     mk(512),
 		GrepMaxMatches:       mk(500),
-		MemoryRecentN:        mk(7),
 		ContextTrimToolChars: mk(1234),
 	}
 	r, err := Resolve(cfg, CLIOverrides{})
@@ -205,7 +204,6 @@ func TestResolve_StrategyConstantsLateWired(t *testing.T) {
 	}{
 		{"SummaryMaxTokens", r.Run.SummaryMaxTokens, 512},
 		{"GrepMaxMatches", r.Run.GrepMaxMatches, 500},
-		{"MemoryRecentN", r.Run.MemoryRecentN, 7},
 		{"ContextTrimToolChars", r.Run.ContextTrimToolChars, 1234},
 	} {
 		if c.got == nil || *c.got != c.want {

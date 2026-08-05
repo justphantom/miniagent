@@ -24,7 +24,7 @@ type ResolvedRun struct {
 	MaxToolResultChars, MaxFileResultChars, MaxParallelTools, ContextKeepRecent, SummaryMaxChars *int
 	MaxReadFileBytes, MaxShellOutputChars, MaxSessionBytes                                       *int
 	ShellStreamWindowBytes                                                                       *int
-	SummaryMaxTokens, GrepMaxMatches, MemoryRecentN, ContextTrimToolChars                        *int
+	SummaryMaxTokens, GrepMaxMatches, ContextTrimToolChars                                       *int
 	ContextKeepReasoning                                                                         *int
 	ContextKeepToolArgs                                                                          *int
 	ContextKeepReasoningChars                                                                    *int
@@ -41,8 +41,6 @@ type Resolved struct {
 	CompactionModelID  string
 	CompactionAuto     bool
 	CompactionReserved int
-	MemoryProvider     ProviderConfig
-	MemoryModelID      string
 	Thinking           string
 	Mode               string
 	System             string
@@ -50,10 +48,6 @@ type Resolved struct {
 	SummarizerPrompt   string
 	Session            SessionConfig
 	Run                ResolvedRun
-	// 会话结束自动抽取记忆的生效配置（已应用默认值：AutoUpdate 缺省 true，MaxPerSession 缺省 3）。
-	MemoryAutoUpdate    bool
-	MemoryMaxPerSession int
-	MemoryExtractPrompt string
 }
 
 // Resolve 按 cli>config>builtin 裁决产出 Resolved。cfg 必须非 nil（S1 删裸模式后始终有 config）。
@@ -83,7 +77,7 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		r.Provider, r.ModelID = p, *o.Model
 	}
 
-	// compaction / memory：成对可选——同设取自身（可跨 provider），同空整体回落 defaults 对。
+	// compaction：成对可选——同设取自身（可跨 provider），同空整体回落 defaults 对。
 	cp, cm, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel)
 	if err != nil {
 		return nil, err
@@ -94,11 +88,6 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	if cfg.Compaction.Reserved != nil {
 		r.CompactionReserved = *cfg.Compaction.Reserved
 	}
-	mp, mm, err := resolveOptionalPair(cfg, "memory", cfg.Memory.Provider, cfg.Memory.Model, defProv, defModel)
-	if err != nil {
-		return nil, err
-	}
-	r.MemoryProvider, r.MemoryModelID = mp, mm
 
 	switch {
 	case o.Thinking != nil:
@@ -146,16 +135,6 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	}
 	r.Run = run
 
-	// 记忆抽取默认值：auto_update 缺省 true，max_per_session 缺省/<=0 = 3。
-	r.MemoryAutoUpdate = true
-	if cfg.Memory.AutoUpdate != nil {
-		r.MemoryAutoUpdate = *cfg.Memory.AutoUpdate
-	}
-	r.MemoryMaxPerSession = 3
-	if cfg.Memory.MaxPerSession != nil && *cfg.Memory.MaxPerSession > 0 {
-		r.MemoryMaxPerSession = *cfg.Memory.MaxPerSession
-	}
-	r.MemoryExtractPrompt = cfg.Memory.ExtractPrompt
 	return r, nil
 }
 
@@ -176,7 +155,7 @@ func resolveProviderModel(cfg *Config, label, provider, model string) (ProviderC
 	return p, model, nil
 }
 
-// resolveOptionalPair 校验可选模型对（compaction/memory）：provider/model 同空时整体回落
+// resolveOptionalPair 校验可选模型对（compaction）：provider/model 同空时整体回落
 // defaults 对（def/defModel）；同设时 provider 须已声明；只设其一报错（成对规则不允许交叉回落）。
 func resolveOptionalPair(cfg *Config, label, provider, model string, def ProviderConfig, defModel string) (ProviderConfig, string, error) {
 	if provider == "" && model == "" {
@@ -260,7 +239,6 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	// 否则 config 值不入 ResolvedRun、main 的 Set* 收到 0 当作未设置而回落内置默认。
 	r.SummaryMaxTokens = intPtr(func(rc RunConfig) *int { return rc.SummaryMaxTokens })
 	r.GrepMaxMatches = intPtr(func(rc RunConfig) *int { return rc.GrepMaxMatches })
-	r.MemoryRecentN = intPtr(func(rc RunConfig) *int { return rc.MemoryRecentN })
 	r.ContextTrimToolChars = intPtr(func(rc RunConfig) *int { return rc.ContextTrimToolChars })
 	r.ContextKeepReasoning = intPtr(func(rc RunConfig) *int { return rc.ContextKeepReasoning })
 	r.ContextKeepToolArgs = intPtr(func(rc RunConfig) *int { return rc.ContextKeepToolArgs })

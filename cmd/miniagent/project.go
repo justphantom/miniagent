@@ -16,7 +16,7 @@ type scriptDef struct {
 	Description string `json:"description"`
 }
 
-// projectRules 是 loadProjectRules 的返回：persona/rules 文本、scripts 列表、memory 注入片段。
+// projectRules 是 loadProjectRules 的返回：persona/rules 文本与 scripts 列表。
 // *_Set 标记表示对应文件在目录中显式存在（即使内容为空），用于 workdir 覆盖 home 时区分“未提供”与“提供空值”。
 type projectRules struct {
 	persona    string
@@ -25,15 +25,14 @@ type projectRules struct {
 	rulesSet   bool
 	scripts    []scriptDef
 	scriptsSet bool
-	memory     string
 }
 
-// hasAny 报告是否加载到任意项目规则/脚本/记忆（决定是否在 system prompt 末尾告知 LLM）。
+// hasAny 报告是否加载到任意项目规则/脚本（决定是否在 system prompt 末尾告知 LLM）。
 func (p projectRules) hasAny() bool {
-	return p.persona != "" || p.rules != "" || len(p.scripts) > 0 || p.memory != ""
+	return p.persona != "" || p.rules != "" || len(p.scripts) > 0
 }
 
-// loadProjectRules 读 <workdir>/.miniagent/ 和 ~/.miniagent/ 的项目规则与记忆。
+// loadProjectRules 读 <workdir>/.miniagent/ 和 ~/.miniagent/ 的项目规则。
 // 优先级：workdir/.miniagent/ > ~/.miniagent/ > 空。各文件单独覆盖（非合并）。
 // workdir 为空时仅从 home 目录读取。
 func loadProjectRules(workdir string) projectRules {
@@ -44,8 +43,6 @@ func loadProjectRules(workdir string) projectRules {
 	if workdir != "" {
 		pr = mergeProjectRules(loadProjectRulesFromDir(filepath.Join(workdir, ".miniagent")), pr)
 	}
-	// 记忆：FormatMemorySnippet 内部已处理 workdir→home 回退。
-	pr.memory = miniagent.FormatMemorySnippet(workdir)
 	return pr
 }
 
@@ -111,8 +108,8 @@ func readTrimmedFile(path string) string {
 
 // mergeSystemPrompt 按优先级 persona.md > rules.md > defaults.system_prompt 合并 system prompt
 // （persona 存在则取代 base 作身份基线，否则沿用 base=defaults.system_prompt 工作流约束），
-// 追加 rules 段与 memory 片段，并在加载了任意项目规则/脚本时显式告知 LLM（P0）。
-func mergeSystemPrompt(base, persona, rules, memory string, hasAny bool) string {
+// 追加 rules 段，并在加载了任意项目规则/脚本时显式告知 LLM（P0）。
+func mergeSystemPrompt(base, persona, rules string, hasAny bool) string {
 	if persona != "" {
 		base = persona
 	}
@@ -120,11 +117,8 @@ func mergeSystemPrompt(base, persona, rules, memory string, hasAny bool) string 
 	if rules != "" {
 		parts = append(parts, "## 项目规则\n"+rules)
 	}
-	if memory != "" {
-		parts = append(parts, memory)
-	}
 	if hasAny {
-		parts = append(parts, "（已加载 .miniagent/ 项目规则、脚本或记忆）")
+		parts = append(parts, "（已加载 .miniagent/ 项目规则或脚本）")
 	}
 	return strings.Join(parts, "\n\n")
 }

@@ -52,7 +52,7 @@ make test       # go test -race ./...
 
 > 破坏性变更（-list-models 输出）：由纯文本 `provider/model_id` 行改为逐行 NDJSON 事件 `{"type":"model","provider":"...","model":"..."}`（model id 含 `/` 时文本拆分有歧义）；解析该输出的消费方需改为逐行 JSON 解析。部分失败语义不变：成功条目照常输出，退出码 1。
 
-> 破坏性变更（provider/model 拆分）：config 的 `defaults`/`compaction`/`memory` 三处模型设置改为 `provider` + `model` 两个独立字段（删除 `provider/id` 拼接串与旧三级回落链），适用**成对规则**：`defaults.provider`/`defaults.model` 必填；`compaction`/`memory` 成对设置（可跨 provider）或整段留空（整体回落 defaults 对），只设其一报错。CLI 同步拆分：`-model` 改为纯 model id，新增 `-provider`，两者须成对传入（不传则以 config 为准）；`-list-models` 的单 provider 筛选从 `-model` 改为 `-provider`。旧格式 config 加载即报错。
+> 破坏性变更（provider/model 拆分）：config 的 `defaults`/`compaction` 两处模型设置改为 `provider` + `model` 两个独立字段（删除 `provider/id` 拼接串与旧三级回落链），适用**成对规则**：`defaults.provider`/`defaults.model` 必填；`compaction` 成对设置（可跨 provider）或整段留空（整体回落 defaults 对），只设其一报错。CLI 同步拆分：`-model` 改为纯 model id，新增 `-provider`，两者须成对传入（不传则以 config 为准）；`-list-models` 的单 provider 筛选从 `-model` 改为 `-provider`。旧格式 config 加载即报错。
 
 > 破坏性变更（session 重构）：`-session` 改为**仅接续**——纯 id（仅允许字母/数字/-，禁 `/`/`.`/`\`），文件须已存在，不存在则报错退出；新增 `-save-session` 新建会话（id 内部生成，作为 stdout NDJSON 首条 `session` 事件输出）；二者互斥。移除 `-session` 的路径双语义与"文件不存在则新建"行为。subagent fork 改无状态（不再落盘会话、不再注入父 session id）。
 
@@ -291,14 +291,13 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 在 `workdir` 下放 `.miniagent/` 目录，agent 启动时自动发现并把项目专属行为注入——核心引擎本身不感知任何具体项目，只「知道如何发现项目规则」：
 
-项目规则文件（`persona.md`/`rules.md`/`scripts.json`/`memory.jsonl`）采用双层查找：优先从 `workdir/.miniagent/` 读，不存在则回退到 `~/.miniagent/`。优先级：workdir > home > 空。
+项目规则文件（`persona.md`/`rules.md`/`scripts.json`）采用双层查找：优先从 `workdir/.miniagent/` 读，不存在则回退到 `~/.miniagent/`。优先级：workdir > home > 空。
 
 | 文件 | 作用 |
 |------|------|
 | `.miniagent/persona.md` | 角色/语气/回答格式。存在时取代默认 system prompt 作身份基线（优先级 persona > rules > defaults.system_prompt） |
 | `.miniagent/rules.md` | 项目专属约束（编码规范、禁止事项、审查清单），追加到 system prompt 的「## 项目规则」段 |
 | `.miniagent/scripts.json` | `{"scripts":[{"name","command","description"}]}`；每条注册为 `script_<name>` 工具，复用 shell 的安全策略（mode 黑名单/env 剥离/超时/进程组） |
-| `.miniagent/memory.jsonl` | 项目级记忆（结构化记录）。`read`/`write` 工具的保留路径 `path="memory"` 路由到此文件：read 渲染记录、write **追加**一条 `{type:"note",content}`（特殊语义：追加而非覆盖）。最近 10 条记忆注入 system prompt |
 
 任一文件存在即触发 system prompt 末尾追加「（已加载 .miniagent/ 项目规则与脚本）」。该目录通常应加入 `.gitignore` 或按团队约定纳入版本控制。
 
@@ -310,7 +309,6 @@ repo/
     persona.md              # 「你是 repo 的 Go 维护者…」
     rules.md                # 「禁止提交未跑 go test 的改动…」
     scripts.json            # {"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}
-    memory.jsonl            # {"type":"lesson","content":"…"}…
 ```
 
 ### 配置示例（miniagent.json）
@@ -355,14 +353,9 @@ repo/
     "max_shell_output_chars": 100000,
     "max_session_bytes": 10485760,
     "grep_max_matches": 500,
-    "memory_recent_n": 10,
     "context_trim_tool_chars": 1000
   },
   "compaction": {
-    "provider": "openai",
-    "model": "gpt-4o-mini"
-  },
-  "memory": {
     "provider": "openai",
     "model": "gpt-4o-mini"
   }
@@ -375,7 +368,6 @@ repo/
 - `defaults.provider` / `defaults.model`：主会话 provider 名与 model id，**成对必填**（拆分后不再使用 `provider/id` 拼接串）
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
 - `compaction.provider` / `compaction.model`：摘要压缩模型。**成对可选**：同设可跨 provider；整段留空则整体回落 defaults 对；只设其一报错
-- `memory.*`：会话结束自动抽取项目记忆到 `.miniagent/memory.jsonl`。`memory.provider` / `memory.model` 规则同 compaction（成对可选，同空回落 defaults 对），与主会话/compaction 同 provider 时复用 client（按 provider 名去重）。`auto_update` 默认 `true`，仅在有过工具调用的会话触发，best-effort（失败仅告警）；无 workdir 跳过。`max_per_session` 单会话上限条数（默认 3）；`extract_prompt` 可覆盖默认提示词（**v3.5.1 起仅支持 `%d`(条数)/`%s`(已有记忆) 两个占位符；对话内容改为以 user message 传入，旧版第 3 个 `%s` 占位符已移除**）。抽取不计入 token 预算。注意：抽取自 transcript，已剔除含 API key 字面量的记录，但并非安全边界，密钥隔离仍依赖 OS 权限。
 
 ## 完整调用示例
 

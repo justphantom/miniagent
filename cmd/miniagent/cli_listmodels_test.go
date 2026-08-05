@@ -80,7 +80,7 @@ func TestCLI_ListModels_MultiProvider(t *testing.T) {
 	}))
 	defer srv2.Close()
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
-	body := fmt.Sprintf(`{"providers":[{"name":"p1","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"},{"name":"p2","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"}],"defaults":{"provider":"p1","model":"x"},"compaction":{"provider":"p1","model":"x"},"memory":{"provider":"p1","model":"x"}}`, srv1.URL, srv1.URL, srv2.URL, srv2.URL)
+	body := fmt.Sprintf(`{"providers":[{"name":"p1","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"},{"name":"p2","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"}],"defaults":{"provider":"p1","model":"x"},"compaction":{"provider":"p1","model":"x"}}`, srv1.URL, srv1.URL, srv2.URL, srv2.URL)
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestCLI_ListModels_MultiProvider_ProviderFilter(t *testing.T) {
 	}))
 	defer srv2.Close()
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
-	body := fmt.Sprintf(`{"providers":[{"name":"p1","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"},{"name":"p2","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"}],"defaults":{"provider":"p1","model":"x"},"compaction":{"provider":"p1","model":"x"},"memory":{"provider":"p1","model":"x"}}`, srv1.URL, srv1.URL, srv2.URL, srv2.URL)
+	body := fmt.Sprintf(`{"providers":[{"name":"p1","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"},{"name":"p2","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"}],"defaults":{"provider":"p1","model":"x"},"compaction":{"provider":"p1","model":"x"}}`, srv1.URL, srv1.URL, srv2.URL, srv2.URL)
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestCLI_ListModels_MultiProvider_PartialFailure(t *testing.T) {
 	}))
 	defer srv2.Close()
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
-	body := fmt.Sprintf(`{"providers":[{"name":"ok","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"},{"name":"fail","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"}],"defaults":{"provider":"ok","model":"x"},"compaction":{"provider":"ok","model":"x"},"memory":{"provider":"ok","model":"x"}}`, srv1.URL, srv1.URL, srv2.URL, srv2.URL)
+	body := fmt.Sprintf(`{"providers":[{"name":"ok","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"},{"name":"fail","chat_url":"%s/v1/chat/completions","models_url":"%s/v1/models"}],"defaults":{"provider":"ok","model":"x"},"compaction":{"provider":"ok","model":"x"}}`, srv1.URL, srv1.URL, srv2.URL, srv2.URL)
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	defer srv.Close()
 
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
-	cfg := `{"providers":[{"name":"main","chat_url":"` + srv.URL + `/v1/chat/completions","models":["glm"]}],"defaults":{"provider":"main","model":"glm","mode":"auto"},"compaction":{"provider":"main","model":"glm"},"memory":{"provider":"main","model":"glm"}}`
+	cfg := `{"providers":[{"name":"main","chat_url":"` + srv.URL + `/v1/chat/completions","models":["glm"]}],"defaults":{"provider":"main","model":"glm","mode":"auto"},"compaction":{"provider":"main","model":"glm"}}`
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}

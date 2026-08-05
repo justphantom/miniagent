@@ -23,7 +23,7 @@ func validConfigBody() string {
 }`
 }
 
-// mkFullConfig 构造 defaults/compaction/memory 三处模型对齐全（拆分必填后）的 Config 公共固件；
+// mkFullConfig 构造 defaults/compaction 两处模型对齐全（拆分必填后）的 Config 公共固件；
 // providers 缺省时补一个名为 provName 的 provider。
 func mkFullConfig(provName, model string, providers ...ProviderConfig) *Config {
 	if len(providers) == 0 {
@@ -33,7 +33,6 @@ func mkFullConfig(provName, model string, providers ...ProviderConfig) *Config {
 		Providers:  providers,
 		Defaults:   DefaultsConfig{Provider: provName, Model: model},
 		Compaction: CompactionConfig{Provider: provName, Model: model},
-		Memory:     MemoryConfig{Provider: provName, Model: model},
 	}
 }
 
@@ -68,8 +67,7 @@ func TestLoadConfig_CompactionModelCrossProvider(t *testing.T) {
     {"name":"comp","chat_url":"https://comp/v1/chat/completions","models":["glm-flash"]}
   ],
   "defaults":{"provider":"main","model":"glm"},
-  "compaction":{"provider":"comp","model":"glm-flash"},
-  "memory":{"provider":"main","model":"glm"}
+  "compaction":{"provider":"comp","model":"glm-flash"}
 }`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err != nil {
 		t.Errorf("compaction cross-provider pair should succeed: %v", err)
@@ -80,8 +78,7 @@ func TestLoadConfig_CompactionModelUnknownProvider(t *testing.T) {
 	body := `{
   "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]}],
   "defaults":{"provider":"main","model":"glm"},
-  "compaction":{"provider":"unknown","model":"glm-flash"},
-  "memory":{"provider":"main","model":"glm"}
+  "compaction":{"provider":"unknown","model":"glm-flash"}
 }`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
 		t.Error("compaction.provider unknown should error")
@@ -117,7 +114,7 @@ func TestLoadConfig_DefaultsModelUnknownProvider(t *testing.T) {
 	}
 }
 
-// 成对规则：defaults 对必填；compaction/memory 只设一个字段即报错。
+// 成对规则：defaults 对必填；compaction 只设一个字段即报错。
 func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	providers := `"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}]`
 	def := `"defaults":{"provider":"p","model":"m"}`
@@ -125,7 +122,6 @@ func TestLoadConfig_ModelPairRequired(t *testing.T) {
 		"defaults.provider 缺": `{` + providers + `,"defaults":{"model":"m"}}`,
 		"defaults.model 缺":    `{` + providers + `,"defaults":{"provider":"p"}}`,
 		"compaction 仅 model":  `{` + providers + `,` + def + `,"compaction":{"model":"m"}}`,
-		"memory 仅 provider":   `{` + providers + `,` + def + `,"memory":{"provider":"p"}}`,
 	}
 	for name, body := range cases {
 		if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
@@ -134,11 +130,11 @@ func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	}
 }
 
-// compaction/memory 整段留空合法（Resolve 时整体回落 defaults 对）。
+// compaction 整段留空合法（Resolve 时整体回落 defaults 对）。
 func TestLoadConfig_SecondaryOmittedOK(t *testing.T) {
 	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"}}`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err != nil {
-		t.Errorf("omitted compaction/memory should load: %v", err)
+		t.Errorf("omitted compaction should load: %v", err)
 	}
 }
 
@@ -162,7 +158,7 @@ func TestFindProvider_Unknown(t *testing.T) {
 
 // S4：config run.* JSON 标签 round-trip（max_tool_result_chars 等）。
 func TestLoadConfig_StrategyConstants(t *testing.T) {
-	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"},"compaction":{"provider":"p","model":"m"},"memory":{"provider":"p","model":"m"},"run":{"max_tool_result_chars":1234,"max_file_result_chars":9999,"max_parallel_tools":3,"context_keep_recent":8,"summary_max_chars":1500,"context_keep_reasoning":2}}`
+	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"},"compaction":{"provider":"p","model":"m"},"run":{"max_tool_result_chars":1234,"max_file_result_chars":9999,"max_parallel_tools":3,"context_keep_recent":8,"summary_max_chars":1500,"context_keep_reasoning":2}}`
 	cfg, err := LoadConfig(writeTmpConfig(t, body))
 	if err != nil {
 		t.Fatal(err)
@@ -210,40 +206,12 @@ func stripJSONComments(in string) string {
 	return b.String()
 }
 
-func TestLoadConfig_MemoryModelCrossProvider(t *testing.T) {
-	body := `{
-  "providers":[
-    {"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]},
-    {"name":"comp","chat_url":"https://comp/v1/chat/completions","models":["glm-mini"]}
-  ],
-  "defaults":{"provider":"main","model":"glm"},
-  "compaction":{"provider":"main","model":"glm"},
-  "memory":{"provider":"comp","model":"glm-mini"}
-}`
-	if _, err := LoadConfig(writeTmpConfig(t, body)); err != nil {
-		t.Errorf("memory cross-provider pair should succeed: %v", err)
-	}
-}
-
-func TestLoadConfig_MemoryModelUnknownProvider(t *testing.T) {
-	body := `{
-  "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]}],
-  "defaults":{"provider":"main","model":"glm"},
-  "compaction":{"provider":"main","model":"glm"},
-  "memory":{"provider":"unknown","model":"glm-mini"}
-}`
-	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
-		t.Error("memory.provider unknown should error")
-	}
-}
-
 // headers 字段 round-trip：provider 自定义头被正确解析。
 func TestLoadConfig_ProviderHeaders(t *testing.T) {
 	body := `{
   "providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","headers":{"X-Custom":"abc","Authorization":"Bearer override"}}],
   "defaults":{"provider":"p","model":"m"},
-  "compaction":{"provider":"p","model":"m"},
-  "memory":{"provider":"p","model":"m"}
+  "compaction":{"provider":"p","model":"m"}
 }`
 	cfg, err := LoadConfig(writeTmpConfig(t, body))
 	if err != nil {

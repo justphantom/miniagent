@@ -38,7 +38,7 @@ func writeConfigFixture(t *testing.T, srvURL, runJSON string) string {
 	if runJSON != "" {
 		runField = `,"run":` + runJSON
 	}
-	body := `{"providers":[{"name":"p","chat_url":"` + srvURL + `/v1/chat/completions","models_url":"` + srvURL + `/v1/models"}],"defaults":{"provider":"p","model":"m","mode":"auto"},"compaction":{"provider":"p","model":"m"},"memory":{"provider":"p","model":"m"}` + runField + `}`
+	body := `{"providers":[{"name":"p","chat_url":"` + srvURL + `/v1/chat/completions","models_url":"` + srvURL + `/v1/models"}],"defaults":{"provider":"p","model":"m","mode":"auto"},"compaction":{"provider":"p","model":"m"}` + runField + `}`
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

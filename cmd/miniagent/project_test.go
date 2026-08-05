@@ -76,7 +76,6 @@ func TestLoadProjectRules_AllWorkdirSources(t *testing.T) {
 	writeFile(t, filepath.Join(workdir, ".miniagent", "persona.md"), "你是本项目专属 agent。")
 	writeFile(t, filepath.Join(workdir, ".miniagent", "rules.md"), "禁止提交未跑测试的代码。")
 	writeFile(t, filepath.Join(workdir, ".miniagent", "scripts.json"), `{"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}`)
-	writeFile(t, filepath.Join(workdir, ".miniagent", "memory.jsonl"), `{"type":"lesson","topic":"t","content":"记忆A"}`+"\n")
 
 	// 隔离 home，避免真实 ~/.miniagent 干扰。
 	oldHome := os.Getenv("HOME")
@@ -92,9 +91,6 @@ func TestLoadProjectRules_AllWorkdirSources(t *testing.T) {
 	}
 	if len(pr.scripts) != 1 || pr.scripts[0].Name != "test" || pr.scripts[0].Command != "go test ./..." {
 		t.Errorf("scripts = %+v", pr.scripts)
-	}
-	if !strings.Contains(pr.memory, "记忆A") {
-		t.Errorf("memory snippet should contain 记忆A: %q", pr.memory)
 	}
 	if !pr.hasAny() {
 		t.Error("hasAny should be true")
@@ -120,14 +116,14 @@ func TestMergeProjectRules_HomeKeptWhenWorkdirEmpty(t *testing.T) {
 	}
 }
 
-// mergeSystemPrompt：persona 取代 base；rules/memory 追加；hasAny 时告知 LLM。
+// mergeSystemPrompt：persona 取代 base；rules 追加；hasAny 时告知 LLM。
 func TestMergeSystemPrompt_PersonaOverridesBase(t *testing.T) {
-	got := mergeSystemPrompt("default-workflow", "专属人格", "规则A", "记忆B", true)
+	got := mergeSystemPrompt("default-workflow", "专属人格", "规则A", true)
 	if !strings.HasPrefix(got, "专属人格") {
 		t.Errorf("persona should be base: %s", got)
 	}
-	if !strings.Contains(got, "## 项目规则\n规则A") || !strings.Contains(got, "记忆B") {
-		t.Errorf("rules/memory missing: %s", got)
+	if !strings.Contains(got, "## 项目规则\n规则A") {
+		t.Errorf("rules missing: %s", got)
 	}
 	if !strings.Contains(got, "已加载 .miniagent/") {
 		t.Errorf("should note loaded rules: %s", got)
@@ -136,7 +132,7 @@ func TestMergeSystemPrompt_PersonaOverridesBase(t *testing.T) {
 
 // mergeSystemPrompt：无 persona 时沿用 base（工作流约束），仅追加 rules。
 func TestMergeSystemPrompt_KeepsBaseWhenNoPersona(t *testing.T) {
-	got := mergeSystemPrompt("default-workflow", "", "规则A", "", true)
+	got := mergeSystemPrompt("default-workflow", "", "规则A", true)
 	if !strings.HasPrefix(got, "default-workflow") {
 		t.Errorf("base should be kept: %s", got)
 	}

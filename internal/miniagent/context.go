@@ -37,8 +37,8 @@ func getSummaryMaxTokens() int {
 
 // summaryPrefix 是落盘的 KindSummary 消息 Content 的展示层前缀（原硬编码 "[既往对话摘要]\n"）。
 // 注意：识别 KindSummary 必须用 Message.Kind == KindSummary（applyCompactionBarrier context.go:164），
-// 不可用前缀字符串嗅探——memory_extract.go 有空格变体 "[既往对话摘要] "（append 末尾、非落盘路径），
-// 测试 fixture 也不一致。前缀仅展示层，不参与识别。
+// 不可用前缀字符串嗅探——历史上有空格变体 "[既往对话摘要] "（非落盘路径）与测试 fixture 不一致。
+// 前缀仅展示层，不参与识别。
 const summaryPrefix = "[既往对话摘要]\n"
 
 // summaryCreateInstruction 是 CREATE 模式角色指令；%d 由 fmt.Sprintf 注入 maxChars，

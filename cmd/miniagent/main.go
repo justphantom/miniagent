@@ -115,12 +115,9 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	// memory_recent_n 必须在 loadProjectRules（内部 FormatMemorySnippet 已格式化注入片段）
-	// 之前生效，否则 run.memory_recent_n 对当前进程的注入无效（启动快照已用旧 N）。
-	miniagent.SetMemoryRecentN(into(resolved.Run.MemoryRecentN, 0))
-	// P0/P5：发现 .miniagent/ 项目规则与记忆，合并进 system prompt（persona>rules>defaults）。
+	// P0：发现 .miniagent/ 项目规则，合并进 system prompt（persona>rules>defaults）。
 	pr := loadProjectRules(workdir)
-	resolved.System = mergeSystemPrompt(resolved.System, pr.persona, pr.rules, pr.memory, pr.hasAny())
+	resolved.System = mergeSystemPrompt(resolved.System, pr.persona, pr.rules, pr.hasAny())
 	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), resolved.Mode)
 
 	// 应用运行时配置覆盖（优先级：config>builtin）。
@@ -148,21 +145,8 @@ func main() {
 
 	// compaction client：与主 provider 相同则留 nil（loop 回落主 chat），否则新建。
 	var compChat *miniagent.ChatClient
-	compKey := ""
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
-		compChat, compKey = secondaryClient("compaction", resolved.CompactionProvider)
-	}
-
-	// memory client：按 provider 名去重复用——与主或 compaction 相同则复用对应 client，否则新建。
-	var memChat *miniagent.ChatClient
-	memKey := ""
-	switch resolved.MemoryProvider.Name {
-	case resolved.Provider.Name:
-		memChat = chat
-	case resolved.CompactionProvider.Name:
-		memChat = compChat // compaction==main 时本 case 不会命中（已被上一 case 接走）
-	default:
-		memChat, memKey = secondaryClient("memory", resolved.MemoryProvider)
+		compChat, _ = secondaryClient("compaction", resolved.CompactionProvider)
 	}
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
@@ -178,26 +162,6 @@ func main() {
 	}
 	if resolved.Run.ToolOutputRetention != nil {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
-	}
-
-	// 会话结束自动抽取项目记忆：用 memory 专属 client（memChat，按 provider 去重后可能 == chat/compChat）。
-	// 默认 on（resolved.MemoryAutoUpdate）。secrets 收集所有用到的 key 字面量，用于剔除含 key 的记录。
-	secrets := []string{apiKey}
-	if compKey != "" {
-		secrets = append(secrets, compKey)
-	}
-	if memKey != "" {
-		secrets = append(secrets, memKey)
-	}
-	memExtractor := &memoryExtractor{
-		enabled: resolved.MemoryAutoUpdate,
-		workdir: workdir,
-		model:   resolved.MemoryModelID,
-		maxK:    resolved.MemoryMaxPerSession,
-		prompt:  resolved.MemoryExtractPrompt,
-		secrets: secrets,
-		client:  memChat,
-		logger:  logger,
 	}
 
 	// runCtx 含 -max-duration 超时（若有）；信号处理由 main 顶部的 NotifyContext 提供。
@@ -235,10 +199,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-
-	// 非交互：会话结束抽取记忆（best-effort，失败仅 warn，不影响退出码）。
-	// 内部 use context.Background()，避免 -max-duration 到期导致抽取立刻失败。
-	memExtractor.extract(result.Messages)
 }
 
 // loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig。System 空回落默认 prompt。

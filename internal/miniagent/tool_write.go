@@ -61,10 +61,6 @@ func runWriteFile(workspaceRoot, args string) ToolResult {
 	if len(a.Content) > maxWriteFileBytes {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("content 超过最大限制 %d 字节", maxWriteFileBytes)}
 	}
-	// P5：保留路径 "memory" → 追加项目记忆记录（特殊语义：追加而非覆盖）。
-	if a.Path == memoryPathToken {
-		return writeMemoryTool(workspaceRoot, a.Content)
-	}
 	full := resolveToolPath(workspaceRoot, a.Path)
 	if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("创建父目录失败：%v", err)}

@@ -119,8 +119,6 @@
     "max_session_bytes": 10485760,
     // grep_max_matches：grep 命中行上限。
     "grep_max_matches": 500,
-    // memory_recent_n：注入 system prompt 的最近记忆条数。
-    "memory_recent_n": 10,
     // context_trim_tool_chars：context 超限时 tool content 二次裁剪字符数。
     "context_trim_tool_chars": 1000,
     // context_use_real_usage（§P0-B）：压缩阈值是否优先采纳 provider 真实 usage。true（默认）= 优先真实 usage + 时间戳防陈旧；false = kill-switch 回落纯本地 estimateTokens。
@@ -145,20 +143,5 @@
     "auto": true,
     // reserved（§P1-B）：从 context_window 预留的输出/增长 token 缓冲；<=0/缺省 = 回落 min(20000, run.max_tokens)。
     "reserved": 0
-  },
-
-  // memory：会话结束自动抽取项目记忆（写入 .miniagent/memory.jsonl）。
-  "memory": {
-    // provider/model：规则同 compaction（成对设置或整段留空回落 defaults 对）。
-    // 与主/compaction 同 provider 时复用其 client。
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    // auto_update：默认 true。仅有过工具调用的会话才触发；
-    // best-effort（失败仅告警）；无 workdir 跳过；不计入 token 预算。
-    "auto_update": true,
-    // max_per_session：单会话最多抽取的条数（默认 3）。
-    "max_per_session": 3
-    // extract_prompt：留空用内置默认；可用 %d(最大条数)/%s(已有记忆) 自定义
-    //   （对话作为 user message 附加，不进 prompt；旧版第 3 个 %s 对话占位符已移除）。
   }
 }
