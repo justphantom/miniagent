@@ -3,13 +3,24 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [4.0.0] - 2026-08-05
 
-### Added
-- **`codemap` 工具**：递归输出带缩进层级的目录树概览（目录标注子条目数），填补 glob 扁平列举与 read 单文件之间的结构感知缺口。参数 `path`（默认 workdir）+ `depth`（默认 3，<=0 不限）；条目上限 500，排除 `.git` 与符号链接，default 模式经 confineWrap 限定 workdir 子树。
+> 上下文工程强化（stale 内容主动裁剪/去重/折叠、token 估算对齐真实体积）、codemap 工具、session CLI 重构、移除 `-interactive`。
 
 ### Breaking
 - **移除 `-interactive` flag**：交互循环（`readTurn` 逐行 turn、跨轮预算/信号管理）与单轮 stdin 读取冗余。多轮对话通过多次调用同一 `-session` 实现；每次调用 stdin 的全部内容（含多行）作为一个 turn 的完整 prompt。
+- **`-session` 重构为仅接续已有会话**：改为纯 id 校验（仅允许字母/数字/`-`，禁路径与扩展名注入），文件须已存在、不存在则报错退出；新增 **`-save-session`** 新建会话并落盘（id 内部生成，stderr 打印供接续），二者互斥。移除 `-session` 的路径双语义与「文件不存在则新建」行为；`CLIOverrides` 去掉 Session 透传；subagent fork 改无状态（不再落盘会话、不再注入父 session id）（`4cdc55e`）。
+
+### Added
+- **`codemap` 工具**：递归输出带缩进层级的目录树概览（目录标注子条目数），填补 glob 扁平列举与 read 单文件之间的结构感知缺口。参数 `path`（默认 workdir）+ `depth`（默认 3，<=0 不限）；条目上限 500，排除 `.git` 与符号链接，default 模式经 confineWrap 限定 workdir 子树。
+- **跨消息去重/折叠（P6/P8'/P9b/P11）**：保留窗口（最近 N 条 assistant）外——同 `(path,offset)` 的 read 结果按时间序最后一次保留、更早压占位（P6）；被更晚同 path 成功 write/edit 取代的 write/edit args 整条折叠为 path+占位（P8'，成功判定依赖 tool 消息新增的 `IsError` 回填，仅用于持久化与判定、不泄漏给 LLM）；规范化同义 shell command 去重（P9b）；同 path 存在更晚成功写入的 stale read 结果折叠（P11，补「edit 后未再 read」盲区）。均仅改 context 侧拷贝，不动 session 持久化与 tool_calls/tool 配对（`825e224`、`9b596b6`）。
+- **主动压缩 stale write/edit args（P4）**：非最近 N 条 assistant 的 write/edit 大 Args（content/old_string/new_string，写成功后已落盘纯占位）在 context 侧压为前缀+省略标记，保留 path（`5b49ea2`）。
+- **主动清理 stale reasoning（P1）+ 保留窗口超长 reasoning 中段截断（P7）**：非最近 N 条 assistant 的 Reasoning 主动清空（思考模型 reasoning 常达正文数倍，每轮原样回灌是隐性 token 大户）；保留窗口内单条超 `run.context_keep_reasoning_chars`（默认 4000 rune，0=默认/负数=关闭）的做头 1/4 + 尾 3/4 分段截断（`a26c88e`、`5ec990c`）。
+
+### Changed
+- **token 估算对齐真实体积**：`estimateTokens` 信封开销从 flat 400 改为 base + 按消息数/tool_call 数线性增长（长 ReAct 会话嵌套 function 对象随条数累积，flat 估算系统性低估、压缩触发偏晚易撞 context_length_exceeded）；tools schema 开销从 flat per-tool 常数改为序列化实际 JSON schema 走 CJK/non-CJK 启发式（`5ec990c`、`5b49ea2`）。
+- **工具结果截断头尾分段**：`trimForHistory` 对 shell/grep/script 类结果改「头 N/4 + 尾 3N/4」分段截断，保留尾部错误结论；read/edit 保持 head-only 符合分段读大文件语义（`a26c88e`）。
+- **主动裁剪序列统一**：`FitHistory` 未超窗/超窗两分支的 P1/P4/P6/P7/P8'/P9b/P11 序列抽为 `applyContextStrips` 复用；logger Debug level 记录各阶段 token 差值与 fit 前后总量（Info level 零开销）（`43c8fdf`）。
 
 ## [3.5.1] - 2026-08-04
 
