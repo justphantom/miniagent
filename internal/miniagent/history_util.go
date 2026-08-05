@@ -3,6 +3,7 @@ package miniagent
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -222,7 +223,7 @@ func stripStaleReasoning(msgs []Message, keepN int) []Message {
 	copy(out, msgs)
 	// 从后往前保留最近 keepN 条 assistant 的 reasoning，更早的清空。
 	kept := 0
-	for i := len(out) - 1; i >= 0; i-- {
+	for i := range slices.Backward(out) {
 		if out[i].Role != roleAssistant {
 			continue
 		}
@@ -251,7 +252,7 @@ func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
 	// 预扫：从后往前遍历保留窗口（最近 keepN 条 assistant），检查是否有超长 Reasoning。
 	kept := 0
 	hasOversized := false
-	for i := len(msgs) - 1; i >= 0; i-- {
+	for i := range slices.Backward(msgs) {
 		if msgs[i].Role != roleAssistant {
 			continue
 		}
@@ -270,7 +271,7 @@ func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
 	out := make([]Message, len(msgs))
 	copy(out, msgs)
 	kept = 0
-	for i := len(out) - 1; i >= 0; i-- {
+	for i := range slices.Backward(out) {
 		if out[i].Role != roleAssistant {
 			continue
 		}
@@ -301,7 +302,7 @@ func stripStaleToolArgs(msgs []Message, keepN int) []Message {
 	// 预扫：从后往前跳过最近 keepN 条 assistant，检查更早的 assistant 是否有可压缩 tool_call。
 	kept := 0
 	hasCompressible := false
-	for i := len(msgs) - 1; i >= 0; i-- {
+	for i := range slices.Backward(msgs) {
 		if msgs[i].Role != roleAssistant {
 			continue
 		}
@@ -325,7 +326,7 @@ func stripStaleToolArgs(msgs []Message, keepN int) []Message {
 	out := make([]Message, len(msgs))
 	copy(out, msgs)
 	kept = 0
-	for i := len(out) - 1; i >= 0; i-- {
+	for i := range slices.Backward(out) {
 		if out[i].Role != roleAssistant {
 			continue
 		}
@@ -455,7 +456,7 @@ func windowStartOf(msgs []Message, keepN int) int {
 		return 0
 	}
 	seen := 0
-	for i := len(msgs) - 1; i >= 0; i-- {
+	for i := range slices.Backward(msgs) {
 		if msgs[i].Role == roleAssistant {
 			seen++
 			if seen == keepN {
