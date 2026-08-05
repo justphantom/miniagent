@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -163,5 +164,67 @@ func TestCLI_SIGINTExits130(t *testing.T) {
 	// SIGINT 不应 emit error NDJSON 事件（干净退出，区别于真故障）。
 	if strings.Contains(out.String(), `"type":"error"`) {
 		t.Errorf("SIGINT 不应 emit error 事件: %s", out.String())
+	}
+}
+
+// -save-session 与 -result-only 同传 → stderr 报错退出 1（subagent fork 无状态、不落盘会话）。
+func TestCLI_SaveSessionAndResultOnlyExits1(t *testing.T) {
+	sessionDir := t.TempDir()
+	cfgPath := writeSessionConfig(t, "http://127.0.0.1:1", sessionDir)
+	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath, "-save-session", "-result-only"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "-save-session 与 -result-only 互斥") {
+		t.Errorf("missing mutex error: %s", out)
+	}
+}
+
+// -save-session 新建会话：stdout 首条事件为 session（type/provider/id），
+// 且 jsonl 首行 metadata 的 provider 与之同值（输出契约与落盘文件同构）。
+func TestCLI_SaveSessionEmitsSessionEventFirst(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+	sessionDir := t.TempDir()
+	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
+	code, out := runMainBin(t, "提问", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) == 0 {
+		t.Fatal("stdout 无输出")
+	}
+	var first map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("首行非 JSON: %s err=%v", lines[0], err)
+	}
+	if first["type"] != "session" {
+		t.Errorf("首行 type = %v, want session（session 事件须在 Run 之前 emit）", first["type"])
+	}
+	if first["provider"] != "p" {
+		t.Errorf("provider = %v, want p（config 的 provider name）", first["provider"])
+	}
+	if first["id"] == nil || first["id"] == "" {
+		t.Errorf("id 缺失或空: %v", first["id"])
+	}
+	// session 文件应已落盘，首行 metadata 与 stdout session 事件 provider 同值。
+	matches, _ := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
+	if len(matches) != 1 {
+		t.Fatalf("session 文件数 = %d, want 1（out=%s）", len(matches), out)
+	}
+	data, _ := os.ReadFile(matches[0])
+	firstFileLine := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)[0]
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(firstFileLine), &meta); err != nil {
+		t.Fatalf("jsonl 首行非 JSON: %s", firstFileLine)
+	}
+	if meta["provider"] != first["provider"] {
+		t.Errorf("jsonl 首行 provider = %v, 与 stdout session 事件 %v 不一致", meta["provider"], first["provider"])
+	}
+	if meta["id"] != first["id"] {
+		t.Errorf("jsonl 首行 id = %v, 与 stdout session 事件 %v 不一致", meta["id"], first["id"])
 	}
 }
