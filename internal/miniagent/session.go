@@ -145,6 +145,7 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 		}
 		// message 行（type=message 或历史无 type）：反序列化进 Message，未知字段忽略。
 		var m Message
+		//nolint:musttag // Message 已有 json tag；sessionLine 嵌入 Message 是 session 文件格式约定（非 wire）
 		if err := json.Unmarshal(line, &m); err != nil {
 			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行解析失败：%w", path, i+1, err)
 		}
@@ -229,6 +230,7 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 			buf.WriteByte('\n')
 		}
 		for _, m := range msgs {
+			//nolint:musttag // sessionLine 嵌入 Message 是 session 文件格式约定（非 wire）
 			b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 			if err != nil {
 				return err
@@ -267,6 +269,7 @@ func RewriteMessages(path string, meta SessionMeta, msgs []Message) error {
 	buf.Write(mb)
 	buf.WriteByte('\n')
 	for _, m := range msgs {
+		//nolint:musttag // sessionLine 嵌入 Message 是 session 文件格式约定（非 wire）
 		b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 		if err != nil {
 			return err

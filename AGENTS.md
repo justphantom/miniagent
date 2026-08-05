@@ -10,4 +10,6 @@
 - 注释只写“为什么”，且仅非直观或特殊约定时
 - 所有二进制文件只能保存在bin目录
 - Commit：subject ≤72 字符、祈使、无句号，一次一事
+- 纳入版本跟踪的文件中不可引用未纳入版本跟踪文件的任何内容
+- 改后必跑全绿 verify-gate：`gofmt -s -l .`（空）/ `go build ./...` / `go vet ./...` / `go test -race ./...` / `golangci-lint run ./...`
 - 回复 ≤1500 字符

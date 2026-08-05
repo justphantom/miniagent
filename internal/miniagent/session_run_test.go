@@ -93,8 +93,16 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 		{Role: "user", Content: "q2"},
 		{Role: "assistant", Content: "a2"},
 	}
-	if !reflect.DeepEqual(res.Messages, want) {
-		t.Errorf("Messages = %+v, want %+v", res.Messages, want)
+	if len(res.Messages) != len(want) {
+		t.Fatalf("Messages len = %d, want %d: %+v", len(res.Messages), len(want), res.Messages)
+	}
+	// §P0-B 后新产生的 assistant 带 Usage/Ts、新 user 带 Ts（非确定性），故只校验 Role+Content，
+	// 不再整体 reflect.DeepEqual（history q1/a1 仍无 Usage/Ts，深比会因新字段失稳）。
+	for i, w := range want {
+		if res.Messages[i].Role != w.Role || res.Messages[i].Content != w.Content {
+			t.Errorf("Messages[%d] = {Role:%q Content:%q}, want {Role:%q Content:%q}",
+				i, res.Messages[i].Role, res.Messages[i].Content, w.Role, w.Content)
+		}
 	}
 }
 

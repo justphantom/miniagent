@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -254,4 +257,95 @@ func TestRun_ContextLengthFallbackStillTooLong(t *testing.T) {
 	if tr.calls != 2 {
 		t.Errorf("calls = %d, want 2 (only one fallback)", tr.calls)
 	}
+}
+
+// §P1-A：工具输出超 limit 且 ToolOutputDir 启用时，全文落盘、历史 Content 含路径提示、文件内容==原文。
+func TestRun_ToolOutputStoredOnTruncation(t *testing.T) {
+	big := strings.Repeat("x", 5000) // > maxToolResultInHistory(4000)
+	tool := Tool{Name: "bigtool", Call: func(context.Context, string) ToolResult { return ToolResult{Output: big} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "bigtool", Args: "{}"}),
+		textResponse("done"),
+	}}
+	chat, stream := testClients(tr)
+	dir := t.TempDir()
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	toolMsg := lastToolMessage(t, res.NewMessages)
+	if !strings.Contains(toolMsg.Content, "已保存") || !strings.Contains(toolMsg.Content, dir) {
+		t.Errorf("tool content 应含路径提示（已保存 + 目录）: len=%d", len(toolMsg.Content))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("应恰好落盘 1 个文件: entries=%d err=%v", len(entries), err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read spill: %v", err)
+	}
+	if string(b) != big {
+		t.Errorf("落盘文件内容应 == 原文: got len=%d want=%d", len(b), len(big))
+	}
+}
+
+// §P1-A：ToolOutputDir 空（默认禁用）→ 全链路无落盘 IO，行为等同 trimForHistory 硬截断（回归保护）。
+func TestRun_ToolOutputDisabledByDefault(t *testing.T) {
+	big := strings.Repeat("x", 5000)
+	tool := Tool{Name: "bigtool", Call: func(context.Context, string) ToolResult { return ToolResult{Output: big} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "bigtool", Args: "{}"}),
+		textResponse("done"),
+	}}
+	chat, stream := testClients(tr)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "q", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	toolMsg := lastToolMessage(t, res.NewMessages)
+	if strings.Contains(toolMsg.Content, "已保存") {
+		t.Errorf("禁用时不应含路径提示: %q", toolMsg.Content)
+	}
+	want := trimForHistory(big, 0, false)
+	if toolMsg.Content != want {
+		t.Errorf("禁用时应 == trimForHistory 硬截断: got len=%d want len=%d", len(toolMsg.Content), len(want))
+	}
+}
+
+// §P1-A：SplitTruncate=true 的工具，落盘后预览仍含尾部关键行（头1/4+尾3/4 语义不被 store 改写）。
+func TestRun_ToolOutputPreservesSplit(t *testing.T) {
+	head := strings.Repeat("head-line\n", 700) // ~7000 字符头部
+	tail := "FINAL_FAIL_LINE\n"
+	big := head + tail
+	tool := Tool{Name: "shelltool", SplitTruncate: true, Call: func(context.Context, string) ToolResult { return ToolResult{Output: big} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "shelltool", Args: "{}"}),
+		textResponse("done"),
+	}}
+	chat, stream := testClients(tr)
+	dir := t.TempDir()
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	toolMsg := lastToolMessage(t, res.NewMessages)
+	if !strings.Contains(toolMsg.Content, "FINAL_FAIL_LINE") {
+		t.Errorf("split 预览应保留尾部 FAIL 行: %q...(len %d)", toolMsg.Content[:min(60, len(toolMsg.Content))], len(toolMsg.Content))
+	}
+	if !strings.Contains(toolMsg.Content, "已保存") {
+		t.Errorf("超限应触发落盘路径提示")
+	}
+}
+
+// lastToolMessage 返回 msgs 中最后一条 role=tool 的消息（测试辅助）。
+func lastToolMessage(t *testing.T, msgs []Message) Message {
+	t.Helper()
+	for idx := range slices.Backward(msgs) {
+		if msgs[idx].Role == roleTool {
+			return msgs[idx]
+		}
+	}
+	t.Fatalf("no tool message in msgs: %+v", msgs)
+	return Message{}
 }

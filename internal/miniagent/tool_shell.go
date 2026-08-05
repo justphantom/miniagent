@@ -1,7 +1,6 @@
 package miniagent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,6 +39,26 @@ func shellOutputChars() int {
 
 func shellOutputBytes() int {
 	return shellOutputChars() * 4
+}
+
+// shellStreamWindowOverride 是滑窗字节上限的 atomic-override（§P1-D，复刻 maxShellOutputCharsOverride 模式），
+// 默认回落 shellOutputBytes()*2。Resolve/main 注入、测试覆盖。
+var shellStreamWindowOverride atomic.Int64
+
+// SetShellStreamWindowBytes 覆盖 shell 输出滑窗字节上限（保尾部）；n<=0 回落默认 2*shellOutputBytes。测试/正常流程由 Resolve 调用。
+func SetShellStreamWindowBytes(n int) {
+	if n > 0 {
+		shellStreamWindowOverride.Store(int64(n))
+	} else {
+		shellStreamWindowOverride.Store(0)
+	}
+}
+
+func shellStreamWindowBytes() int {
+	if v := shellStreamWindowOverride.Load(); v > 0 {
+		return int(v)
+	}
+	return shellOutputBytes() * 2
 }
 
 const shellTimeout = 120 * time.Second
@@ -125,8 +144,8 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 		return "", err
 	}
 	// exec 不会主动关闭 io.PipeWriter；ctx 超时后主进程已被 CommandContext
-	// 杀掉，但 pw 仍开着，io.Copy 会永久阻塞。这里监听 ctx，一旦 done 就关闭
-	// pw 并 kill 整组，让 io.Copy 解除阻塞。
+	// 杀掉，但 pw 仍开着，读循环会永久阻塞。这里监听 ctx，一旦 done 就关闭
+	// pw 并 kill 整组，让读循环解除阻塞、cmd.Wait 返回 kill-error。
 	go func() {
 		<-ctx.Done()
 		killProcessGroup(cmd)
@@ -137,20 +156,25 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 		waitErr <- cmd.Wait()
 		_ = pw.Close()
 	}()
-	var out bytes.Buffer
-	limited := io.LimitReader(pr, int64(shellOutputBytes()))
-	n, _ := io.Copy(&out, limited)
-	if n >= int64(shellOutputBytes()) {
-		// 输出达上限：LimitReader 已 EOF，但子进程仍向写满的 pipe 继续写而阻塞，
-		// cmd.Wait 不返回、空等至 60s 超时。主动 kill 整组并关 pipe，让子进程
-		// 收 SIGPIPE/被杀后 Wait 立即返回，避免高输出命令被误判为"超时"。
-		killProcessGroup(cmd)
-		_ = pw.Close()
+	// §P1-D：字节滑窗累积器——运行中保最近 keep 字节（尾部）、超窗丢中段（保住 shell 错误/退出码所在尾部），
+	// 子进程因 pipe 被持续排空不阻塞、不被输出量打断（移除旧 LimitReader+volume-kill），跑到 Wait 返回可信 ExitCode。
+	// phase-1 落盘默认关（headSpillBytes=0）。
+	accum := newOutputAccum(shellStreamWindowBytes(), 0, "", "miniagent_shell_")
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := pr.Read(buf)
+		if n > 0 {
+			_ = accum.write(string(buf[:n])) // 落盘失败 best-effort（phase-1 关，不会触发）
+		}
+		if rerr != nil {
+			break // EOF（pw 关闭）或读错
+		}
 	}
+	_ = accum.closeSink()
 	err := <-waitErr
-	// 兜底：正常退出后也整组清理一次，防后台 & 残留。
+	// 兜底：正常退出后也整组清理一次，防后台 & 残留（不再为 volume kill）。
 	killProcessGroup(cmd)
-	return truncate(out.String(), shellOutputChars(), "…"), err
+	return accum.finalize(shellOutputChars()), err
 }
 
 // scrubEnv 复制 env 并移除：所有 MINIAGENT_* 前缀条目，以及变量名（大写后）含

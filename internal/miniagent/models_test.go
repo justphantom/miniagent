@@ -76,10 +76,10 @@ func TestListAllModels_MultiProvider(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := map[ModelRef]bool{
-		{Provider: "openai", Model: "gpt-4o"}:            true,
-		{Provider: "openai", Model: "gpt-3.5"}:           true,
-		{Provider: "deepseek", Model: "deepseek-chat"}:   true,
-		{Provider: "deepseek", Model: "deepseek-coder"}:  true,
+		{Provider: "openai", Model: "gpt-4o"}:           true,
+		{Provider: "openai", Model: "gpt-3.5"}:          true,
+		{Provider: "deepseek", Model: "deepseek-chat"}:  true,
+		{Provider: "deepseek", Model: "deepseek-coder"}: true,
 	}
 	if len(ids) != 4 {
 		t.Fatalf("want 4 ids, got %d: %v", len(ids), ids)

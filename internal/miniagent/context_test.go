@@ -134,7 +134,9 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 }
 
 // P2-1 跨轮继承：上轮 LoadSession 带入的旧 KindSummary 经 applyCompactionBarrier 落在 msgs 头，
-// splitRounds 使其单独成 rounds[0]；compactWithSummary 检测到后并入 middle 让 LLM 真正继承。
+// splitRounds 使其单独成 rounds[0]；compactWithSummary 检测到后（§P0-A 默认路径）抽作
+// previousSummary 经 UPDATE 模式下传，旧摘要文本仍出现在 LLM 请求体（system 的
+// <previous-summary> 块）中，真正继承而非断链。
 func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("新摘要内容")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}

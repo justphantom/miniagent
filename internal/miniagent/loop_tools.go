@@ -39,7 +39,7 @@ func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
 	return toolByName
 }
 
-func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Response, toolByName map[string]Tool, msgs []Message, newMsgs *[]Message, hooks LoopHooks, logger *slog.Logger) ([]Message, error) {
+func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Response, toolByName map[string]Tool, msgs []Message, newMsgs *[]Message, hooks LoopHooks, store *toolOutputStore, logger *slog.Logger) ([]Message, error) {
 	calls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		calls[i] = tc
@@ -47,8 +47,8 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			calls[i].ID = fmt.Sprintf("synth_%d_%d", step, i)
 		}
 	}
-	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。
-	appendMsg(&msgs, newMsgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls})
+	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。§P0-B：附真实 usage 供后续防陈旧估算。
+	appendMsg(&msgs, newMsgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
 
 	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
 	// OnToolUse 返回 ErrToolDenied 表示拒绝该工具（如危险命令未确认）：记录后继续
@@ -102,7 +102,20 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 		if limit <= 0 {
 			limit = cfg.MaxToolResultChars
 		}
-		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: trimForHistory(tres.Output, limit, split), IsError: tres.IsError})
+		preview := trimForHistory(tres.Output, limit, split)
+		content := preview
+		if store != nil {
+			// §P1-A：超 limit 的全文落盘，入历史 Content 改为 preview+路径提示。truncated 判定用
+			// effective limit 的精确比较（trimForHistory 内部对 limit<=0 回落 maxToolResultInHistory，
+			// 此处复刻同一解析；截断 iff rune 数 > effective limit），避免 rune 长度差法在「输出刚好超 limit、
+			// preview marker 反而更长」时的假阴性（丢全文不落盘）。
+			effLimit := limit
+			if effLimit <= 0 {
+				effLimit = maxToolResultInHistory
+			}
+			content = store.bound(step, tc.ID, tres.Output, preview, len([]rune(tres.Output)) > effLimit)
+		}
+		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: content, IsError: tres.IsError})
 	}
 	return msgs, nil
 }

@@ -270,3 +270,56 @@ func TestRun_CompactionChatUsed(t *testing.T) {
 		t.Errorf("final text = %q, want final", res.Text)
 	}
 }
+
+// §P1-C 静默溢出 Case 2（200 stop 但 input>window）：trim 历史（清 reasoning）后单次重试。
+func TestRun_SilentOverflowStopTrimsAndRetries(t *testing.T) {
+	silentStop := `{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1500,"completion_tokens":10}}`
+	tr := &fakeTransport{responses: []string{silentStop, textResponse("final")}}
+	chat, stream := testClients(tr)
+	history := []Message{
+		{Role: roleUser, Content: "q"},
+		{Role: roleAssistant, Content: "a", Reasoning: "SECRET_REASONING"},
+	}
+	res, err := Run(context.Background(), chat, stream, LoopConfig{History: history, ContextWindow: 1000}, "prompt", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if tr.calls != 2 {
+		t.Errorf("calls = %d, want 2（初次 + 静默溢出重试一次）", tr.calls)
+	}
+	if len(tr.bodies) < 2 || !strings.Contains(tr.bodies[0], "SECRET_REASONING") {
+		t.Errorf("首次请求应含 reasoning：%q", tr.lastBody)
+	}
+	if len(tr.bodies) >= 2 && strings.Contains(tr.bodies[1], "SECRET_REASONING") {
+		t.Errorf("静默溢出重试应在 trim 后清掉 reasoning：%q", tr.bodies[1])
+	}
+	if res.Finish != finishStop || res.Text != "final" {
+		t.Errorf("应正常返回 final/stop：finish=%q text=%q", res.Finish, res.Text)
+	}
+}
+
+// §P1-C：显式 ErrContextLength 恢复后置 overflowRecovered=true，本步不再触发静默溢出二次收紧。
+func TestRun_SilentOverflowDoesNotDoubleRecover(t *testing.T) {
+	ctxLenBody := `{"error":{"message":"context_length_exceeded"}}`
+	silentStop := `{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1500,"completion_tokens":10}}`
+	tr := &fakeTransport{
+		statuses:  []int{400, 200, 200},
+		responses: []string{ctxLenBody, silentStop, silentStop},
+	}
+	chat, stream := testClients(tr)
+	history := []Message{
+		{Role: roleUser, Content: "q"},
+		{Role: roleAssistant, Content: "a"},
+	}
+	res, err := Run(context.Background(), chat, stream, LoopConfig{History: history, ContextWindow: 1000}, "prompt", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// 显式重试一次（400→200），responses[1] 虽静默超窗但 overflowRecovered=true 不再二次 trim。
+	if tr.calls != 2 {
+		t.Errorf("calls = %d, want 2（显式重试一次后不再二次恢复）", tr.calls)
+	}
+	if res.Finish != finishStop {
+		t.Errorf("finish=%q, want stop", res.Finish)
+	}
+}

@@ -271,3 +271,54 @@ func TestShellTool_PleaseNotFalselyRejected(t *testing.T) {
 		t.Fatalf("please wrongly rejected: %s", res.Output)
 	}
 }
+
+// §P1-D：超 100k 字符的 shell 输出保尾部（含退出码所在末尾）、加 banner、ExitCode 可信（命令跑完）。
+func TestShell_HighOutputKeepsTail(t *testing.T) {
+	s := ShellTool(t.TempDir(), 0, ModeAuto)
+	res := s.Call(context.Background(), `{"command":"seq 1 400000"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0（命令应跑完，退出码可信）", res.ExitCode)
+	}
+	if !strings.Contains(res.Output, "仅保留尾部") {
+		t.Errorf("超量输出应含 banner: len=%d", len(res.Output))
+	}
+	if !strings.Contains(res.Output, "399999") || !strings.Contains(res.Output, "400000") {
+		t.Errorf("应保留尾部 399999/400000: len=%d", len(res.Output))
+	}
+	if strings.Contains(res.Output, "1\n2\n3\n") {
+		t.Errorf("不应保留首部 1\\n2\\n3\\n（中段应被丢）")
+	}
+}
+
+// §P1-D 回归：<100k 字符命令字节级等价（无 banner、首尾完整）。
+func TestShell_SmallOutputNoBanner(t *testing.T) {
+	s := ShellTool(t.TempDir(), 0, ModeAuto)
+	res := s.Call(context.Background(), `{"command":"seq 1 100"}`)
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
+	}
+	if strings.Contains(res.Output, "仅保留尾部") {
+		t.Errorf("小输出不应有 banner")
+	}
+	if !strings.Contains(res.Output, "1\n") || !strings.Contains(res.Output, "\n100") {
+		t.Errorf("小输出应完整含首尾: %q", res.Output)
+	}
+}
+
+// §P1-D：移除 volume-kill 后 ctx 超时语义仍生效（sleep > timeout → IsError + exitCodeNotSet + 超时提示）。
+func TestShell_TimeoutStillReported(t *testing.T) {
+	s := ShellTool(t.TempDir(), 100*time.Millisecond, ModeAuto)
+	res := s.Call(context.Background(), `{"command":"sleep 5"}`)
+	if !res.IsError {
+		t.Errorf("超时应 IsError=true")
+	}
+	if res.ExitCode != exitCodeNotSet {
+		t.Errorf("超时 ExitCode = %d, want exitCodeNotSet", res.ExitCode)
+	}
+	if !strings.Contains(res.Output, "超时") {
+		t.Errorf("超时应含提示: %q", res.Output)
+	}
+}

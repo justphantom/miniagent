@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // 消息 role 常量：loop/session/wire 多处匹配同一组取值，抽常量防拼写漂移。
@@ -27,6 +28,15 @@ type Message struct {
 	// Kind 是 session 层标记（如 KindSummary），仅持久化与上下文屏障识别用；
 	// wire 的 chatMessage 不含此字段——buildChatBody 独立构造，绝不泄漏给 LLM。
 	Kind string `json:"kind,omitempty"`
+	// Usage 是该 assistant 消息对应 LLM 响应的真实计费用量；nil 表示无用量（user/tool 消息或
+	// 未携带用量的响应）。仅 session 持久化与上下文用量估算（estimateTokensFromUsage）用，
+	// wire 的 chatMessage 不含此字段——buildChatBody 独立构造，绝不泄漏给 LLM。
+	// omitempty 向后兼容旧 session（缺失=nil=回落本地估算）。
+	Usage *Usage `json:"usage,omitempty"`
+	// Ts 是消息产生时的 Unix 毫秒时间戳，供「真实 usage 防陈旧」判定（见 lastApplicableUsageIndex）：
+	// 若某 assistant.usage 之后插入了 Ts 更新的前缀消息（典型：摘要），该 usage 不再描述当前前缀，应失效。
+	// omitempty 向后兼容旧 session；appendMsg 对 Ts==0 自动打戳，故 0 可靠表示「未承载」。
+	Ts int64 `json:"ts,omitempty"`
 }
 
 type ToolCall struct {
@@ -119,6 +129,9 @@ type LoopHooks struct {
 	OnToolResult func(name, callID string, r ToolResult) error
 	// OnDelta LLM 流式增量；非流式模式不触发。
 	OnDelta func(step int, kind DeltaKind, text string) error
+	// OnCompacting 在每次摘要压缩前触发（compactWithSummary 内、调摘要 LLM 前，§P2）。
+	// 可注入 context 或一次性替换 summarizerPrompt，不可 cancel。nil=不通知，零开销。
+	OnCompacting func(ctx context.Context, in CompactingInput) (CompactingOutput, error)
 }
 
 type Result struct {
@@ -146,6 +159,9 @@ type Result struct {
 const (
 	finishStop          = "stop"
 	finishMaxIterations = "max_iterations"
+	// finishLength 是 provider 在 output 撞 max_tokens 或输入撑满 context 无生成空间时返回的
+	// finish_reason（§P1-C 静默溢出 Case 3 判据）。
+	finishLength = "length"
 )
 
 // ErrBudgetExceeded 由 Run 在累计 token（输入+输出）超过 LoopConfig.MaxTotalTokens
@@ -214,6 +230,27 @@ type LoopConfig struct {
 	// ContextKeepReasoningChars 是保留窗口内单条 Reasoning 的字符上限（P7，rune）。超过则头尾分段截断
 	// （压中段发散、留两端）。0=用内置默认 4000；<0=关闭；>0=自定义阈值。高准确度/长思考链场景可调高。
 	ContextKeepReasoningChars int
+	// ContextUseRealUsage 控制压缩阈值是否优先采纳 provider 真实 usage（§P0-B）。默认 true（main.go
+	// 装配）；false=kill-switch，回落纯本地 estimateTokens。无可用真实 usage 时自动回落，故零回归。
+	ContextUseRealUsage bool
+	// ToolOutputDir 非空时启用「工具输出落盘 + path 回读」（§P1-A）：超 limit 的工具全文写入
+	// <ToolOutputDir>/tool_<step>_<callID>_<n>.txt，历史 Content 改为预览+绝对路径提示
+	// （模型用 read(offset/limit)/grep 回读）。空=禁用（保留 trimForHistory 一次性硬截断）。
+	ToolOutputDir string
+	// ToolOutputRetention 是落盘文件保留时长；Run 启动时机会性清理更早文件。<=0 用 7d。
+	ToolOutputRetention time.Duration
+	// CompactionAuto 控制是否启用静默用量溢出检测（对标 opencode compaction.auto，§P1-B）。resolve.go
+	// 置位：cfg.Compaction.Auto==nil → true（默认启用）；false 则仅保留 estimateTokens 主动压缩 + 反应重试。
+	CompactionAuto bool
+	// CompactionReserved 是从 ContextWindow 预留的 token 数（对标 opencode compaction.reserved，§P1-B）。
+	// <=0 回落 min(compactionBuffer=20000, MaxTokens)。
+	CompactionReserved int
+	// PreserveRecentTokens 是 retainedTail token 预算上界（§P1-E）。<=0 自动（floor(ContextWindow/4) clamp
+	// [2000,8000]）；ContextWindow<=0 时关闭，回落 ContextKeepRecent 轮数模式。
+	PreserveRecentTokens int
+	// SessionID 是本次 Run 的会话标识，供 compaction hook（CompactingInput.SessionID）等回调识别会话（§P2）。
+	// 空串兼容无 session 模式；cmd 层由 loopCfg 从 resolveSessionForRun 返回的 meta.ID 填入。
+	SessionID string
 }
 
 // ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。

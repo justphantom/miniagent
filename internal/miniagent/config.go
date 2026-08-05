@@ -67,19 +67,21 @@ type RunConfig struct {
 	WriteTimeout   *string `json:"write_timeout,omitempty"`
 	Stream         *bool   `json:"stream,omitempty"`
 	// S4 策略化常量（<=0 或缺省=内置默认）。
-	MaxToolResultChars   *int    `json:"max_tool_result_chars,omitempty"`
-	MaxFileResultChars   *int    `json:"max_file_result_chars,omitempty"`
-	MaxParallelTools     *int    `json:"max_parallel_tools,omitempty"`
-	ContextKeepRecent    *int    `json:"context_keep_recent,omitempty"`
-	SummaryMaxChars      *int    `json:"summary_max_chars,omitempty"`
-	HTTPTimeout          *string `json:"http_timeout,omitempty"`
-	MaxReadFileBytes     *int    `json:"max_read_file_bytes,omitempty"`
-	MaxShellOutputChars  *int    `json:"max_shell_output_chars,omitempty"`
-	MaxSessionBytes      *int    `json:"max_session_bytes,omitempty"`
-	SummaryMaxTokens     *int    `json:"summary_max_tokens,omitempty"`
-	GrepMaxMatches       *int    `json:"grep_max_matches,omitempty"`
-	MemoryRecentN        *int    `json:"memory_recent_n,omitempty"`
-	ContextTrimToolChars *int    `json:"context_trim_tool_chars,omitempty"`
+	MaxToolResultChars  *int    `json:"max_tool_result_chars,omitempty"`
+	MaxFileResultChars  *int    `json:"max_file_result_chars,omitempty"`
+	MaxParallelTools    *int    `json:"max_parallel_tools,omitempty"`
+	ContextKeepRecent   *int    `json:"context_keep_recent,omitempty"`
+	SummaryMaxChars     *int    `json:"summary_max_chars,omitempty"`
+	HTTPTimeout         *string `json:"http_timeout,omitempty"`
+	MaxReadFileBytes    *int    `json:"max_read_file_bytes,omitempty"`
+	MaxShellOutputChars *int    `json:"max_shell_output_chars,omitempty"`
+	// ShellStreamWindowBytes 是 shell/script 输出滑窗字节上限（保尾部，§P1-D）；缺省/<=0 用默认 2*max_shell_output_chars*4。
+	ShellStreamWindowBytes *int `json:"shell_stream_window_bytes,omitempty"`
+	MaxSessionBytes        *int `json:"max_session_bytes,omitempty"`
+	SummaryMaxTokens       *int `json:"summary_max_tokens,omitempty"`
+	GrepMaxMatches         *int `json:"grep_max_matches,omitempty"`
+	MemoryRecentN          *int `json:"memory_recent_n,omitempty"`
+	ContextTrimToolChars   *int `json:"context_trim_tool_chars,omitempty"`
 	// ContextKeepReasoning 是主动 reasoning 清理保留的最近 assistant 条数（P1）；<=0/缺省=内置默认 1。
 	ContextKeepReasoning *int `json:"context_keep_reasoning,omitempty"`
 	// ContextKeepToolArgs 是主动 tool_call args 压缩保留的最近 assistant 条数（P4）；<=0/缺省=内置默认 2。
@@ -87,6 +89,16 @@ type RunConfig struct {
 	// ContextKeepReasoningChars 是保留窗口内单条 Reasoning 字符上限（P7）；缺省=内置默认 4000，超过则头尾
 	// 分段；负数=关闭，正数=自定义阈值。
 	ContextKeepReasoningChars *int `json:"context_keep_reasoning_chars,omitempty"`
+	// PreserveRecentTokens 是 retainedTail token 预算上界（§P1-E）；缺省/<=0=自动（floor(window/4) clamp [2000,8000]）。
+	PreserveRecentTokens *int `json:"preserve_recent_tokens,omitempty"`
+	// ContextUseRealUsage 控制压缩阈值是否优先采纳 provider 真实 usage（§P0-B）。nil/缺省=启用（默认）；
+	// false=kill-switch 回落纯本地 estimateTokens。无可用真实 usage 时自动回落，故零回归。
+	ContextUseRealUsage *bool `json:"context_use_real_usage,omitempty"`
+	// ToolOutputDir 是工具输出落盘根目录（§P1-A）；空=禁用。未设时 main.go 按 session 目录自动派生
+	// （<sessionDir>/<id>.tool-output/）。超 limit 的工具全文写盘、历史 Content 改为预览+路径提示。
+	ToolOutputDir *string `json:"tool_output_dir,omitempty"`
+	// ToolOutputRetention 是落盘文件保留时长（"168h"）；<=0/缺省=7d。
+	ToolOutputRetention *string `json:"tool_output_retention,omitempty"`
 }
 
 // CompactionConfig 配置长会话摘要压缩模型。
@@ -94,6 +106,12 @@ type RunConfig struct {
 type CompactionConfig struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
+	// Auto 控制静默用量溢出检测（对标 opencode compaction.auto，§P1-B）。nil=启用（默认）；false=关闭，
+	// 仅保留 estimateTokens 主动压缩 + ErrContextLength 反应重试。
+	Auto *bool `json:"auto,omitempty"`
+	// Reserved 是从 ContextWindow 预留的输出/增长缓冲（对标 opencode compaction.reserved）。
+	// <=0/缺省回落 min(compactionBuffer=20000, run.max_tokens)。
+	Reserved *int `json:"reserved,omitempty"`
 }
 
 // MemoryConfig 配置会话结束后的自动记忆抽取。Provider/Model 规则同 CompactionConfig；

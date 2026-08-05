@@ -201,8 +201,9 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		return Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
-		// context 超限（400 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
-		if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
+		// context 超限（400/413 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
+		// §P1-C：状态门从仅 400 放宽到 400||413（Anthropic request_too_large 走 413）。
+		if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && isContextLengthError(raw) {
 			return Response{}, false, 0, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
 		}
 		// thinking 参数不被支持（400 + 特征词）：callLLM 据此去字段重试一次（审查 v2 #7）。

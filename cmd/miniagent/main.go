@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
@@ -124,6 +126,7 @@ func main() {
 	// 应用运行时配置覆盖（优先级：config>builtin）。
 	miniagent.SetMaxReadFileBytes(maxReadFileBytesOf(resolved))
 	miniagent.SetMaxShellOutputChars(maxShellOutputCharsOf(resolved))
+	miniagent.SetShellStreamWindowBytes(into(resolved.Run.ShellStreamWindowBytes, 0))
 	miniagent.SetMaxSessionBytes(maxSessionBytesOf(resolved))
 
 	miniagent.SetSummaryMaxTokens(into(resolved.Run.SummaryMaxTokens, 0))
@@ -164,8 +167,18 @@ func main() {
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
 	hooks := buildHooks(*f.resultOnly)
-	baseCfg := loopCfg(resolved, f, history, tools)
+	baseCfg := loopCfg(resolved, f, meta, history, tools)
 	baseCfg.CompactionChat = compChat
+	// §P1-A：工具输出落盘目录——config 显式优先；否则 -save-session/-session 激活时按 session 目录
+	// 派生 <sessionDir>/<id>.tool-output/（无 session 且 config 未配则禁用）。
+	if resolved.Run.ToolOutputDir != nil && *resolved.Run.ToolOutputDir != "" {
+		baseCfg.ToolOutputDir = *resolved.Run.ToolOutputDir
+	} else if sessPath != "" {
+		baseCfg.ToolOutputDir = filepath.Join(filepath.Dir(sessPath), strings.TrimSuffix(filepath.Base(sessPath), ".jsonl")+".tool-output")
+	}
+	if resolved.Run.ToolOutputRetention != nil {
+		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
+	}
 
 	// 会话结束自动抽取项目记忆：用 memory 专属 client（memChat，按 provider 去重后可能 == chat/compChat）。
 	// 默认 on（resolved.MemoryAutoUpdate）。secrets 收集所有用到的 key 字面量，用于剔除含 key 的记录。
@@ -229,7 +242,8 @@ func main() {
 }
 
 // loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig。System 空回落默认 prompt。
-func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
+// meta 提供 SessionID（§P2，供 compaction hook 识别会话）。
+func loopCfg(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
 	system := resolved.System
 	if system == "" {
 		system = defaultSystemPrompt
@@ -249,6 +263,8 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 		ThinkingLevel:             resolved.Thinking,
 		Thinking:                  resolved.Provider.Thinking,
 		CompactionModel:           resolved.CompactionModelID,
+		CompactionAuto:            resolved.CompactionAuto,
+		CompactionReserved:        resolved.CompactionReserved,
 		MaxToolResultChars:        into(resolved.Run.MaxToolResultChars, 0),
 		MaxFileResultChars:        into(resolved.Run.MaxFileResultChars, 0),
 		MaxParallelTools:          into(resolved.Run.MaxParallelTools, 0),
@@ -257,6 +273,9 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 		ContextKeepReasoning:      into(resolved.Run.ContextKeepReasoning, 0),
 		ContextKeepToolArgs:       into(resolved.Run.ContextKeepToolArgs, 0),
 		ContextKeepReasoningChars: into(resolved.Run.ContextKeepReasoningChars, 0),
+		ContextUseRealUsage:       intoBool(resolved.Run.ContextUseRealUsage, true),
+		PreserveRecentTokens:      into(resolved.Run.PreserveRecentTokens, 0),
+		SessionID:                 meta.ID,
 	}
 }
 

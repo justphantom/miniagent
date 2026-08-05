@@ -31,6 +31,20 @@ func truncate(s string, n int, marker string) string {
 	return string(r[:n]) + marker
 }
 
+// truncateTail 是 truncate 的互补（§P1-D）：保留 s 末尾 n 个 rune，截断时前置 marker。
+// 服务 outputAccum.finalize 的尾部 rune 兜底（shell 累积器保尾丢中段后，再把窗口尾部截到 maxChars）。
+// n<=0 原样返回；len<=n 不截。
+func truncateTail(s string, n int, marker string) string {
+	if n <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return marker + string(r[len(r)-n:])
+}
+
 // truncateHeadTail 把 s 截到约 n 个 rune，保留「头 headN + 尾 tailN」，中间用 marker 连接。
 // 用于 shell/grep 等关键信息在尾部的工具结果：head-only 会丢掉编译/测试错误汇总、命中上限提示等
 // 最该让模型看到的诊断信息。头占 n/4（前段提供上下文/命令回显），尾占 3n/4（错误结论集中处）。

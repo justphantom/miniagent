@@ -13,8 +13,8 @@ import (
 func testBudget(llm *ChatClient) ContextBudget {
 	return ContextBudget{
 		Model: "m",
-		Summarize: func(ctx context.Context, model, sys string, middle []Message) (string, Usage, error) {
-			return summarizeMiddle(ctx, llm, model, sys, summaryMaxChars, middle)
+		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []Message) (string, Usage, error) {
+			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, middle)
 		},
 	}
 }
@@ -108,7 +108,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err == nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
 	}
 }
@@ -118,7 +118,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}})
+	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}})
 	if err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
@@ -146,9 +146,9 @@ func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 	budget := ContextBudget{
 		Model:           "main-model",
 		CompactionModel: "compaction-model",
-		Summarize: func(ctx context.Context, model, sys string, middle []Message) (string, Usage, error) {
+		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []Message) (string, Usage, error) {
 			gotModel = model
-			return summarizeMiddle(ctx, llm, model, sys, summaryMaxChars, middle)
+			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, middle)
 		},
 	}
 	var msgs []Message
@@ -160,5 +160,143 @@ func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 	}
 	if gotModel != "compaction-model" {
 		t.Errorf("Summarize model = %q, want compaction-model", gotModel)
+	}
+}
+
+// §P0-A：buildSummarizerSystem 三模式。CREATE：含模板 6 段、不含 <previous-summary>。
+func TestBuildSummarizerSystem_CreateMode(t *testing.T) {
+	got := buildSummarizerSystem("", "", 5000)
+	for _, want := range []string{"## 目标", "## 关键细节", "## 进展状态", "## 下一步", "## 相关文件"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("CREATE 模式应含模板段 %q：\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "<previous-summary>") {
+		t.Errorf("CREATE 模式不应含 <previous-summary>：%s", got)
+	}
+}
+
+// §P0-A：UPDATE：含 <previous-summary> 块包裹旧摘要 + update 指令 + 模板 6 段。
+func TestBuildSummarizerSystem_UpdateMode(t *testing.T) {
+	got := buildSummarizerSystem("", "旧锚点", 5000)
+	for _, want := range []string{"<previous-summary>\n旧锚点\n</previous-summary>", "更新已有的锚定摘要", "## 目标", "## 相关文件"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("UPDATE 模式应含 %q：\n%s", want, got)
+		}
+	}
+}
+
+// §P0-A：override：summarizerPrompt 非空 → 全量接管，Sprintf 注入 maxChars，不含模板/previous-summary。
+func TestBuildSummarizerSystem_Override(t *testing.T) {
+	got := buildSummarizerSystem("自定义%d", "旧", 5000)
+	if got != "自定义5000" {
+		t.Errorf("override = %q, want 自定义5000", got)
+	}
+	if strings.Contains(got, "<previous-summary>") || strings.Contains(got, "## 目标") {
+		t.Errorf("override 不应含模板/previous-summary：%s", got)
+	}
+}
+
+// §P0-A：stripSummaryPrefix 表驱动（前缀仅展示层，识别必须用 Kind==KindSummary）。
+func TestStripSummaryPrefix(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{summaryPrefix + "x", "x"},
+		{"x", "x"},
+		{"", ""},
+		{summaryPrefix, ""},
+	}
+	for i, c := range cases {
+		if got := stripSummaryPrefix(c.in); got != c.want {
+			t.Errorf("case %d: stripSummaryPrefix(%q) = %q, want %q", i, c.in, got, c.want)
+		}
+	}
+}
+
+// §P0-A：默认路径（SummarizerPrompt=""）检测到 head 是旧 KindSummary 时，抽 prevSummary、
+// 不并入 middle、head 置空。旧摘要文本经 previousSummary 下传（UPDATE 模式）。
+func TestCompactWithSummary_UpdateModeExtractsPrevSummary(t *testing.T) {
+	var gotPrev string
+	var gotMiddle []Message
+	budget := ContextBudget{
+		Model: "m",
+		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []Message) (string, Usage, error) {
+			gotPrev = prevSummary
+			gotMiddle = middle
+			return "新摘要", Usage{}, nil
+		},
+	}
+	msgs := []Message{
+		{Role: roleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: roleUser, Content: "real0"},
+		{Role: roleUser, Content: "real1"},
+		{Role: roleUser, Content: "real2"},
+		{Role: roleUser, Content: "real3"},
+		{Role: roleUser, Content: "real4"},
+		{Role: roleUser, Content: "本轮"},
+	}
+	out, summary, _, err := compactWithSummary(context.Background(), budget, msgs, 3)
+	if err != nil || summary.Kind != KindSummary {
+		t.Fatalf("compactWithSummary: kind=%v err=%v", summary.Kind, err)
+	}
+	if gotPrev != "旧摘" {
+		t.Errorf("previousSummary = %q, want 旧摘", gotPrev)
+	}
+	for _, m := range gotMiddle {
+		if m.Kind == KindSummary {
+			t.Errorf("默认路径 middle 不应含 KindSummary（旧摘要应作 prevSummary 下传）：%+v", gotMiddle)
+		}
+	}
+	// head 置空：out = summaryMsg + tail（3），首条为新 summary。
+	if len(out) != 1+3 || out[0].Kind != KindSummary {
+		t.Errorf("out 应为 summary+tail（head 已置空）：%+v", out)
+	}
+}
+
+// §P0-A：override 路径（SummarizerPrompt!=""）维持旧行为——旧 KindSummary 并入 middle，
+// previousSummary 传空。
+func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
+	var gotPrev string
+	var gotMiddle []Message
+	budget := ContextBudget{
+		Model:            "m",
+		SummarizerPrompt: "自定义%d",
+		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []Message) (string, Usage, error) {
+			gotPrev = prevSummary
+			gotMiddle = middle
+			return "新摘要", Usage{}, nil
+		},
+	}
+	msgs := []Message{
+		{Role: roleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: roleUser, Content: "real0"},
+		{Role: roleUser, Content: "real1"},
+		{Role: roleUser, Content: "real2"},
+		{Role: roleUser, Content: "real3"},
+		{Role: roleUser, Content: "real4"},
+		{Role: roleUser, Content: "本轮"},
+	}
+	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
+		t.Fatalf("compactWithSummary: %v", err)
+	}
+	if gotPrev != "" {
+		t.Errorf("override 路径 previousSummary 应为空，got %q", gotPrev)
+	}
+	if len(gotMiddle) == 0 || gotMiddle[0].Kind != KindSummary || !strings.Contains(gotMiddle[0].Content, "旧摘") {
+		t.Errorf("override 路径 middle 首条应为旧 KindSummary（旧行为）：%+v", gotMiddle)
+	}
+}
+
+// §P0-A：summarizeMiddle UPDATE 模式把 previous-summary 写进请求 system。
+func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("更新摘要")}}
+	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err != nil {
+		t.Fatalf("summarizeMiddle: %v", err)
+	}
+	// lastBody 是 JSON-marshaled 请求体，< > 被转义成 < >；断言用未转义的标签名 + 旧锚点文本。
+	if !strings.Contains(tr.lastBody, "previous-summary") || !strings.Contains(tr.lastBody, "旧锚点") {
+		t.Errorf("UPDATE 模式请求应含 previous-summary 块 + 旧锚点：%s", tr.lastBody)
 	}
 }

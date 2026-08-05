@@ -20,18 +20,7 @@ func shouldRetryStatus(code int) bool {
 	return false
 }
 
-// isContextLengthError 启发式识别 context 超限的 400 响应：不同厂商措辞不一
-// （OpenAI: "maximum context length" / "context_length_exceeded"；其他: "context window"）。
-// 小写匹配命中任一即认定。误判的最坏后果是触发一次无谓的历史收紧重试，可接受。
-func isContextLengthError(raw []byte) bool {
-	lower := strings.ToLower(string(raw))
-	for _, marker := range []string{"context_length", "context length", "maximum context", "context window"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
+// isContextLengthError 已迁移到 overflow.go（§P1-C：升级为 24 正则 + 3 排除）。
 
 // isThinkingError 启发式识别 thinking 参数（reasoning_effort 等）不被支持的 400：跨供应商
 // 措辞不一（"reasoning_effort"/"unknown parameter"/"unrecognized"）。宽松识别——误判只会触发

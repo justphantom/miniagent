@@ -23,10 +23,15 @@ type ResolvedRun struct {
 	Stream                                                                                       *bool
 	MaxToolResultChars, MaxFileResultChars, MaxParallelTools, ContextKeepRecent, SummaryMaxChars *int
 	MaxReadFileBytes, MaxShellOutputChars, MaxSessionBytes                                       *int
+	ShellStreamWindowBytes                                                                       *int
 	SummaryMaxTokens, GrepMaxMatches, MemoryRecentN, ContextTrimToolChars                        *int
 	ContextKeepReasoning                                                                         *int
 	ContextKeepToolArgs                                                                          *int
 	ContextKeepReasoningChars                                                                    *int
+	ContextUseRealUsage                                                                          *bool
+	PreserveRecentTokens                                                                         *int
+	ToolOutputDir                                                                                *string
+	ToolOutputRetention                                                                          *time.Duration
 }
 
 type Resolved struct {
@@ -34,6 +39,8 @@ type Resolved struct {
 	ModelID            string
 	CompactionProvider ProviderConfig
 	CompactionModelID  string
+	CompactionAuto     bool
+	CompactionReserved int
 	MemoryProvider     ProviderConfig
 	MemoryModelID      string
 	Thinking           string
@@ -82,6 +89,11 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		return nil, err
 	}
 	r.CompactionProvider, r.CompactionModelID = cp, cm
+	// §P1-B：静默用量溢出检测开关 + reserve。Auto 缺省（nil）= 启用；Reserved 缺省/<=0 回落 min(20000, max_tokens)。
+	r.CompactionAuto = cfg.Compaction.Auto == nil || *cfg.Compaction.Auto
+	if cfg.Compaction.Reserved != nil {
+		r.CompactionReserved = *cfg.Compaction.Reserved
+	}
 	mp, mm, err := resolveOptionalPair(cfg, "memory", cfg.Memory.Provider, cfg.Memory.Model, defProv, defModel)
 	if err != nil {
 		return nil, err
@@ -242,6 +254,7 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	}
 	r.MaxReadFileBytes = intPtr(func(rc RunConfig) *int { return rc.MaxReadFileBytes })
 	r.MaxShellOutputChars = intPtr(func(rc RunConfig) *int { return rc.MaxShellOutputChars })
+	r.ShellStreamWindowBytes = intPtr(func(rc RunConfig) *int { return rc.ShellStreamWindowBytes })
 	r.MaxSessionBytes = intPtr(func(rc RunConfig) *int { return rc.MaxSessionBytes })
 	// S4 策略化常量（接续上文，仅 config 来源）：与 MaxToolResultChars 等同批，须一并装配，
 	// 否则 config 值不入 ResolvedRun、main 的 Set* 收到 0 当作未设置而回落内置默认。
@@ -252,6 +265,15 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	r.ContextKeepReasoning = intPtr(func(rc RunConfig) *int { return rc.ContextKeepReasoning })
 	r.ContextKeepToolArgs = intPtr(func(rc RunConfig) *int { return rc.ContextKeepToolArgs })
 	r.ContextKeepReasoningChars = intPtr(func(rc RunConfig) *int { return rc.ContextKeepReasoningChars })
+	r.PreserveRecentTokens = intPtr(func(rc RunConfig) *int { return rc.PreserveRecentTokens })
+	// ContextUseRealUsage 仅 config 来源（§P0-B kill-switch）；nil=默认启用。
+	r.ContextUseRealUsage = cfg.Run.ContextUseRealUsage
+	// §P1-A：工具输出落盘目录（config-only，nil=main.go 按 session 目录派生）。
+	r.ToolOutputDir = strPtr(func(rc RunConfig) *string { return rc.ToolOutputDir })
+	r.ToolOutputRetention, err = parseDur(strPtr(func(rc RunConfig) *string { return rc.ToolOutputRetention }), "run.tool_output_retention")
+	if err != nil {
+		return r, err
+	}
 	return r, nil
 }
 

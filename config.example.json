@@ -122,7 +122,17 @@
     // memory_recent_n：注入 system prompt 的最近记忆条数。
     "memory_recent_n": 10,
     // context_trim_tool_chars：context 超限时 tool content 二次裁剪字符数。
-    "context_trim_tool_chars": 1000
+    "context_trim_tool_chars": 1000,
+    // context_use_real_usage（§P0-B）：压缩阈值是否优先采纳 provider 真实 usage。true（默认）= 优先真实 usage + 时间戳防陈旧；false = kill-switch 回落纯本地 estimateTokens。
+    "context_use_real_usage": true,
+    // shell_stream_window_bytes（§P1-D）：shell/script 输出滑窗字节上限（运行中保尾部、丢中段）；<=0 用默认 2*max_shell_output_chars*4。
+    "shell_stream_window_bytes": 0,
+    // preserve_recent_tokens（§P1-E）：压缩时 retainedTail 的 token 预算上界；<=0 = 自动 floor(context_window/4) clamp [2000,8000]。
+    "preserve_recent_tokens": 0,
+    // tool_output_dir（§P1-A）：工具输出落盘根目录；空 = 禁用，未设时按 session 目录自动派生 <id>.tool-output/（超 limit 的全文写盘、历史 Content 改为预览+路径提示）。
+    "tool_output_dir": "",
+    // tool_output_retention（§P1-A）：工具输出落盘文件保留时长；<=0/缺省 = 7d。
+    "tool_output_retention": "168h"
   },
 
   // compaction：长会话摘要压缩配置。
@@ -130,7 +140,11 @@
     // provider/model：摘要压缩用的 provider 与 model id。须成对设置（可跨 provider）；
     // 整段留空则整体回落 defaults 对；只设其一报错。
     "provider": "openai",
-    "model": "gpt-4o-mini"
+    "model": "gpt-4o-mini",
+    // auto（§P1-B）：静默用量溢出检测。true（默认）= 撞 provider 前用上一步真实 usage 预压；false = 关闭，仅留 estimateTokens 主动压缩 + ErrContextLength 反应重试。
+    "auto": true,
+    // reserved（§P1-B）：从 context_window 预留的输出/增长 token 缓冲；<=0/缺省 = 回落 min(20000, run.max_tokens)。
+    "reserved": 0
   },
 
   // memory：会话结束自动抽取项目记忆（写入 .miniagent/memory.jsonl）。

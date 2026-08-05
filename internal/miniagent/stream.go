@@ -113,12 +113,13 @@ func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(D
 		if resp.StatusCode != http.StatusOK {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxChatBodyBytes+1))
 			_ = resp.Body.Close()
-			// 400 context 超限 / thinking：沿用非流式判定供 Run 降级，不重试；attempt>0 加 "after N retries" 前缀（P3 排错）。
+			// 400/413 context 超限 / thinking：沿用非流式判定供 Run 降级，不重试；attempt>0 加 "after N retries" 前缀（P3 排错）。
+			// §P1-C：状态门从仅 400 放宽到 400||413（与 client.go 对齐）。
 			prefix := ""
 			if attempt > 0 {
 				prefix = fmt.Sprintf("after %d retries: ", attempt)
 			}
-			if resp.StatusCode == http.StatusBadRequest && isContextLengthError(raw) {
+			if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && isContextLengthError(raw) {
 				return Response{}, fmt.Errorf("%s%w: %s", prefix, ErrContextLength, truncate(string(raw), 500, "…"))
 			}
 			if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {

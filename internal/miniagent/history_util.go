@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unicode"
 )
 
@@ -96,6 +97,146 @@ func estimateResponseTokens(resp Response) int {
 		add(tc.Args)
 	}
 	return nonCJK/4 + cjk/2
+}
+
+// nowMs 统一取 Unix 毫秒时间戳供 Message.Ts 用；集中一处便于审查（loop.go 无 time import，
+// 故落 history_util.go）。供 appendMsg 打戳与 compactWithSummary 给 summaryMsg 打新戳。
+func nowMs() int64 {
+	return time.Now().UnixMilli()
+}
+
+// countCharsLocal 统计 s 的 non-CJK / CJK rune 数（与 estimateTokens 同口径），供
+// estimateMessageTokensLocal 复用。
+func countCharsLocal(s string) (nonCJK, cjk int) {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
+			unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+			cjk++
+		} else {
+			nonCJK++
+		}
+	}
+	return nonCJK, cjk
+}
+
+// estimateMessageTokensLocal 单条消息本地 token 估算（CJK≈1/2、其他≈1/4），
+// 仅计 Content+Reasoning+ToolCalls.Args，不计 system/schema/envelope。
+// 供 estimateTokensFromUsage 的 trailing 段补估（锚点 usage 已含信封真实体积，trailing 不重复计）。
+func estimateMessageTokensLocal(m Message) int {
+	var nonCJK, cjk int
+	n, c := countCharsLocal(m.Content)
+	nonCJK, cjk = nonCJK+n, cjk+c
+	n, c = countCharsLocal(m.Reasoning)
+	nonCJK, cjk = nonCJK+n, cjk+c
+	for _, tc := range m.ToolCalls {
+		n, c = countCharsLocal(tc.Args)
+		nonCJK, cjk = nonCJK+n, cjk+c
+	}
+	return nonCJK/4 + cjk/2
+}
+
+// contextTokensFromUsage 把单次响应 usage 折算成「该次请求前缀+输出 token 总量」，
+// 等价 pi calculateContextTokens。miniagent 无 cache 字段，InputTokens 已含 OpenAI
+// prompt_tokens 全量（含缓存命中）。与 silent-usage-overflow 的 usageFootprint 口径一致。
+func contextTokensFromUsage(u Usage) int {
+	return u.InputTokens + u.OutputTokens
+}
+
+// lastApplicableUsageIndex 返回最近一条「usage 适用于当前前缀」的 assistant 索引，无则 -1。
+//
+// 防陈旧判定：仅 KindSummary（摘要）重定义前缀——它替换掉之前的旧历史，使其前 assistant 的
+// usage（描述的是压缩前的大前缀）不再适用于当前前缀。普通 user/tool 尾随消息不重定义前缀，
+// 其 token 由 estimateTokensFromUsage 的 trailing 段补估。故锚点判定用 latestSummaryTs
+// （最新 KindSummary 的 Ts，无摘要则 0），取最后一条 Ts>=latestSummaryTs 且 usage 非零的 assistant。
+//
+// 注意：本判定刻意不用「全局最大 Ts」等纯 Ts 比较方案。后者在 miniagent 工具密集轨迹下
+// （msgs 末尾常是 tool 消息、其 Ts >= 同步 assistant）会把最后 assistant 误判陈旧、几乎永不采纳
+// 真实 usage，使「真实 usage 优先」特性失效。仅 KindSummary 才是真正的前缀重定义事件。
+func lastApplicableUsageIndex(msgs []Message) int {
+	var latestSummaryTs int64
+	for _, m := range msgs {
+		if m.Kind == KindSummary && m.Ts > latestSummaryTs {
+			latestSummaryTs = m.Ts
+		}
+	}
+	idx := -1
+	for i, m := range msgs {
+		if m.Role == roleAssistant && m.Usage != nil &&
+			(m.Usage.InputTokens > 0 || m.Usage.OutputTokens > 0) &&
+			m.Ts >= latestSummaryTs {
+			idx = i
+		}
+	}
+	return idx
+}
+
+// estimateTokensFromUsage 两段式估算：lastApplicableUsageIndex 找最近未陈旧真实 usage 锚点，
+// tokens = contextTokensFromUsage(usage) + Σ estimateMessageTokensLocal(msgs[idx+1:])。
+// ok=false（无锚点）时调用方回落 estimateTokens。等价 pi estimate.ts estimateMessages。
+// trailing 不重复计 system/schema/envelope（锚点 usage 已含信封真实体积）。
+func estimateTokensFromUsage(msgs []Message) (tokens int, ok bool) {
+	idx := lastApplicableUsageIndex(msgs)
+	if idx < 0 {
+		return 0, false
+	}
+	tokens = contextTokensFromUsage(*msgs[idx].Usage)
+	for _, m := range msgs[idx+1:] {
+		tokens += estimateMessageTokensLocal(m)
+	}
+	return tokens, true
+}
+
+// estimateThreshold 封装「优先真实 usage、回落本地」策略，供 FitHistory context.go:91 单点调用。
+// useRealUsage=false（kill-switch）直接调 estimateTokens；否则先试 estimateTokensFromUsage，
+// ok=false（无可用真实 usage）回落 estimateTokens。等价 pi estimate.ts 的「真实 usage 优先 + 防陈旧」。
+func estimateThreshold(msgs []Message, system string, tools []Tool, useRealUsage bool) int {
+	if useRealUsage {
+		if t, ok := estimateTokensFromUsage(msgs); ok {
+			return t
+		}
+	}
+	return estimateTokens(msgs, system, tools)
+}
+
+// compactionBuffer 是为模型输出与未来轮次增长预留的 token 缓冲，对标 opencode COMPACTION_BUFFER=20000。
+// §P1-B reserve = min(compactionBuffer, cfg.MaxTokens)（MaxTokens<=0 时取 compactionBuffer）。
+const compactionBuffer = 20000
+
+// usageFootprint 返回一次 LLM 调用的真实上下文占用（与 contextTokensFromUsage 同口径：input+output，
+// OpenAI prompt_tokens 已含 cached 子集即完整足迹）。对标 opencode isOverflow 的 count。
+func usageFootprint(u Usage) int {
+	return contextTokensFromUsage(u)
+}
+
+// compactionReserve 返回从 ContextWindow 预留的 token 数（对标 opencode usable() 的 reserved）。
+// reservedCfg>0 直接取；否则 maxTokens>0 取 min(compactionBuffer, maxTokens)；否则取 compactionBuffer。
+func compactionReserve(maxTokens, reservedCfg int) int {
+	if reservedCfg > 0 {
+		return reservedCfg
+	}
+	if maxTokens > 0 {
+		return min(compactionBuffer, maxTokens)
+	}
+	return compactionBuffer
+}
+
+// usableTokens 返回可用于历史填充的 token 预算（对标 opencode usable()）。
+// contextWindow<=0 返回 0（未知窗口）；否则 max(0, contextWindow - compactionReserve(...))。
+func usableTokens(contextWindow, maxTokens, reservedCfg int) int {
+	if contextWindow <= 0 {
+		return 0
+	}
+	return max(0, contextWindow-compactionReserve(maxTokens, reservedCfg))
+}
+
+// isUsageOverflow 判定上一步真实 usage 是否已撞上下文窗口（对标 opencode isOverflow，§P1-B）。
+// auto=false 或 contextWindow<=0 返回 false；否则 usageFootprint(u) >= usableTokens(...)。
+// 补 estimateTokens 对缓存内容零感知的盲区：撞 provider 前用真实 usage 先压，不再先吃一次 400。
+func isUsageOverflow(u Usage, contextWindow, maxTokens, reservedCfg int, auto bool) bool {
+	if !auto || contextWindow <= 0 {
+		return false
+	}
+	return usageFootprint(u) >= usableTokens(contextWindow, maxTokens, reservedCfg)
 }
 
 // 一轮（成组，保 tool_calls/tool 配对）；user 与无 tool_calls 的 assistant 各自独立成轮。

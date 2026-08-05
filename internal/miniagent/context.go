@@ -35,9 +35,53 @@ func getSummaryMaxTokens() int {
 	return summaryMaxTokens
 }
 
-// summarizerSystem 是压缩专用 system prompt：要求把历史压成一段受限摘要，保留关键事实。
-// 默认值通过 LoopConfig.SummarizerPrompt 覆盖；调用方需传入 maxChars（summaryMaxChars）。
-const summarizerSystem = "你是会话压缩器。把以下对话历史压缩为一段不超过 %d 字符的中文摘要，保留关键事实、决策、文件改动与未决问题，不要复述全部对话，不要输出多余解释。"
+// summaryPrefix 是落盘的 KindSummary 消息 Content 的展示层前缀（原硬编码 "[既往对话摘要]\n"）。
+// 注意：识别 KindSummary 必须用 Message.Kind == KindSummary（applyCompactionBarrier context.go:164），
+// 不可用前缀字符串嗅探——memory_extract.go 有空格变体 "[既往对话摘要] "（append 末尾、非落盘路径），
+// 测试 fixture 也不一致。前缀仅展示层，不参与识别。
+const summaryPrefix = "[既往对话摘要]\n"
+
+// summaryCreateInstruction 是 CREATE 模式角色指令；%d 由 fmt.Sprintf 注入 maxChars，
+// 与旧 summarizerSystem 的 %d 契约一致（用户 override 仍按此契约）。
+const summaryCreateInstruction = "你是会话压缩器。把以下对话历史压缩为不超过 %d 字符的锚定摘要，严格按下方模板结构输出。"
+
+// summaryUpdateInstruction 是 UPDATE 模式角色指令（移植 opencode buildPrompt compaction.ts:164
+// 的 preserve/remove/merge）。后面由 buildSummarizerSystem 追加 <previous-summary> 块 + 模板。
+const summaryUpdateInstruction = "你是会话压缩器。基于以下对话历史更新已有的锚定摘要，输出不超过 %d 字符。保留仍成立的事实，删除已过时的细节，合并新增的事实。把旧摘要作为锚点更新："
+
+// summaryTemplate 是固定 6 段 Markdown 模板（移植 opencode SUMMARY_TEMPLATE compaction.ts(core):16-46，
+// 中文化匹配现有 prompt 风格）。CREATE/UPDATE 两模式都追加在指令之后。
+const summaryTemplate = `严格按以下 Markdown 结构输出，保持段落顺序，不要输出 <template> 标签。
+<template>
+## 目标
+- [用户想完成什么，一两句简述]
+
+## 关键细节
+- [约束/偏好、决策及理由、重要事实/假设、续跑所需确切上下文，或 "(无)"]
+
+## 进展状态
+### 已完成
+- [已完成的工作、已验证的事实、已做的改动，或 "(无)"]
+
+### 进行中
+- [当前工作、未完成的改动、调查中的状态，或 "(无)"]
+
+### 受阻
+- [阻碍、失败的命令、未知项，或 "(无)"]
+
+## 下一步
+1. [立即要做的具体动作，或 "(无)"]
+2. [若已知，下一个动作，或 "(无)"]
+
+## 相关文件
+- [文件或目录路径：为什么重要，或 "(无)"]
+</template>
+
+规则：
+- 保留每个段落，即使为空也输出 "(无)"。
+- 用简短要点，不要写成段落。
+- 已知的文件路径、符号、命令、错误串、URL、标识符必须原样保留。
+- 不要提及摘要/压缩过程本身。`
 
 // ContextBudget 是 FitHistory 的单一参数包：上下文窗口、保留轮数、摘要提示与模型、
 // 以及把中段压成摘要的可注入回调（解耦 context.go 与 HTTPClient，便于测试注入假摘要）。
@@ -60,9 +104,27 @@ type ContextBudget struct {
 	Model              string
 	System             string
 	Tools              []Tool
+	// UseRealUsage 控制 estimateThreshold 是否优先采纳真实 usage（§P0-B）。false（kill-switch）
+	// 直接用本地 estimateTokens，回落旧行为；true 时无可用真实 usage 亦自动回落本地估算。
+	UseRealUsage bool
+	// Force 为 true 时 FitHistory 跳过 estimateTokens 4/5 门控，直接进入 compactWithSummary+有损 fallback
+	// 分支（§P1-B）。由 Run 在上一步真实 usage 命中 isUsageOverflow 时置位，让压缩基于「已证实的真实占用」触发。
+	Force bool
+	// PreserveRecentTokens 是 retainedTail 的 token 预算上界（§P1-E，移植 opencode preserve_recent_tokens）。
+	// <=0=自动：floor(ContextWindow/tailBudgetFraction) clamp [min,max]；ContextWindow<=0 时返回 0 关闭，
+	// 回落 KeepRecent 轮数模式（向后兼容老会话与无窗口配置）。
+	PreserveRecentTokens int
+	// Compacting 在每次摘要前触发（compactWithSummary 内、调 budget.Summarize 前），允许注入
+	// context 或一次性替换 summarizerPrompt（镜像 opencode experimental.session.compacting，§P2）。
+	// nil=不启用。Run 构造 budget 时从 LoopHooks.OnCompacting 桥接。
+	Compacting CompactingHook
+	// SessionID 经 budget 带入 compactWithSummary 作用域，供 applyCompactingHook 读（CompactingInput.SessionID）。
+	SessionID string
 	// Summarize 把中段 middle 压成摘要文本（已截断到 maxChars）+ 该次调用 Usage。
-	// Run 注入：func(ctx, model, summarizerPrompt, middle) → summarizeMiddle(...)。
-	Summarize func(ctx context.Context, model, summarizerPrompt string, middle []Message) (string, Usage, error)
+	// previousSummary 非空时走 UPDATE 模式（保留旧摘要作锚点更新），由 compactWithSummary
+	// 从遗留 KindSummary 抽出经此参数下传。Run 注入：func(ctx, model, summarizerPrompt,
+	// previousSummary, middle) → summarizeMiddle(...)。
+	Summarize func(ctx context.Context, model, summarizerPrompt, previousSummary string, middle []Message) (string, Usage, error)
 }
 
 // FitHistory 是 Run 阶段 2 的单一入口：超 window 80% 时摘要中段，失败/无中段回落有损压缩，
@@ -88,7 +150,12 @@ func FitHistory(ctx context.Context, msgs []Message, budget ContextBudget, logge
 		keepReasoningChars = contextKeepReasoningChars
 	}
 	// keepReasoningChars < 0 → truncateKeptReasoning 内部 threshold<=0 原样返回（关闭）。
-	if budget.ContextWindow <= 0 || estimateTokens(msgs, budget.System, budget.Tools) <= budget.ContextWindow*4/5 {
+	// §P0-B：阈值判定改用 estimateThreshold（优先真实 usage、回落本地估算），补 estimateTokens
+	// 对缓存内容零感知的盲区，长会话不再系统性偏晚触发压缩。
+	// §P1-B：Force=true（上一步真实 usage 命中 isUsageOverflow）时跳过估算门控，直接进 compactWithSummary
+	// 分支，让压缩基于「已证实的真实占用」触发。Force 仅在 ContextWindow>0 时被置位，故不产生 ContextWindow<=0
+	// 的非法 Force 路径；后续 trimRecentRounds/终止门控（:116/:122）仍用 ContextWindow，不受影响。
+	if !budget.Force && (budget.ContextWindow <= 0 || estimateThreshold(msgs, budget.System, budget.Tools, budget.UseRealUsage) <= budget.ContextWindow*4/5) {
 		// P1/P4/P6/P7/P8'/P9b/P11 主动裁剪（各阶段语义见 applyContextStrips；Debug level 记录节省 token）。
 		out := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
 		return out, Message{}, false, Usage{}, nil
@@ -168,20 +235,44 @@ func applyCompactionBarrier(msgs []Message) []Message {
 	return msgs
 }
 
+// buildSummarizerSystem 集中构造摘要 system prompt（替代旧内联 system 选择）。规则：
+//   - summarizerPrompt 非空 → 全量 override（fmt.Sprintf(summarizerPrompt, maxChars)），
+//     向后兼容用户自定义，忽略 previousSummary（override 路径维持旧的「旧摘要并入 middle」行为）。
+//   - 默认路径 + previousSummary 非空 → UPDATE（summaryUpdateInstruction + <previous-summary>
+//     块包裹旧摘要 + summaryTemplate）：旧摘要不再作为 history 重读重写，省一半 token、显式
+//     preserve 指令降低丢细节概率。
+//   - 默认路径 + previousSummary 为空 → CREATE（summaryCreateInstruction + summaryTemplate）。
+func buildSummarizerSystem(summarizerPrompt, previousSummary string, maxChars int) string {
+	if summarizerPrompt != "" {
+		return fmt.Sprintf(summarizerPrompt, maxChars)
+	}
+	if previousSummary != "" {
+		return fmt.Sprintf(summaryUpdateInstruction, maxChars) +
+			"\n<previous-summary>\n" + previousSummary + "\n</previous-summary>\n\n" +
+			summaryTemplate
+	}
+	return fmt.Sprintf(summaryCreateInstruction, maxChars) + "\n\n" + summaryTemplate
+}
+
+// stripSummaryPrefix 从 Message.Content 剥离 summaryPrefix 还原纯摘要文本供 UPDATE 回灌。
+// 主识别必须用 Kind==KindSummary；此函数仅在有前缀时剥离，无前缀原样返回（防御旧/手写 session）。
+// 注意同级 codepath 有空格变体 "[既往对话摘要] "，此处只剥 production 的 \n 前缀；混合历史下
+// 若前缀不匹配直接返回原文，由 UPDATE 指令自行处理（前缀仅展示层，不参与识别）。
+func stripSummaryPrefix(content string) string {
+	return strings.TrimPrefix(content, summaryPrefix)
+}
+
 // summarizeMiddle 调 LLM 把中段 msgs 压成一段摘要文本（不带 tools）。返回经 maxChars 截断的
 // 摘要 + 该次调用的 Usage（供上游累加入预算）。复用 ChatClient.Do；调用方据 error 回落
-// 有损压缩（审查 v2 #6）。summarizerPrompt 空时回落默认 summarizerSystem。
-func summarizeMiddle(ctx context.Context, llm *ChatClient, model, summarizerPrompt string, maxChars int, msgs []Message) (string, Usage, error) {
+// 有损压缩（审查 v2 #6）。previousSummary 非空时走 UPDATE 模式（buildSummarizerSystem 判定）。
+func summarizeMiddle(ctx context.Context, llm *ChatClient, model, summarizerPrompt, previousSummary string, maxChars int, msgs []Message) (string, Usage, error) {
 	if len(msgs) == 0 {
 		return "", Usage{}, errors.New("无中段可摘要")
 	}
-	system := summarizerSystem
-	if summarizerPrompt != "" {
-		system = summarizerPrompt
-	}
+	system := buildSummarizerSystem(summarizerPrompt, previousSummary, maxChars)
 	resp, err := llm.Do(ctx, Request{
 		Model:     model,
-		System:    fmt.Sprintf(system, maxChars),
+		System:    system,
 		Messages:  msgs,
 		MaxTokens: getSummaryMaxTokens(),
 	})
@@ -191,28 +282,241 @@ func summarizeMiddle(ctx context.Context, llm *ChatClient, model, summarizerProm
 	return truncate(strings.TrimSpace(resp.Text), maxChars, "…[摘要已截断]"), resp.Usage, nil
 }
 
+// CompactingInput 是摘要现场快照，让外部 hook 决定是否注入/替换（§P2，镜像 opencode experimental.session.compacting）。
+type CompactingInput struct {
+	// SessionID 是本次摘要所属会话 id（Run 经 LoopConfig.SessionID 透传）。空串兼容无 session 模式。
+	SessionID string
+	// Middle 是待摘要的中段（compactWithSummary 切出的 middle，含已并入的旧 KindSummary）。
+	// 只读：hook 不应就地改 middle，注入经 CompactingOutput.Context 由 applyCompactingHook 追加。
+	Middle []Message
+	// Model 是实际用于本次摘要的模型 id（已回落 CompactionModel→Model）。
+	Model string
+}
+
+// CompactingOutput 是 hook 的回参：注入 context 或一次性替换 summarizerPrompt。
+type CompactingOutput struct {
+	// Context 追加到摘要输入的额外文本（领域知识/文件清单/外部记忆等）；空切片=不注入。
+	// applyCompactingHook 以一条 role=user 消息 append 到 middle 末尾，进摘要输入而非 system
+	// （对齐 opencode compaction.ts nextPrompt 进 user 通道的语义）。
+	Context []string
+	// Prompt 非空时替换本次 summarizerPrompt（仅本次调用，不持久改 budget.SummarizerPrompt）。
+	// 空串=沿用 budget.SummarizerPrompt。
+	Prompt string
+}
+
+// CompactingHook 在每次摘要前同步触发（compactWithSummary 内、调 budget.Summarize 前）。
+// 镜像 opencode experimental.session.compacting：可注入 context 或替换 prompt，不可 cancel
+// （pi 才支持 cancel；miniagent 现阶段不支持）。
+// 契约（实现 A，与 opencode plugin.trigger 默认语义一致）：hook 抛错上抛中止压缩。
+// nil = 无 hook，applyCompactingHook 零开销短路。
+type CompactingHook func(ctx context.Context, in CompactingInput) (CompactingOutput, error)
+
+// applyCompactingHook 在 compactWithSummary 内、调 budget.Summarize 之前触发 hook（§P2），
+// 把 hook 输出折叠回 (effPrompt, effMiddle)：Prompt 非空覆盖本次 summarizerPrompt；Context 非空
+// 以一条 role=user 消息 append 到 middle 末尾（进摘要输入，不进 system 通道）。
+// 契约：hook==nil 直接返回原 prompt/middle（零开销短路）。hook 返回 error → 上抛中止压缩（实现 A）。
+// context 注入只追加无 tool_calls 的 user 消息，不破坏 tool 配对（调用前已过 validateToolPairing）。
+func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, model, summarizerPrompt string, middle []Message) (effPrompt string, effMiddle []Message, err error) {
+	if hook == nil {
+		return summarizerPrompt, middle, nil
+	}
+	out, err := hook(ctx, CompactingInput{SessionID: sessionID, Middle: middle, Model: model})
+	if err != nil {
+		return "", nil, err
+	}
+	effPrompt = summarizerPrompt
+	if out.Prompt != "" {
+		effPrompt = out.Prompt
+	}
+	effMiddle = middle
+	if len(out.Context) > 0 {
+		injected := append(append([]Message{}, middle...), Message{Role: roleUser, Content: strings.Join(out.Context, "\n")})
+		effMiddle = injected
+	}
+	return effPrompt, effMiddle, nil
+}
+
+// preserveRecentTokens 解析 retainedTail token 预算上界（移植 opencode preserveRecentBudget，§P1-E）：
+// budget.PreserveRecentTokens>0 直接返回；否则 floor(budget.ContextWindow/tailBudgetFraction)
+// clamp [minPreserveRecentTokens, maxPreserveRecentTokens]；budget.ContextWindow<=0 返回 0（关闭 → 纯轮数模式）。
+// 无副作用、纯函数、易测。
+func preserveRecentTokens(budget ContextBudget) int {
+	if budget.PreserveRecentTokens > 0 {
+		return budget.PreserveRecentTokens
+	}
+	if budget.ContextWindow <= 0 {
+		return 0
+	}
+	t := budget.ContextWindow / tailBudgetFraction
+	if t < minPreserveRecentTokens {
+		return minPreserveRecentTokens
+	}
+	if t > maxPreserveRecentTokens {
+		return maxPreserveRecentTokens
+	}
+	return t
+}
+
+// estimateRoundTokens 估算单轮的边际 token（content+reasoning+args+信封），不计 system/schema 全局开销
+// ——这两项是请求级常量，在 tail 总量里只计一次，故逐轮累加时必须用边际估算（否则每轮重复计 400+schema，
+// 系统性高估、tail 恒不达标）。供 selectTailByTokens 累加。
+func estimateRoundTokens(round []Message) int {
+	return estimateTokens(round, "", nil) - systemOverheadTokens
+}
+
+// selectTailByTokens 按 token 预算从最近轮累加选 tail（移植 opencode select，§P1-E）。
+// maxTurns=keepRecent（轮数上界）；tokenBudget=preserveRecentTokens(...)。流程：从最近轮向前累加
+// estimateRoundTokens(轮)（边际，不含 system/schema），整轮装下并入 tail；首个装不下的边界轮调
+// splitRoundByTokens 找安全切点（切出后缀并入 tail），切不动（tool-call 轮）转 shrinkRoundToolContents
+// 压 tool content 贴合剩余预算并入 tail，仍不行则整轮进 middle；边界轮之前的全部进 middle。
+// tokenBudget<=0 退化为「最近 maxTurns 轮」纯轮数模式（向后兼容）。返回 tail 与 middle 均为扁平 []Message（原顺序）。
+func selectTailByTokens(rounds [][]Message, maxTurns, tokenBudget int) (tail, middle []Message) {
+	n := len(rounds)
+	if n == 0 {
+		return nil, nil
+	}
+	if tokenBudget <= 0 {
+		cnt := min(maxTurns, n)
+		return flatten(rounds[n-cnt:]), flatten(rounds[:n-cnt])
+	}
+	total := 0
+	// tailStart 初值 0：若全部轮都装下（n<=maxTurns 且未触 token 上界，循环正常结束）则 tail=全部、middle=空。
+	// 循环内 break 时覆写为 i+1（tail=rounds[i+1..]）。
+	tailStart := 0
+	boundary := -1 // token 边界轮索引（需 split/shrink 决策）；-1=无（全部装下或仅 maxTurns 截断）
+	for i := n - 1; i >= 0; i-- {
+		if n-i > maxTurns {
+			tailStart = i + 1 // maxTurns 截断：tail=rounds[i+1..]，older 进 middle
+			break
+		}
+		size := estimateRoundTokens(rounds[i])
+		if total+size > tokenBudget {
+			boundary = i
+			tailStart = i + 1
+			break
+		}
+		total += size
+	}
+	tail = flatten(rounds[tailStart:n])
+	middle = flatten(rounds[:tailStart])
+	if boundary >= 0 {
+		// 边界轮尝试 split/shrink 并入 tail 前端；成功则该轮（压缩后）不进 middle。
+		remaining := tokenBudget - total
+		if fitted, ok := splitOrShrinkToRound(rounds[boundary], remaining); ok {
+			tail = append(append([]Message{}, fitted...), tail...)
+			middle = flatten(rounds[:boundary]) // boundary 轮已并入 tail，从 middle 移除
+		}
+		// split/shrink 失败 → 边界轮整轮留 middle（rounds[:tailStart]=rounds[:boundary+1] 已含），符合预期。
+	}
+	return tail, middle
+}
+
+// splitOrShrinkToRound 是边界轮的适配入口：先试 splitRoundByTokens 找安全消息边界切点（后缀并入 tail），
+// 切不动则 shrinkRoundToolContents 压 tool content 贴合 remaining。返回 (fitted, ok)；ok=false 表示
+// 边界轮无法并入 tail，应整轮进 middle。
+func splitOrShrinkToRound(round []Message, remaining int) ([]Message, bool) {
+	if remaining <= 0 {
+		return nil, false
+	}
+	if suffix := splitRoundByTokens(round, remaining); suffix != nil {
+		return suffix, true
+	}
+	shrunk := shrinkRoundToolContents(round, remaining)
+	if estimateRoundTokens(shrunk) <= remaining {
+		return shrunk, true
+	}
+	return nil, false
+}
+
+// splitRoundByTokens 单轮内按 token 预算找安全切点，返回并入 tail 的后缀（移植 opencode splitTurn，§P1-E）。
+// 受 miniagent flat []Message 配对约束：tool 角色消息不可作切点起点（会孤立 tool 于 assistant 之外），
+// 后缀须自洽（validateToolPairing 守）。从 round[1] 起向后扫，返回最早 estimateRoundTokens<=tokenBudget 的合格后缀。
+// tokenBudget<=0 或 len(round)<=1（单消息轮无可切边界）返回 nil——由调用方整轮进 middle 或转 shrink。
+// 注：miniagent splitRounds 使文本轮为单消息、tool-call 轮为 [assistant(tc)+tools]，故本函数对生产轮恒返回 nil
+// （单消息轮 len<=1；tool-call 轮除 round[0] 外皆 tool 被跳过）；保留以服务手动构造的多消息轮与未来扩展。
+func splitRoundByTokens(round []Message, tokenBudget int) []Message {
+	if tokenBudget <= 0 || len(round) <= 1 {
+		return nil
+	}
+	for i := 1; i < len(round); i++ {
+		if round[i].Role == roleTool {
+			continue // 切点后缀不能以 tool 开头（孤立）
+		}
+		suffix := round[i:]
+		if estimateRoundTokens(suffix) <= tokenBudget {
+			if err := validateToolPairing(suffix); err != nil {
+				continue
+			}
+			return suffix
+		}
+	}
+	return nil
+}
+
+// shrinkRoundToolContents 是 miniagent flat 模型下 opencode splitTurn 的语义等价物（§P1-E，REFUTED 后的必需补偿）：
+// tool-call 轮切不动时，把轮内 tool 结果 content 就地截短贴合 tokenBudget（深拷贝，不动入参，保配对不变）。
+// 按 round 当前 estimateRoundTokens 与 tokenBudget 的比例缩放每条 tool content 字符数（复用 truncateHeadTail 头1/4+尾3/4）。
+// tokenBudget<=0 原样返回拷贝；无 tool 消息则压缩无意义但仍返回拷贝（由调用方判 fit）。
+func shrinkRoundToolContents(round []Message, tokenBudget int) []Message {
+	out := make([]Message, len(round))
+	copy(out, round)
+	if tokenBudget <= 0 {
+		return out
+	}
+	cur := estimateRoundTokens(out)
+	if cur <= tokenBudget {
+		return out
+	}
+	ratio := float64(tokenBudget) / float64(cur)
+	if ratio > 1 {
+		ratio = 1
+	}
+	for i, m := range out {
+		if m.Role == roleTool && len(m.Content) > 0 {
+			newLen := int(float64(len([]rune(m.Content))) * ratio)
+			newLen = max(1, newLen)
+			out[i].Content = truncateHeadTail(m.Content, newLen, "…[tool 结果已压缩]")
+		}
+	}
+	return out
+}
+
 // compactWithSummary 保留最早 1 轮 + 最近 keepRecent 轮，中段摘要为单条 KindSummary 消息。
 // 返回 (out, summary, usage, err)：out 含新 summary；summary 是该消息（.Kind=="" 表示无中段/失败）；
 // 中段配对断裂或摘要失败返回 error（调用方 FitHistory 回落 compactHistory）。无中段可摘返回
 // (msgs, Message{}, Usage{}, nil)。不再接收 newMsgs——持久化插入由 Run 完成。
 //
-// 跨轮继承（P2-1）：上轮 LoadSession 带入的旧 summary 经 applyCompactionBarrier 落在 msgs
-// 头，splitRounds 使其单独成 rounds[0]。middle 默认排除 rounds[0] → LLM 输入从未含旧
-// summary 文本，新 summary 不继承远古历史；下轮 barrier 命中新 summary 后旧 summary 被丢弃，
-// 其承载的历史永久失真。检测到该遗留 summary 时并入 middle 开头让 LLM 真正继承，并从 out 头
-// 移除——否则新旧 summary 双存，下轮 splitRounds 又把新 summary 孤立进 rounds[0] 重演同一
-// bug。首轮非 summary（正常 user 轮）维持原行为。
+// 跨轮继承（P2-1 + §P0-A UPDATE）：上轮 LoadSession 带入的旧 summary 经 applyCompactionBarrier
+// 落在 msgs 头，splitRounds 使其单独成 rounds[0]。
+//   - 默认路径（SummarizerPrompt==""）：用 stripSummaryPrefix 抽出旧摘要文本作 previousSummary
+//     经 Summarize 回调下传（UPDATE 模式），head 置 nil、旧摘要不再并入 middle——省一半 token
+//     （旧摘要不再作为 history 重读重写）、显式 preserve 指令降低丢细节概率。这是 99% 用户路径。
+//   - override 路径（SummarizerPrompt!=""）：维持旧行为，旧 summary 并入 middle 开头让 LLM 重读
+//     重写（previousSummary 传空），已设自定义 prompt 的用户零回归。
+//
+// 下轮 barrier 命中新 summary 后旧 summary 被丢弃；首轮非 summary（正常 user 轮）维持原行为。
 func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []Message, keepRecent int) (out []Message, summary Message, usage Usage, err error) {
 	rounds := splitRounds(msgs)
 	if len(rounds) <= 1+keepRecent {
 		return msgs, Message{}, Usage{}, nil // 无中段可摘
 	}
-	middle := flatten(rounds[1 : len(rounds)-keepRecent])
+	// §P1-E：tail 选择从纯轮数升级为 token 预算累加 + 边界轮细切（tokenBudget<=0 回落纯轮数，向后兼容）。
+	// 在 rounds[1:]（排除 head=rounds[0]）上选 tail，head 单独保留/并入 middle。
+	tokenBudget := preserveRecentTokens(budget)
+	tail, middleCore := selectTailByTokens(rounds[1:], keepRecent, tokenBudget)
 	head := rounds[0]
+	prevSummary := ""
 	if len(head) == 1 && head[0].Kind == KindSummary {
-		middle = append([]Message{head[0]}, middle...)
+		if budget.SummarizerPrompt == "" {
+			// 默认路径：抽旧摘要作 UPDATE 锚点，不再并入 middle 重读重写。
+			prevSummary = stripSummaryPrefix(head[0].Content)
+		} else {
+			// override 路径：维持旧行为，旧 summary 并入 middle 让 LLM 重读重写。
+			middleCore = append([]Message{head[0]}, middleCore...)
+		}
 		head = nil
 	}
+	middle := middleCore
 	if len(middle) == 0 {
 		return msgs, Message{}, Usage{}, nil
 	}
@@ -224,14 +528,23 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []Messag
 	if compModel == "" {
 		compModel = budget.Model
 	}
-	text, sumUsage, err := budget.Summarize(ctx, compModel, budget.SummarizerPrompt, middle)
+	// §P2：摘要 LLM 调用前触发 compaction hook（注入 context / 一次性替换 summarizerPrompt）。
+	// 必须排在 validateToolPairing(middle) 通过之后：context 注入仅追加无 tool_calls 的 user 消息，不破坏配对。
+	effPrompt, effMiddle, herr := applyCompactingHook(ctx, budget.Compacting, budget.SessionID, compModel, budget.SummarizerPrompt, middle)
+	if herr != nil {
+		return msgs, Message{}, Usage{}, herr // 实现A：hook 抛错上抛中止压缩
+	}
+	text, sumUsage, err := budget.Summarize(ctx, compModel, effPrompt, prevSummary, effMiddle)
 	if err != nil {
 		return msgs, Message{}, Usage{}, err
 	}
-	summaryMsg := Message{Role: roleUser, Kind: KindSummary, Content: "[既往对话摘要]\n" + text}
+	// §P0-B：summaryMsg 显式打新戳 nowMs()（不经 appendMsg）——防陈旧的关键触发点：新 Ts 使其前
+	// assistant 的真实 usage 在下一轮 estimateTokensFromUsage 中失效（lastApplicableUsageIndex 的
+	// latestSummaryTs 抬高），强制回落本地估算重算压缩后的小体积历史，避免陈旧大 usage 立即二次压缩。
+	summaryMsg := Message{Role: roleUser, Kind: KindSummary, Content: summaryPrefix + text, Ts: nowMs()}
 	out = append([]Message{}, head...)
 	out = append(out, summaryMsg)
-	out = append(out, flatten(rounds[len(rounds)-keepRecent:])...)
+	out = append(out, tail...)
 	return out, summaryMsg, sumUsage, nil
 }
 
@@ -268,6 +581,14 @@ const perToolSchemaTokens = 60
 // P3：从 6 下调到 4——稳态占用降一截，更早的轮次由 summary（已含关键事实）承载；配置钩子
 // cfg.Run.ContextKeepRecent 仍在，长 ReAct 场景可调回更高值。
 const contextKeepRecent = 4
+
+// §P1-E retainedTail token 预算上下界与分母（移植自 opencode compaction.ts:33-34/80-85 的
+// MIN/MAX_PRESERVE_RECENT_TOKENS）。tailBudgetFraction=4 对应 opencode usable*0.25 的 1/4（这里用 ContextWindow/4）。
+const (
+	minPreserveRecentTokens = 2000
+	maxPreserveRecentTokens = 8000
+	tailBudgetFraction      = 4
+)
 
 // contextKeepReasoning 是主动 reasoning 清理默认保留的最近 assistant 消息条数（P1）。
 // 1 = 仅保留最近一条 assistant 的思考链（当前推理上下文），更早的清空。
