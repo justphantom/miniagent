@@ -11,16 +11,26 @@ import (
 )
 
 func TestResolveSessionPath(t *testing.T) {
-	if p, err := ResolveSessionPath("s.json", "dir"); err != nil || p != "s.json" {
-		t.Errorf("path arg should be used as-is: p=%q err=%v", p, err)
-	}
-	if p, err := ResolveSessionPath("./x/s.jsonl", "dir"); err != nil || !strings.HasSuffix(p, "s.jsonl") {
-		t.Errorf("relative path: p=%q err=%v", p, err)
-	}
+	// 合法 id → {dir}/{id}.jsonl
 	p, err := ResolveSessionPath("mysess", ".miniagent/sessions")
 	if err != nil || p != filepath.Join(".miniagent/sessions", "mysess.jsonl") {
 		t.Errorf("id resolution: p=%q err=%v", p, err)
 	}
+	// 生成 id 形态（字母/数字/-）合法。
+	if _, err := ResolveSessionPath("20260805-143022-abc123", "dir"); err != nil {
+		t.Errorf("generated-style id should be valid: %v", err)
+	}
+	// 非法字符（路径分隔符、点、空格等）必须报错。
+	for _, bad := range []string{"s.json", "./x/s", "a/b", "a\\b", "a b", ".."} {
+		if _, err := ResolveSessionPath(bad, "dir"); err == nil {
+			t.Errorf("bad id %q should error", bad)
+		}
+	}
+	// 空报错。
+	if _, err := ResolveSessionPath("", "dir"); err == nil {
+		t.Error("empty id should error")
+	}
+	// dir 空报错。
 	if _, err := ResolveSessionPath("mysess", ""); err == nil {
 		t.Error("id without dir should error")
 	}

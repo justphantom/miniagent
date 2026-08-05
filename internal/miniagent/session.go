@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 )
 
@@ -59,16 +58,33 @@ type sessionLine struct {
 	Message
 }
 
-// ResolveSessionPath 解析 -session：含路径分隔符/「.」/绝对路径→视为路径（双语义兼容老 .json/.jsonl）；纯 id → {dir}/{id}.jsonl。dir 空且是 id 报错。
+// ValidateSessionID 白名单校验 id：仅允许拉丁字母、数字、连字符。禁路径分隔符/点/空格等，
+// 使 id 只作文件名主体（.jsonl 扩展名由 ResolveSessionPath 补），杜绝路径穿越与扩展名注入。
+func ValidateSessionID(id string) error {
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-':
+		default:
+			return fmt.Errorf("session id %q 含非法字符 %q（仅允许拉丁字母、数字、-）", id, r)
+		}
+	}
+	return nil
+}
+
+// ResolveSessionPath 校验 id（白名单）后拼 {dir}/{id}.jsonl。仅解析路径，不判文件存在性——
+// 新建（-save-session）与接续（-session）的存在性语义由调用方裁决（resolveSessionForRun）。
 func ResolveSessionPath(arg, dir string) (string, error) {
 	if arg == "" {
 		return "", errors.New("session 参数为空")
 	}
-	if filepath.IsAbs(arg) || strings.ContainsAny(arg, "/."+string(filepath.Separator)) {
-		return arg, nil
+	if err := ValidateSessionID(arg); err != nil {
+		return "", err
 	}
 	if dir == "" {
-		return "", fmt.Errorf("session %q 是 id 但未配置 session.dir（或传完整路径）", arg)
+		return "", fmt.Errorf("session %q 有效但未配置 session.dir", arg)
 	}
 	return filepath.Join(dir, arg+".jsonl"), nil
 }

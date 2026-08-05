@@ -156,7 +156,8 @@ func TestCLI_ResultOnlyError(t *testing.T) {
 	}
 }
 
-// config 模式 e2e：system prompt 含 subagent 引导（config 绝对路径 + 父 session id）。
+// config 模式 e2e：system prompt 含 subagent 引导（config 绝对路径 + 无状态 fork 命令）。
+// subagent 改无状态后不再注入父 session id——无状态调用即触发 guidance 注入。
 func TestCLI_SubagentPromptInjected(t *testing.T) {
 	var mu sync.Mutex
 	var body string
@@ -174,8 +175,7 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sessID := "parent1"
-	code, out := runMainBin(t, "hi", []string{"-config", cfgPath, "-session", sessID}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "hi", []string{"-config", cfgPath}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -185,7 +185,7 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	if !strings.Contains(body, abs) {
 		t.Errorf("system prompt missing config abs path %q: %s", abs, body)
 	}
-	if !strings.Contains(body, sessID+"-sub-") {
-		t.Errorf("system prompt missing parent session id guidance: %s", body)
+	if !strings.Contains(body, "无状态") || !strings.Contains(body, "subagent") {
+		t.Errorf("system prompt missing subagent stateless guidance: %s", body)
 	}
 }

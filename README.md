@@ -4,7 +4,7 @@
 
 - 后端：OpenAI 兼容的 chat completions 接口（config 模式 provider 各自的完整 chat/models URL）
 - 默认非流式：每次 LLM 调用是普通 POST，等完整响应返回；传 `-stream` 改走 SSE，增量发 `text_delta`/`reasoning_delta` 事件
-- 会话：默认无状态；传 `-session <id|path>` 时以 jsonl append-only 落盘（首行 metadata + 每条 message），跨进程接续对话
+- 会话：默认无状态；`-save-session` 新建并落盘（id 内部生成），`-session <id>` 接续已存在会话；均以 jsonl append-only 落盘（首行 metadata + 每条 message），跨进程接续对话。二者互斥
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
 - 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`internal/miniagent/platform_windows.go`）
@@ -40,13 +40,16 @@ make test       # go test -race ./...
 -mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
 -model string            LLM 模型（config 模式 provider/id）
 -result-only             仅输出 result.text（subagent fork 用）；与 -stream 互斥。失败输出 "error: <msg>" + 退出码 1
--session string          session id 或路径（id 在 session.dir 解析为 .jsonl；含 / 或 . 视为路径）
+-save-session            新建会话并落盘（id 内部生成；与 -session 互斥）
+-session string          接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错；仅允许字母/数字/-）
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
 -system string           系统提示词（默认为面向工程代码开发的代码向 prompt）
 -thinking string         思考级别 off|minimal|low|medium|high|xhigh|max（默认 off，wire 透传 reasoning_effort）
 -version                 显示版本号并退出
 -workdir string          工作目录（default 模式写工具边界 + shell 的 cwd；也是 .miniagent/ 规则发现根）
 ```
+
+> 破坏性变更（session 重构）：`-session` 改为**仅接续**——纯 id（仅允许字母/数字/-，禁 `/`/`.`/`\`），文件须已存在，不存在则报错退出；新增 `-save-session` 新建会话（id 内部生成，stderr 打印 `miniagent: session id: <id>`）；二者互斥。移除 `-session` 的路径双语义与"文件不存在则新建"行为。subagent fork 改无状态（不再落盘会话、不再注入父 session id）。
 
 > v3.2 破坏性变更：删除裸 CLI 模式（`-chat-url`/`-models-url`）与 `-migrate-session` 子命令；`-summary-request`/`-summarizer-prompt`/`-max-tokens-total`/`-context-window`/`-max-duration`/`-shell-timeout` 移出 CLI、改为仅 `config`（`defaults.*` / `run.*`）；`multi_edit` 工具并入 `edit`（`edits` 数组）。这些参数仍在 `miniagent.json` 可配，仅不再暴露为 flag。
 
@@ -64,6 +67,7 @@ make test       # go test -race ./...
 - API key 缺失（provider.key / `$MINIAGENT_API_KEY` 均无）→ stderr 报错，退出码 1
 - `default` 模式无 `-workdir` → stderr 报错，退出码 1（用 `-mode auto` 放行）
 - `-stream` 与 `-result-only` 同传 → stderr 报错，退出码 1
+- `-save-session` 与 `-session` 同传 → stderr 报错，退出码 1
 - stdin 为空 → stderr 报错 `miniagent: stdin is empty (send prompt via pipe or redirect)`，退出码 1
 
 ## NDJSON 输出结构
@@ -206,12 +210,17 @@ make test       # go test -race ./...
 - 退出码：成功 `ExitCode=0`；命令非 0 退出 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；超时/启动失败 `IsError=true` + `ExitCode=-1`（`exitCodeNotSet`）。LLM 据 `ExitCode` 判命令成败
 - 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；另剥离变量名（大写后）含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT）的第三方凭证变量（PAT 排除含 PATH 的路径类变量如 `PATH`/`GITHUB_PATH`）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
-## 会话接续（-session）
+## 会话（-save-session / -session）
 
-缺省为无状态单次调用。传 `-session <id|path>` 后（id 在 `session.dir` 解析为 `<dir>/<id>.jsonl`；含 `/` 或 `.` 视为路径）：
+缺省为无状态单次调用（不落盘）。两种落盘方式，**互斥**：
+
+- **`-save-session`**：新建会话并落盘。id 由程序内部生成（`<时间戳>-<随机>`，仅字母/数字/-），stderr 打印 `miniagent: session id: <id>` 供下次接续。
+- **`-session <id>`**：接续**已存在**的会话。id 在 `session.dir` 解析为 `<dir>/<id>.jsonl`；仅允许字母/数字/-（禁 `/`/`.`/`\` 等，杜绝路径穿越与扩展名注入）；文件不存在则报错退出（防 typo 创建垃圾会话）。
+- 二者同传 → stderr 报错，退出码 1。
+
+落盘格式与语义：
 
 - 文件格式为 jsonl：首行 `{"type":"session",...}` metadata（id/model/workdir/provider/created），其后每行一条 `{"type":"message",...}`。metadata 一致性：`-session` 指向已存在文件时，workdir/model 不一致仅 stderr warn。
-- 文件存在则加载其中消息作为历史前缀；不存在则视为新会话，首次落盘时补 metadata 行。
 - Run 成功后 **append-only 追加本轮 NewMessages**（user prompt + assistant/tool 往返 + 最终回答 + 可能的 summary），不重写全量（权限 0o600）。
 - Run 出错（LLM 失败/取消/超 window 终止）不追加——失败轮不固化，但工具副作用可能已发生且无记录。
 - **并发**：同一 session 文件同一时刻仅单写者。append 经 `flock`（Windows 用字节区间锁）跨进程互斥，但 rename 换 inode 场景（机会性 rewrite）下跨进程并发不保证；多进程同写同一 session 应避免。
@@ -220,7 +229,7 @@ make test       # go test -race ./...
 - 文件损坏（非法 JSON 行、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 4 MiB 上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
 - **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
 - 思考内容（reasoning）：wire 解析响应里的 `reasoning_content` / `reasoning`（双兼容），随 assistant 消息进入上下文并以 `reasoning_content` 回灌；**随 session 落盘**（与 content 同级）。
-- 多轮对话通过多次调用同一 `-session` 实现：每次调用 stdin 的全部内容作为一个 turn 的完整 prompt。
+- 多轮接续：首轮 `-save-session`（从 stderr 记下生成的 id），后续轮 `-session <id>`；每次调用 stdin 的全部内容作为一个 turn 的完整 prompt。
 
 ## 退出码
 
@@ -370,7 +379,7 @@ echo "跑全量测试并总结" | \
   MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -mode auto -workdir .
 
 # subagent fork：把可并行子任务再调一次 miniagent（仅输出结果文本）
-echo "<子任务>" | ./bin/miniagent -session <父id>-sub-1 -workdir . -mode default -result-only
+echo "<子任务>" | ./bin/miniagent -config <path> -workdir . -mode default -result-only  # subagent 无状态，不落盘会话
 
 # 查看版本
 ./bin/miniagent -version

@@ -185,28 +185,44 @@ func TestCLI_InvalidLogLevelExits1(t *testing.T) {
 	}
 }
 
-// e2e：单次非交互运行带 -session 会把对话追加到 session 文件。
+// e2e：-save-session 新建会话，把对话落盘到 session.dir 下内部生成 id 的 jsonl。
 func TestCLI_SingleTurnSessionAppend(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer srv.Close()
 
-	sessPath := filepath.Join(t.TempDir(), "s.jsonl")
-	args := configArgs(t, srv.URL, "-session", sessPath)
-	code, out := runMainBin(t, "hi", args, "MINIAGENT_API_KEY=sk-test")
+	sessionDir := t.TempDir()
+	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
+	code, out := runMainBin(t, "hi", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
 	if !strings.Contains(out, `"type":"result"`) || !strings.Contains(out, `"text":"ok"`) {
 		t.Errorf("missing result event: %s", out)
 	}
-	data, err := os.ReadFile(sessPath)
+	matches, err := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected 1 session file, got %v (err=%v)", matches, err)
+	}
+	data, err := os.ReadFile(matches[0])
 	if err != nil {
 		t.Fatalf("read session: %v", err)
 	}
 	if !strings.Contains(string(data), `"role":"user"`) || !strings.Contains(string(data), `"role":"assistant"`) {
 		t.Errorf("session missing messages: %s", data)
+	}
+}
+
+// -save-session 与 -session 互斥。
+func TestCLI_SaveSessionMutex(t *testing.T) {
+	args := configArgs(t, "http://127.0.0.1:1", "-save-session", "-session", "x")
+	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "互斥") {
+		t.Errorf("missing mutex error: %s", out)
 	}
 }
 

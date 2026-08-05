@@ -23,6 +23,7 @@ type cliFlags struct {
 	maxTokens     *int
 	workdir       *string
 	session       *string
+	saveSession   *bool
 	logLevel      *string
 	showVer       *bool
 	maxIterations *int
@@ -44,7 +45,8 @@ func parseFlags() *cliFlags {
 	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
 	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
-	f.session = flag.String("session", "", "session id 或路径（id 在 session.dir 解析为 .jsonl）")
+	f.session = flag.String("session", "", "接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错）")
+	f.saveSession = flag.Bool("save-session", false, "新建会话并落盘（id 内部生成；与 -session 互斥）")
 	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
 	f.maxIterations = flag.Int("max-iterations", 0, "单轮 LLM 调用上限（0=默认 20）")
 	f.stream = flag.Bool("stream", false, "流式输出（SSE）；默认非流式")
@@ -121,14 +123,14 @@ func main() {
 	}
 	workdir := effectiveWorkdir(resolved, f)
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
-	sessPath, meta, history := resolveSessionForRun(*f.session, sessionDir, modelSpec, workdir)
+	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, workdir)
 	// memory_recent_n 必须在 loadProjectRules（内部 FormatMemorySnippet 已格式化注入片段）
 	// 之前生效，否则 run.memory_recent_n 对当前进程的注入无效（启动快照已用旧 N）。
 	miniagent.SetMemoryRecentN(into(resolved.Run.MemoryRecentN, 0))
 	// P0/P5：发现 .miniagent/ 项目规则与记忆，合并进 system prompt（persona>rules>defaults）。
 	pr := loadProjectRules(workdir)
 	resolved.System = mergeSystemPrompt(resolved.System, pr.persona, pr.rules, pr.memory, pr.hasAny())
-	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), meta.ID, resolved.Mode)
+	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), resolved.Mode)
 
 	// 应用运行时配置覆盖（优先级：config>builtin）。
 	miniagent.SetMaxReadFileBytes(maxReadFileBytesOf(resolved))

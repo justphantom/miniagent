@@ -18,7 +18,19 @@ import (
 	"time"
 )
 
-// 两轮接续 e2e：第二轮请求体含第一轮回答，session jsonl 落盘。
+// writeSessionConfig 写一份指向 srvURL 的临时 config，session.dir=sessionDir，mode=auto（免 workdir）。
+func writeSessionConfig(t *testing.T, srvURL, sessionDir string) string {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
+	body := `{"session":{"dir":"` + sessionDir + `"},"providers":[{"name":"p","chat_url":"` + srvURL + `/v1/chat/completions","models_url":"` + srvURL + `/v1/models"}],"defaults":{"model":"p/m","mode":"auto"}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cfgPath
+}
+
+// 两轮接续 e2e：turn1 -save-session 新建（id 内部生成），turn2 -session <id> 接续。
+// 验证第二轮请求体含第一轮回答，且 session jsonl 落盘两轮内容。
 func TestCLI_SessionTwoTurns(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []string
@@ -31,13 +43,20 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sess := filepath.Join(t.TempDir(), "s.jsonl")
-	args := configArgs(t, srv.URL, "-session", sess)
-	code, out := runMainBin(t, "第一轮提问", args, "MINIAGENT_API_KEY=sk-test")
+	sessionDir := t.TempDir()
+	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
+	code, out := runMainBin(t, "第一轮提问", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("turn1 code = %d, out = %s", code, out)
 	}
-	code, out = runMainBin(t, "第二轮提问", args, "MINIAGENT_API_KEY=sk-test")
+	matches, err := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected 1 session file, got %v (err=%v) out=%s", matches, err, out)
+	}
+	sess := matches[0]
+	id := strings.TrimSuffix(filepath.Base(sess), ".jsonl")
+
+	code, out = runMainBin(t, "第二轮提问", []string{"-config", cfgPath, "-session", id}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("turn2 code = %d, out = %s", code, out)
 	}
@@ -61,20 +80,35 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 	}
 }
 
-// 损坏 session → 报错退出 1。
+// 损坏 session → 接续时报错退出 1。
 func TestCLI_CorruptSessionExits1(t *testing.T) {
-	sess := filepath.Join(t.TempDir(), "bad.jsonl")
+	sessionDir := t.TempDir()
+	sess := filepath.Join(sessionDir, "bad.jsonl")
 	// 中间损坏（合法行夹非法行）：LoadSession 严格报错（尾行半写才容忍），CLI 退出码 1。
-	body := "{\"type\":\"session\",\"id\":\"s\"}\n{oops}\n{\"type\":\"message\",\"role\":\"user\",\"content\":\"q\"}\n"
+	body := "{\"type\":\"session\",\"id\":\"bad\"}\n{oops}\n{\"type\":\"message\",\"role\":\"user\",\"content\":\"q\"}\n"
 	if err := os.WriteFile(sess, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out := runMainBin(t, "prompt", configArgs(t, "http://127.0.0.1:1", "-session", sess), "MINIAGENT_API_KEY=sk-test")
+	cfgPath := writeSessionConfig(t, "http://127.0.0.1:1", sessionDir)
+	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath, "-session", "bad"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
 	if !strings.Contains(out, "load session") {
 		t.Errorf("missing error: %s", out)
+	}
+}
+
+// -session 指向不存在的会话 → 报错退出 1（防 typo 建垃圾会话；新建须 -save-session）。
+func TestCLI_ResumeMissingSessionExits1(t *testing.T) {
+	sessionDir := t.TempDir()
+	cfgPath := writeSessionConfig(t, "http://127.0.0.1:1", sessionDir)
+	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath, "-session", "nope"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "不存在") {
+		t.Errorf("missing not-exist error: %s", out)
 	}
 }
 

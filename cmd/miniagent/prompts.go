@@ -16,26 +16,23 @@ const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真
 - 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。`
 
 // injectSubagentGuidance 把 subagent fork 引导附加到 system prompt：注入 config 绝对路径
-// 与父 session id（审查 v1 #12 + v2 #9 + v3 #6/#8）。configAbsPath 空（裸模式）则不注入——
-// subagent fork 依赖 -config。mode 透传父会话的权限模式（审查 v3 P3）：不再硬编码 default，
-// auto 父会话 fork 出的 subagent 继承 auto；空值回落 default（与 resolved.Mode 兜底一致）。
-func injectSubagentGuidance(system, configAbsPath, parentSessionID, mode string) string {
+// （审查 v1 #12 + v2 #9 + v3 #6/#8）。configAbsPath 空则不注入。mode 透传父会话权限模式
+// （审查 v3 P3）：不再硬编码 default，auto 父会话 fork 出的 subagent 继承 auto；空值回落 default。
+// subagent 为无状态单次调用（不落盘会话，stdout 即结果），故不再注入父 session id。
+func injectSubagentGuidance(system, configAbsPath, mode string) string {
 	if configAbsPath == "" {
 		return system
-	}
-	if parentSessionID == "" {
-		parentSessionID = "<父session>"
 	}
 	if mode == "" {
 		mode = "default"
 	}
-	return system + "\n\n" + subagentGuidance(configAbsPath, parentSessionID, mode)
+	return system + "\n\n" + subagentGuidance(configAbsPath, mode)
 }
 
 // subagentGuidance 构造 fork 命令模板与递归约束文案。mode 透传父会话权限模式
 // （审查 v3 P3）：默认 default，父 auto 时 subagent 命令用 -mode auto。
-func subagentGuidance(configAbsPath, parentSessionID, mode string) string {
+func subagentGuidance(configAbsPath, mode string) string {
 	return fmt.Sprintf(`- 子任务委派：可并行的子任务用 shell 再调一次 miniagent（仅在必要时 fork，建议嵌套≤2 层）：
-  echo "<子任务>" | miniagent -config %s -session %s-sub-<n> -workdir . -mode %s -result-only
-  session id 用「%s-sub-<序号>」，勿复用父 id；stdout 纯文本即结果。`, configAbsPath, parentSessionID, mode, parentSessionID)
+  echo "<子任务>" | miniagent -config %s -workdir . -mode %s -result-only
+  subagent 为无状态单次调用（不落盘会话）；stdout 纯文本即结果。`, configAbsPath, mode)
 }

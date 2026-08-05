@@ -14,21 +14,24 @@ func TestDefaultSystemPrompt_CoversWorkflow(t *testing.T) {
 	}
 }
 
-// subagentGuidance 默认 mode=default 时，生成的 fork 命令含 -mode default
-// 且保留 config 路径与 session 模板（审查 v3 P3）。
+// subagentGuidance 默认 mode=default 时，fork 命令含 -mode default 与 config 路径，
+// 且标注无状态（不落盘会话）。
 func TestSubagentGuidance_DefaultMode(t *testing.T) {
-	got := subagentGuidance("/abs/miniagent.json", "sess1", "default")
+	got := subagentGuidance("/abs/miniagent.json", "default")
 	if !strings.Contains(got, "-mode default") {
 		t.Errorf("default mode: expected -mode default in:\n%s", got)
 	}
-	if !strings.Contains(got, "/abs/miniagent.json") || !strings.Contains(got, "sess1-sub-") {
-		t.Errorf("missing config path or session template:\n%s", got)
+	if !strings.Contains(got, "/abs/miniagent.json") {
+		t.Errorf("missing config path:\n%s", got)
+	}
+	if !strings.Contains(got, "无状态") {
+		t.Errorf("missing stateless hint:\n%s", got)
 	}
 }
 
 // 父会话 mode=auto 时透传：fork 命令应含 -mode auto，而非硬编码 default（审查 v3 P3）。
 func TestSubagentGuidance_AutoMode(t *testing.T) {
-	got := subagentGuidance("/abs/miniagent.json", "sess1", "auto")
+	got := subagentGuidance("/abs/miniagent.json", "auto")
 	if !strings.Contains(got, "-mode auto") {
 		t.Errorf("auto mode: expected -mode auto in:\n%s", got)
 	}
@@ -41,7 +44,7 @@ func TestSubagentGuidance_AutoMode(t *testing.T) {
 // configAbsPath 空不注入（审查 v3 P3）。
 func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
 	const base = "SYS"
-	out := injectSubagentGuidance(base, "/abs/miniagent.json", "s1", "auto")
+	out := injectSubagentGuidance(base, "/abs/miniagent.json", "auto")
 	if !strings.Contains(out, "-mode auto") {
 		t.Errorf("auto not propagated:\n%s", out)
 	}
@@ -49,12 +52,12 @@ func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
 		t.Errorf("system prompt should be prefix, got: %s", out)
 	}
 	// 空值兜底 default。
-	out2 := injectSubagentGuidance(base, "/abs/miniagent.json", "s1", "")
+	out2 := injectSubagentGuidance(base, "/abs/miniagent.json", "")
 	if !strings.Contains(out2, "-mode default") {
 		t.Errorf("empty mode should fall back to default:\n%s", out2)
 	}
 	// configAbsPath 空不注入。
-	if got := injectSubagentGuidance(base, "", "s1", "auto"); got != base {
+	if got := injectSubagentGuidance(base, "", "auto"); got != base {
 		t.Errorf("empty config path should not inject, got: %s", got)
 	}
 }

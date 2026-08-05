@@ -11,9 +11,9 @@ import (
 // 按 cli>config>builtin 优先级裁决。指针为 nil 表示未传入。P2 后仅保留 CLI 核心参数；
 // 策略参数（summary/duration/window 等）只在 config，故此处不含。
 type CLIOverrides struct {
-	Model, Thinking, Mode, System, Workdir, Session *string
-	MaxTokens, MaxIterations                        *int
-	Stream, ResultOnly                              *bool
+	Model, Thinking, Mode, System, Workdir *string
+	MaxTokens, MaxIterations               *int
+	Stream, ResultOnly                     *bool
 }
 
 // ResolvedRun 是 Resolve 输出的运行参数（duration 已解析）；nil 表示未设置，main 回落 flag 默认。

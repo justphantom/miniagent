@@ -75,9 +75,6 @@ func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	if set["workdir"] {
 		o.Workdir = f.workdir
 	}
-	if set["session"] {
-		o.Session = f.session
-	}
 	if set["max-tokens"] {
 		o.MaxTokens = f.maxTokens
 	}
@@ -104,6 +101,10 @@ func resolveFinalKey(providerKey string) string {
 func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
 	if *f.stream && *f.resultOnly {
 		fmt.Fprintln(os.Stderr, "miniagent: -stream 与 -result-only 互斥")
+		os.Exit(1)
+	}
+	if *f.saveSession && *f.session != "" {
+		fmt.Fprintln(os.Stderr, "miniagent: -save-session 与 -session 互斥")
 		os.Exit(1)
 	}
 	if resolved.Mode == miniagent.ModeDefault && effectiveWorkdir(resolved, f) == "" {
