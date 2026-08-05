@@ -15,7 +15,9 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-var version = "3.4.0"
+// version 由 make build 经 -ldflags "-X main.version=$(git describe --tags)" 注入；
+// 不在源码写死字面量，避免发版后滞后。未注入时为空串。
+var version string
 
 type cliFlags struct {
 	model         *string
