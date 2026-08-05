@@ -3,10 +3,15 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [4.0.1] - 2026-08-05
+
+> session id 输出契约迁移到 stdout NDJSON、Provider 字段补全、id 随机段扩位。
+
+### Breaking
+- **session id 输出契约改为 stdout NDJSON 首条事件**：`-save-session` 新建会话时，session 元数据（与 jsonl 首行 metadata 同构：id/model/workdir/provider/created）作为 stdout 第一条 `session` 事件输出，替代此前的 stderr 文本行 `miniagent: session id: <id>`；外部 stderr grep 该文本行的消费方需改为读 stdout 首行 JSON 的 `id` 字段。
+- **`SessionMeta.Provider` 字段补全**：新建会话此前未填 Provider，jsonl 首行与 stdout session 事件的 `provider` 恒为 `""`，与「多 provider 溯源」设计意图及字段定义不符；现填 config 解析出的 provider 名。仅影响此前落盘会话文件的该字段为空（不影响接续读写）。
 
 ### Changed
-- **session id 输出契约改为 stdout NDJSON 首条事件**：`-save-session` 新建会话时，session 元数据（与 jsonl 首行 metadata 同构：id/model/workdir/provider/created）作为 stdout 第一条 `session` 事件输出，替代此前的 stderr 文本行 `miniagent: session id: <id>`；消费方可从首行程序化捕获会话 id 接续下轮。
 - **`-save-session` 与 `-result-only` 互斥**：subagent fork 无状态、不落盘会话；二者同传 stderr 报错退出码 1（此前未拦，理论上会向 result-only 的纯文本 stdout 掺入 NDJSON）。
 - **会话 id 随机段提升到 64 bit**：`generateSessionID` 随机段从 4 字节（32 bit）提至 8 字节（64 bit），同秒并发新建碰撞阈值从 ~2^16 抬到 ~2^32 量级，覆盖 CI 矩阵/批量 fork；`crypto/rand` 失败回落由裸时间戳改为时间戳+pid，避免同秒不同进程必碰撞。
 

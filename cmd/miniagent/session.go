@@ -19,7 +19,7 @@ const defaultSessionDir = ".miniagent/sessions"
 //   - saveNew=true：新建会话，generateSessionID 生成 id，构造 meta（id 的 stdout NDJSON 输出由 main 的 EmitSession 负责），history=nil。
 //   - sessionArg!=""：接续，校验 id 后 LoadSession；文件不存在（meta.Type==""）报错防 typo 建垃圾会话。
 //   - 两者皆空：无状态，返回空 path（main 据此跳过落盘）。
-func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, workdir string) (string, miniagent.SessionMeta, []miniagent.Message) {
+func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string) (string, miniagent.SessionMeta, []miniagent.Message) {
 	if !saveNew && sessionArg == "" {
 		return "", miniagent.SessionMeta{}, nil
 	}
@@ -39,12 +39,14 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, workd
 	}
 	if meta.Type == "" {
 		if saveNew {
-			// 新会话：构造 metadata（Type 由 AppendMessages 补 session）。
+			// 新会话：构造 metadata（Type 由 AppendMessages 补 session）。Provider 独立于
+			// modelSpec（"provider/id"）单列，供会话列举/多 provider 溯源免解析字符串。
 			meta = miniagent.SessionMeta{
-				ID:      id,
-				Model:   modelSpec,
-				Workdir: absWorkdir(workdir),
-				Created: time.Now().Format(time.RFC3339),
+				ID:       id,
+				Model:    modelSpec,
+				Provider: provider,
+				Workdir:  absWorkdir(workdir),
+				Created:  time.Now().Format(time.RFC3339),
 			}
 		} else {
 			// 接续但文件不存在 → 报错（防 typo 创建垃圾会话；新建请用 -save-session）。

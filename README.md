@@ -126,7 +126,7 @@ make test       # go test -race ./...
 新建会话（`-save-session`，首条为 `session` 事件）：
 
 ```jsonl
-{"type":"session","id":"20240105-120000-a1b2c3d4e5f6a7b8","model":"openai/gpt-4o","workdir":"/repo","provider":"","created":"2024-01-05T12:00:00Z"}
+{"type":"session","id":"20240105-120000-a1b2c3d4e5f6a7b8","model":"openai/gpt-4o","workdir":"/repo","provider":"openai","created":"2024-01-05T12:00:00Z"}
 {"type":"tool_use","name":"read","input":"{\"path\":\"a.go\"}"}
 {"type":"result","text":"...","model":"gpt-4o","input_tokens":100,"output_tokens":20,"steps":2}
 ```

@@ -123,7 +123,7 @@ func main() {
 	}
 	workdir := effectiveWorkdir(resolved, f)
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
-	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, workdir)
+	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, resolved.Provider.Name, workdir)
 	if *f.saveSession {
 		// 新建会话：session 元数据作为 stdout NDJSON 首条事件（与 jsonl 首行同构），供消费方程序化捕获接续 id。
 		// 互斥保证 -result-only 下不会触发，不污染 subagent 的纯文本 stdout。
