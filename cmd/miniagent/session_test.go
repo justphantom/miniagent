@@ -24,7 +24,7 @@ func TestGenerateSessionID_Format(t *testing.T) {
 // 同秒并发生成不应碰撞（随机段 64 bit 保证；回落路径加 pid 也区分同秒不同进程）。
 func TestGenerateSessionID_Unique(t *testing.T) {
 	seen := map[string]bool{}
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		id := generateSessionID()
 		if seen[id] {
 			t.Fatalf("第 %d 次碰撞: %q", i, id)
