@@ -45,7 +45,7 @@ func TestListAllModels_StaticNoGET(t *testing.T) {
 	if err != nil {
 		t.Fatalf("static list: %v", err)
 	}
-	if len(ids) != 2 || ids[0] != "p/a" {
+	if len(ids) != 2 || ids[0] != (ModelRef{Provider: "p", Model: "a"}) {
 		t.Errorf("ids = %v", ids)
 	}
 }
@@ -75,18 +75,18 @@ func TestListAllModels_MultiProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := map[string]bool{
-		"openai/gpt-4o":           true,
-		"openai/gpt-3.5":          true,
-		"deepseek/deepseek-chat":  true,
-		"deepseek/deepseek-coder": true,
+	want := map[ModelRef]bool{
+		{Provider: "openai", Model: "gpt-4o"}:            true,
+		{Provider: "openai", Model: "gpt-3.5"}:           true,
+		{Provider: "deepseek", Model: "deepseek-chat"}:   true,
+		{Provider: "deepseek", Model: "deepseek-coder"}:  true,
 	}
 	if len(ids) != 4 {
 		t.Fatalf("want 4 ids, got %d: %v", len(ids), ids)
 	}
 	for _, id := range ids {
 		if !want[id] {
-			t.Errorf("unexpected id: %s", id)
+			t.Errorf("unexpected ref: %+v", id)
 		}
 	}
 }
@@ -105,17 +105,17 @@ func TestListAllModels_MixedStaticAndDynamic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := map[string]bool{
-		"static/static-1":       true,
-		"static/static-2":       true,
-		"dynamic/dynamic-model": true,
+	want := map[ModelRef]bool{
+		{Provider: "static", Model: "static-1"}:       true,
+		{Provider: "static", Model: "static-2"}:       true,
+		{Provider: "dynamic", Model: "dynamic-model"}: true,
 	}
 	if len(ids) != 3 {
 		t.Fatalf("want 3 ids, got %d: %v", len(ids), ids)
 	}
 	for _, id := range ids {
 		if !want[id] {
-			t.Errorf("unexpected id: %s", id)
+			t.Errorf("unexpected ref: %+v", id)
 		}
 	}
 }
@@ -138,8 +138,8 @@ func TestListAllModels_PartialFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from failed provider")
 	}
-	if len(ids) != 1 || ids[0] != "ok/model-a" {
-		t.Errorf("want [ok/model-a], got %v", ids)
+	if len(ids) != 1 || ids[0] != (ModelRef{Provider: "ok", Model: "model-a"}) {
+		t.Errorf("want [{ok model-a}], got %v", ids)
 	}
 	if !strings.Contains(err.Error(), "fail") {
 		t.Errorf("error should mention failing provider: %v", err)
@@ -177,7 +177,7 @@ func TestListAllModels_PerProviderKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(ids[0], "Bearer shared") || !strings.Contains(ids[1], "Bearer key-b") {
+	if ids[0].Model != "Bearer shared" || ids[1].Model != "Bearer key-b" {
 		t.Errorf("per-provider key not respected: %v", ids)
 	}
 }
@@ -197,13 +197,13 @@ func TestListAllModels_DeterministicOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"p1/m", "p2/m", "p3/m"}
+	want := []ModelRef{{Provider: "p1", Model: "m"}, {Provider: "p2", Model: "m"}, {Provider: "p3", Model: "m"}}
 	if len(ids) != len(want) {
 		t.Fatalf("want %v, got %v", want, ids)
 	}
 	for i, id := range ids {
 		if id != want[i] {
-			t.Errorf("order mismatch at %d: got %s, want %s", i, id, want[i])
+			t.Errorf("order mismatch at %d: got %+v, want %+v", i, id, want[i])
 		}
 	}
 }

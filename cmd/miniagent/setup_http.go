@@ -46,7 +46,7 @@ func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
 
 // listAllModels 按 provider 解析 key（provider.Key > $MINIAGENT_API_KEY）并复用统一
 // transport/timeout，聚合模型列表。
-func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]string, error) {
+func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]miniagent.ModelRef, error) {
 	keyFor := func(p miniagent.ProviderConfig) string {
 		if p.Key != "" {
 			return p.Key
@@ -58,6 +58,37 @@ func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, ht
 	}
 	httpClient := newHTTPClient(httpTimeout, newHTTPTransport())
 	return miniagent.ListAllModels(ctx, providers, keyFor, httpClient, logger)
+}
+
+// runListModels 实现 -list-models 早退路径：逐行输出 NDJSON model 事件（provider/model
+// 分离字段）。providerFilter 非空时仅列出该 provider。部分失败：成功条目照常输出，退出码 1。
+func runListModels(ctx context.Context, cfg *miniagent.Config, providerFilter string, logger *slog.Logger) {
+	listHTTPTimeout, err := httpTimeoutFromConfig(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: config: %v\n", err)
+		os.Exit(1)
+	}
+	providers := cfg.Providers
+	if providerFilter != "" {
+		p, err := miniagent.FindProvider(cfg, providerFilter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
+			os.Exit(1)
+		}
+		providers = []miniagent.ProviderConfig{p}
+	}
+	warnProvidersInsecureURLs(providers)
+	models, err := listAllModels(ctx, providers, listHTTPTimeout, logger)
+	for _, m := range models {
+		if emitErr := miniagent.EmitModel(os.Stdout, m.Provider, m.Model); emitErr != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: emit model: %v\n", emitErr)
+			os.Exit(1)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // warnInsecureURL：http（非 loopback）时 API key 明文上链，stderr 警告。不强制拒绝。

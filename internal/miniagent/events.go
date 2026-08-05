@@ -66,6 +66,19 @@ func EmitSession(w io.Writer, meta SessionMeta) error {
 	return json.NewEncoder(w).Encode(meta)
 }
 
+// modelEvent 是 -list-models 输出的 NDJSON 事件（每行一个可用模型）。
+// provider/model 分离字段：model id 本身可含 '/'，文本行 "provider/model_id" 无法可靠拆分。
+type modelEvent struct {
+	Type     string `json:"type"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// EmitModel 写一条 model 事件。
+func EmitModel(w io.Writer, provider, model string) error {
+	return json.NewEncoder(w).Encode(modelEvent{Type: "model", Provider: provider, Model: model})
+}
+
 // maxToolResultEventChars 是 tool_result 事件里 output 的字符上限：事件给消费方看
 // 概要，完整结果仍经 trimForHistory 入历史回灌 LLM。与历史裁剪上限解耦。
 const maxToolResultEventChars = 2000

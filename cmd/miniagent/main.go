@@ -78,32 +78,9 @@ func main() {
 	defer stop()
 
 	if *f.listModels {
-		// list-models 不要求 -provider/-model（本就为发现模型），故不走 Resolve。
-		// 统一输出 "provider/model_id"（单 provider 也带前缀），-provider 可筛选单个 provider。
-		listHTTPTimeout, err := httpTimeoutFromConfig(cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: config: %v\n", err)
-			os.Exit(1)
-		}
-
-		providers := cfg.Providers
-		if f.provider != nil && *f.provider != "" {
-			p, err := miniagent.FindProvider(cfg, *f.provider)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
-				os.Exit(1)
-			}
-			providers = []miniagent.ProviderConfig{p}
-		}
-		warnProvidersInsecureURLs(providers)
-		ids, err := listAllModels(ctx, providers, listHTTPTimeout, logger)
-		for _, id := range ids {
-			fmt.Println(id)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
-			os.Exit(1)
-		}
+		// list-models 不要求 -provider/-model（本就为发现模型），故不走 Resolve；
+		// 逐行输出 NDJSON {"type":"model","provider","model"}。
+		runListModels(ctx, cfg, *f.provider, logger)
 		return
 	}
 

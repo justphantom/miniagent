@@ -87,19 +87,26 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	return ids, false, nil
 }
 
-// ListAllModels 聚合多个 provider 的可用模型，统一输出 "provider/model_id" 格式。
+// ModelRef 是一个可用的 provider/model 组合（ListAllModels 的返回单元）。
+// provider 与 model 分离，消费方无需从 "provider/model_id" 文本拆分
+// （model id 本身可含 '/'，文本拆分有歧义）。
+type ModelRef struct {
+	Provider, Model string
+}
+
+// ListAllModels 聚合多个 provider 的可用模型，以 ModelRef 切片返回（provider/model 分离）。
 // 并发请求各 provider 的 ModelsURL（最多 8 路并发）；静态 models（无 ModelsURL）直接返回配置，不 GET。
 // 单个 provider 失败时记录警告但继续其他，最终返回首个错误（若有）。
 // keyFor 按 provider 返回最终 API key；httpClient 非 nil 时复用其 transport/timeout。
 // 调用方须保证 providers 已校验（名称唯一、URL 合法）。
-func ListAllModels(ctx context.Context, providers []ProviderConfig, keyFor func(ProviderConfig) string, httpClient *http.Client, logger *slog.Logger) ([]string, error) {
+func ListAllModels(ctx context.Context, providers []ProviderConfig, keyFor func(ProviderConfig) string, httpClient *http.Client, logger *slog.Logger) ([]ModelRef, error) {
 	var (
 		firstErr error
 		mu       sync.Mutex
 		wg       sync.WaitGroup
 	)
 	// 按 provider 名称收集结果，最后按输入顺序拼接，保证输出稳定。
-	results := make(map[string][]string, len(providers))
+	results := make(map[string][]ModelRef, len(providers))
 
 	const maxConcurrent = 8
 	sem := make(chan struct{}, maxConcurrent)
@@ -137,9 +144,9 @@ func ListAllModels(ctx context.Context, providers []ProviderConfig, keyFor func(
 				mu.Unlock()
 				return
 			}
-			paired := make([]string, 0, len(ids))
+			paired := make([]ModelRef, 0, len(ids))
 			for _, id := range ids {
-				paired = append(paired, p.Name+"/"+id)
+				paired = append(paired, ModelRef{Provider: p.Name, Model: id})
 			}
 			mu.Lock()
 			results[p.Name] = paired
@@ -148,7 +155,7 @@ func ListAllModels(ctx context.Context, providers []ProviderConfig, keyFor func(
 	}
 	wg.Wait()
 
-	all := make([]string, 0)
+	all := make([]ModelRef, 0)
 	for _, p := range providers {
 		all = append(all, results[p.Name]...)
 	}

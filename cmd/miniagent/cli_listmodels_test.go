@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +13,29 @@ import (
 	"testing"
 )
 
-// -list-models：GET models-url，统一输出 "provider/model_id"（单 provider 也带前缀）。
+// modelLine 是 -list-models 输出的 NDJSON 事件（与 events.go modelEvent 同构）。
+type modelLine struct {
+	Type     string `json:"type"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// parseModelLines 从输出中提取 type=model 的 NDJSON 事件；非 JSON 行（stderr 文本）跳过，
+// 因为 runMainBin 把 stdout/stderr 合流（部分失败场景两者混杂）。
+func parseModelLines(t *testing.T, out string) []modelLine {
+	t.Helper()
+	var evs []modelLine
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		var ev modelLine
+		if err := json.Unmarshal([]byte(line), &ev); err != nil || ev.Type != "model" {
+			continue
+		}
+		evs = append(evs, ev)
+	}
+	return evs
+}
+
+// -list-models：GET models-url，逐行输出 NDJSON {"type":"model","provider","model"}。
 func TestCLI_ListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -26,17 +49,23 @@ func TestCLI_ListModels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
-	if !strings.Contains(out, "p/gpt-4o") || !strings.Contains(out, "p/gpt-3.5-turbo") {
-		t.Errorf("missing prefixed model ids: %s", out)
+	evs := parseModelLines(t, out)
+	if len(evs) != 2 {
+		t.Fatalf("want 2 model events, got %d: %s", len(evs), out)
 	}
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		if !strings.HasPrefix(line, "p/") {
-			t.Errorf("line missing provider prefix: %q", line)
+	got := map[string]bool{}
+	for _, ev := range evs {
+		if ev.Provider != "p" {
+			t.Errorf("provider = %q, want p", ev.Provider)
 		}
+		got[ev.Model] = true
+	}
+	if !got["gpt-4o"] || !got["gpt-3.5-turbo"] {
+		t.Errorf("missing models: %+v", evs)
 	}
 }
 
-// -list-models 多 provider：聚合所有 provider 的模型列表，输出 "provider/model_id" 格式。
+// -list-models 多 provider：聚合所有 provider 的模型列表，NDJSON 事件带各自 provider 字段。
 func TestCLI_ListModels_MultiProvider(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -59,8 +88,18 @@ func TestCLI_ListModels_MultiProvider(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
-	if !strings.Contains(out, "p1/gpt-4o") || !strings.Contains(out, "p2/deepseek-chat") {
-		t.Errorf("missing aggregated ids: %s", out)
+	evs := parseModelLines(t, out)
+	want := map[modelLine]bool{
+		{Type: "model", Provider: "p1", Model: "gpt-4o"}:        true,
+		{Type: "model", Provider: "p2", Model: "deepseek-chat"}: true,
+	}
+	if len(evs) != 2 {
+		t.Fatalf("want 2 events, got %d: %s", len(evs), out)
+	}
+	for _, ev := range evs {
+		if !want[ev] {
+			t.Errorf("unexpected event: %+v", ev)
+		}
 	}
 }
 
@@ -87,11 +126,9 @@ func TestCLI_ListModels_MultiProvider_ProviderFilter(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
-	if !strings.Contains(out, "p2/deepseek-chat") {
-		t.Errorf("missing filtered id: %s", out)
-	}
-	if strings.Contains(out, "p1/gpt-4o") {
-		t.Errorf("should not contain p1 ids: %s", out)
+	evs := parseModelLines(t, out)
+	if len(evs) != 1 || evs[0].Provider != "p2" || evs[0].Model != "deepseek-chat" {
+		t.Errorf("want only p2/deepseek-chat event, got %+v (out: %s)", evs, out)
 	}
 }
 
@@ -118,8 +155,9 @@ func TestCLI_ListModels_MultiProvider_PartialFailure(t *testing.T) {
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "ok/model-a") {
-		t.Errorf("missing successful provider id: %s", out)
+	evs := parseModelLines(t, out)
+	if len(evs) != 1 || evs[0].Provider != "ok" || evs[0].Model != "model-a" {
+		t.Errorf("want ok/model-a event, got %+v", evs)
 	}
 	if !strings.Contains(out, "fail") {
 		t.Errorf("error should mention failing provider: %s", out)

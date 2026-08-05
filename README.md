@@ -33,7 +33,7 @@ make test       # go test -race ./...
 
 ```
 -config string           配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）
--list-models             列出可用模型后退出，统一输出 provider/model_id（静态 models 不发 GET，否则 GET models-url；-provider 可筛选单个 provider）
+-list-models             列出可用模型后退出，逐行输出 NDJSON 事件 {"type":"model","provider":"...","model":"..."}（静态 models 不发 GET，否则 GET models-url；-provider 可筛选单个 provider）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
@@ -50,6 +50,8 @@ make test       # go test -race ./...
 -workdir string          工作目录（default 模式写工具边界 + shell 的 cwd；也是 .miniagent/ 规则发现根）
 ```
 
+> 破坏性变更（-list-models 输出）：由纯文本 `provider/model_id` 行改为逐行 NDJSON 事件 `{"type":"model","provider":"...","model":"..."}`（model id 含 `/` 时文本拆分有歧义）；解析该输出的消费方需改为逐行 JSON 解析。部分失败语义不变：成功条目照常输出，退出码 1。
+
 > 破坏性变更（provider/model 拆分）：config 的 `defaults`/`compaction`/`memory` 三处模型设置改为 `provider` + `model` 两个独立字段（删除 `provider/id` 拼接串与旧三级回落链），适用**成对规则**：`defaults.provider`/`defaults.model` 必填；`compaction`/`memory` 成对设置（可跨 provider）或整段留空（整体回落 defaults 对），只设其一报错。CLI 同步拆分：`-model` 改为纯 model id，新增 `-provider`，两者须成对传入（不传则以 config 为准）；`-list-models` 的单 provider 筛选从 `-model` 改为 `-provider`。旧格式 config 加载即报错。
 
 > 破坏性变更（session 重构）：`-session` 改为**仅接续**——纯 id（仅允许字母/数字/-，禁 `/`/`.`/`\`），文件须已存在，不存在则报错退出；新增 `-save-session` 新建会话（id 内部生成，作为 stdout NDJSON 首条 `session` 事件输出）；二者互斥。移除 `-session` 的路径双语义与"文件不存在则新建"行为。subagent fork 改无状态（不再落盘会话、不再注入父 session id）。
@@ -62,7 +64,7 @@ make test       # go test -race ./...
 ### 子命令
 
 - `-version`：打印 `miniagent <version>`，退出码 0。
-- `-list-models`：列出可用模型后退出，每行 `provider/model_id`。
+- `-list-models`：列出可用模型后退出，每行一条 NDJSON `model` 事件（`provider`/`model` 分离字段，model id 含 `/` 时也可靠解析）。
 
 ### 主对话流程的前置检查
 
