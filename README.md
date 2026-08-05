@@ -33,12 +33,13 @@ make test       # go test -race ./...
 
 ```
 -config string           配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）
--list-models             列出可用模型后退出，统一输出 provider/model_id（静态 models 不发 GET，否则 GET models-url；-model 可筛选单个 provider）
+-list-models             列出可用模型后退出，统一输出 provider/model_id（静态 models 不发 GET，否则 GET models-url；-provider 可筛选单个 provider）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
 -mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
--model string            LLM 模型（config 模式 provider/id）
+-model string            LLM model id（须与 -provider 成对传入，同传覆盖 defaults 对；只传其一报错）
+-provider string         LLM provider 名（须与 -model 成对传入；-list-models 时单独用于筛选单个 provider）
 -result-only             仅输出 result.text（subagent fork 用）；与 -stream、-save-session 互斥。失败输出 "error: <msg>" + 退出码 1
 -save-session            新建会话并落盘（id 内部生成，stdout NDJSON 首条 `session` 事件输出；与 -session、-result-only 互斥）
 -session string          接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错；仅允许字母/数字/-）
@@ -48,6 +49,8 @@ make test       # go test -race ./...
 -version                 显示版本号并退出
 -workdir string          工作目录（default 模式写工具边界 + shell 的 cwd；也是 .miniagent/ 规则发现根）
 ```
+
+> 破坏性变更（provider/model 拆分）：config 的 `defaults`/`compaction`/`memory` 三处模型设置改为 `provider` + `model` 两个独立字段（删除 `provider/id` 拼接串与旧三级回落链），适用**成对规则**：`defaults.provider`/`defaults.model` 必填；`compaction`/`memory` 成对设置（可跨 provider）或整段留空（整体回落 defaults 对），只设其一报错。CLI 同步拆分：`-model` 改为纯 model id，新增 `-provider`，两者须成对传入（不传则以 config 为准）；`-list-models` 的单 provider 筛选从 `-model` 改为 `-provider`。旧格式 config 加载即报错。
 
 > 破坏性变更（session 重构）：`-session` 改为**仅接续**——纯 id（仅允许字母/数字/-，禁 `/`/`.`/`\`），文件须已存在，不存在则报错退出；新增 `-save-session` 新建会话（id 内部生成，作为 stdout NDJSON 首条 `session` 事件输出）；二者互斥。移除 `-session` 的路径双语义与"文件不存在则新建"行为。subagent fork 改无状态（不再落盘会话、不再注入父 session id）。
 
@@ -63,7 +66,7 @@ make test       # go test -race ./...
 
 ### 主对话流程的前置检查
 
-- 无法确定 endpoint/model（config 缺 provider/defaults.model，或 config 解析失败）→ stderr 报错，退出码 1
+- 无法确定 endpoint/model（config 缺 provider/defaults.provider/defaults.model，或 config 解析失败）→ stderr 报错，退出码 1
 - API key 缺失（provider.key / `$MINIAGENT_API_KEY` 均无）→ stderr 报错，退出码 1
 - `default` 模式无 `-workdir` → stderr 报错，退出码 1（用 `-mode auto` 放行）
 - `-stream` 与 `-result-only` 同传 → stderr 报错，退出码 1
@@ -323,7 +326,8 @@ repo/
   ],
   "session": {"dir": ".sessions"},
   "defaults": {
-    "model": "openai/gpt-4o",
+    "provider": "openai",
+    "model": "gpt-4o",
     "thinking": "medium",
     "mode": "default",
     "summary_request": "请按以下格式总结：...",
@@ -353,6 +357,11 @@ repo/
     "context_trim_tool_chars": 1000
   },
   "compaction": {
+    "provider": "openai",
+    "model": "gpt-4o-mini"
+  },
+  "memory": {
+    "provider": "openai",
     "model": "gpt-4o-mini"
   }
 }
@@ -361,10 +370,10 @@ repo/
 **关键字段说明**：
 - `provider.chat_url` / `provider.models_url`：完整 OpenAI 兼容端点
 - `provider.key`：按字面量读取；明文入 config，注意文件权限（建议 `0600`），或改用 `$MINIAGENT_API_KEY`
-- `defaults.model`：`provider/id` 格式；无 `/` 时默认选中唯一 provider
+- `defaults.provider` / `defaults.model`：主会话 provider 名与 model id，**成对必填**（拆分后不再使用 `provider/id` 拼接串）
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
-- `compaction.model`：摘要压缩模型。三级回落：`compaction.model` → `defaults.model` → 主会话模型。可写 `model_id`（同主模型 provider）或 `provider/model`（跨 provider）
-- `memory.*`：会话结束自动抽取项目记忆到 `.miniagent/memory.jsonl`。`memory.model` 同样三级回落（`memory.model` → `defaults.model` → 主会话模型），可跨 provider，默认与主会话/compaction 共用 client（按 provider 名去重）。`auto_update` 默认 `true`，仅在有过工具调用的会话触发，best-effort（失败仅告警）；无 workdir 跳过。`max_per_session` 单会话上限条数（默认 3）；`extract_prompt` 可覆盖默认提示词（**v3.5.1 起仅支持 `%d`(条数)/`%s`(已有记忆) 两个占位符；对话内容改为以 user message 传入，旧版第 3 个 `%s` 占位符已移除**）。抽取不计入 token 预算。注意：抽取自 transcript，已剔除含 API key 字面量的记录，但并非安全边界，密钥隔离仍依赖 OS 权限。
+- `compaction.provider` / `compaction.model`：摘要压缩模型。**成对可选**：同设可跨 provider；整段留空则整体回落 defaults 对；只设其一报错
+- `memory.*`：会话结束自动抽取项目记忆到 `.miniagent/memory.jsonl`。`memory.provider` / `memory.model` 规则同 compaction（成对可选，同空回落 defaults 对），与主会话/compaction 同 provider 时复用 client（按 provider 名去重）。`auto_update` 默认 `true`，仅在有过工具调用的会话触发，best-effort（失败仅告警）；无 workdir 跳过。`max_per_session` 单会话上限条数（默认 3）；`extract_prompt` 可覆盖默认提示词（**v3.5.1 起仅支持 `%d`(条数)/`%s`(已有记忆) 两个占位符；对话内容改为以 user message 传入，旧版第 3 个 `%s` 占位符已移除**）。抽取不计入 token 预算。注意：抽取自 transcript，已剔除含 API key 字面量的记录，但并非安全边界，密钥隔离仍依赖 OS 权限。
 
 ## 完整调用示例
 

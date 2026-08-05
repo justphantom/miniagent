@@ -12,8 +12,9 @@ func TestResolve_CLIOverridesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cliModel := "main/glm-5.2"
-	r, err := Resolve(cfg, CLIOverrides{Model: &cliModel})
+	cliProvider := "main"
+	cliModel := "glm-5.2"
+	r, err := Resolve(cfg, CLIOverrides{Provider: &cliProvider, Model: &cliModel})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -68,11 +69,8 @@ func TestResolve_NilCfgErrors(t *testing.T) {
 
 func TestResolve_DurationFromString(t *testing.T) {
 	dur := "30s"
-	cfg := &Config{
-		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
-		Defaults:  DefaultsConfig{Model: "p/m"},
-		Run:       RunConfig{MaxDuration: &dur},
-	}
+	cfg := mkFullConfig("p", "m")
+	cfg.Run = RunConfig{MaxDuration: &dur}
 	r, err := Resolve(cfg, CLIOverrides{})
 	if err != nil {
 		t.Fatal(err)
@@ -85,11 +83,8 @@ func TestResolve_DurationFromString(t *testing.T) {
 func TestResolve_BadDurationFromString(t *testing.T) {
 	// 配置中 duration 字符串非法（如缺单位）应上抛错误，而非静默回落。
 	bad := "30"
-	cfg := &Config{
-		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
-		Defaults:  DefaultsConfig{Model: "p/m"},
-		Run:       RunConfig{MaxDuration: &bad},
-	}
+	cfg := mkFullConfig("p", "m")
+	cfg.Run = RunConfig{MaxDuration: &bad}
 	if _, err := Resolve(cfg, CLIOverrides{}); err == nil {
 		t.Error("bad duration string should error, not silently drop")
 	}
@@ -98,17 +93,14 @@ func TestResolve_BadDurationFromString(t *testing.T) {
 // S4：5 个策略化常量经 config run.* 解析后透传到 ResolvedRun（仅 config 来源，不经 CLI）。
 func TestResolve_StrategyConstants(t *testing.T) {
 	mk := func(v int) *int { return &v }
-	cfg := &Config{
-		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
-		Defaults:  DefaultsConfig{Model: "p/m"},
-		Run: RunConfig{
-			MaxToolResultChars:   mk(1234),
-			MaxFileResultChars:   mk(9999),
-			MaxParallelTools:     mk(3),
-			ContextKeepRecent:    mk(8),
-			SummaryMaxChars:      mk(1500),
-			ContextKeepReasoning: mk(2),
-		},
+	cfg := mkFullConfig("p", "m")
+	cfg.Run = RunConfig{
+		MaxToolResultChars:   mk(1234),
+		MaxFileResultChars:   mk(9999),
+		MaxParallelTools:     mk(3),
+		ContextKeepRecent:    mk(8),
+		SummaryMaxChars:      mk(1500),
+		ContextKeepReasoning: mk(2),
 	}
 	r, err := Resolve(cfg, CLIOverrides{})
 	if err != nil {
@@ -135,14 +127,9 @@ func TestResolve_StrategyConstants(t *testing.T) {
 
 // 新字段：summary_request 和 summarizer_prompt 在 config 中正确解析。
 func TestResolve_PromptFields(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
-		Defaults: DefaultsConfig{
-			Model:            "p/m",
-			SummaryRequest:   "自定义总结引导",
-			SummarizerPrompt: "自定义压缩器",
-		},
-	}
+	cfg := mkFullConfig("p", "m")
+	cfg.Defaults.SummaryRequest = "自定义总结引导"
+	cfg.Defaults.SummarizerPrompt = "自定义压缩器"
 	r, err := Resolve(cfg, CLIOverrides{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -200,15 +187,12 @@ func TestChatEndpoint_ConcurrentLazyParse(t *testing.T) {
 // 修复后须从 config 透传到 ResolvedRun，main 的 Set* 才能据此覆盖内置默认。
 func TestResolve_StrategyConstantsLateWired(t *testing.T) {
 	mk := func(v int) *int { return &v }
-	cfg := &Config{
-		Providers: []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions"}},
-		Defaults:  DefaultsConfig{Model: "p/m"},
-		Run: RunConfig{
-			SummaryMaxTokens:     mk(512),
-			GrepMaxMatches:       mk(500),
-			MemoryRecentN:        mk(7),
-			ContextTrimToolChars: mk(1234),
-		},
+	cfg := mkFullConfig("p", "m")
+	cfg.Run = RunConfig{
+		SummaryMaxTokens:     mk(512),
+		GrepMaxMatches:       mk(500),
+		MemoryRecentN:        mk(7),
+		ContextTrimToolChars: mk(1234),
 	}
 	r, err := Resolve(cfg, CLIOverrides{})
 	if err != nil {
@@ -229,5 +213,3 @@ func TestResolve_StrategyConstantsLateWired(t *testing.T) {
 		}
 	}
 }
-
-// compaction.model 缺省时回落到主模型。

@@ -117,13 +117,11 @@ func TestValidateConfig_ThinkingFieldBlacklisted(t *testing.T) {
 // field 但属保留（显式 mapping 视同误配），应拒绝。
 func TestValidateConfig_ThinkingFieldValid(t *testing.T) {
 	for _, ok := range []string{"reasoning", "thinking", "extended_thinking"} {
-		cfg := &Config{
-			Providers: []ProviderConfig{{
-				Name:     "main",
-				ChatURL:  "https://api/v1/chat/completions",
-				Thinking: &ThinkingMapping{Field: ok},
-			}},
-		}
+		cfg := mkFullConfig("main", "m", ProviderConfig{
+			Name:     "main",
+			ChatURL:  "https://api/v1/chat/completions",
+			Thinking: &ThinkingMapping{Field: ok},
+		})
 		if err := validateConfig(cfg); err != nil {
 			t.Errorf("field %q should pass, got: %v", ok, err)
 		}

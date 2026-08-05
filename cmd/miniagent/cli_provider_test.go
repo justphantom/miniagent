@@ -23,7 +23,7 @@ func TestCLI_ProviderKeyAuth(t *testing.T) {
 	defer srv.Close()
 
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
-	body := `{"providers":[{"name":"p","chat_url":"` + srv.URL + `/v1/chat/completions","key":"sk-from-config"}],"defaults":{"model":"p/m","mode":"auto"}}`
+	body := `{"providers":[{"name":"p","chat_url":"` + srv.URL + `/v1/chat/completions","key":"sk-from-config"}],"defaults":{"provider":"p","model":"m","mode":"auto"},"compaction":{"provider":"p","model":"m"},"memory":{"provider":"p","model":"m"}}`
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

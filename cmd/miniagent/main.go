@@ -20,6 +20,7 @@ import (
 var version string
 
 type cliFlags struct {
+	provider      *string
 	model         *string
 	system        *string
 	maxTokens     *int
@@ -43,7 +44,8 @@ func parseFlags() *cliFlags {
 	f.mode = flag.String("mode", "", "权限模式 default|auto（default 时 workdir 必填）；默认 default")
 	f.thinking = flag.String("thinking", "", "思考级别 off|minimal|low|medium|high|xhigh|max（默认 off）")
 	f.resultOnly = flag.Bool("result-only", false, "仅输出 result.text（subagent fork 用）；与 -stream 互斥")
-	f.model = flag.String("model", "", "LLM model（config 模式 provider/id）")
+	f.provider = flag.String("provider", "", "LLM provider 名（与 -model 成对覆盖 defaults 对；-list-models 时单独用于筛选）")
+	f.model = flag.String("model", "", "LLM model id（与 -provider 成对覆盖 defaults 对）")
 	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
 	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
@@ -76,8 +78,8 @@ func main() {
 	defer stop()
 
 	if *f.listModels {
-		// list-models 不要求 -model（本就为发现模型），故不走 Resolve。
-		// 统一输出 "provider/model_id"（单 provider 也带前缀），-model 可筛选单个 provider。
+		// list-models 不要求 -provider/-model（本就为发现模型），故不走 Resolve。
+		// 统一输出 "provider/model_id"（单 provider 也带前缀），-provider 可筛选单个 provider。
 		listHTTPTimeout, err := httpTimeoutFromConfig(cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: config: %v\n", err)
@@ -85,8 +87,8 @@ func main() {
 		}
 
 		providers := cfg.Providers
-		if f.model != nil && *f.model != "" {
-			p, _, err := miniagent.ParseModelSpec(*f.model, cfg)
+		if f.provider != nil && *f.provider != "" {
+			p, err := miniagent.FindProvider(cfg, *f.provider)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 				os.Exit(1)
@@ -255,10 +257,6 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 	if system == "" {
 		system = defaultSystemPrompt
 	}
-	compModel := resolved.CompactionModelID
-	if compModel == "" {
-		compModel = resolved.ModelID
-	}
 	return miniagent.LoopConfig{
 		Model:                     resolved.ModelID,
 		System:                    system,
@@ -273,7 +271,7 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 		ContextWindow:             into(resolved.Run.ContextWindow, 0),
 		ThinkingLevel:             resolved.Thinking,
 		Thinking:                  resolved.Provider.Thinking,
-		CompactionModel:           compModel,
+		CompactionModel:           resolved.CompactionModelID,
 		MaxToolResultChars:        into(resolved.Run.MaxToolResultChars, 0),
 		MaxFileResultChars:        into(resolved.Run.MaxFileResultChars, 0),
 		MaxParallelTools:          into(resolved.Run.MaxParallelTools, 0),

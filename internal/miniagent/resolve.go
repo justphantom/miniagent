@@ -3,7 +3,6 @@ package miniagent
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -11,9 +10,9 @@ import (
 // 按 cli>config>builtin 优先级裁决。指针为 nil 表示未传入。P2 后仅保留 CLI 核心参数；
 // 策略参数（summary/duration/window 等）只在 config，故此处不含。
 type CLIOverrides struct {
-	Model, Thinking, Mode, System, Workdir *string
-	MaxTokens, MaxIterations               *int
-	Stream, ResultOnly                     *bool
+	Provider, Model, Thinking, Mode, System, Workdir *string
+	MaxTokens, MaxIterations                         *int
+	Stream, ResultOnly                               *bool
 }
 
 // ResolvedRun 是 Resolve 输出的运行参数（duration 已解析）；nil 表示未设置，main 回落 flag 默认。
@@ -58,33 +57,36 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	}
 	r := &Resolved{Session: cfg.Session}
 
-	spec := ""
-	switch {
-	case o.Model != nil && *o.Model != "":
-		spec = *o.Model
-	case cfg.Defaults.Model != "":
-		spec = cfg.Defaults.Model
+	// 成对规则：CLI -provider/-model 须同传（只传其一报错）；不传则以 config defaults 对为准。
+	cliProv := o.Provider != nil && *o.Provider != ""
+	cliModel := o.Model != nil && *o.Model != ""
+	if cliProv != cliModel {
+		return nil, errors.New("-provider 与 -model 须成对传入（同传覆盖，同缺以 config 为准）")
 	}
-	if spec == "" {
-		return nil, errors.New("无法确定 model（用 -model 或 config defaults.model）")
-	}
-	p, modelID, err := ParseModelSpec(spec, cfg)
+	defProv, defModel, err := resolveProviderModel(cfg, "defaults", cfg.Defaults.Provider, cfg.Defaults.Model)
 	if err != nil {
 		return nil, err
 	}
-	r.Provider = p
-	r.ModelID = modelID
+	r.Provider, r.ModelID = defProv, defModel
+	if cliProv {
+		p, err := FindProvider(cfg, *o.Provider)
+		if err != nil {
+			return nil, fmt.Errorf("-provider: %w", err)
+		}
+		r.Provider, r.ModelID = p, *o.Model
+	}
 
-	// compaction / memory 模型三级回落：显式配置 → defaults.model → 主会话模型。
-	// 显式项不带 '/' 表示与主会话同 provider（只换 model id）；defaults.model 层走完整解析。
-	if err := resolveSecondaryModel(cfg, p, modelID, cfg.Compaction.Model, "compaction.model",
-		&r.CompactionProvider, &r.CompactionModelID); err != nil {
+	// compaction / memory：成对可选——同设取自身（可跨 provider），同空整体回落 defaults 对。
+	cp, cm, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel)
+	if err != nil {
 		return nil, err
 	}
-	if err := resolveSecondaryModel(cfg, p, modelID, cfg.Memory.Model, "memory.model",
-		&r.MemoryProvider, &r.MemoryModelID); err != nil {
+	r.CompactionProvider, r.CompactionModelID = cp, cm
+	mp, mm, err := resolveOptionalPair(cfg, "memory", cfg.Memory.Provider, cfg.Memory.Model, defProv, defModel)
+	if err != nil {
 		return nil, err
 	}
+	r.MemoryProvider, r.MemoryModelID = mp, mm
 
 	switch {
 	case o.Thinking != nil:
@@ -145,40 +147,50 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	return r, nil
 }
 
-// resolveSecondaryModel 解析 compaction/memory 的二级模型，三级回落：
-//  1. explicit（cfg.Compaction.Model / cfg.Memory.Model）：非空时，
-//     含 '/' → provider/model；不含 '/' → 主会话 provider + 该 model id（与主会话同 provider）。
-//  2. cfg.Defaults.Model：完整 provider/model 解析（默认模型层）。
-//  3. 主会话 provider + modelID（兜底）。
-//
-// label 用于错误信息（如 "compaction.model"）。结果写入 outProv/outModel。
-func resolveSecondaryModel(cfg *Config, mainProv ProviderConfig, mainModel, explicit, label string,
-	outProv *ProviderConfig, outModel *string) error {
-	// 第 1 级：显式配置。
-	if explicit != "" {
-		if strings.Contains(explicit, "/") {
-			cp, m, err := ParseModelSpec(explicit, cfg)
-			if err != nil {
-				return fmt.Errorf("%s: %w", label, err)
-			}
-			*outProv, *outModel = cp, m
-			return nil
-		}
-		*outProv, *outModel = mainProv, explicit
-		return nil
+// resolveProviderModel 校验必填模型对（defaults）：两者均非空且 provider 已声明，
+// 通过则返回该 provider 与原样 model id（model id 允许含 '/'，不再承担 provider 前缀语义）。
+// label 是 JSON 段名（defaults），用于错误定位。validateConfig 与 Resolve 共用。
+func resolveProviderModel(cfg *Config, label, provider, model string) (ProviderConfig, string, error) {
+	if provider == "" {
+		return ProviderConfig{}, "", fmt.Errorf("%s.provider 必填", label)
 	}
-	// 第 2 级：defaults.model（默认模型，已由 validateConfig 校验存在可解析）。
-	if cfg.Defaults.Model != "" {
-		cp, m, err := ParseModelSpec(cfg.Defaults.Model, cfg)
-		if err != nil {
-			return fmt.Errorf("%s 回落 defaults.model: %w", label, err)
-		}
-		*outProv, *outModel = cp, m
-		return nil
+	if model == "" {
+		return ProviderConfig{}, "", fmt.Errorf("%s.model 必填", label)
 	}
-	// 第 3 级：主会话模型。
-	*outProv, *outModel = mainProv, mainModel
-	return nil
+	p, err := FindProvider(cfg, provider)
+	if err != nil {
+		return ProviderConfig{}, "", fmt.Errorf("%s.provider: %w", label, err)
+	}
+	return p, model, nil
+}
+
+// resolveOptionalPair 校验可选模型对（compaction/memory）：provider/model 同空时整体回落
+// defaults 对（def/defModel）；同设时 provider 须已声明；只设其一报错（成对规则不允许交叉回落）。
+func resolveOptionalPair(cfg *Config, label, provider, model string, def ProviderConfig, defModel string) (ProviderConfig, string, error) {
+	if provider == "" && model == "" {
+		return def, defModel, nil
+	}
+	if provider == "" || model == "" {
+		return ProviderConfig{}, "", fmt.Errorf("%s.provider 与 %s.model 须成对设置（同空则回落 defaults）", label, label)
+	}
+	p, err := FindProvider(cfg, provider)
+	if err != nil {
+		return ProviderConfig{}, "", fmt.Errorf("%s.provider: %w", label, err)
+	}
+	return p, model, nil
+}
+
+// FindProvider 按名查找 provider；未找到报错。provider/model 拆分后取代 ParseModelSpec。
+func FindProvider(cfg *Config, name string) (ProviderConfig, error) {
+	if cfg == nil {
+		return ProviderConfig{}, errors.New("FindProvider: cfg 为 nil（S1 后 config 必须存在）")
+	}
+	for _, p := range cfg.Providers {
+		if p.Name == name {
+			return p, nil
+		}
+	}
+	return ProviderConfig{}, fmt.Errorf("未知 provider %q", name)
 }
 
 func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {

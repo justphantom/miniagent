@@ -42,8 +42,10 @@ type ProviderConfig struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// DefaultsConfig 的 Provider/Model 均必填（provider/model 拆分后不再解析 "provider/id" 串）。
 type DefaultsConfig struct {
-	Model            string `json:"model,omitempty"`
+	Provider         string `json:"provider"`
+	Model            string `json:"model"`
 	Thinking         string `json:"thinking,omitempty"`
 	Mode             string `json:"mode,omitempty"`
 	SystemPrompt     string `json:"system_prompt,omitempty"`
@@ -88,16 +90,17 @@ type RunConfig struct {
 }
 
 // CompactionConfig 配置长会话摘要压缩模型。
-// model 可以是 model id（与主模型同 provider），也可以是 provider/model（跨 provider）。
+// Provider/Model 须成对设置：同设可跨 provider；同空则整体回落 defaults 对；只设其一报错。
 type CompactionConfig struct {
-	Model string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
-// MemoryConfig 配置会话结束后的自动记忆抽取。
-// model 缺省回落链：memory.model → defaults.model → 主会话模型（同 compaction）。
-// 不带 '/' 表示与主会话同 provider，只换 model id；带 '/' 走 provider/model（可跨 provider）。
+// MemoryConfig 配置会话结束后的自动记忆抽取。Provider/Model 规则同 CompactionConfig；
+// 与主/compaction 同 provider 时复用其 client。
 // auto_update 缺省（nil）= true；max_per_session 缺省/<=0 = 3。
 type MemoryConfig struct {
+	Provider      string `json:"provider,omitempty"`
 	Model         string `json:"model,omitempty"`
 	AutoUpdate    *bool  `json:"auto_update,omitempty"`
 	MaxPerSession *int   `json:"max_per_session,omitempty"`
@@ -234,10 +237,9 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("provider %q thinking.field %q 是保留 payload key，会覆盖标准字段", p.Name, p.Thinking.Field)
 		}
 	}
-	if cfg.Defaults.Model != "" {
-		if _, _, err := ParseModelSpec(cfg.Defaults.Model, cfg); err != nil {
-			return fmt.Errorf("defaults.model: %w", err)
-		}
+	defProv, defModel, err := resolveProviderModel(cfg, "defaults", cfg.Defaults.Provider, cfg.Defaults.Model)
+	if err != nil {
+		return err
 	}
 	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != "default" && cfg.Defaults.Mode != "auto" {
 		return fmt.Errorf("defaults.mode %q 非法（default|auto）", cfg.Defaults.Mode)
@@ -245,42 +247,16 @@ func validateConfig(cfg *Config) error {
 	if err := validateThinking(cfg.Defaults.Thinking, thinkingCustomKeys(cfg)); err != nil {
 		return fmt.Errorf("defaults.thinking: %w", err)
 	}
-	if cfg.Compaction.Model != "" && strings.Contains(cfg.Compaction.Model, "/") {
-		if _, _, err := ParseModelSpec(cfg.Compaction.Model, cfg); err != nil {
-			return fmt.Errorf("compaction.model: %w", err)
-		}
+	if _, _, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel); err != nil {
+		return err
 	}
-	if cfg.Memory.Model != "" && strings.Contains(cfg.Memory.Model, "/") {
-		if _, _, err := ParseModelSpec(cfg.Memory.Model, cfg); err != nil {
-			return fmt.Errorf("memory.model: %w", err)
-		}
+	if _, _, err := resolveOptionalPair(cfg, "memory", cfg.Memory.Provider, cfg.Memory.Model, defProv, defModel); err != nil {
+		return err
 	}
 	return nil
 }
 
-// ParseModelSpec 拆分 "provider/model"。无 / 时仅当 provider 恰好 1 个才回落到它；
-// 否则要求显式前缀。cfg 必须非 nil（S1 删裸模式后始终有 config）。
-func ParseModelSpec(spec string, cfg *Config) (ProviderConfig, string, error) {
-	if spec == "" {
-		return ProviderConfig{}, "", errors.New("model spec 为空")
-	}
-	if cfg == nil {
-		return ProviderConfig{}, "", errors.New("ParseModelSpec: cfg 为 nil（S1 后 config 必须存在）")
-	}
-	name, modelID, hasSlash := strings.Cut(spec, "/")
-	if !hasSlash {
-		if len(cfg.Providers) != 1 {
-			return ProviderConfig{}, "", fmt.Errorf("model %q 缺 provider 前缀，且 provider 数非 1（用 provider/model）", spec)
-		}
-		return cfg.Providers[0], spec, nil
-	}
-	for _, p := range cfg.Providers {
-		if p.Name == name {
-			return p, modelID, nil
-		}
-	}
-	return ProviderConfig{}, "", fmt.Errorf("未知 provider %q", name)
-}
+// FindProvider / resolveProviderModel / resolveOptionalPair 见 resolve.go。
 
 // Resolve / resolveRun / pickInt / pickDur 见 resolve.go。
 // ListModels / ListAllModels 见 models.go。

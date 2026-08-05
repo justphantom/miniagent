@@ -60,6 +60,9 @@ func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	set := map[string]bool{}
 	flag.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
 	o := miniagent.CLIOverrides{}
+	if set["provider"] {
+		o.Provider = f.provider
+	}
 	if set["model"] {
 		o.Model = f.model
 	}

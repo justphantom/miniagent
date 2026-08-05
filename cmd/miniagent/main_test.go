@@ -38,7 +38,7 @@ func writeConfigFixture(t *testing.T, srvURL, runJSON string) string {
 	if runJSON != "" {
 		runField = `,"run":` + runJSON
 	}
-	body := `{"providers":[{"name":"p","chat_url":"` + srvURL + `/v1/chat/completions","models_url":"` + srvURL + `/v1/models"}],"defaults":{"model":"p/m","mode":"auto"}` + runField + `}`
+	body := `{"providers":[{"name":"p","chat_url":"` + srvURL + `/v1/chat/completions","models_url":"` + srvURL + `/v1/models"}],"defaults":{"provider":"p","model":"m","mode":"auto"},"compaction":{"provider":"p","model":"m"},"memory":{"provider":"p","model":"m"}` + runField + `}`
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestCLI_ExplicitConfigMissingExits1(t *testing.T) {
 	}
 }
 
-// config 无 defaults.model 且未传 -model → Resolve 报错。
+// config 缺 defaults.provider/model（拆分后必填）→ validateConfig 报错。
 func TestCLI_MissingModelExits1(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
 	body := `{"providers":[{"name":"p","chat_url":"http://127.0.0.1:1/v1/chat/completions"}]}`
@@ -115,8 +115,8 @@ func TestCLI_MissingModelExits1(t *testing.T) {
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "model") {
-		t.Errorf("missing model error: %s", out)
+	if !strings.Contains(out, "必填") {
+		t.Errorf("missing required-field error: %s", out)
 	}
 }
 
