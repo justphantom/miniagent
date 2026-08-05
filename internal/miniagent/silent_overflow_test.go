@@ -112,14 +112,8 @@ func TestRun_SilentUsageOverflowTriggersCompaction(t *testing.T) {
 	chat, stream := testClients(tr)
 	// 6 轮 history + prompt → step2 压缩时有中段可摘（>1+keepRecent=5）。
 	history := []Message{{Role: roleUser, Content: "h1"}, {Role: roleUser, Content: "h2"}, {Role: roleUser, Content: "h3"}, {Role: roleUser, Content: "h4"}, {Role: roleUser, Content: "h5"}, {Role: roleUser, Content: "h6"}}
-	cfg := LoopConfig{
-		Tools:          []Tool{tool},
-		History:        history,
-		ContextWindow:  10000, // usable=10000-4096=5904；6000>=5904 触发
-		MaxTokens:      4096,
-		CompactionAuto: true,
-	}
-	res, err := Run(context.Background(), chat, stream, cfg, "prompt", LoopHooks{}, nil)
+	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: true, Model: "m"})
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, History: history}, "prompt", LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -135,14 +129,8 @@ func TestRun_SilentUsageOverflowDisabled(t *testing.T) {
 	tr := &fakeTransport{responses: []string{step1, textResponse("done")}}
 	chat, stream := testClients(tr)
 	history := []Message{{Role: roleUser, Content: "h1"}, {Role: roleUser, Content: "h2"}, {Role: roleUser, Content: "h3"}, {Role: roleUser, Content: "h4"}, {Role: roleUser, Content: "h5"}, {Role: roleUser, Content: "h6"}}
-	cfg := LoopConfig{
-		Tools:          []Tool{tool},
-		History:        history,
-		ContextWindow:  10000,
-		MaxTokens:      4096,
-		CompactionAuto: false, // 关闭静默溢出检测
-	}
-	res, err := Run(context.Background(), chat, stream, cfg, "prompt", LoopHooks{}, nil)
+	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: false, Model: "m"})
+	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, History: history}, "prompt", LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

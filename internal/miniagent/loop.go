@@ -14,12 +14,17 @@ const maxIterations = 20
 // summaryRequestPrompt 在迭代上限前一步工具调用后注入，引导 LLM 输出总结性回复而非继续调用工具。
 const summaryRequestPrompt = "所有工具调用已完成。请输出一段总结性回复，说明完成了什么、关键结果是什么。不要在此之后继续调用工具。"
 
-// Run 单轮 ReAct 循环：把 userPrompt 发给 llm，模型若请求工具则执行后回灌，
-// 直到模型给出无 tool_calls 的最终文本或撞 maxIterations 上限。logger 为 nil 时静默。
+// Run 是极简的 ReAct 核心循环：发 userPrompt → LLM 回工具则执行回灌 → 直到模型给出无 tool_calls 的
+// 最终文本或撞 maxIterations。核心不做任何上下文管理（压缩/记忆/溢出/估算全无）——一切上下文策略经
+// LoopHooks.BeforeLLM/AfterLLM 外挂（见 NewCompaction）。logger 为 nil 时静默。
 //
-// Result.Messages 是截至返回的全量 transcript，所有 return 路径均带回。配对：OnToolUse 非
-// denied 的 error 路径尾部可能留下"有 tool_calls、无 tool 结果"的 assistant 消息（不可续跑）；
-// OnToolResult error 路径已补占位 tool 消息保配对完整（P2-1）。出错分支不应持久化。
+// 开放缝：
+//   - BeforeLLM（每步调 LLM 前）：改写消息视图、收缩 transcript、注入记忆/RAG、提交持久化摘要、累加用量。
+//     nil=透传（极简模式：原样发 transcript，零上下文管理）。
+//   - AfterLLM（每步响应后）：用量记账、静默溢出判定（压缩插件据此置下步强制压缩）。
+//
+// Result.Messages 是截至返回的全量 transcript，所有 return 路径均带回；NewMessages 是本轮新增（main 据此
+// append-only 落盘）。ErrContextLength 会触发一次收紧重试（核心健壮性，防长会话崩溃），其余错误上抛。
 func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (result Result, err error) {
 	if chat == nil {
 		return Result{}, errors.New("miniagent: chat client is nil")
@@ -27,9 +32,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 	if cfg.Stream && stream == nil {
 		return Result{}, errors.New("miniagent: stream client is nil in stream mode")
 	}
-	// thinkingDowngraded/compacted 跨循环累积，统一经 defer 写入命名返回 result 的对应字段，
-	// 避免在多个 return 点逐一展开赋值（loop.go 行数受限）。Compacted 任一步摘要成功即置位；
-	// ThinkingDowngraded 任一次降级即置位。
+	// thinkingDowngraded/compacted 跨循环累积，统一经 defer 写入命名返回 result 的对应字段。
 	var thinkingDowngraded, compacted bool
 	defer func() {
 		result.ThinkingDowngraded = thinkingDowngraded
@@ -40,51 +43,17 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 	// 复制 History：接续对话时调用方可能复用同一 slice，原地 append 会越界写其数据。
 	msgs := make([]Message, 0, len(cfg.History)+1)
 	msgs = append(msgs, cfg.History...)
-	// 阶段 1（Run 入口统一）：屏障掉最新 summary 之前的旧历史（审查 v3 #3）。
-	msgs = applyCompactionBarrier(msgs)
 	// newMsgs 仅记本轮新增，main 据此 append-only 落盘；与 msgs 分离：裁剪只动 msgs。
 	var newMsgs []Message
 	appendMsg(&msgs, &newMsgs, Message{Role: roleUser, Content: userPrompt})
 	total := Usage{}
-	// §P1-B：overflowPending 记录「上一步真实 usage 命中静默溢出」，本步 FitHistory 前注入 budget.Force
-	// 强制压缩（撞 provider 前用真实 usage 先压）。每步消费后归零、callLLM 后重新采样。
-	var overflowPending bool
-	// 调用方可经 cfg.MaxIterations 覆盖默认上限；<=0 回退到包默认 maxIterations。
+
 	iterLimit := cfg.MaxIterations
 	if iterLimit <= 0 {
 		iterLimit = maxIterations
 	}
-	// ContextBudget 一次构造、循环复用：摘要回调捕获 llm 与 maxChars，解耦 context.go 与 HTTPClient。
-	maxChars := cfg.SummaryMaxChars
-	if maxChars <= 0 {
-		maxChars = summaryMaxChars
-	}
-	budget := ContextBudget{
-		ContextWindow:        cfg.ContextWindow,
-		KeepRecent:           cfg.ContextKeepRecent,
-		KeepReasoning:        cfg.ContextKeepReasoning,
-		KeepToolArgs:         cfg.ContextKeepToolArgs,
-		KeepReasoningChars:   cfg.ContextKeepReasoningChars,
-		SummarizerPrompt:     cfg.SummarizerPrompt,
-		CompactionModel:      cfg.CompactionModel,
-		Model:                cfg.Model,
-		System:               cfg.System,
-		Tools:                cfg.Tools,
-		UseRealUsage:         cfg.ContextUseRealUsage,
-		PreserveRecentTokens: cfg.PreserveRecentTokens,
-		Compacting:           hooks.OnCompacting,
-		SessionID:            cfg.SessionID,
-		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []Message) (string, Usage, error) {
-			c := chat
-			if cfg.CompactionChat != nil {
-				c = cfg.CompactionChat
-			}
-			return summarizeMiddle(ctx, c, model, sys, prevSummary, maxChars, middle)
-		},
-	}
 
-	// §P1-A：工具输出落盘 store（cfg.ToolOutputDir 空=禁用，走 trimForHistory 一次性硬截断）。
-	// Run 入口构造一次、跨步复用；启动时机会性清理过期文件。
+	// 工具输出落盘 store（cfg.ToolOutputDir 空=禁用）。仍属核心工具结果成型策略，跨步复用。
 	var store *toolOutputStore
 	if cfg.ToolOutputDir != "" {
 		store = newToolOutputStore(cfg.ToolOutputDir, cfg.ToolOutputRetention, logger)
@@ -95,71 +64,47 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
 		}
-		// 阶段 2（loop 每 step 前）：超 window 摘要中段 + 有损 fallback + 终止（见 FitHistory）。
-		// 摘要调用的 usage 累加入 total（MaxTotalTokens 预算含摘要调用——审查 P2 摘要 token 不入预算）；
-		// summarized=true 时记 compacted，供 defer 写 result.Compacted（交互层据此 rewrite session），
-		// 并把 summary 插入 newMsgs（insertSummaryIntoNewMsgs 保排序与去重）。
-		// §P1-B：上一步真实 usage 命中静默溢出时，本步强制压缩（Force 跳过 estimateTokens 4/5 门控）。
-		budget.Force = overflowPending
-		fitted, summaryMsg, summarized, sumUsage, fitErr := FitHistory(ctx, msgs, budget, logger)
-		if fitErr != nil {
-			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, fitErr
+		// 开放缝 BeforeLLM：压缩/记忆/RAG/上下文管理。nil=透传（极简模式）。
+		toSend, perr := applyBeforeLLM(ctx, hooks, step, &msgs, &newMsgs, &total, &compacted, cfg)
+		if perr != nil {
+			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, perr
 		}
-		msgs = fitted
-		if summarized {
-			compacted = true
-			total.InputTokens += sumUsage.InputTokens
-			total.OutputTokens += sumUsage.OutputTokens
-			insertSummaryIntoNewMsgs(&newMsgs, summaryMsg)
-		}
-		// downgraded=true 时固化 cfg（P2-2：thinking 降级跨步生效，避免每步重撞 400）。
-		resp, downgraded, err := callLLMWithDowngrade(ctx, chat, stream, cfg, step, msgs, hooks, logger)
+
+		resp, downgraded, err := callLLMWithDowngrade(ctx, chat, stream, cfg, step, toSend, hooks, logger)
 		if downgraded {
 			cfg.ThinkingLevel, cfg.Thinking = "", nil
-			// 记录降级供 defer 写 result.ThinkingDowngraded：交互层据此清 baseCfg，
-			// 避免下一轮重传原 thinking 值再撞 400（审查 P2 thinking 跨轮固化）。
 			thinkingDowngraded = true
 		}
-		// §P1-C overflowRecovered：显式 ErrContextLength 与静默溢出两路径共享 guard，本步合计最多恢复一次。
-		overflowRecovered := false
+		// 撞 context 上限：收紧历史（清 reasoning + 压 tool content）后重试一次——核心健壮性，仍超则上抛。
 		if errors.Is(err, ErrContextLength) {
-			// 撞 context 上限：收紧历史（清 reasoning + 压 tool content）后重试一次，仍超则上抛。
 			msgs = trimHistoryForContext(msgs)
 			if logger != nil {
 				logger.Warn("context length exceeded; trimmed history; retrying step", "step", step)
 			}
 			resp, _, err = callLLMWithDowngrade(ctx, chat, stream, cfg, step, msgs, hooks, logger)
-			overflowRecovered = true
 		}
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
 		}
-		// §P1-C 静默溢出（provider 200 成功但 finish/usage 暗示超窗）：仅本步未恢复过时 trim+重试一次，
-		// 复用同一条 trimHistoryForContext + callLLMWithDowngrade 通路。不与显式路径叠加（overflowRecovered guard）。
-		if !overflowRecovered && cfg.ContextWindow > 0 && isSilentContextOverflow(resp, cfg.ContextWindow) {
-			if logger != nil {
-				logger.Warn("silent context overflow detected; trimmed history; retrying step", "step", step, "finish", resp.FinishReason)
-			}
-			msgs = trimHistoryForContext(msgs)
-			resp, _, err = callLLMWithDowngrade(ctx, chat, stream, cfg, step, msgs, hooks, logger)
-			if err != nil {
-				return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
+
+		// 开放缝 AfterLLM：用量记账 / 静默溢出判定（压缩插件据此置下步 Force）。
+		if hooks.AfterLLM != nil {
+			if aerr := hooks.AfterLLM(ctx, step, resp); aerr != nil {
+				return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, aerr
 			}
 		}
+
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
 		// usage 全零（流式端点常不 honor include_usage / 非流式缺失）：用本地估算 fallback，
-		// 避免预算熔断静默失效（P1-5）。估算计入请求侧（msgs+system+tools）和响应侧。
+		// 避免预算熔断静默失效。估算计入请求侧（toSend+system+tools）与响应侧。
 		if resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0 {
 			if logger != nil {
 				logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step)
 			}
-			total.InputTokens += estimateTokens(msgs, cfg.System, cfg.Tools)
+			total.InputTokens += estimateTokens(toSend, cfg.System, cfg.Tools)
 			total.OutputTokens += estimateResponseTokens(resp)
 		}
-		// §P1-B：采集下一步的静默溢出判定（撞 provider 前用真实 usage 预压）。resp.Usage 全零
-		// （fallback 路径）时 isUsageOverflow 恒 false，不影响；ContextWindow<=0 或 CompactionAuto=false 亦恒 false。
-		overflowPending = isUsageOverflow(resp.Usage, cfg.ContextWindow, cfg.MaxTokens, cfg.CompactionReserved, cfg.CompactionAuto)
 		// 预算熔断：以端点返回的真实 usage（或零 usage 时的本地估算）累计判定，超限即停。
 		if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, fmt.Errorf(
@@ -169,7 +114,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			// 最终文本入历史：接续对话需要看到上一轮的回答。§P0-B：附真实 usage 供后续防陈旧估算。
+			// 最终文本入历史：接续对话需要看到上一轮的回答。附真实 usage 供外挂策略防陈旧估算。
 			appendMsg(&msgs, &newMsgs, Message{Role: roleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, Usage: &resp.Usage})
 			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
 		}
@@ -178,16 +123,13 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 		if err != nil {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
 		}
-		// 阶段 3（Option B：末尾工具调用后强制总结）。
-		// 若当前步已达迭代上限且刚执行完工具，注入总结请求让 LLM 输出最终文本而非继续调工具。
-		// 允许一次额外 LLM 调用（step+1），确保有总结性回复；若 LLM 仍要调工具或出错，
-		// 回落至 finishMaxIterations。
+		// 撞迭代上限且刚执行完工具：注入总结请求让 LLM 输出最终文本（允许一次额外调用），
+		// 落回落至 finishMaxIterations。总结请求是内部引导消息，不持久化（LoadSession 拒绝 roleSystem）。
 		if step == iterLimit {
 			summaryReq := cfg.SummaryRequest
 			if summaryReq == "" {
 				summaryReq = summaryRequestPrompt
 			}
-			// 总结请求是内部引导消息，不持久化到 session（LoadSession 拒绝 roleSystem）。
 			msgs = append(msgs, Message{Role: roleSystem, Content: summaryReq})
 			if logger != nil {
 				logger.Info("injecting summary request at iteration limit", "step", step)
@@ -211,15 +153,67 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 			}
 		}
 	}
-	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。
-	// Finish=finishMaxIterations 是终止信号（无最终 Text）。
+	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。Finish=finishMaxIterations 是终止信号。
 	return Result{Usage: total, Steps: iterLimit, Finish: finishMaxIterations, Messages: msgs, NewMessages: newMsgs}, nil
 }
 
+// applyBeforeLLM 调 hooks.BeforeLLM（nil=透传，极简模式）并把它对 transcript / 持久化 / 用量 / 压缩标记的
+// 副作用折叠回循环局部状态。返回本轮实际发给 LLM 的消息视图 toSend。
+func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsgs *[]Message, total *Usage, compacted *bool, cfg LoopConfig) ([]Message, error) {
+	if hooks.BeforeLLM == nil {
+		return *msgs, nil
+	}
+	out, err := hooks.BeforeLLM(ctx, StepInput{Step: step, Msgs: *msgs, System: cfg.System, Tools: cfg.Tools})
+	if err != nil {
+		return nil, err
+	}
+	toSend := out.View
+	if toSend == nil {
+		toSend = *msgs
+	}
+	if out.Commit {
+		// 压缩场景：收缩后的 View 即新的运行 transcript。
+		*msgs = out.View
+	}
+	if len(out.Persist) > 0 {
+		mergePersisted(newMsgs, out.Persist)
+	}
+	if out.ExtraUsage != nil {
+		total.InputTokens += out.ExtraUsage.InputTokens
+		total.OutputTokens += out.ExtraUsage.OutputTokens
+	}
+	if out.Compacted {
+		*compacted = true
+	}
+	return toSend, nil
+}
+
+// mergePersisted 把 persisted 批量并入 newMsgs：带非空 Kind 的条目替换 newMsgs 中同 Kind 旧条目
+// （如多次压缩只留最新 summary），随后把批次前插到 newMsgs 首部——保跨轮 barrier 命中最新 summary 的语义
+// （与原 insertSummaryIntoNewMsgs 行为一致，泛化到任意带 Kind 的持久化条目）。
+func mergePersisted(newMsgs *[]Message, persisted []Message) {
+	kinds := make(map[string]bool, len(persisted))
+	for _, m := range persisted {
+		if m.Kind != "" {
+			kinds[m.Kind] = true
+		}
+	}
+	filtered := make([]Message, 0, len(*newMsgs)+len(persisted))
+	for _, m := range *newMsgs {
+		if m.Kind != "" && kinds[m.Kind] {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	merged := make([]Message, 0, len(filtered)+len(persisted))
+	merged = append(merged, persisted...)
+	merged = append(merged, filtered...)
+	*newMsgs = merged
+}
+
 // appendMsg 同时追加到 msgs（LLM context）与 newMsgs（持久化）。所有产生点统一经此，
-// 保证 session 落盘与上下文一致（审查 v1 #1 + v2 #4）。
-// §P0-B：对 Ts==0 的消息统一打 Unix 毫秒戳（供「真实 usage 防陈旧」判定）；已显式设 Ts 的（如
-// compactWithSummary 的 summaryMsg）不覆盖——0 可靠表示「未承载」。
+// 保证 session 落盘与上下文一致。对 Ts==0 的消息统一打 Unix 毫秒戳（供外挂策略的「真实 usage 防陈旧」判定）；
+// 已显式设 Ts 的（如压缩 summaryMsg）不覆盖——0 可靠表示「未承载」。
 func appendMsg(msgs, newMsgs *[]Message, m Message) {
 	if m.Ts == 0 {
 		m.Ts = nowMs()

@@ -232,7 +232,17 @@ func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
 	}
 }
 
-// compaction 使用不同 ChatClient 时，Run 应调用 CompactionChat 而非主 chat 做摘要。
+// testCompactionHooks 构造 NewCompaction 钩子对（测试用）：chat 做摘要，window 经 fn 可调。
+// 默认 Auto=true、MaxTokens=4096，模拟 CLI 默认装配。返回 (before, after) 供挂到 LoopHooks。
+func testCompactionHooks(chat *ChatClient, window int, fn func(*CompactionOptions)) (func(context.Context, StepInput) (StepOutput, error), func(context.Context, int, Response) error) {
+	o := CompactionOptions{Chat: chat, ContextWindow: window, Model: "m", MaxTokens: 4096, Auto: true}
+	if fn != nil {
+		fn(&o)
+	}
+	return NewCompaction(o)
+}
+
+// 压缩用不同 ChatClient 时，BeforeLLM 应调 compChat 做摘要、主 chat 做对话（压缩作为外挂的契约）。
 func TestRun_CompactionChatUsed(t *testing.T) {
 	mainTr := &fakeTransport{responses: []string{textResponse("final")}}
 	compTr := &fakeTransport{responses: []string{textResponse("compacted-by-other")}}
@@ -244,16 +254,12 @@ func TestRun_CompactionChatUsed(t *testing.T) {
 	for range 10 {
 		hist = append(hist, Message{Role: roleUser, Content: strings.Repeat("q", 50)})
 	}
+	before, after := NewCompaction(CompactionOptions{
+		Chat: compChat, ContextWindow: 600, Model: "main-model", CompactionModel: "comp-model", MaxTokens: 4096, Auto: true,
+	})
+	hooks := LoopHooks{BeforeLLM: before, AfterLLM: after}
 
-	cfg := LoopConfig{
-		Model:           "main-model",
-		CompactionModel: "comp-model",
-		CompactionChat:  compChat,
-		ContextWindow:   600,
-		History:         hist,
-	}
-
-	res, err := Run(context.Background(), mainChat, nil, cfg, "hi", LoopHooks{}, nil)
+	res, err := Run(context.Background(), mainChat, nil, LoopConfig{Model: "main-model", History: hist}, "hi", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -271,55 +277,28 @@ func TestRun_CompactionChatUsed(t *testing.T) {
 	}
 }
 
-// §P1-C 静默溢出 Case 2（200 stop 但 input>window）：trim 历史（清 reasoning）后单次重试。
-func TestRun_SilentOverflowStopTrimsAndRetries(t *testing.T) {
-	silentStop := `{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1500,"completion_tokens":10}}`
-	tr := &fakeTransport{responses: []string{silentStop, textResponse("final")}}
-	chat, stream := testClients(tr)
-	history := []Message{
-		{Role: roleUser, Content: "q"},
-		{Role: roleAssistant, Content: "a", Reasoning: "SECRET_REASONING"},
+// 极简模式（BeforeLLM=nil）：核心不做任何上下文管理——巨大历史原样发送，不压缩、Compacted=false。
+// 这是「核心极简 + 压缩外挂」的契约证明：不挂 NewCompaction 即得无压缩 agent。
+func TestRun_NilBeforeLLMIsMinimalNoCompaction(t *testing.T) {
+	big := strings.Repeat("x", 1000)
+	hist := make([]Message, 20)
+	for i := range hist {
+		hist[i] = Message{Role: roleUser, Content: big}
 	}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{History: history, ContextWindow: 1000}, "prompt", LoopHooks{}, nil)
+	tr := &fakeTransport{responses: []string{textResponse("done")}}
+	chat, stream := testClients(tr)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{History: hist}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if tr.calls != 2 {
-		t.Errorf("calls = %d, want 2（初次 + 静默溢出重试一次）", tr.calls)
+	if res.Compacted {
+		t.Error("minimal mode (nil BeforeLLM) must not compact")
 	}
-	if len(tr.bodies) < 2 || !strings.Contains(tr.bodies[0], "SECRET_REASONING") {
-		t.Errorf("首次请求应含 reasoning：%q", tr.lastBody)
+	if tr.calls != 1 {
+		t.Errorf("minimal mode: want 1 LLM call, got %d", tr.calls)
 	}
-	if len(tr.bodies) >= 2 && strings.Contains(tr.bodies[1], "SECRET_REASONING") {
-		t.Errorf("静默溢出重试应在 trim 后清掉 reasoning：%q", tr.bodies[1])
-	}
-	if res.Finish != finishStop || res.Text != "final" {
-		t.Errorf("应正常返回 final/stop：finish=%q text=%q", res.Finish, res.Text)
-	}
-}
-
-// §P1-C：显式 ErrContextLength 恢复后置 overflowRecovered=true，本步不再触发静默溢出二次收紧。
-func TestRun_SilentOverflowDoesNotDoubleRecover(t *testing.T) {
-	ctxLenBody := `{"error":{"message":"context_length_exceeded"}}`
-	silentStop := `{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1500,"completion_tokens":10}}`
-	tr := &fakeTransport{
-		statuses:  []int{400, 200, 200},
-		responses: []string{ctxLenBody, silentStop, silentStop},
-	}
-	chat, stream := testClients(tr)
-	history := []Message{
-		{Role: roleUser, Content: "q"},
-		{Role: roleAssistant, Content: "a"},
-	}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{History: history, ContextWindow: 1000}, "prompt", LoopHooks{}, nil)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	// 显式重试一次（400→200），responses[1] 虽静默超窗但 overflowRecovered=true 不再二次 trim。
-	if tr.calls != 2 {
-		t.Errorf("calls = %d, want 2（显式重试一次后不再二次恢复）", tr.calls)
-	}
-	if res.Finish != finishStop {
-		t.Errorf("finish=%q, want stop", res.Finish)
+	// 全部历史原样进请求体（无压缩、无裁剪）——压缩了就不会含完整 big blob。
+	if !strings.Contains(tr.lastBody, big) {
+		t.Errorf("minimal mode should send history verbatim, body lacks big blob: %s", tr.lastBody)
 	}
 }

@@ -101,7 +101,8 @@ func TestRun_SummaryReducesAndPersists(t *testing.T) {
 	chat, stream := testClients(tr)
 	// ContextWindow 取在「压缩前 > 80%、压缩后 ≤ 80%」之间；estimateTokens 现计入 system/tools
 	// 固定开销（systemOverheadTokens=400），256 的小窗口会使压缩后仍超 → 误报失败，故放到 750。
-	res, err := Run(context.Background(), chat, stream, LoopConfig{ContextWindow: 750, History: hist}, "now", LoopHooks{}, nil)
+	before, after := testCompactionHooks(chat, 750, nil)
+	res, err := Run(context.Background(), chat, stream, LoopConfig{History: hist}, "now", LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -135,7 +136,8 @@ func TestRun_OverWindowIrreducibleErrors(t *testing.T) {
 		textResponse("done"),
 	}}
 	chat, stream := testClients(tr)
-	_, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, ContextWindow: 200}, "x", LoopHooks{}, nil)
+	before, after := testCompactionHooks(chat, 200, nil)
+	_, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err == nil {
 		t.Fatal("expected error when irreducibly over window")
 	}

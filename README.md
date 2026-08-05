@@ -12,6 +12,43 @@
 - 工具：`read` / `write` / `edit` / `grep` / `glob` / `codemap` / `shell`，外加 `.miniagent/scripts.json` 声明的项目脚本工具（`script_<name>`）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行；**session 保存期间临时忽略信号**，避免截断 session 文件
 
+## 架构：极简核心 + 开放钩子
+
+miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.Run`）：发 prompt → LLM 回工具则执行回灌 → 直到最终文本或撞迭代上限。核心**不做任何上下文管理**——压缩、记忆、溢出检测、token 估算都**不在循环里**。一切上下文策略经 `LoopHooks` 外挂：
+
+| 钩子 | 触发点 | 用途 |
+|------|--------|------|
+| `BeforeLLM(StepInput) (StepOutput, error)` | 每步调 LLM 前 | 改写消息视图、压缩、注入记忆/RAG、提交持久化摘要、累加用量 |
+| `AfterLLM(step, resp) error` | 每步 LLM 响应后 | 用量记账、静默溢出判定 |
+| `OnToolUse(name, input) error` | 工具执行前 | 审批/拒绝（返回 `ErrToolDenied` 仅拒该工具，不终止循环） |
+| `OnToolResult(name, callID, ToolResult) error` | 工具执行后 | 结果观察、事件下发 |
+| `OnDelta(step, kind, text) error` | 流式增量 | 实时输出 |
+
+`StepOutput.View` 是发给 LLM 的消息；`Commit=true` 则同时替换运行 transcript（压缩语义）；`Persist` 追加到持久化增量；`ExtraUsage` 计入用量；`Compacted=true` 标记压缩（交互层据此 rewrite session）。
+
+**极简模式**：`BeforeLLM=nil` → 核心原样发送 transcript，零上下文管理。要压缩，挂 `NewCompaction`：
+
+```go
+before, after := miniagent.NewCompaction(miniagent.CompactionOptions{
+    Chat: chat, ContextWindow: 120000, Model: model, Auto: true, MaxTokens: maxTokens,
+})
+hooks := miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}
+result, err := miniagent.Run(ctx, chat, stream, cfg, prompt, hooks, logger)
+```
+
+`NewCompaction` 封装原有摘要压缩引擎（超窗摘要中段 + 有损 fallback + 主动裁剪 + 静默溢出检测），是「压缩作为外挂」的默认实现。**不挂它即得无压缩的极简 agent。** CLI 默认装配 `NewCompaction`，故命令行行为不变。
+
+**自定义外挂示例**（注入一条长期记忆，仅本轮可见、不进 transcript）：
+
+```go
+hooks.BeforeLLM = func(ctx context.Context, in miniagent.StepInput) (miniagent.StepOutput, error) {
+    view := append([]miniagent.Message{{Role: "user", Content: memoryNote}}, in.Msgs...)
+    return miniagent.StepOutput{View: view}, nil // Commit=false：注入不持久化
+}
+```
+
+会话压缩、会话记忆、RAG、用量记账等都可经这对钩子自行搭建，无需改核心。`OnToolUse`/`OnToolResult` 可外挂工具审批与执行审计；工具本身是 `Tool.Call` 函数字段，自由增删。
+
 ## 构建
 
 ```bash

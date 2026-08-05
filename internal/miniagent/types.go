@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
 
@@ -119,9 +120,15 @@ const (
 )
 
 // LoopHooks 是 Run 在循环各点回调消费方的钩子集合，所有字段可 nil（不通知）。
-// 聚合为结构而非散参：回调达 3 个（工具前通知 / 工具后结果 / LLM 增量），集中扩展，
-// Run 签名只暴露一个 hooks 参数。
+// 这是 agent 核心的开放缝口：BeforeLLM/AfterLLM 让一切上下文策略（压缩、记忆、RAG 注入、
+// 用量记账、溢出检测）外挂实现，核心循环本身不做任何上下文管理。
 type LoopHooks struct {
+	// BeforeLLM 每步调 LLM 前触发：可改写发给 LLM 的消息视图、提交持久化增量、累加用量、
+	// 标记压缩。nil=透传（极简模式：核心不做上下文管理，原样发送 transcript）。
+	// 这是上下文管理/压缩/记忆/RAG 注入的唯一缝口。
+	BeforeLLM func(ctx context.Context, in StepInput) (StepOutput, error)
+	// AfterLLM 每步 LLM 响应后触发，供观察用量、判定静默溢出、记账。nil=不通知。
+	AfterLLM func(ctx context.Context, step int, resp Response) error
 	// OnToolUse 工具执行前通知；返回 error 沿链上抛到 Run 终止循环（下游管道关闭时）。
 	// 返回哨兵 ErrToolDenied（loop.go 定义）时仅拒绝该工具、不终止循环。
 	OnToolUse func(name, input string) error
@@ -129,9 +136,31 @@ type LoopHooks struct {
 	OnToolResult func(name, callID string, r ToolResult) error
 	// OnDelta LLM 流式增量；非流式模式不触发。
 	OnDelta func(step int, kind DeltaKind, text string) error
-	// OnCompacting 在每次摘要压缩前触发（compactWithSummary 内、调摘要 LLM 前，§P2）。
-	// 可注入 context 或一次性替换 summarizerPrompt，不可 cancel。nil=不通知，零开销。
-	OnCompacting func(ctx context.Context, in CompactingInput) (CompactingOutput, error)
+}
+
+// StepInput 是 BeforeLLM 的入参：当前运行 transcript（只读意图）+ step + 请求级 System/Tools。
+// BeforeLLM 据此决定本轮发给 LLM 的消息视图（可压缩、可注入、可原样透传）。
+type StepInput struct {
+	Step   int
+	Msgs   []Message
+	System string
+	Tools  []Tool
+}
+
+// StepOutput 是 BeforeLLM 的回参。View 必填（发给 LLM 的消息）；其余可选，为核心副作用。
+type StepOutput struct {
+	// View 是本轮发给 LLM 的消息（必填；透传时 = 输入 Msgs）。
+	View []Message
+	// Commit=true 时核心把运行 transcript 替换为 View（压缩场景：收缩后即新 transcript）；
+	// false 时核心保留原 transcript、仅本轮发 View（记忆/RAG 注入场景：注入不进 transcript）。
+	Commit bool
+	// Persist 额外追加到本轮持久化 delta（如压缩生成的 summary 消息）。
+	// 带 Kind 的持久化消息会替换 newMsgs 中同 Kind 的旧条目（如多次压缩只留最新 summary）。
+	Persist []Message
+	// ExtraUsage 累加进本轮 Result.Usage（如摘要 LLM 调用的 token），非 nil 即生效。
+	ExtraUsage *Usage
+	// Compacted=true 标记本轮发生压缩，核心据此置 Result.Compacted（交互层据此 rewrite session）。
+	Compacted bool
 }
 
 type Result struct {
@@ -180,15 +209,16 @@ var ErrThinkingUnsupported = errors.New("miniagent: thinking parameter unsupport
 // handleToolCalls 据此跳过该工具（回填拒绝结果）、不终止循环；其他 error 仍终止。
 var ErrToolDenied = errors.New("miniagent: tool denied by caller")
 
+// LoopConfig 是 Run 的核心配置——只含 agent 循环本体所需：模型、系统提示、工具、历史、限额、流式、思考。
+// 一切上下文策略（压缩窗口、保留轮数、摘要模板、真实用量、溢出检测…）已移出，经 LoopHooks.BeforeLLM/AfterLLM
+// 外挂（见 NewCompaction）。这使得 Run 成为一个极简、无策略的 ReAct 核心调用方按需组装能力。
 type LoopConfig struct {
-	Model            string
-	System           string
-	SummaryRequest   string
-	SummarizerPrompt string
-	MaxTokens        int
-	Tools            []Tool
-	// History 是本轮之前的会话历史，按序拼在新 user prompt 之前。
-	// Run 不修改其内容。
+	Model          string
+	System         string
+	SummaryRequest string // 撞迭代上限时注入的总结请求（内部引导消息，不持久化）；空用内置默认。
+	MaxTokens      int
+	Tools          []Tool
+	// History 是本轮之前的会话历史，按序拼在新 user prompt 之前。Run 不修改其内容。
 	History []Message
 	// MaxIterations 覆盖单轮 LLM 调用上限；<=0 用 maxIterations 默认值。
 	MaxIterations int
@@ -196,61 +226,56 @@ type LoopConfig struct {
 	// ErrBudgetExceeded（走 error 事件 + 退出码 1）。
 	MaxTotalTokens int
 	// Stream 为 true 时 callLLM 走流式（DoStream），增量经 LoopHooks.OnDelta 推出；
-	// 默认 false（非流式 Do），保持单测与兼容。
+	// 默认 false（非流式 Do）。
 	Stream bool
-	// ContextWindow 是模型 context 上限（tokens）；>0 时 Run 在每步 callLLM 前据
-	// estimateTokens 判定是否主动裁剪历史（见 compactHistory）；0=未知，不主动管理
-	// （仅 ErrContextLength 被动降级），保持兼容。
-	ContextWindow int
 	// ThinkingLevel / Thinking 透传到每次 callLLM 的 Request（思考级别 + 供应商映射）。
 	ThinkingLevel string
 	Thinking      *ThinkingMapping
-	// CompactionModel 是摘要压缩用的模型 id；空则回落 cfg.Model。
-	CompactionModel string
-	// CompactionChat 是摘要压缩专用的 ChatClient；nil 则回落主 chat（同 provider）。
-	CompactionChat *ChatClient
-	// 以下 5 项是 S4 策略化常量（config run.* 可覆盖，<=0 用内置默认）：
-	// MaxToolResultChars=tool 结果入历史默认字符上限（兜底 Tool.ResultLimit）；
-	// MaxFileResultChars=read/edit 等代码类工具结果上限（buildTools 注入 Tool.ResultLimit）；
-	// MaxParallelTools=单步并行工具上限；ContextKeepRecent/SummaryMaxChars=压缩保留轮数与摘要字符上限。
+	// MaxToolResultChars 是 tool 结果入历史的默认字符上限（兜底 Tool.ResultLimit；<=0 用内置默认）。
 	MaxToolResultChars int
-	MaxFileResultChars int
-	MaxParallelTools   int
-	ContextKeepRecent  int
-	SummaryMaxChars    int
-	// ContextKeepReasoning 是主动 reasoning 清理时保留的最近 assistant 消息条数（<=0 用内置默认 1）。
-	// P1：非最近 N 条 assistant 的 Reasoning（思考链回灌）每轮原样发回，是思考模型下隐性 token 大户；
-	// 主动清空不碰 tool 配对、不丢可见事实（正文/tool_calls 不动）。高准确度场景可调高保留更多轮思考。
-	ContextKeepReasoning int
-	// ContextKeepToolArgs 是主动 tool_call args 压缩时保留的最近 assistant 条数（<=0 用内置默认 2）。
-	// P4：非最近 N 条 assistant 的 write/edit 大 Args（content/old_string/new_string）每轮原样回灌，
-	// 而写成功后已落盘或被替换，纯占位重发；压缩为前缀占位不碰配对、不丢 path（模型知道改过哪个文件）。
-	// 高准确度场景可调高保留更多轮写入参数原文。
-	ContextKeepToolArgs int
-	// ContextKeepReasoningChars 是保留窗口内单条 Reasoning 的字符上限（P7，rune）。超过则头尾分段截断
-	// （压中段发散、留两端）。0=用内置默认 4000；<0=关闭；>0=自定义阈值。高准确度/长思考链场景可调高。
-	ContextKeepReasoningChars int
-	// ContextUseRealUsage 控制压缩阈值是否优先采纳 provider 真实 usage（§P0-B）。默认 true（main.go
-	// 装配）；false=kill-switch，回落纯本地 estimateTokens。无可用真实 usage 时自动回落，故零回归。
-	ContextUseRealUsage bool
-	// ToolOutputDir 非空时启用「工具输出落盘 + path 回读」（§P1-A）：超 limit 的工具全文写入
-	// <ToolOutputDir>/tool_<step>_<callID>_<n>.txt，历史 Content 改为预览+绝对路径提示
-	// （模型用 read(offset/limit)/grep 回读）。空=禁用（保留 trimForHistory 一次性硬截断）。
+	// MaxParallelTools 是单步并行工具上限（<=0 用内置默认）。
+	MaxParallelTools int
+	// ToolOutputDir 非空时启用「工具输出落盘 + path 回读」：超 limit 的工具全文写入
+	// <ToolOutputDir>/tool_<step>_<callID>_<n>.txt，历史 Content 改为预览+绝对路径提示。
+	// 空=禁用（保留 trimForHistory 一次性硬截断）。
 	ToolOutputDir string
 	// ToolOutputRetention 是落盘文件保留时长；Run 启动时机会性清理更早文件。<=0 用 7d。
 	ToolOutputRetention time.Duration
-	// CompactionAuto 控制是否启用静默用量溢出检测（对标 opencode compaction.auto，§P1-B）。resolve.go
-	// 置位：cfg.Compaction.Auto==nil → true（默认启用）；false 则仅保留 estimateTokens 主动压缩 + 反应重试。
-	CompactionAuto bool
-	// CompactionReserved 是从 ContextWindow 预留的 token 数（对标 opencode compaction.reserved，§P1-B）。
-	// <=0 回落 min(compactionBuffer=20000, MaxTokens)。
-	CompactionReserved int
-	// PreserveRecentTokens 是 retainedTail token 预算上界（§P1-E）。<=0 自动（floor(ContextWindow/4) clamp
-	// [2000,8000]）；ContextWindow<=0 时关闭，回落 ContextKeepRecent 轮数模式。
+}
+
+// CompactionOptions 是 NewCompaction 的参数——把原散布在 LoopConfig 的上下文压缩策略集中到一处，
+// 让压缩成为可插拔的「外挂」而非核心配置。<=0/空 的字段在引擎内回落内置默认（见 context.go）。
+type CompactionOptions struct {
+	// Chat 是摘要压缩用的 client（可与主 chat 不同 provider）；nil 时调用方须自行注入 Summarize，
+	// 否则 NewCompaction 用它构造 summarizeMiddle 回调。
+	Chat *ChatClient
+	// MaxTokens 是主请求的单次输出上限，供 isUsageOverflow 判定静默溢出（对标原 cfg.MaxTokens）。
+	MaxTokens int
+	// ContextWindow 是模型 context 上限（tokens）；<=0 关闭主动压缩（仅保留 ErrContextLength 被动重试）。
+	ContextWindow int
+	// Model 是主模型 id；CompactionModel 空时回落此值做摘要。
+	Model string
+	// CompactionModel 是摘要专用模型 id（可跨 provider）；空回落 Model。
+	CompactionModel string
+	System          string
+	Tools           []Tool
+	KeepRecent      int // compactWithSummary 保留的最近轮数（<=0 用内置默认）。
+	// KeepReasoning/KeepToolArgs/KeepReasoningChars 是主动裁剪参数（P1/P4/P7，<=0/0 用内置默认）。
+	KeepReasoning        int
+	KeepToolArgs         int
+	KeepReasoningChars   int
+	SummarizerPrompt     string // 非空则全量 override 摘要 system prompt。
+	SummaryMaxChars      int
 	PreserveRecentTokens int
-	// SessionID 是本次 Run 的会话标识，供 compaction hook（CompactingInput.SessionID）等回调识别会话（§P2）。
-	// 空串兼容无 session 模式；cmd 层由 loopCfg 从 resolveSessionForRun 返回的 meta.ID 填入。
+	UseRealUsage         bool
+	// Auto 控制静默用量溢出检测（AfterLLM 采真实 usage 判溢出、置下步 Force 压缩）；false=关闭。
+	Auto     bool
+	Reserved int // 从 ContextWindow 预留的 token 缓冲（<=0 回落内置默认）。
+	// SessionID 透传给 OnCompacting（CompactingInput.SessionID），空串兼容无 session。
 	SessionID string
+	// OnCompacting 是每次摘要前的钩子（注入 context / 一次性替换 summarizerPrompt），nil=不启用。
+	OnCompacting CompactingHook
+	Logger       *slog.Logger
 }
 
 // ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。

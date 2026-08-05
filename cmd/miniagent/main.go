@@ -150,9 +150,7 @@ func main() {
 	}
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
-	hooks := buildHooks(*f.resultOnly)
-	baseCfg := loopCfg(resolved, f, meta, history, tools)
-	baseCfg.CompactionChat = compChat
+	baseCfg := loopCfg(resolved, f, history, tools)
 	// §P1-A：工具输出落盘目录——config 显式优先；否则 -save-session/-session 激活时按 session 目录
 	// 派生 <sessionDir>/<id>.tool-output/（无 session 且 config 未配则禁用）。
 	if resolved.Run.ToolOutputDir != nil && *resolved.Run.ToolOutputDir != "" {
@@ -163,6 +161,11 @@ func main() {
 	if resolved.Run.ToolOutputRetention != nil {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
 	}
+	// 压缩作为外挂：经 NewCompaction 取 before/after 挂到 hooks（核心 Run 本身不含压缩）。
+	compBefore, compAfter := miniagent.NewCompaction(compactionOptions(resolved, f, meta, chat, compChat, baseCfg.System, tools, logger))
+	hooks := buildHooks(*f.resultOnly)
+	hooks.BeforeLLM = compBefore
+	hooks.AfterLLM = compAfter
 
 	// runCtx 含 -max-duration 超时（若有）；信号处理由 main 顶部的 NotifyContext 提供。
 	runCtx := ctx
@@ -201,41 +204,57 @@ func main() {
 	}
 }
 
-// loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig。System 空回落默认 prompt。
-// meta 提供 SessionID（§P2，供 compaction hook 识别会话）。
-func loopCfg(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
+// loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig（仅核心字段——压缩策略已移出，
+// 经 NewCompaction 外挂）。System 空回落默认 prompt。
+func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
 	system := resolved.System
 	if system == "" {
 		system = defaultSystemPrompt
 	}
 	return miniagent.LoopConfig{
-		Model:                     resolved.ModelID,
-		System:                    system,
-		SummaryRequest:            resolved.SummaryRequest,
-		SummarizerPrompt:          resolved.SummarizerPrompt,
-		MaxTokens:                 into(resolved.Run.MaxTokens, *f.maxTokens),
-		Tools:                     tools,
-		History:                   history,
-		MaxIterations:             into(resolved.Run.MaxIterations, *f.maxIterations),
-		MaxTotalTokens:            into(resolved.Run.MaxTotalTokens, 0),
-		Stream:                    intoBool(resolved.Run.Stream, *f.stream),
-		ContextWindow:             into(resolved.Run.ContextWindow, 0),
-		ThinkingLevel:             resolved.Thinking,
-		Thinking:                  resolved.Provider.Thinking,
-		CompactionModel:           resolved.CompactionModelID,
-		CompactionAuto:            resolved.CompactionAuto,
-		CompactionReserved:        resolved.CompactionReserved,
-		MaxToolResultChars:        into(resolved.Run.MaxToolResultChars, 0),
-		MaxFileResultChars:        into(resolved.Run.MaxFileResultChars, 0),
-		MaxParallelTools:          into(resolved.Run.MaxParallelTools, 0),
-		ContextKeepRecent:         into(resolved.Run.ContextKeepRecent, 0),
-		SummaryMaxChars:           into(resolved.Run.SummaryMaxChars, 0),
-		ContextKeepReasoning:      into(resolved.Run.ContextKeepReasoning, 0),
-		ContextKeepToolArgs:       into(resolved.Run.ContextKeepToolArgs, 0),
-		ContextKeepReasoningChars: into(resolved.Run.ContextKeepReasoningChars, 0),
-		ContextUseRealUsage:       intoBool(resolved.Run.ContextUseRealUsage, true),
-		PreserveRecentTokens:      into(resolved.Run.PreserveRecentTokens, 0),
-		SessionID:                 meta.ID,
+		Model:              resolved.ModelID,
+		System:             system,
+		SummaryRequest:     resolved.SummaryRequest,
+		MaxTokens:          into(resolved.Run.MaxTokens, *f.maxTokens),
+		Tools:              tools,
+		History:            history,
+		MaxIterations:      into(resolved.Run.MaxIterations, *f.maxIterations),
+		MaxTotalTokens:     into(resolved.Run.MaxTotalTokens, 0),
+		Stream:             intoBool(resolved.Run.Stream, *f.stream),
+		ThinkingLevel:      resolved.Thinking,
+		Thinking:           resolved.Provider.Thinking,
+		MaxToolResultChars: into(resolved.Run.MaxToolResultChars, 0),
+		MaxParallelTools:   into(resolved.Run.MaxParallelTools, 0),
+	}
+}
+
+// compactionOptions 把 resolved 的压缩策略装配成 CompactionOptions。chat 是摘要用 client
+// （compChat 非空用之，否则回落主 chat）。
+func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, chat, compChat *miniagent.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) miniagent.CompactionOptions {
+	compClient := compChat
+	if compClient == nil {
+		compClient = chat
+	}
+	return miniagent.CompactionOptions{
+		Chat:                 compClient,
+		MaxTokens:            into(resolved.Run.MaxTokens, *f.maxTokens),
+		ContextWindow:        into(resolved.Run.ContextWindow, 0),
+		Model:                resolved.ModelID,
+		CompactionModel:      resolved.CompactionModelID,
+		System:               system,
+		Tools:                tools,
+		KeepRecent:           into(resolved.Run.ContextKeepRecent, 0),
+		KeepReasoning:        into(resolved.Run.ContextKeepReasoning, 0),
+		KeepToolArgs:         into(resolved.Run.ContextKeepToolArgs, 0),
+		KeepReasoningChars:   into(resolved.Run.ContextKeepReasoningChars, 0),
+		SummarizerPrompt:     resolved.SummarizerPrompt,
+		SummaryMaxChars:      into(resolved.Run.SummaryMaxChars, 0),
+		PreserveRecentTokens: into(resolved.Run.PreserveRecentTokens, 0),
+		UseRealUsage:         intoBool(resolved.Run.ContextUseRealUsage, true),
+		Auto:                 resolved.CompactionAuto,
+		Reserved:             resolved.CompactionReserved,
+		SessionID:            meta.ID,
+		Logger:               logger,
 	}
 }
 

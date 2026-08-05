@@ -613,3 +613,57 @@ const (
 	toolArgsCompressThreshold = 600
 	toolArgsKeepChars         = 200
 )
+
+// NewCompaction 把整套上下文压缩引擎（FitHistory：超窗摘要中段 + 有损 fallback + 主动裁剪；§P1-B 静默溢出
+// 检测）封装为一对可外挂的 LoopHooks 钩子。这是「压缩作为外挂」的默认实现：核心 Run 不含任何压缩，
+// 调用方经 NewCompaction(opts) 取回 (before, after) 挂到 LoopHooks.BeforeLLM/AfterLLM 即恢复完整压缩能力；
+// 不挂则得极简无压缩 agent。before 每步做 applyCompactionBarrier + FitHistory；after 采真实 usage 判溢出、
+// 置下步 Force（跨步共享 overflowPending 状态）。opts.Chat 必须非 nil（摘要 LLM 调用需 client）。
+func NewCompaction(opts CompactionOptions) (before func(context.Context, StepInput) (StepOutput, error), after func(context.Context, int, Response) error) {
+	maxChars := opts.SummaryMaxChars
+	if maxChars <= 0 {
+		maxChars = summaryMaxChars
+	}
+	budget := ContextBudget{
+		ContextWindow:        opts.ContextWindow,
+		KeepRecent:           opts.KeepRecent,
+		KeepReasoning:        opts.KeepReasoning,
+		KeepToolArgs:         opts.KeepToolArgs,
+		KeepReasoningChars:   opts.KeepReasoningChars,
+		SummarizerPrompt:     opts.SummarizerPrompt,
+		CompactionModel:      opts.CompactionModel,
+		Model:                opts.Model,
+		System:               opts.System,
+		Tools:                opts.Tools,
+		UseRealUsage:         opts.UseRealUsage,
+		PreserveRecentTokens: opts.PreserveRecentTokens,
+		Compacting:           opts.OnCompacting,
+		SessionID:            opts.SessionID,
+		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []Message) (string, Usage, error) {
+			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, maxChars, middle)
+		},
+	}
+	var overflowPending bool
+	before = func(ctx context.Context, in StepInput) (StepOutput, error) {
+		barrier := applyCompactionBarrier(in.Msgs)
+		budget.Force = overflowPending
+		fitted, summary, summarized, sumUsage, err := FitHistory(ctx, barrier, budget, opts.Logger)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		out := StepOutput{View: fitted, Commit: true} // 压缩：收缩后的 fitted 即新 transcript
+		if summarized {
+			out.Persist = []Message{summary}
+			u := sumUsage
+			out.ExtraUsage = &u
+			out.Compacted = true
+		}
+		return out, nil
+	}
+	after = func(_ context.Context, _ int, resp Response) error {
+		// §P1-B：用上一步真实 usage 判静默溢出，置下步 Force（撞 provider 前先压）。
+		overflowPending = isUsageOverflow(resp.Usage, opts.ContextWindow, opts.MaxTokens, opts.Reserved, opts.Auto)
+		return nil
+	}
+	return before, after
+}
