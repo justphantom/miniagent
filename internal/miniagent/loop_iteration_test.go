@@ -385,3 +385,51 @@ func TestRun_SummaryStepEnforcesBudget(t *testing.T) {
 		t.Fatalf("err = %v, want ErrBudgetExceeded（总结步应走 OnBudget 熔断）", err)
 	}
 }
+
+// StepOutput{Commit:true, View:nil}（调用方误用）不应清空 transcript——
+// applyBeforeLLM 的 Commit 路径用 toSend（已 nil 补救）而非裸 View。
+func TestApplyBeforeLLM_CommitNilViewKeepsTranscript(t *testing.T) {
+	msgs := []Message{{Role: RoleUser, Content: "keep"}}
+	newMsgs := []Message{{Role: RoleUser, Content: "keep"}}
+	total := &Usage{}
+	compacted := false
+	hooks := LoopHooks{
+		BeforeLLM: func(context.Context, StepInput) (StepOutput, error) {
+			return StepOutput{Commit: true, View: nil}, nil
+		},
+	}
+	toSend, err := applyBeforeLLM(context.Background(), hooks, 1, &msgs, &newMsgs, total, &compacted, LoopConfig{})
+	if err != nil {
+		t.Fatalf("applyBeforeLLM: %v", err)
+	}
+	if len(toSend) != 1 || toSend[0].Content != "keep" {
+		t.Errorf("toSend 应保留原 transcript: %+v", toSend)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "keep" {
+		t.Errorf("Commit+View=nil 不应清空 msgs: %+v", msgs)
+	}
+}
+
+// 总结路径注入的 RoleSystem 引导消息不应进入 Result.Messages——
+// 用临时 reqMsgs 发请求，transcript 始终干净（修复前 summaryReq 裸 append 进 msgs 泄漏）。
+func TestRun_SummaryPathDoesNotLeakSystemPrompt(t *testing.T) {
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
+		textResponse("done"),
+	}}
+	llm := testClients(tr)
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}
+	res, err := Run(context.Background(), llm, cfg, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Text != "done" {
+		t.Errorf("Text = %q, want done", res.Text)
+	}
+	for i, m := range res.Messages {
+		if m.Role == RoleSystem {
+			t.Errorf("Result.Messages[%d] 不应含内部 RoleSystem 引导消息: %+v", i, m)
+		}
+	}
+}

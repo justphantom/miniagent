@@ -48,6 +48,43 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		iterLimit = maxIterations
 	}
 
+	// summarizeAtLimit 撞迭代上限时注入 RoleSystem 总结请求并额外调一次 LLM 求最终文本。逻辑外提为闭包，
+	// 使主循环 for 体聚焦五件事；捕获 Run 全部局部状态，仅 step 作参数（闭包定义先于 for，循环变量不可直接捕获）。
+	// 总结请求经临时 reqMsgs 发送——不污染 transcript（内部引导消息不进 Result.Messages / newMsgs）。
+	// ok=true 表示已得出终止 Result（res+err），调用方直接 return；ok=false 表示总结未成，回落 finishMaxIterations。
+	summarizeAtLimit := func(s int) (Result, bool, error) {
+		summaryReq := cfg.SummaryRequest
+		if summaryReq == "" {
+			summaryReq = summaryRequestPrompt
+		}
+		if logger != nil {
+			logger.Info("injecting summary request at iteration limit", "step", s)
+		}
+		reqMsgs := make([]Message, 0, len(msgs)+1)
+		reqMsgs = append(reqMsgs, msgs...)
+		reqMsgs = append(reqMsgs, Message{Role: RoleSystem, Content: summaryReq})
+		resp2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
+		if err2 != nil {
+			if logger != nil {
+				logger.Warn("summary LLM call failed", "step", s+1, "error", err2)
+			}
+			return Result{}, false, nil
+		}
+		if len(resp2.ToolCalls) != 0 {
+			return Result{}, false, nil
+		}
+		appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
+		if hooks.AfterLLM != nil {
+			if aerr := hooks.AfterLLM(ctx, s+1, resp2); aerr != nil {
+				return Result{Usage: total, Steps: s + 1, Messages: msgs, NewMessages: newMsgs}, true, aerr
+			}
+		}
+		if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
+			return Result{Usage: total, Steps: s + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, true, berr
+		}
+		return Result{Text: resp2.Text, Usage: total, Steps: s + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, true, nil
+	}
+
 	for step := 1; step <= iterLimit; step++ {
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
@@ -95,15 +132,11 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			}
 		}
 
-		// 核心只累加真实 usage（零 usage 时的本地估算 fallback 由 OnBudget 钩子做，核心不估算）。
-		total.InputTokens += resp.Usage.InputTokens
-		total.OutputTokens += resp.Usage.OutputTokens
-		// 开放缝 OnBudget：用量记账（零 usage 估算 fallback）+ 预算判定。nil=核心不估算不熔断（极简）。
-		// 默认实现 NewDefaultOnBudget 承载原 EstimateTokens fallback + MaxTotalTokens 判定。
-		if hooks.OnBudget != nil {
-			if berr := hooks.OnBudget(ctx, step, BudgetInput{ToSend: toSend, System: cfg.System, Tools: cfg.Tools, Resp: resp}, &total); berr != nil {
-				return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, berr
-			}
+		// 开放缝 OnBudget：累加真实 usage（零 usage 估算 fallback 由 NewDefaultOnBudget 承载）+ 预算判定。
+		// nil=核心不估算不熔断（极简）。AfterLLM 与 OnBudget 的 Steps 语义不同（前者 step-1、后者 step），
+		// 故 AfterLLM 留在调用方、仅累加+判定下沉到 recordStepUsage 复用。
+		if berr := recordStepUsage(ctx, hooks, step, resp, toSend, cfg, &total); berr != nil {
+			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, berr
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -116,38 +149,11 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		if err != nil {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
 		}
-		// 撞迭代上限且刚执行完工具：注入总结请求让 LLM 输出最终文本（允许一次额外调用），
-		// 落回落至 finishMaxIterations。总结请求是内部引导消息，不持久化（LoadSession 拒绝 RoleSystem）。
+		// 撞迭代上限且刚执行完工具：注入总结请求让 LLM 输出最终文本（允许一次额外调用）；
+		// 未成则回落 finishMaxIterations（总结逻辑外提为 summarizeAtLimit，主循环保持简洁）。
 		if step == iterLimit {
-			summaryReq := cfg.SummaryRequest
-			if summaryReq == "" {
-				summaryReq = summaryRequestPrompt
-			}
-			msgs = append(msgs, Message{Role: RoleSystem, Content: summaryReq})
-			if logger != nil {
-				logger.Info("injecting summary request at iteration limit", "step", step)
-			}
-			resp2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, step+1, msgs, hooks, logger)
-			if err2 == nil && len(resp2.ToolCalls) == 0 {
-				appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
-				// 总结步走与主路径一致的三段式（AfterLLM → 累加真实 usage → OnBudget），避免绕过预算熔断
-				// 成为逃逸通道、并消除内联估算与主路径的不一致（零 usage fallback 由 NewDefaultOnBudget 承载）。
-				if hooks.AfterLLM != nil {
-					if aerr := hooks.AfterLLM(ctx, step+1, resp2); aerr != nil {
-						return Result{Usage: total, Steps: step + 1, Messages: msgs, NewMessages: newMsgs}, aerr
-					}
-				}
-				total.InputTokens += resp2.Usage.InputTokens
-				total.OutputTokens += resp2.Usage.OutputTokens
-				if hooks.OnBudget != nil {
-					if berr := hooks.OnBudget(ctx, step+1, BudgetInput{ToSend: msgs, System: cfg.System, Tools: cfg.Tools, Resp: resp2}, &total); berr != nil {
-						return Result{Usage: total, Steps: step + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, berr
-					}
-				}
-				return Result{Text: resp2.Text, Usage: total, Steps: step + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
-			}
-			if err2 != nil && logger != nil {
-				logger.Warn("summary LLM call failed", "step", step+1, "error", err2)
+			if res, ok, err := summarizeAtLimit(step); ok {
+				return res, err
 			}
 		}
 	}
@@ -170,8 +176,9 @@ func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsg
 		toSend = *msgs
 	}
 	if out.Commit {
-		// 压缩场景：收缩后的 View 即新的运行 transcript。
-		*msgs = out.View
+		// 压缩场景：收缩后的 View 即新的运行 transcript。用 toSend（已 nil 补救）而非裸 View——
+		// 防 StepOutput{Commit:true, View:nil} 误用静默清空 transcript（View 文档必填，但核心不强制）。
+		*msgs = toSend
 	}
 	if len(out.Persist) > 0 {
 		mergePersisted(newMsgs, out.Persist)
@@ -218,4 +225,18 @@ func appendMsg(msgs, newMsgs *[]Message, m Message) {
 	}
 	*msgs = append(*msgs, m)
 	*newMsgs = append(*newMsgs, m)
+}
+
+// recordStepUsage 把单步真实 usage 累加进 total 并经 OnBudget 钩子做零 usage 估算 fallback + 预算判定。
+// 主路径与总结路径共用，消除两处三段式重复（AfterLLM 因 Steps 语义与 Result 构造耦合，仍留在各调用方）。
+// toSend 是本轮实际发给 LLM 的消息视图，供 OnBudget 估算。
+func recordStepUsage(ctx context.Context, hooks LoopHooks, step int, resp Response, toSend []Message, cfg LoopConfig, total *Usage) error {
+	total.InputTokens += resp.Usage.InputTokens
+	total.OutputTokens += resp.Usage.OutputTokens
+	if hooks.OnBudget != nil {
+		if berr := hooks.OnBudget(ctx, step, BudgetInput{ToSend: toSend, System: cfg.System, Tools: cfg.Tools, Resp: resp}, total); berr != nil {
+			return berr
+		}
+	}
+	return nil
 }

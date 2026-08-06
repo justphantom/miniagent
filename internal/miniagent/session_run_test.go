@@ -189,12 +189,12 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// 1 (user) + 2*maxIterations (assistant+tool 各 maxIterations 轮) + 1 (summary request system)
-	if want := 1 + 2*maxIterations + 1; len(res.Messages) != want {
+	// 1 (user) + 2*maxIterations (assistant+tool 各 maxIterations 轮)；summary 引导消息不进 transcript。
+	if want := 1 + 2*maxIterations; len(res.Messages) != want {
 		t.Errorf("Messages len = %d, want %d", len(res.Messages), want)
 	}
-	// 最后一条应是 summary request system 消息。
-	if res.Messages[len(res.Messages)-1].Role != RoleSystem {
-		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, RoleSystem)
+	// 最后一条应是最近一次工具结果（summary 经临时 reqMsgs 发送，不污染 Messages）。
+	if res.Messages[len(res.Messages)-1].Role != RoleTool {
+		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, RoleTool)
 	}
 }

@@ -58,16 +58,16 @@ func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 	if res.Steps != 1 {
 		t.Errorf("Steps = %d, want 1（回落，不累计额外步）", res.Steps)
 	}
-	// 但 summary request 仍注入了历史（messages 含该 system 消息）。
-	hasSummary := false
-	for _, m := range res.Messages {
-		if m.Role == RoleSystem && strings.Contains(m.Content, summaryRequestPrompt) {
-			hasSummary = true
-			break
-		}
+	// summary request 仍注入并发给了 LLM（第二次请求 body 含 prompt），但不再污染 transcript
+	// （Result.Messages 不含内部 RoleSystem 引导消息——经临时 reqMsgs 发送）。
+	secondBody := tr.bodies[1]
+	if !strings.Contains(secondBody, summaryRequestPrompt) {
+		t.Errorf("second request missing summary prompt: %s", secondBody)
 	}
-	if !hasSummary {
-		t.Error("summary request not in messages")
+	for i, m := range res.Messages {
+		if m.Role == RoleSystem {
+			t.Errorf("Result.Messages[%d] 不应含内部 RoleSystem 引导消息: %+v", i, m)
+		}
 	}
 }
 
