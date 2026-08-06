@@ -3,6 +3,8 @@ package miniagent
 import (
 	"os"
 	"strings"
+
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // chunkBuf 是流式累积器单个原始片段，text 与字节大小分离记录，
@@ -93,10 +95,10 @@ func (a *outputAccum) closeSink() error {
 }
 
 // finalize 返回最终 Output：cut 时前置「…[输出超限，仅保留尾部[,全文：<file>]]\n」，
-// 再 chunks join 经 truncateTail(maxChars) 兜底。替代旧 truncate(out.String(),shellOutputChars(),"…")。
+// 再 chunks join 经 text.TruncateTail(maxChars) 兜底。替代旧 truncate(out.String(),shellOutputChars(),"…")。
 func (a *outputAccum) finalize(maxChars int) string {
 	body := strings.Join(chunkTexts(a.chunks), "")
-	body = truncateTail(body, maxChars, "…[输出已截断]")
+	body = text.TruncateTail(body, maxChars, "…[输出已截断]")
 	if !a.cut {
 		return body
 	}

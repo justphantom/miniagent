@@ -156,7 +156,7 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 	}
 	// 扫描结束：corruptLine 仍非 0 → 最后一行半写（append-only 崩溃残行），容忍丢弃，
 	// 返回此前合法的历史。validateToolPairing 仍严格执行：若残行致配对断裂则报清晰错误。
-	if err := validateToolPairing(msgs); err != nil {
+	if err := ValidateToolPairing(msgs); err != nil {
 		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q：%w", path, err)
 	}
 	return meta, msgs, nil
@@ -177,7 +177,7 @@ func validateSessionMessage(m Message) error {
 }
 
 // validateToolPairing 校验 assistant.tool_calls 与 tool 消息一一配对；断裂会被端点 400，提前拦截指明位置。
-func validateToolPairing(msgs []Message) error {
+func ValidateToolPairing(msgs []Message) error {
 	pending := map[string]bool{}
 	for i, m := range msgs {
 		switch m.Role {

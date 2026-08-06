@@ -1,6 +1,9 @@
 package compaction
 
-import "github.com/justphantom/miniagent/internal/miniagent"
+import (
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/text"
+)
 
 import "log/slog"
 
@@ -49,12 +52,12 @@ type CompactionOptions struct {
 // 仅计 Content+Reasoning+ToolCalls.Args，不计 system/schema/envelope。
 func estimateMessageTokensLocal(m miniagent.Message) int {
 	var nonCJK, cjk int
-	n, c := miniagent.CountCharsLocal(m.Content)
+	n, c := text.CountCharsLocal(m.Content)
 	nonCJK, cjk = nonCJK+n, cjk+c
-	n, c = miniagent.CountCharsLocal(m.Reasoning)
+	n, c = text.CountCharsLocal(m.Reasoning)
 	nonCJK, cjk = nonCJK+n, cjk+c
 	for _, tc := range m.ToolCalls {
-		n, c = miniagent.CountCharsLocal(tc.Args)
+		n, c = text.CountCharsLocal(tc.Args)
 		nonCJK, cjk = nonCJK+n, cjk+c
 	}
 	return nonCJK/4 + cjk/2

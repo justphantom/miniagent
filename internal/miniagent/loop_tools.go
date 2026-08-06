@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
-	"log/slog"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // maxToolResultInHistory：单条 tool 结果入历史字符上限，平衡可读性与上下文预算。
@@ -190,7 +191,7 @@ func trimForHistory(s string, limit int, split bool) string {
 		limit = maxToolResultInHistory
 	}
 	if split {
-		return truncateHeadTail(s, limit, "…[省略中间段]")
+		return text.TruncateHeadTail(s, limit, "…[省略中间段]")
 	}
-	return truncate(s, limit, "…[tool_result 已截断]")
+	return text.Truncate(s, limit, "…[tool_result 已截断]")
 }

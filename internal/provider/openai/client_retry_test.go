@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // 重试相关：用 httptest.Server + atomic 计数精确控制每次响应。
@@ -57,7 +59,7 @@ func TestChatClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
 		{status: http.StatusTooManyRequests, body: `{"error":"rate"}`, headers: map[string]string{"Retry-After": "0"}},
 	})
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.Do(context.Background(), Request{Model: "m"})
+	resp, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -81,7 +83,7 @@ func TestChatClient_Do_RetriesExhaustedOn503(t *testing.T) {
 		{status: http.StatusServiceUnavailable, body: "busy"},
 	})
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")
 	}
@@ -108,7 +110,7 @@ func TestChatClient_Do_RetriesOn500(t *testing.T) {
 		{status: http.StatusInternalServerError, body: "boom"},
 	})
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.Do(context.Background(), Request{Model: "m"})
+	resp, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("expected retry success, got: %v", err)
 	}
@@ -130,7 +132,7 @@ func TestChatClient_Do_NoRetryOn400(t *testing.T) {
 		{status: http.StatusBadRequest, body: `{"error":"bad"}`},
 	})
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -150,7 +152,7 @@ func TestChatClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
 	})
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	start := time.Now()
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -178,7 +180,7 @@ func TestChatClient_Do_RetryCancelledByCtx(t *testing.T) {
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err := c.Do(ctx, Request{Model: "m"})
+	_, err := c.Do(ctx, miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -203,7 +205,7 @@ func TestChatClient_Do_RetriesOnNetworkError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -255,7 +257,7 @@ data: [DONE]
 		{status: http.StatusOK, body: okSSE, headers: map[string]string{"Content-Type": "text/event-stream"}},
 	})
 	c := &StreamClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.DoStream(context.Background(), Request{Model: "m"}, nil)
+	resp, err := c.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
 	if err != nil {
 		t.Fatalf("DoStream: %v", err)
 	}
@@ -279,7 +281,7 @@ func TestStreamClient_DoStream_RetriesExhaustedOn503(t *testing.T) {
 		{status: http.StatusServiceUnavailable, body: "busy", headers: map[string]string{"Retry-After": "0"}},
 	})
 	c := &StreamClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.DoStream(context.Background(), Request{Model: "m"}, nil)
+	_, err := c.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")
 	}

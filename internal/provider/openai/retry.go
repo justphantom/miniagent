@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"context"
@@ -6,6 +6,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+)
+
+// 重试：仅对瞬时故障（429/5xx + 网络错误）生效，maxRetries 次。端点 429/503 抖动
+// 数秒内自愈，2 次覆盖典型尖刺；避免真故障下放大下游压力（雪崩）。
+const (
+	maxRetries     = 2
+	retryBaseDelay = 500 * time.Millisecond
+	retryMaxDelay  = 8 * time.Second // 单次退火上限，含 Retry-After 解析值
 )
 
 func shouldRetryStatus(code int) bool {
@@ -20,7 +28,8 @@ func shouldRetryStatus(code int) bool {
 	return false
 }
 
-// isContextLengthError 已迁移到 overflow.go（§P1-C：升级为 24 正则 + 3 排除）。
+// isContextLengthError 的识别在 core（overflow.go，miniagent.IsContextLengthError）：
+// 24 正则 + 3 排除（§P1-C）。本包经 miniagent.IsContextLengthError 调用，避免分叉。
 
 // isThinkingError 启发式识别 thinking 参数（reasoning_effort 等）不被支持的 400：跨供应商
 // 措辞不一（"reasoning_effort"/"unknown parameter"/"unrecognized"）。宽松识别——误判只会触发

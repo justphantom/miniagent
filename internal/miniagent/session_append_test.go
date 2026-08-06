@@ -149,7 +149,7 @@ func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
 		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
 		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
 	}
-	err := validateToolPairing(msgs)
+	err := ValidateToolPairing(msgs)
 	if err == nil {
 		t.Fatal("expected pairing error")
 	}

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 const maxGlobEntries = 500
@@ -99,7 +101,7 @@ func runGlob(workspaceRoot, args string) ToolResult {
 	if len(paths) == 0 {
 		return ToolResult{Output: "无匹配"}
 	}
-	out := truncate(strings.Join(paths, "\n"), shellOutputChars(), "…[glob 输出已截断]")
+	out := text.Truncate(strings.Join(paths, "\n"), shellOutputChars(), "…[glob 输出已截断]")
 	if truncated {
 		out += fmt.Sprintf("\n…（超过 %d 条，已停止收集）", maxGlobEntries)
 	}

@@ -1,18 +1,19 @@
 package compaction
 
-import "github.com/justphantom/miniagent/internal/miniagent"
-
 import (
 	"context"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // testBudget 用 llm 构造 ContextBudget：Summarize 回调调 summarizeMiddle（maxChars=内置上限）。
 // Model/CompactionModel/System/Tools 留零值（这些测试不关心 token 估算窗口，直接调 compactWithSummary）。
-func testBudget(llm *miniagent.ChatClient) ContextBudget {
+func testBudget(llm *openai.ChatClient) ContextBudget {
 	return ContextBudget{
 		Model: "m",
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
@@ -44,7 +45,7 @@ func TestApplyCompactionBarrier(t *testing.T) {
 // 且经 insertSummaryIntoNewMsgs 写入 newMsgs（持久化）。
 func TestCompactWithSummary_Success(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("压缩摘要")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
@@ -76,7 +77,7 @@ func TestCompactWithSummary_Success(t *testing.T) {
 // 中段配对断裂（孤立 tool 消息）→ 不摘要，返回 error（调用方回落有损）。
 func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Content: "first"},
 		{Role: miniagent.RoleTool, ToolCallID: "orphan", Content: "x"}, // 断裂
@@ -92,7 +93,7 @@ func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 // 无中段可摘（轮数 ≤ 1+keepRecent）→ summary.Kind==""，不发 LLM 请求，msgs 原样。
 func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("should-not-call")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "u1"}, {Role: miniagent.RoleUser, Content: "u2"}}
 	out, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 6)
 	if err != nil || summary.Kind == miniagent.KindSummary {
@@ -109,7 +110,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 // summarizeMiddle 的 LLM 错误上抛（不吞）。
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
 	}
@@ -119,7 +120,7 @@ func TestSummarizeMiddle_LLMError(t *testing.T) {
 func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
 	if err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
@@ -132,7 +133,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 // P3-1：摘要请求设置 MaxTokens=summaryMaxTokens。
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 
 // compactWithSummary 应把 budget.CompactionModel 透传给 Summarize 回调。
 func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
 	var gotModel string
 	budget := ContextBudget{
 		Model:           "main-model",
@@ -293,7 +294,7 @@ func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 // §P0-A：summarizeMiddle UPDATE 模式把 previous-summary 写进请求 system。
 func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("更新摘要")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}

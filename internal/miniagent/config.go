@@ -41,6 +41,13 @@ type ProviderConfig struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// ModelRef 是一个可用的 provider/model 组合（ListAllModels 的返回单元）。
+// provider 与 model 分离，消费方无需从 "provider/model_id" 文本拆分
+// （model id 本身可含 '/'，文本拆分有歧义）。
+type ModelRef struct {
+	Provider, Model string
+}
+
 // DefaultsConfig 的 Provider/Model 均必填（provider/model 拆分后不再解析 "provider/id" 串）。
 type DefaultsConfig struct {
 	Provider         string `json:"provider"`
@@ -226,11 +233,11 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("provider 名 %q 重复", p.Name)
 		}
 		seen[p.Name] = true
-		if _, err := validateURL(p.ChatURL); err != nil {
+		if _, err := ValidateURL(p.ChatURL); err != nil {
 			return fmt.Errorf("provider %q chat_url: %w", p.Name, err)
 		}
 		if p.ModelsURL != "" {
-			if _, err := validateURL(p.ModelsURL); err != nil {
+			if _, err := ValidateURL(p.ModelsURL); err != nil {
 				return fmt.Errorf("provider %q models_url: %w", p.Name, err)
 			}
 		}

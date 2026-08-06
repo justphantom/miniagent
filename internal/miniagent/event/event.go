@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // sessionEventType 是 session 事件 / jsonl 首行 metadata 的 type 判别（与 session 包同值）。
@@ -106,7 +107,7 @@ type toolResultEvent struct {
 // EmitToolResult 写一条 tool_result 事件。output 截断到 maxToolResultEventChars；
 // 仅 shell 工具输出 exit_code（其他工具 ExitCode 是无语义的零值）。
 func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) error {
-	out := miniagent.Truncate(r.Output, maxToolResultEventChars, "…[tool_result 已截断]")
+	out := text.Truncate(r.Output, maxToolResultEventChars, "…[tool_result 已截断]")
 	ev := toolResultEvent{
 		Type:      "tool_result",
 		Name:      name,

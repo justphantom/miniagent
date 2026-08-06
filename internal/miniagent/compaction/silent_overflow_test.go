@@ -1,12 +1,13 @@
 package compaction
 
-import "github.com/justphantom/miniagent/internal/miniagent"
-
 import (
 	"context"
 	"net/http"
 	"strconv"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // §P1-B isUsageOverflow 表驱动（B.5 用例集）。
@@ -84,7 +85,7 @@ func TestUsageFootprint(t *testing.T) {
 // §P1-B Force=true 时，即使 miniagent.EstimateTokens 远低于 4/5 阈值，FitHistory 也走 compactWithSummary。
 func TestFitHistory_ForceCompactsRegardlessOfEstimate(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("forced summary")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
@@ -115,7 +116,7 @@ func TestRun_SilentUsageOverflowTriggersCompaction(t *testing.T) {
 	// 6 轮 history + prompt → step2 压缩时有中段可摘（>1+keepRecent=5）。
 	history := []miniagent.Message{{Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"}, {Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"}, {Role: miniagent.RoleUser, Content: "h6"}}
 	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: true, Model: "m"})
-	res, err := miniagent.Run(context.Background(), &miniagent.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
+	res, err := miniagent.Run(context.Background(), &openai.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestRun_SilentUsageOverflowDisabled(t *testing.T) {
 	chat, stream := testClients(tr)
 	history := []miniagent.Message{{Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"}, {Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"}, {Role: miniagent.RoleUser, Content: "h6"}}
 	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: false, Model: "m"})
-	res, err := miniagent.Run(context.Background(), &miniagent.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
+	res, err := miniagent.Run(context.Background(), &openai.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run: %v", err)
 	}

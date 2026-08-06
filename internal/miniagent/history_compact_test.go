@@ -7,15 +7,15 @@ import (
 
 func TestEstimateTokens(t *testing.T) {
 	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时 = 内容 + systemOverhead + 每条消息信封。
-	if n := estimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+SystemOverheadTokens+envelopePerMsgTokens {
+	if n := EstimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+SystemOverheadTokens+envelopePerMsgTokens {
 		t.Errorf("ascii 8 chars = %d, want %d", n, 2+SystemOverheadTokens+envelopePerMsgTokens)
 	}
 	// 纯中文：2 字符 ≈ 1 token
-	if n := estimateTokens([]Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+SystemOverheadTokens+envelopePerMsgTokens {
+	if n := EstimateTokens([]Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+SystemOverheadTokens+envelopePerMsgTokens {
 		t.Errorf("cjk 4 chars = %d, want %d", n, 2+SystemOverheadTokens+envelopePerMsgTokens)
 	}
 	// tool_calls.Args 计入估算；每个 tool_call 额外计信封（嵌套 function 对象）。
-	if n := estimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+SystemOverheadTokens+envelopePerMsgTokens+envelopePerToolCallTokens {
+	if n := EstimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+SystemOverheadTokens+envelopePerMsgTokens+envelopePerToolCallTokens {
 		t.Errorf("args 4 chars = %d, want %d", n, 1+SystemOverheadTokens+envelopePerMsgTokens+envelopePerToolCallTokens)
 	}
 }
@@ -24,19 +24,19 @@ func TestEstimateTokens(t *testing.T) {
 // 用 delta 断言，使测试不依赖具体常量取值。
 func TestEstimateTokens_Overhead(t *testing.T) {
 	msgs := []Message{{Role: "user", Content: "abcdefgh"}}
-	base := estimateTokens(msgs, "", nil)
-	if got := estimateTokens(msgs, "abcd", nil) - base; got != 1 {
+	base := EstimateTokens(msgs, "", nil)
+	if got := EstimateTokens(msgs, "abcd", nil) - base; got != 1 {
 		t.Errorf("system 4 chars should add 1 token, got delta %d", got)
 	}
-	small := estimateTokens(msgs, "", []Tool{{Name: "t", Description: "abcd"}}) - base
-	large := estimateTokens(msgs, "", []Tool{{Name: "t", Description: strings.Repeat("a", 400)}}) - base
+	small := EstimateTokens(msgs, "", []Tool{{Name: "t", Description: "abcd"}}) - base
+	large := EstimateTokens(msgs, "", []Tool{{Name: "t", Description: strings.Repeat("a", 400)}}) - base
 	if large <= small {
 		t.Errorf("schema estimate should grow with description length: small=%d large=%d", small, large)
 	}
 	if small <= 0 {
 		t.Errorf("non-empty tool schema should add tokens: small=%d", small)
 	}
-	if got := estimateTokens(msgs, strings.Repeat("a", 40), nil) - base; got != 10 {
+	if got := EstimateTokens(msgs, strings.Repeat("a", 40), nil) - base; got != 10 {
 		t.Errorf("system 40 chars should add 10 tokens, got delta %d", got)
 	}
 }

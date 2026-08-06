@@ -14,6 +14,7 @@ import (
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // warnProviderInsecureURLs 对 provider 使用的 http（非 loopback）URL 发出明文传 key 警告。
@@ -40,7 +41,7 @@ func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
 		return 0, fmt.Errorf("run.http_timeout %q: %w", *cfg.Run.HTTPTimeout, err)
 	}
 	if d < 0 {
-		return 0, fmt.Errorf("run.http_timeout %q: 负值不合法", *cfg.Run.HTTPTimeout)
+		return 0, fmt.Errorf("run.http_timeout %q 负值不合法", *cfg.Run.HTTPTimeout)
 	}
 	return d, nil
 }
@@ -58,7 +59,7 @@ func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, ht
 		httpTimeout = 120 * time.Second
 	}
 	httpClient := newHTTPClient(httpTimeout, newHTTPTransport())
-	return miniagent.ListAllModels(ctx, providers, keyFor, httpClient, logger)
+	return openai.ListAllModels(ctx, providers, keyFor, httpClient, logger)
 }
 
 // runListModels 实现 -list-models 早退路径：逐行输出 NDJSON model 事件（provider/model
@@ -112,19 +113,19 @@ func warnInsecureURL(rawURL string) {
 // 两者共享同一 *http.Transport（代理/dial/TLS 超时）；chat 的 httpTimeout 兜底防单次调用挂死（#3），
 // stream 无 Timeout 避免 body 读取被砍（P2-5/P1-A，#2）——P4 拆分后由各自 client 持有。
 // httpTimeout<=0 用默认 120s。
-func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) (*miniagent.ChatClient, *miniagent.StreamClient) {
+func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) (*openai.ChatClient, *openai.StreamClient) {
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
 	}
 	transport := newHTTPTransport()
 	chatClient := newHTTPClient(httpTimeout, transport)
 	streamClient := &http.Client{Transport: transport}
-	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger, p.Headers)
+	chat, err := openai.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger, p.Headers)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)
 	}
-	stream, err := miniagent.NewStreamClient(apiKey, p.ChatURL, streamClient, logger, p.Headers)
+	stream, err := openai.NewStreamClient(apiKey, p.ChatURL, streamClient, logger, p.Headers)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)
@@ -133,11 +134,11 @@ func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, ht
 }
 
 // buildChatClient 为指定 provider 构造非流式 ChatClient（用于 compaction 等仅需 Do 的场景）。
-func buildChatClient(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) *miniagent.ChatClient {
+func buildChatClient(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) *openai.ChatClient {
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
 	}
-	chat, err := miniagent.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers)
+	chat, err := openai.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)

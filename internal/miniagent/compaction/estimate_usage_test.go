@@ -1,7 +1,5 @@
 package compaction
 
-import "github.com/justphantom/miniagent/internal/miniagent"
-
 import (
 	"context"
 	"net/http"
@@ -9,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // uPtr 是构造 *miniagent.Usage 的小工具（避免每处都写零时变量取址）。
@@ -144,7 +145,7 @@ func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 // 不触发摘要压缩（Summarize 不被调），applyContextStrips 早返——补 miniagent.EstimateTokens 对缓存零感知盲区。
 func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("不应被调")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	// user 巨大内容使本地 miniagent.EstimateTokens 远超窗；末尾 assistant 真实 usage 仅 150（未超窗）。
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Content: strings.Repeat("x", 8000)}, // ~2000 token 本地估算
@@ -172,7 +173,7 @@ func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
 }
 
 // §P0-B 防陈旧/二次压缩防护（提案 B.5 用例5）：第一次摘要后 summaryMsg 带新 Ts 使旧 assistant usage 失效，
-// 第二次 FitHistory 不再因陈旧大 usage 二次压缩。守护 compactWithSummary 的 summaryMsg Ts:nowMs() 触发点
+// 第二次 FitHistory 不再因陈旧大 usage 二次压缩。守护 compactWithSummary 的 summaryMsg Ts:text.NowMs() 触发点
 // （review Finding 3：移除该 Ts 会使第二轮用陈旧 usage 再次摘要，此测试失败）。
 func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 	calls := 0

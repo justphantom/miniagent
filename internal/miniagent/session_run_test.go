@@ -43,12 +43,12 @@ func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
 		textResponse("done"),
 	}}
-	chat, stream := testClients(tr)
+	llm := testClients(tr)
 	history := []Message{
 		{Role: "user", Content: "old"},
 		{Role: "assistant", Content: "oldans"},
 	}
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -69,12 +69,12 @@ func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 // History 作为前缀拼在新 prompt 之前发给 LLM；Run 不修改调用方的 History。
 func TestRun_HistoryPrefixSent(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("a2")}}
-	chat, stream := testClients(tr)
+	llm := testClients(tr)
 	history := []Message{
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
 	}
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
+	res, err := Run(context.Background(), llm, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -109,8 +109,8 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 // 最终 assistant 文本必须进入 Messages（接续对话依赖上一轮的回答）。
 func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("final answer")}}
-	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "q", LoopHooks{}, nil)
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -127,20 +127,20 @@ func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
 		textResponse("第一轮回答"),
 	}}
-	chat, stream := testClients(tr)
-	r1, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
+	llm := testClients(tr)
+	r1, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn1: %v", err)
 	}
 
 	tr2 := &fakeTransport{responses: []string{textResponse("第二轮回答")}}
-	chat, stream = testClients(tr2)
-	_, err = Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
+	llm = testClients(tr2)
+	_, err = Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn2: %v", err)
 	}
 	var body struct {
-		Messages []chatMessage `json:"messages"`
+		Messages []testChatMessage `json:"messages"`
 	}
 	if err := json.Unmarshal([]byte(tr2.lastBody), &body); err != nil {
 		t.Fatalf("unmarshal request: %v", err)
@@ -165,8 +165,8 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
 	}}
-	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "hi", LoopHooks{}, nil)
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -184,8 +184,8 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 		responses[i] = toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"})
 	}
 	tr := &fakeTransport{responses: responses}
-	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

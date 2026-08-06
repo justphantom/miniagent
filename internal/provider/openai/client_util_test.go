@@ -1,6 +1,10 @@
-package miniagent
+package openai
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+)
 
 // §P1-C isContextLengthError：多厂商超限措辞正例 + throttling/空/限流反例。
 func TestIsContextLengthError(t *testing.T) {
@@ -22,7 +26,7 @@ func TestIsContextLengthError(t *testing.T) {
 		"input token count (1196265) exceeds the maximum",
 	}
 	for _, body := range positives {
-		if !isContextLengthError([]byte(body)) {
+		if !miniagent.IsContextLengthError([]byte(body)) {
 			t.Errorf("正例应判 true: %q", body)
 		}
 	}
@@ -36,7 +40,7 @@ func TestIsContextLengthError(t *testing.T) {
 		"internal server error",
 	}
 	for _, body := range negatives {
-		if isContextLengthError([]byte(body)) {
+		if miniagent.IsContextLengthError([]byte(body)) {
 			t.Errorf("反例应判 false: %q", body)
 		}
 	}

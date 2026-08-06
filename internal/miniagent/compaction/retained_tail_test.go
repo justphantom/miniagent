@@ -1,12 +1,13 @@
 package compaction
 
-import "github.com/justphantom/miniagent/internal/miniagent"
-
 import (
 	"context"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // msgsContainContent 报告 msgs 中是否有任一 Content 含 sub。
@@ -147,7 +148,7 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 // 若 tokenBudget 误改成 0（纯轮数回退），tail=最近 keepRecent 轮会含 bigTool，此断言失败。
 func TestCompactWithSummary_TokenBudgetTailE2E(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("sum")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	bigTool := strings.Repeat("x", 20000) // ~5000 tokens > preserveRecentTokens=2000
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Content: "h0"},

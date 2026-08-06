@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"bufio"
@@ -8,6 +8,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // chatCompletionChunk 是流式响应的单个 SSE 载荷（OpenAI chat.completion.chunk）。
@@ -41,11 +43,7 @@ type chatCompletionChunk struct {
 	} `json:"error"`
 }
 
-// Delta 是推给消费方的流式增量。
-type Delta struct {
-	Kind DeltaKind
-	Text string
-}
+// Delta 类型在 core（miniagent.Delta，LLM.DoStream 契约引用）；本包经 miniagent.Delta 用。
 
 // streamToolCall 累积单个 tool_call 的分片（按 delta.index 路由）。
 type streamToolCall struct {
@@ -63,14 +61,14 @@ type streamAccum struct {
 	calls      map[int]*streamToolCall // key = delta.index
 	callOrder  []int                   // index 出现顺序，稳定聚合
 	finish     string
-	usage      Usage
+	usage      miniagent.Usage
 	sawChoice  bool // 是否见过含 choices 的 chunk（空响应判定，P1-2）
 	totalBytes int  // 累积字节数上限防护
 }
 
 // parseSSE 读 SSE 流：每个 content/reasoning 片段调 onDelta，onDelta 返回 error 时中止；结束时返回聚合 Response。
 // 行格式：以 "data: " 开头，载荷为 JSON；"data: [DONE]" 结束；空行/":" 注释忽略。
-func parseSSE(r io.Reader, onDelta func(Delta) error) (Response, error) {
+func parseSSE(r io.Reader, onDelta func(miniagent.Delta) error) (miniagent.Response, error) {
 	acc := &streamAccum{calls: map[int]*streamToolCall{}}
 	sc := bufio.NewScanner(r)
 	// 放宽默认 64KB 行长到 4MB（与 maxChatBodyBytes 同级），避免超大单行 chunk 触发 ErrTooLong（P3-2）。
@@ -92,31 +90,31 @@ func parseSSE(r io.Reader, onDelta func(Delta) error) (Response, error) {
 		}
 		var chunk chatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return Response{}, fmt.Errorf("parse sse chunk: %w", err)
+			return miniagent.Response{}, fmt.Errorf("parse sse chunk: %w", err)
 		}
 		// provider/网关以 error chunk 报错（内容过滤/上游故障）：上抛而非吞掉当成功（P1-3）。
 		if chunk.Error != nil {
-			return Response{}, fmt.Errorf("stream error from provider: %s", chunk.Error.Message)
+			return miniagent.Response{}, fmt.Errorf("stream error from provider: %s", chunk.Error.Message)
 		}
 		if err := acc.apply(chunk, onDelta); err != nil {
-			return Response{}, err
+			return miniagent.Response{}, err
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return Response{}, fmt.Errorf("read sse: %w", err)
+		return miniagent.Response{}, fmt.Errorf("read sse: %w", err)
 	}
 	res := acc.response()
 	// 从未见过 choices（截断/空流/仅 usage）：报错而非伪装成空回答，与 parseChatResponse 对齐（P1-2）。
 	if !acc.sawChoice && res.FinishReason == "" && res.Text == "" && len(res.ToolCalls) == 0 {
-		return Response{}, errors.New("stream ended without any choices")
+		return miniagent.Response{}, errors.New("stream ended without any choices")
 	}
 	return res, nil
 }
 
-func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta) error) error {
+func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(miniagent.Delta) error) error {
 	// usage 通常只在末 chunk（stream_options.include_usage）出现，无 choices。
 	if ch.Usage != nil {
-		a.usage = Usage{InputTokens: ch.Usage.PromptTokens, OutputTokens: ch.Usage.CompletionTokens}
+		a.usage = miniagent.Usage{InputTokens: ch.Usage.PromptTokens, OutputTokens: ch.Usage.CompletionTokens}
 	}
 	if len(ch.Choices) == 0 {
 		return nil
@@ -132,7 +130,7 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta) error) e
 		}
 		a.text.WriteString(c.Delta.Content)
 		if onDelta != nil {
-			if err := onDelta(Delta{Kind: DeltaText, Text: c.Delta.Content}); err != nil {
+			if err := onDelta(miniagent.Delta{Kind: miniagent.DeltaText, Text: c.Delta.Content}); err != nil {
 				return err
 			}
 		}
@@ -148,7 +146,7 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(Delta) error) e
 		}
 		a.reasoning.WriteString(rc)
 		if onDelta != nil {
-			if err := onDelta(Delta{Kind: DeltaReasoning, Text: rc}); err != nil {
+			if err := onDelta(miniagent.Delta{Kind: miniagent.DeltaReasoning, Text: rc}); err != nil {
 				return err
 			}
 		}
@@ -186,8 +184,8 @@ func (a *streamAccum) guardAdd(n int) error {
 }
 
 // response 按 index 升序聚合 tool_calls，与 handleToolCalls 顺序匹配契约一致。
-func (a *streamAccum) response() Response {
-	out := Response{
+func (a *streamAccum) response() miniagent.Response {
+	out := miniagent.Response{
 		Text:         a.text.String(),
 		Reasoning:    a.reasoning.String(),
 		FinishReason: a.finish,
@@ -197,7 +195,7 @@ func (a *streamAccum) response() Response {
 	sort.Ints(idxs)
 	for _, i := range idxs {
 		tc := a.calls[i]
-		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: tc.id, Name: tc.name, Args: tc.args.String()})
+		out.ToolCalls = append(out.ToolCalls, miniagent.ToolCall{ID: tc.id, Name: tc.name, Args: tc.args.String()})
 	}
 	return out
 }

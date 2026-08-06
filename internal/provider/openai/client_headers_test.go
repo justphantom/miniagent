@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // 自定义请求头：Headers 中的键值会随请求发送，不覆盖 Authorization / Content-Type。
@@ -30,7 +32,7 @@ func TestChatClient_Do_CustomHeaders(t *testing.T) {
 		HTTP:    &http.Client{Timeout: 5 * time.Second},
 		Headers: map[string]string{"X-Custom": "abc"},
 	}
-	resp, err := c.Do(context.Background(), Request{Model: "m"})
+	resp, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -49,7 +51,7 @@ func TestChatClient_Do_NoCustomHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}

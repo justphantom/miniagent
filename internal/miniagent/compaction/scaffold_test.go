@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // 本文件为压缩包测试提供共享脚手架（与核心 loop_test 的同名 helper 等价，独立以避免跨包循环）。
@@ -51,7 +51,7 @@ func textResponse(text string) string {
 }
 
 // testClients 从一个 RoundTripper 构造 ChatClient + StreamClient（ChatURL=http://localhost）。
-func testClients(tr http.RoundTripper) (*miniagent.ChatClient, *miniagent.StreamClient) {
-	return &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}},
-		&miniagent.StreamClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+func testClients(tr http.RoundTripper) (*openai.ChatClient, *openai.StreamClient) {
+	return &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}},
+		&openai.StreamClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 }

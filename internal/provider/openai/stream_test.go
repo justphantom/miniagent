@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // 纯文本 + reasoning + usage + [DONE]：聚合正确，onDelta 收到每个片段。
@@ -18,8 +20,8 @@ data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
 data: {"usage":{"prompt_tokens":5,"completion_tokens":2}}
 data: [DONE]
 `
-	var deltas []Delta
-	res, err := parseSSE(strings.NewReader(sse), func(d Delta) error { deltas = append(deltas, d); return nil })
+	var deltas []miniagent.Delta
+	res, err := parseSSE(strings.NewReader(sse), func(d miniagent.Delta) error { deltas = append(deltas, d); return nil })
 	if err != nil {
 		t.Fatalf("parseSSE: %v", err)
 	}
@@ -79,8 +81,8 @@ data: [DONE]
 	}))
 	defer srv.Close()
 	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
-	var deltas []Delta
-	resp, err := llm.DoStream(context.Background(), Request{Model: "m"}, func(d Delta) error { deltas = append(deltas, d); return nil })
+	var deltas []miniagent.Delta
+	resp, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, func(d miniagent.Delta) error { deltas = append(deltas, d); return nil })
 	if err != nil {
 		t.Fatalf("DoStream: %v", err)
 	}
@@ -93,7 +95,7 @@ data: [DONE]
 	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 1 {
 		t.Errorf("Usage = %+v", resp.Usage)
 	}
-	if len(deltas) != 1 || deltas[0].Kind != DeltaText || deltas[0].Text != "Hi" {
+	if len(deltas) != 1 || deltas[0].Kind != miniagent.DeltaText || deltas[0].Text != "Hi" {
 		t.Errorf("deltas = %+v", deltas)
 	}
 }
@@ -108,7 +110,7 @@ func TestDoStream_NonOKErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
-	_, err := llm.DoStream(context.Background(), Request{Model: "m"}, nil)
+	_, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v, want 503", err)
 	}
@@ -133,11 +135,11 @@ func TestDoStream_ContextLengthAfterRetry(t *testing.T) {
 	}))
 	defer srv.Close()
 	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
-	_, err := llm.DoStream(context.Background(), Request{Model: "m"}, nil)
+	_, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !errors.Is(err, ErrContextLength) {
+	if !errors.Is(err, miniagent.ErrContextLength) {
 		t.Errorf("err = %v, want ErrContextLength in chain", err)
 	}
 	if !strings.Contains(err.Error(), "after 1 retries") {

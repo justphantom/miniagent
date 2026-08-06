@@ -13,8 +13,8 @@ func TestRun_SummaryInjectionSucceeds(t *testing.T) {
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
 		textResponse("总结完成"),
 	}}
-	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}, "x", LoopHooks{}, nil)
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -44,8 +44,8 @@ func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
 		toolResponse(ToolCall{ID: "c2", Name: "loop", Args: "{}"}),
 	}}
-	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}, "x", LoopHooks{}, nil)
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -79,8 +79,8 @@ func TestRun_SummaryRequestPromptConfigurable(t *testing.T) {
 		textResponse("自定义总结"),
 	}}
 	customPrompt := "这是自定义总结引导"
-	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{
 		Tools:          []Tool{tool},
 		MaxIterations:  1,
 		SummaryRequest: customPrompt,

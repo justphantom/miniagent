@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // 正常文本回复：解析出 content、usage、finish_reason。
@@ -20,7 +22,7 @@ func TestChatClient_Do_TextResponse(t *testing.T) {
 	defer srv.Close()
 
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.Do(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}})
+	resp, err := c.Do(context.Background(), miniagent.Request{Model: "m", Messages: []miniagent.Message{{Role: "user", Content: "hi"}}})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -46,7 +48,7 @@ func TestChatClient_Do_ToolCalls(t *testing.T) {
 	defer srv.Close()
 
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.Do(context.Background(), Request{Model: "m"})
+	resp, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestChatClient_Do_EmptyChoicesFails(t *testing.T) {
 	defer srv.Close()
 
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error for empty choices")
 	}
@@ -88,7 +90,7 @@ func TestChatClient_Do_NonOKStatus(t *testing.T) {
 	defer srv.Close()
 
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -105,7 +107,7 @@ func TestChatClient_Do_RejectsOversizedBody(t *testing.T) {
 	defer srv.Close()
 
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected oversize error")
 	}
@@ -117,7 +119,7 @@ func TestChatClient_Do_RejectsOversizedBody(t *testing.T) {
 // 空 API key：prepareDo 阶段就报错。
 func TestChatClient_Do_EmptyAPIKey(t *testing.T) {
 	c := &ChatClient{}
-	_, err := c.Do(context.Background(), Request{})
+	_, err := c.Do(context.Background(), miniagent.Request{})
 	if err == nil {
 		t.Fatal("expected error for empty api key")
 	}
@@ -126,7 +128,7 @@ func TestChatClient_Do_EmptyAPIKey(t *testing.T) {
 // BaseURL 缺 scheme：错误信息应提示 "http(s)://"。
 func TestChatClient_Do_BaseURLMissingScheme(t *testing.T) {
 	c := &ChatClient{APIKey: "sk", ChatURL: "api.example.com"}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -139,7 +141,7 @@ func TestChatClient_Do_BaseURLMissingScheme(t *testing.T) {
 // 失败才报错。
 func TestChatClient_Do_BaseURLUnsupportedScheme(t *testing.T) {
 	c := &ChatClient{APIKey: "sk", ChatURL: "ftp://example.com"}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -160,7 +162,7 @@ func TestChatClient_Do_AcceptsLimitBody(t *testing.T) {
 	defer srv.Close()
 
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	resp, err := c.Do(context.Background(), Request{Model: "m"})
+	resp, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -170,11 +172,11 @@ func TestChatClient_Do_AcceptsLimitBody(t *testing.T) {
 }
 
 func TestBuildChatBody_IncludesTools(t *testing.T) {
-	body, err := buildChatBody(Request{
+	body, err := buildChatBody(miniagent.Request{
 		Model:    "m",
 		System:   "sys",
-		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools:    []Tool{{Name: "read", Description: "d", Parameters: map[string]any{"type": "object"}}},
+		Messages: []miniagent.Message{{Role: "user", Content: "hi"}},
+		Tools:    []miniagent.Tool{{Name: "read", Description: "d", Parameters: map[string]any{"type": "object"}}},
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -185,7 +187,7 @@ func TestBuildChatBody_IncludesTools(t *testing.T) {
 }
 
 func TestBuildChatBody_SkipsZeroMaxTokens(t *testing.T) {
-	body, err := buildChatBody(Request{Model: "m", MaxTokens: 0})
+	body, err := buildChatBody(miniagent.Request{Model: "m", MaxTokens: 0})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -196,7 +198,7 @@ func TestBuildChatBody_SkipsZeroMaxTokens(t *testing.T) {
 
 // 非流式：buildChatBody 不应再带 stream / stream_options。
 func TestBuildChatBody_NoStream(t *testing.T) {
-	body, err := buildChatBody(Request{Model: "m"})
+	body, err := buildChatBody(miniagent.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -208,9 +210,9 @@ func TestBuildChatBody_NoStream(t *testing.T) {
 // ResultLimit 是内部字段，不得泄进工具 schema（buildChatBody 只序列化
 // name/description/parameters）。
 func TestBuildChatBody_ResultLimitNotSerialized(t *testing.T) {
-	body, err := buildChatBody(Request{
+	body, err := buildChatBody(miniagent.Request{
 		Model: "m",
-		Tools: []Tool{{Name: "read", Description: "d", Parameters: map[string]any{"type": "object"}, ResultLimit: 8000}},
+		Tools: []miniagent.Tool{{Name: "read", Description: "d", Parameters: map[string]any{"type": "object"}, ResultLimit: 8000}},
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -246,8 +248,8 @@ func TestChatClient_Do_ContextLength400(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &ChatClient{APIKey: "sk", ChatURL: srv.URL, HTTP: &http.Client{Timeout: 5 * time.Second}}
-	_, err := c.Do(context.Background(), Request{Model: "m"})
-	if !errors.Is(err, ErrContextLength) {
+	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
+	if !errors.Is(err, miniagent.ErrContextLength) {
 		t.Fatalf("err = %v, want ErrContextLength", err)
 	}
 }

@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"bytes"
@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
 
-	"log/slog"
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // StreamClient 调 OpenAI 兼容 chat completions 端点（流式 SSE）。
@@ -31,7 +33,7 @@ type StreamClient struct {
 
 // NewStreamClient 构造时 parse 并缓存 chatURL。headers 为 provider 自定义请求头，可为 nil。
 func NewStreamClient(apiKey, chatURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*StreamClient, error) {
-	chat, err := validateURL(chatURL)
+	chat, err := miniagent.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
@@ -63,18 +65,18 @@ func (c *StreamClient) streamClient() *http.Client {
 // DoStream 流式调用 POST /v1/chat/completions（stream=true），onDelta 实时推增量，返回聚合 Response。
 // onDelta 返回 error 时立即中止流并返回该 error。重试：pre-delta 阶段（client.Do 失败或非 200，尚未流出 delta）复用 shouldRetryStatus+退避+Retry-After；
 // 进入 parseSSE（200，已流 delta）即不可撤回不重试（P2-4）。
-func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(Delta) error) (Response, error) {
+func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDelta func(miniagent.Delta) error) (miniagent.Response, error) {
 	if c.APIKey == "" {
-		return Response{}, errors.New("miniagent: api_key is empty")
+		return miniagent.Response{}, errors.New("miniagent: api_key is empty")
 	}
 	u, err := c.chatEndpoint()
 	if err != nil {
-		return Response{}, err
+		return miniagent.Response{}, err
 	}
 	req.Stream = true
 	body, err := buildChatBody(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("build request body: %w", err)
+		return miniagent.Response{}, fmt.Errorf("build request body: %w", err)
 	}
 	client := c.streamClient()
 	if c.Logger != nil {
@@ -83,12 +85,12 @@ func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(D
 	backoff := retryBaseDelay
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return Response{}, err
+			return miniagent.Response{}, err
 		}
 		// 每次重建 httpReq：body reader 上一轮已被消费，复用会发空 body。
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 		if err != nil {
-			return Response{}, fmt.Errorf("build request: %w", err)
+			return miniagent.Response{}, fmt.Errorf("build request: %w", err)
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 		httpReq.Header.Set("Content-Type", "application/json")
@@ -102,10 +104,10 @@ func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(D
 				c.Logger.Warn("llm stream request failed", "error", err, "failed_attempt", attempt+1)
 			}
 			if attempt == maxRetries {
-				return Response{}, fmt.Errorf("after %d retries: llm request: %w", attempt, err)
+				return miniagent.Response{}, fmt.Errorf("after %d retries: llm request: %w", attempt, err)
 			}
 			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, -1)); waitErr != nil {
-				return Response{}, waitErr
+				return miniagent.Response{}, waitErr
 			}
 			backoff *= 2
 			continue
@@ -119,28 +121,28 @@ func (c *StreamClient) DoStream(ctx context.Context, req Request, onDelta func(D
 			if attempt > 0 {
 				prefix = fmt.Sprintf("after %d retries: ", attempt)
 			}
-			if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && isContextLengthError(raw) {
-				return Response{}, fmt.Errorf("%s%w: %s", prefix, ErrContextLength, truncate(string(raw), 500, "…"))
+			if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && miniagent.IsContextLengthError(raw) {
+				return miniagent.Response{}, fmt.Errorf("%s%w: %s", prefix, miniagent.ErrContextLength, text.Truncate(string(raw), 500, "…"))
 			}
 			if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
-				return Response{}, fmt.Errorf("%s%w: %s", prefix, ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
+				return miniagent.Response{}, fmt.Errorf("%s%w: %s", prefix, miniagent.ErrThinkingUnsupported, text.Truncate(string(raw), 500, "…"))
 			}
 			if !shouldRetryStatus(resp.StatusCode) || attempt == maxRetries {
-				return Response{}, errors.New(prefix + fmt.Sprintf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…")))
+				return miniagent.Response{}, errors.New(prefix + fmt.Sprintf("llm returned %d: %s", resp.StatusCode, text.Truncate(string(raw), 500, "…")))
 			}
 			if c.Logger != nil {
 				c.Logger.Warn("llm stream non-200, retrying", "status", resp.StatusCode, "failed_attempt", attempt+1)
 			}
 			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, parseRetryAfter(resp.Header))); waitErr != nil {
-				return Response{}, waitErr
+				return miniagent.Response{}, waitErr
 			}
 			backoff *= 2
 			continue
 		}
-		return func() (Response, error) { // HTTP 200：parseSSE 流 delta。IIFE 内 defer Close：onDelta panic（被 callLLMOnce recover）时仍关 body；函数级 defer 跨重试堆积故每次循环内联。
+		return func() (miniagent.Response, error) { // HTTP 200：parseSSE 流 delta。IIFE 内 defer Close：onDelta panic（被 callLLMOnce recover）时仍关 body；函数级 defer 跨重试堆积故每次循环内联。
 			defer func() { _ = resp.Body.Close() }()
 			return parseSSE(resp.Body, onDelta)
 		}()
 	}
-	return Response{}, errors.New("llm stream retry loop exited unexpectedly")
+	return miniagent.Response{}, errors.New("llm stream retry loop exited unexpectedly")
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/miniagent/compaction"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // version 由 make build 经 -ldflags "-X main.version=$(git describe --tags)" 注入；
@@ -135,7 +136,7 @@ func main() {
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 
 	// secondaryClient 为与主 provider 不同的二级 provider 解析 key + 建非流式 client（仅 Do）。
-	secondaryClient := func(label string, prov miniagent.ProviderConfig) (*miniagent.ChatClient, string) {
+	secondaryClient := func(label string, prov miniagent.ProviderConfig) (*openai.ChatClient, string) {
 		key := resolveFinalKey(prov.Key)
 		if key == "" {
 			fmt.Fprintf(os.Stderr, "miniagent: %s provider API key 缺失（provider.key / $MINIAGENT_API_KEY）\n", label)
@@ -146,7 +147,7 @@ func main() {
 	}
 
 	// compaction client：与主 provider 相同则留 nil（loop 回落主 chat），否则新建。
-	var compChat *miniagent.ChatClient
+	var compChat *openai.ChatClient
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
 		compChat, _ = secondaryClient("compaction", resolved.CompactionProvider)
 	}
@@ -186,7 +187,7 @@ func main() {
 	}
 
 	prompt := mustReadPrompt(os.Stdin)
-	llm := &miniagent.Provider{Chat: chat, Stream: stream}
+	llm := &openai.Provider{Chat: chat, Stream: stream}
 	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
 	if err != nil {
 		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。
@@ -241,7 +242,7 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 
 // compactionOptions 把 resolved 的压缩策略装配成 CompactionOptions。chat 是摘要用 client
 // （compChat 非空用之，否则回落主 chat）。
-func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, chat, compChat *miniagent.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
+func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, chat, compChat *openai.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
 	compClient := compChat
 	if compClient == nil {
 		compClient = chat

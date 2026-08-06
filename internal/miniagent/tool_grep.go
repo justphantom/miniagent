@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 const (
@@ -115,7 +117,7 @@ func runGrep(workspaceRoot, args string) ToolResult {
 	for _, m := range matches {
 		fmt.Fprintf(&sb, "%s:%d:%s\n", m.file, m.line, m.text)
 	}
-	out := truncate(sb.String(), shellOutputChars(), "…[grep 输出已截断]")
+	out := text.Truncate(sb.String(), shellOutputChars(), "…[grep 输出已截断]")
 	if truncated {
 		out += fmt.Sprintf("\n…（命中超过 %d 行，已停止收集）", getGrepMaxMatches())
 	}

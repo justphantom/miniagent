@@ -1,6 +1,9 @@
 package compaction
 
-import "github.com/justphantom/miniagent/internal/miniagent"
+import (
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/text"
+)
 
 import (
 	"encoding/json"
@@ -128,7 +131,7 @@ func compressToolArgs(args string) string {
 		if !ok || len([]rune(s)) <= toolArgsCompressThreshold {
 			return v, false
 		}
-		return miniagent.Truncate(s, toolArgsKeepChars, "…[参数已省略]"), true
+		return text.Truncate(s, toolArgsKeepChars, "…[参数已省略]"), true
 	}
 	for _, k := range []string{"content", "old_string", "new_string"} {
 		if _, ok := m[k]; ok {

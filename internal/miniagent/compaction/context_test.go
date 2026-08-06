@@ -1,7 +1,5 @@
 package compaction
 
-import "github.com/justphantom/miniagent/internal/miniagent"
-
 import (
 	"context"
 	"net/http"
@@ -9,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // P1-1 回归：compactWithSummary 后 summary 必须排在 user_prompt 之前。loop.go miniagent.Run 入口
@@ -16,7 +17,7 @@ import (
 // 前插 summary，使其排在 user_prompt 之前——否则下一轮 applyCompactionBarrier 会屏障掉本轮 user_prompt。
 func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("历史摘要")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
@@ -44,7 +45,7 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 // → applyCompactionBarrier：本轮 user_prompt 必须仍在结果中。
 func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("既往对话摘要")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "hist" + strconv.Itoa(i)})
@@ -90,7 +91,7 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 // 排在最前，且 applyCompactionBarrier 命中它。
 func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要1"), textResponse("摘要2")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 20 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
@@ -141,7 +142,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 // <previous-summary> 块）中，真正继承而非断链。
 func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("新摘要内容")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "[既往对话摘要]\n远古摘要内容-旧"},
 		{Role: miniagent.RoleUser, Content: "real0"},
@@ -193,7 +194,7 @@ func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 // FitHistory：未超 window（ContextWindow<=0）→ 原样 noop。
 func TestFitHistory_NoWindowNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}
 	out, summary, summarized, usage, err := FitHistory(context.Background(), msgs, ContextBudget{Summarize: testBudget(llm).Summarize}, nil)
 	if err != nil || summarized || summary.Kind == miniagent.KindSummary {
@@ -210,7 +211,7 @@ func TestFitHistory_NoWindowNoop(t *testing.T) {
 // FitHistory：摘要失败回落有损 compactHistory，最终不超窗→不报错、summarized=false。
 func TestFitHistory_SummarizeErrorFallsBackLossy(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
-	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	big := strings.Repeat("x", 1000) // 每条 ~250 tokens，使 30 条远超窗、压到 4 条后落回窗内
 	var msgs []miniagent.Message
 	for range 30 {

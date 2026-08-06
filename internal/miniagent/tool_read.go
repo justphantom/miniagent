@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // maxReadFileBytes 是 read 单文件读取上限：1MB 覆盖大文件（generated code、大数据常量），
@@ -122,7 +124,7 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
-	return ToolResult{Output: truncate(formatted, readFileChars(), "…")}
+	return ToolResult{Output: text.Truncate(formatted, readFileChars(), "…")}
 }
 
 func parseReadArgs(args string) (readFileArgs, error) {

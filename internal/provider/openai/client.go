@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"bytes"
@@ -6,22 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
-	"log/slog"
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
-const (
-	maxChatBodyBytes = 4 << 20 // 4 MiB；恰好达到不截断，多 1 字节即报错
-	// 重试：仅对瞬时故障（429/5xx + 网络错误）生效，maxRetries 次。端点 429/503 抖动
-	// 数秒内自愈，2 次覆盖典型尖刺；避免真故障下放大下游压力（雪崩）。
-	maxRetries     = 2
-	retryBaseDelay = 500 * time.Millisecond
-	retryMaxDelay  = 8 * time.Second // 单次退火上限，含 Retry-After 解析值
-)
+const maxChatBodyBytes = 4 << 20 // 4 MiB；恰好达到不截断，多 1 字节即报错
 
 // ChatClient 调 OpenAI 兼容 chat completions 端点（非流式）+ models 列表。
 // 懒解析（直接 struct 构造的测试路径）用 sync.Once 保护，确保并发 Do 无竞争（修复 R4）。
@@ -43,31 +38,16 @@ type ChatClient struct {
 	defaultClientOnce sync.Once
 }
 
-// validateURL 解析并校验 raw 为合法 http(s) URL（含 scheme+host）。
-func validateURL(raw string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("url %q 解析失败：%w（需 http(s)://host[:port][/path]）", raw, err)
-	}
-	if u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("url %q 缺少 scheme 或 host（应为 http(s)://host[:port]）", raw)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("url %q 的 scheme %q 不支持（仅 http/https）", raw, u.Scheme)
-	}
-	return u, nil
-}
-
 // NewChatClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
 // （ListAllModels 静态回落时不 GET）。headers 为 provider 自定义请求头，可为 nil。
 func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*ChatClient, error) {
-	chat, err := validateURL(chatURL)
+	chat, err := miniagent.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
 	c := &ChatClient{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: chat, HTTP: httpClient, Logger: logger, Headers: headers}
 	if modelsURL != "" {
-		m, err := validateURL(modelsURL)
+		m, err := miniagent.ValidateURL(modelsURL)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +62,7 @@ func cacheEndpoint(dst **url.URL, errp *error, raw string) {
 	if *dst != nil {
 		return
 	}
-	u, err := validateURL(raw)
+	u, err := miniagent.ValidateURL(raw)
 	if err != nil {
 		*errp = err
 		return
@@ -128,10 +108,10 @@ func (c *ChatClient) client(defaultTimeout time.Duration) *http.Client {
 // 重试策略：429/500/502/503/504 与网络错误自动重试 maxRetries 次，退避按
 // retryBaseDelay * 2^attempt；若响应带 Retry-After（秒数或 HTTP-date），用它取代退避
 // （仍受 retryMaxDelay 封顶）。其他 4xx / 解析错误 / 超大 body 立即返回。重试可被 ctx 取消。
-func (c *ChatClient) Do(ctx context.Context, req Request) (Response, error) {
+func (c *ChatClient) Do(ctx context.Context, req miniagent.Request) (miniagent.Response, error) {
 	client, u, body, err := c.prepareDo(req)
 	if err != nil {
-		return Response{}, err
+		return miniagent.Response{}, err
 	}
 	if c.Logger != nil {
 		c.Logger.Debug("llm request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
@@ -139,7 +119,7 @@ func (c *ChatClient) Do(ctx context.Context, req Request) (Response, error) {
 	backoff := retryBaseDelay
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return Response{}, err
+			return miniagent.Response{}, err
 		}
 		resp, retryable, retryAfter, err := c.doOnce(ctx, client, u, body)
 		if err == nil {
@@ -148,29 +128,29 @@ func (c *ChatClient) Do(ctx context.Context, req Request) (Response, error) {
 		if !retryable || attempt == maxRetries {
 			// 用尽重试或不可重试错误：补"已重试 N 次"上下文便于排错。
 			if attempt > 0 {
-				return Response{}, fmt.Errorf("after %d retries: %w", attempt, err)
+				return miniagent.Response{}, fmt.Errorf("after %d retries: %w", attempt, err)
 			}
-			return Response{}, err
+			return miniagent.Response{}, err
 		}
 		delay := capRetryDelay(backoff, retryAfter)
 		if c.Logger != nil {
 			c.Logger.Warn("llm call failed, retrying", "failed_attempt", attempt+1, "delay_ms", delay.Milliseconds(), "error", err)
 		}
 		if waitErr := sleepCtx(ctx, delay); waitErr != nil {
-			return Response{}, waitErr
+			return miniagent.Response{}, waitErr
 		}
 		backoff *= 2
 	}
 	// 循环正常退出（不会到达，所有路径已在循环内 return）；保留兜底。
-	return Response{}, errors.New("llm retry loop exited unexpectedly")
+	return miniagent.Response{}, errors.New("llm retry loop exited unexpectedly")
 }
 
 // doOnce 执行单次 HTTP 调用并解析。retryable 表示错误是否值得重试；
 // retryAfter 是 Retry-After 头解析出的等待时长（-1 表示未提供）。
-func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL, body []byte) (Response, bool, time.Duration, error) {
+func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL, body []byte) (miniagent.Response, bool, time.Duration, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
-		return Response{}, false, 0, fmt.Errorf("build request: %w", err)
+		return miniagent.Response{}, false, 0, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 	// 重定向安全：依赖标准库默认 CheckRedirect——跨域重定向前自动剥离 Authorization
@@ -189,36 +169,36 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 			c.Logger.Warn("llm request failed", "error", err, "duration_ms", callDur.Milliseconds())
 		}
 		// 网络层错误（连接拒绝/DNS/超时）：值得重试，无 Retry-After。
-		return Response{}, true, -1, fmt.Errorf("llm request: %w", err)
+		return miniagent.Response{}, true, -1, fmt.Errorf("llm request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxChatBodyBytes+1))
 	if rerr != nil {
-		return Response{}, true, -1, fmt.Errorf("read response: %w", rerr)
+		return miniagent.Response{}, true, -1, fmt.Errorf("read response: %w", rerr)
 	}
 	if int64(len(raw)) > maxChatBodyBytes {
-		return Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
+		return miniagent.Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// context 超限（400/413 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
 		// §P1-C：状态门从仅 400 放宽到 400||413（Anthropic request_too_large 走 413）。
-		if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && isContextLengthError(raw) {
-			return Response{}, false, 0, fmt.Errorf("%w: %s", ErrContextLength, truncate(string(raw), 500, "…"))
+		if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && miniagent.IsContextLengthError(raw) {
+			return miniagent.Response{}, false, 0, fmt.Errorf("%w: %s", miniagent.ErrContextLength, text.Truncate(string(raw), 500, "…"))
 		}
 		// thinking 参数不被支持（400 + 特征词）：callLLM 据此去字段重试一次（审查 v2 #7）。
 		if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
-			return Response{}, false, 0, fmt.Errorf("%w: %s", ErrThinkingUnsupported, truncate(string(raw), 500, "…"))
+			return miniagent.Response{}, false, 0, fmt.Errorf("%w: %s", miniagent.ErrThinkingUnsupported, text.Truncate(string(raw), 500, "…"))
 		}
-		msg := fmt.Sprintf("llm returned %d: %s", resp.StatusCode, truncate(string(raw), 500, "…"))
+		msg := fmt.Sprintf("llm returned %d: %s", resp.StatusCode, text.Truncate(string(raw), 500, "…"))
 		if shouldRetryStatus(resp.StatusCode) {
-			return Response{}, true, parseRetryAfter(resp.Header), errors.New(msg)
+			return miniagent.Response{}, true, parseRetryAfter(resp.Header), errors.New(msg)
 		}
-		return Response{}, false, 0, errors.New(msg)
+		return miniagent.Response{}, false, 0, errors.New(msg)
 	}
 	out, perr := parseChatResponse(raw)
 	if perr != nil {
-		return Response{}, false, 0, perr
+		return miniagent.Response{}, false, 0, perr
 	}
 	if c.Logger != nil {
 		c.Logger.Info("llm call done", "duration_ms", callDur.Milliseconds(), "input_tokens", out.Usage.InputTokens, "output_tokens", out.Usage.OutputTokens, "tool_calls", len(out.ToolCalls), "finish_reason", out.FinishReason)
@@ -226,7 +206,7 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 	return out, false, 0, nil
 }
 
-func (c *ChatClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, error) {
+func (c *ChatClient) prepareDo(req miniagent.Request) (*http.Client, *url.URL, []byte, error) {
 	if c.APIKey == "" {
 		return nil, nil, nil, errors.New("miniagent: api_key is empty")
 	}
@@ -242,19 +222,19 @@ func (c *ChatClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, err
 	return client, u, body, nil
 }
 
-// Provider 是核心自带的 OpenAI 兼容 LLM 实现：把已有的 ChatClient（Do，非流式）与 StreamClient
-// （DoStream，流式）组合，满足 LLM 接口。cmd 装配它喂给 Run；自定义 provider 实现 LLM 即可替换，
-// 核心 Run 零改动（这是「provider 作为外挂」的默认实现）。Stream 仅在 cfg.Stream=true 时被调，
-// 非流式场景可为 nil。
+// Provider 是 OpenAI 兼容 LLM 的默认实现：把 ChatClient（Do，非流式）与 StreamClient
+// （DoStream，流式）组合，满足 miniagent.LLM 接口。cmd 装配它喂给 Run；自定义 provider
+// 实现 miniagent.LLM 即可替换，核心 Run 零改动（这是「provider 作为外挂」的默认实现）。
+// Stream 仅在 cfg.Stream=true 时被调，非流式场景可为 nil。
 type Provider struct {
 	Chat   *ChatClient
 	Stream *StreamClient
 }
 
-func (p *Provider) Do(ctx context.Context, req Request) (Response, error) {
+func (p *Provider) Do(ctx context.Context, req miniagent.Request) (miniagent.Response, error) {
 	return p.Chat.Do(ctx, req)
 }
 
-func (p *Provider) DoStream(ctx context.Context, req Request, onDelta func(Delta) error) (Response, error) {
+func (p *Provider) DoStream(ctx context.Context, req miniagent.Request, onDelta func(miniagent.Delta) error) (miniagent.Response, error) {
 	return p.Stream.DoStream(ctx, req, onDelta)
 }

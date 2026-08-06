@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildChatBody_ThinkingLevelWritten(t *testing.T) {
-	body, err := buildChatBody(Request{Model: "m", ThinkingLevel: "medium"})
+	body, err := testBuildChatBody(Request{Model: "m", ThinkingLevel: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestBuildChatBody_ThinkingLevelWritten(t *testing.T) {
 
 func TestBuildChatBody_ThinkingOffOmitted(t *testing.T) {
 	for _, lvl := range []string{"", ThinkingOff} {
-		body, _ := buildChatBody(Request{Model: "m", ThinkingLevel: lvl})
+		body, _ := testBuildChatBody(Request{Model: "m", ThinkingLevel: lvl})
 		if strings.Contains(string(body), "reasoning_effort") {
 			t.Errorf("level %q should omit thinking: %s", lvl, body)
 		}
@@ -33,7 +33,7 @@ func TestBuildChatBody_ThinkingMappingOverrides(t *testing.T) {
 		ThinkingLevel: "medium",
 		Thinking:      &ThinkingMapping{Field: "effort", Map: map[string]string{"medium": "high"}},
 	}
-	body, _ := buildChatBody(req)
+	body, _ := testBuildChatBody(req)
 	if !strings.Contains(string(body), `"effort":"high"`) {
 		t.Errorf("mapping override not applied: %s", body)
 	}
@@ -79,8 +79,8 @@ func TestCallLLM_Thinking400Downgrade(t *testing.T) {
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
 		{status: http.StatusOK, body: textResponse("ok")},
 	}}
-	chat, stream := testClients(tr)
-	resp, err := callLLM(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m", ThinkingLevel: "medium"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	llm := testClients(tr)
+	resp, err := callLLM(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("callLLM: %v", err)
 	}
@@ -103,8 +103,8 @@ func TestCallLLM_Plain400NoDowngrade(t *testing.T) {
 	tr := &recordingTransport{plan: []transportResp{
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
 	}}
-	chat, stream := testClients(tr)
-	_, err := callLLM(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	llm := testClients(tr)
+	_, err := callLLM(context.Background(), llm, LoopConfig{Model: "m"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error for plain 400")
 	}

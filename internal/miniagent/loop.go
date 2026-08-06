@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
 	"log/slog"
+
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // maxIterations：单轮 LLM 调用上限默认值，防工具循环烧 token；可经 MaxIterations 覆盖。
@@ -99,7 +100,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			if logger != nil {
 				logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step)
 			}
-			total.InputTokens += estimateTokens(toSend, cfg.System, cfg.Tools)
+			total.InputTokens += EstimateTokens(toSend, cfg.System, cfg.Tools)
 			total.OutputTokens += estimateResponseTokens(resp)
 		}
 		// 预算熔断：钩子非 nil 交调用方判定（可换策略），nil 回落内置 MaxTotalTokens 判定。
@@ -145,7 +146,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 					if logger != nil {
 						logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step+1)
 					}
-					total.InputTokens += estimateTokens(msgs, cfg.System, cfg.Tools)
+					total.InputTokens += EstimateTokens(msgs, cfg.System, cfg.Tools)
 					total.OutputTokens += estimateResponseTokens(resp2)
 				}
 				return Result{Text: resp2.Text, Usage: total, Steps: step + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
@@ -218,7 +219,7 @@ func mergePersisted(newMsgs *[]Message, persisted []Message) {
 // 已显式设 Ts 的（如压缩 summaryMsg）不覆盖——0 可靠表示「未承载」。
 func appendMsg(msgs, newMsgs *[]Message, m Message) {
 	if m.Ts == 0 {
-		m.Ts = nowMs()
+		m.Ts = text.NowMs()
 	}
 	*msgs = append(*msgs, m)
 	*newMsgs = append(*newMsgs, m)

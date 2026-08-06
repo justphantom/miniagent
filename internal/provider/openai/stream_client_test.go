@@ -1,4 +1,4 @@
-package miniagent
+package openai
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 func TestStreamClient_StreamClientNoTimeout(t *testing.T) {
@@ -40,11 +42,11 @@ data: [DONE]
 	tr := &fakeTransport{responses: []string{sse}}
 	chat, stream := testClients(tr)
 	var deltas []string
-	hooks := LoopHooks{OnDelta: func(step int, kind DeltaKind, text string) error {
+	hooks := miniagent.LoopHooks{OnDelta: func(step int, kind miniagent.DeltaKind, text string) error {
 		deltas = append(deltas, text)
 		return nil
 	}}
-	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m", Stream: true}, "hi", hooks, nil)
+	res, err := miniagent.Run(context.Background(), &Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Model: "m", Stream: true}, "hi", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -81,8 +83,8 @@ data: [DONE]
 	}))
 	defer srv.Close()
 	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL, Headers: map[string]string{"X-Custom": "stream-val"}}
-	var deltas []Delta
-	resp, err := llm.DoStream(context.Background(), Request{Model: "m"}, func(d Delta) error { deltas = append(deltas, d); return nil })
+	var deltas []miniagent.Delta
+	resp, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, func(d miniagent.Delta) error { deltas = append(deltas, d); return nil })
 	if err != nil {
 		t.Fatalf("DoStream: %v", err)
 	}
