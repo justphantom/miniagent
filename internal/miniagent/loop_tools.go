@@ -22,7 +22,7 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 			if logger != nil {
 				logger.Error("tool panic recovered", "tool", name, "panic", r)
 			}
-			res = ToolResult{IsError: true, Output: fmt.Sprintf("工具 %q 内部错误", name)}
+			res = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: fmt.Sprintf("工具 %q 内部错误", name)}
 		}
 	}()
 	return tool.Call(ctx, args)
@@ -145,7 +145,7 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[i] = ToolResult{IsError: true, Output: "已取消"}
+				results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: "已取消"}
 				return
 			}
 			defer func() { <-sem }()

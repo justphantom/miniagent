@@ -10,6 +10,19 @@ import (
 	"testing"
 )
 
+// safeCall 捕获工具 panic 时 ToolResult.ExitCode 应为 exitCodeNotSet——与 denied/未知工具一致，
+// 防 shell 工具 panic 被事件层以 exit_code=0 误读为命令成功（P3-4 同型）。
+func TestSafeCall_PanicExitCodeNotSet(t *testing.T) {
+	tool := Tool{Name: "shell", Call: func(context.Context, string) ToolResult { panic("boom") }}
+	res := safeCall(context.Background(), nil, tool, "shell", "{}")
+	if !res.IsError {
+		t.Error("panic 应 IsError=true")
+	}
+	if res.ExitCode != exitCodeNotSet {
+		t.Errorf("panic ExitCode = %d, want %d（未执行完，防事件层误读 0 为成功）", res.ExitCode, exitCodeNotSet)
+	}
+}
+
 // OnToolResult 在每个工具执行后触发一次，透传 name/call_id 与结果（含 IsError）。
 func TestRun_OnToolResultFired(t *testing.T) {
 	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "res"} }}
