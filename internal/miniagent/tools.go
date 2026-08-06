@@ -31,6 +31,11 @@ func truncate(s string, n int, marker string) string {
 	return string(r[:n]) + marker
 }
 
+// Truncate 是 truncate 的导出版本，供外挂包（如 event）复用同一截断语义，避免分叉。
+func Truncate(s string, n int, marker string) string {
+	return truncate(s, n, marker)
+}
+
 // truncateTail 是 truncate 的互补（§P1-D）：保留 s 末尾 n 个 rune，截断时前置 marker。
 // 服务 outputAccum.finalize 的尾部 rune 兜底（shell 累积器保尾丢中段后，再把窗口尾部截到 maxChars）。
 // n<=0 原样返回；len<=n 不截。

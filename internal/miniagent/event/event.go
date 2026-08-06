@@ -1,9 +1,17 @@
-package miniagent
+// Package event 把 agent 循环的观察信号序列化为 NDJSON（每行一个 JSON 对象）写到 stdout。
+// 这是 miniagent 核心的「I/O 约定」外挂——核心循环本身不产生任何输出格式，只经 LoopHooks 回调通知；
+// 想要 NDJSON 事件的消费方挂上这里的 Emit*/ToolUseWriter 即可，不挂则得无输出的纯库 agent。
+package event
 
 import (
 	"encoding/json"
 	"io"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
+
+// sessionEventType 是 session 事件 / jsonl 首行 metadata 的 type 判别（与 session 包同值）。
+const sessionEventType = "session"
 
 // toolUseEvent 是每次工具调用的 NDJSON 事件。
 type toolUseEvent struct {
@@ -14,7 +22,6 @@ type toolUseEvent struct {
 
 // resultEvent 是终态事件。text/model/input_tokens/output_tokens/steps/finish
 // 均不带 omitempty，为 0/空串也会出现键名，方便消费方稳定 parse。
-// finish 为 stop（正常完成）或 max_iterations（撞迭代上限，text 为空）。
 type resultEvent struct {
 	Type         string `json:"type"`
 	Text         string `json:"text"`
@@ -25,7 +32,6 @@ type resultEvent struct {
 	Finish       string `json:"finish"`
 }
 
-// errorEvent 是终态错误事件。
 type errorEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
@@ -33,14 +39,15 @@ type errorEvent struct {
 
 // ToolUseWriter 返回一个 OnToolUse 回调：每次调用把工具名与参数写成一条
 // NDJSON tool_use 事件到 w。错误契约见 OnToolUse。
-func ToolUseWriter(w io.Writer) OnToolUse {
+func ToolUseWriter(w io.Writer) miniagent.OnToolUse {
 	enc := json.NewEncoder(w)
 	return func(name, input string) error {
 		return enc.Encode(toolUseEvent{Type: "tool_use", Name: name, Input: input})
 	}
 }
 
-func EmitResult(w io.Writer, result Result, model string) error {
+// EmitResult 写终态 result 事件。
+func EmitResult(w io.Writer, result miniagent.Result, model string) error {
 	return json.NewEncoder(w).Encode(resultEvent{
 		Type:         "result",
 		Text:         result.Text,
@@ -52,16 +59,17 @@ func EmitResult(w io.Writer, result Result, model string) error {
 	})
 }
 
+// EmitError 写终态 error 事件。
 func EmitError(w io.Writer, msg string) error {
 	return json.NewEncoder(w).Encode(errorEvent{Type: "error", Message: msg})
 }
 
 // EmitSession 写一条 session 事件（NDJSON 流首条，type=session）。-save-session 新建会话时
 // 在 Run 之前 emit，结构同 session jsonl 首行 metadata（id/model/workdir/provider/created），
-// 供消费方从 stdout 第一行程序化捕获会话元数据接续下轮（替代 stderr 文本 grep）。
-func EmitSession(w io.Writer, meta SessionMeta) error {
+// 供消费方从 stdout 第一行程序化捕获会话元数据接续下轮。
+func EmitSession(w io.Writer, meta miniagent.SessionMeta) error {
 	if meta.Type == "" {
-		meta.Type = sessionTypeSession
+		meta.Type = sessionEventType
 	}
 	return json.NewEncoder(w).Encode(meta)
 }
@@ -97,8 +105,8 @@ type toolResultEvent struct {
 
 // EmitToolResult 写一条 tool_result 事件。output 截断到 maxToolResultEventChars；
 // 仅 shell 工具输出 exit_code（其他工具 ExitCode 是无语义的零值）。
-func EmitToolResult(w io.Writer, name, callID string, r ToolResult) error {
-	out := truncate(r.Output, maxToolResultEventChars, "…[tool_result 已截断]")
+func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) error {
+	out := miniagent.Truncate(r.Output, maxToolResultEventChars, "…[tool_result 已截断]")
 	ev := toolResultEvent{
 		Type:      "tool_result",
 		Name:      name,
@@ -123,12 +131,12 @@ type deltaEvent struct {
 
 // EmitDelta 写一条增量事件。kind 决定 type：text→text_delta，reasoning→reasoning_delta；
 // 未知 kind 不输出（防御）。
-func EmitDelta(w io.Writer, step int, kind DeltaKind, text string) error {
+func EmitDelta(w io.Writer, step int, kind miniagent.DeltaKind, text string) error {
 	var t string
 	switch kind {
-	case DeltaText:
+	case miniagent.DeltaText:
 		t = "text_delta"
-	case DeltaReasoning:
+	case miniagent.DeltaReasoning:
 		t = "reasoning_delta"
 	default:
 		return nil

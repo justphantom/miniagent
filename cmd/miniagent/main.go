@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/event"
 )
 
 // version 由 make build 经 -ldflags "-X main.version=$(git describe --tags)" 注入；
@@ -110,7 +111,7 @@ func main() {
 	if *f.saveSession {
 		// 新建会话：session 元数据作为 stdout NDJSON 首条事件（与 jsonl 首行同构），供消费方程序化捕获接续 id。
 		// 互斥保证 -result-only 下不会触发，不污染 subagent 的纯文本 stdout。
-		if err := miniagent.EmitSession(os.Stdout, meta); err != nil {
+		if err := event.EmitSession(os.Stdout, meta); err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: emit session: %v\n", err)
 			os.Exit(1)
 		}

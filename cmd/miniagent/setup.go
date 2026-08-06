@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/event"
 )
 
 func mustParseLogLevel(s string) slog.Level {
@@ -188,14 +189,14 @@ func buildHooks(resultOnly bool) miniagent.LoopHooks {
 		// subagent fork：stdout 纯文本即结果，不发 NDJSON 事件。
 		return miniagent.LoopHooks{}
 	}
-	emit := miniagent.ToolUseWriter(os.Stdout)
+	emit := event.ToolUseWriter(os.Stdout)
 	return miniagent.LoopHooks{
 		OnToolUse: func(name, input string) error { return emit(name, input) },
 		OnToolResult: func(name, callID string, r miniagent.ToolResult) error {
-			return miniagent.EmitToolResult(os.Stdout, name, callID, r)
+			return event.EmitToolResult(os.Stdout, name, callID, r)
 		},
 		OnDelta: func(step int, kind miniagent.DeltaKind, text string) error {
-			return miniagent.EmitDelta(os.Stdout, step, kind, text)
+			return event.EmitDelta(os.Stdout, step, kind, text)
 		},
 	}
 }
@@ -205,7 +206,7 @@ func emitRunError(err error, resultOnly bool, logger *slog.Logger) {
 		fmt.Printf("error: %s\n", err.Error())
 		return
 	}
-	if eerr := miniagent.EmitError(os.Stdout, err.Error()); eerr != nil {
+	if eerr := event.EmitError(os.Stdout, err.Error()); eerr != nil {
 		logger.Warn("emit error failed", "error", eerr)
 		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 	}
@@ -216,7 +217,7 @@ func emitRunResult(result miniagent.Result, model string, resultOnly bool, logge
 		fmt.Println(result.Text)
 		return
 	}
-	if err := miniagent.EmitResult(os.Stdout, result, model); err != nil {
+	if err := event.EmitResult(os.Stdout, result, model); err != nil {
 		logger.Warn("emit result failed", "error", err)
 		fmt.Fprintf(os.Stderr, "miniagent: emit result failed: %v (text: %.200q)\n", err, result.Text)
 		os.Exit(1)

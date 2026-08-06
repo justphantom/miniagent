@@ -13,6 +13,7 @@ import (
 	"log/slog"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/event"
 )
 
 // warnProviderInsecureURLs 对 provider 使用的 http（非 loopback）URL 发出明文传 key 警告。
@@ -80,7 +81,7 @@ func runListModels(ctx context.Context, cfg *miniagent.Config, providerFilter st
 	warnProvidersInsecureURLs(providers)
 	models, err := listAllModels(ctx, providers, listHTTPTimeout, logger)
 	for _, m := range models {
-		if emitErr := miniagent.EmitModel(os.Stdout, m.Provider, m.Model); emitErr != nil {
+		if emitErr := event.EmitModel(os.Stdout, m.Provider, m.Model); emitErr != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: emit model: %v\n", emitErr)
 			os.Exit(1)
 		}

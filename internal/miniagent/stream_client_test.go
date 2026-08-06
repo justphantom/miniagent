@@ -1,9 +1,7 @@
 package miniagent
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,30 +61,6 @@ func TestParseSSE_MalformedChunk(t *testing.T) {
 	sse := "data: not-json\n\ndata: [DONE]\n"
 	if _, err := parseSSE(strings.NewReader(sse), nil); err == nil {
 		t.Error("malformed chunk should error")
-	}
-}
-
-func TestEmitDelta(t *testing.T) {
-	var buf bytes.Buffer
-	if err := EmitDelta(&buf, 2, DeltaText, "hi"); err != nil {
-		t.Fatalf("EmitDelta: %v", err)
-	}
-	var ev map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if ev["type"] != "text_delta" || ev["step"] != float64(2) || ev["text"] != "hi" {
-		t.Errorf("event = %+v", ev)
-	}
-	buf.Reset()
-	if err := EmitDelta(&buf, 3, DeltaReasoning, "think"); err != nil {
-		t.Fatalf("EmitDelta: %v", err)
-	}
-	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if ev["type"] != "reasoning_delta" {
-		t.Errorf("event = %+v", ev)
 	}
 }
 
