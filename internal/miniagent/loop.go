@@ -27,12 +27,8 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm provider is nil")
 	}
-	// thinkingDowngraded/compacted 跨循环累积，统一经 defer 写入命名返回 result 的对应字段。
+	// thinkingDowngraded/compacted 跨循环累积（defer 在 total/msgs/newMsgs 声明后统一写入命名返回 result）。
 	var thinkingDowngraded, compacted bool
-	defer func() {
-		result.ThinkingDowngraded = thinkingDowngraded
-		result.Compacted = compacted
-	}()
 	toolByName := buildToolIndex(cfg.Tools, logger)
 
 	// 复制 History：接续对话时调用方可能复用同一 slice，原地 append 会越界写其数据。
@@ -42,6 +38,17 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	var newMsgs []Message
 	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: userPrompt})
 	total := Usage{}
+
+	// Usage/Messages/NewMessages/thinkingDowngraded/compacted 经 defer 统一写入命名返回 result——消除 12 处
+	// return 的三件套重复，且新增 return 不必手写（防漏填致 session 持久化丢消息）。各 return 只设差异字段
+	// （Steps/Text/Finish）。llm==nil 的早期 return 在此 defer 注册前，不受影响（result 零值）。
+	defer func() {
+		result.Usage = total
+		result.Messages = msgs
+		result.NewMessages = newMsgs
+		result.ThinkingDowngraded = thinkingDowngraded
+		result.Compacted = compacted
+	}()
 
 	iterLimit := cfg.MaxIterations
 	if iterLimit <= 0 {
@@ -93,23 +100,23 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			if aerr := hooks.AfterLLM(ctx, s+1, resp2); aerr != nil {
 				// recordStepUsage 未执行（在其后），按 Steps=已记账 usage 调用数 的语义计 s（=(s+1)-1），
 				// 与主路径 AfterLLM err 的 step-1 对齐。
-				return Result{Usage: total, Steps: s, Messages: msgs, NewMessages: newMsgs}, true, aerr
+				return Result{Steps: s}, true, aerr
 			}
 		}
 		if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
-			return Result{Usage: total, Steps: s + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, true, berr
+			return Result{Steps: s + 1, Finish: finishStop}, true, berr
 		}
-		return Result{Text: resp2.Text, Usage: total, Steps: s + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, true, nil
+		return Result{Text: resp2.Text, Steps: s + 1, Finish: finishStop}, true, nil
 	}
 
 	for step := 1; step <= iterLimit; step++ {
 		if err := ctx.Err(); err != nil {
-			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
+			return Result{Steps: step - 1}, err
 		}
 		// 开放缝 BeforeLLM：压缩/记忆/RAG/上下文管理。nil=透传（极简模式）。
 		toSend, perr := applyBeforeLLM(ctx, hooks, step, &msgs, &newMsgs, &total, &compacted, cfg)
 		if perr != nil {
-			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, perr
+			return Result{Steps: step - 1}, perr
 		}
 
 		resp, downgraded, err := callLLMWithDowngrade(ctx, llm, cfg, step, toSend, hooks, logger)
@@ -119,7 +126,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		if err != nil && hooks.OnLLMError != nil {
 			recovered, retry, rerr := hooks.OnLLMError(ctx, step, msgs, err)
 			if rerr != nil {
-				return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, rerr
+				return Result{Steps: step - 1}, rerr
 			}
 			if retry {
 				if recovered != nil {
@@ -132,13 +139,13 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			}
 		}
 		if err != nil {
-			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
+			return Result{Steps: step - 1}, err
 		}
 
 		// 开放缝 AfterLLM：用量记账 / 静默溢出判定（压缩插件据此置下步 Force）。
 		if hooks.AfterLLM != nil {
 			if aerr := hooks.AfterLLM(ctx, step, resp); aerr != nil {
-				return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, aerr
+				return Result{Steps: step - 1}, aerr
 			}
 		}
 
@@ -146,18 +153,18 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		// nil=核心不估算不熔断（极简）。AfterLLM 与 OnBudget 的 Steps 语义不同（前者 step-1、后者 step），
 		// 故 AfterLLM 留在调用方、仅累加+判定下沉到 recordStepUsage 复用。
 		if berr := recordStepUsage(ctx, hooks, step, resp, toSend, cfg, &total); berr != nil {
-			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, berr
+			return Result{Steps: step}, berr
 		}
 
 		if len(resp.ToolCalls) == 0 {
 			// 最终文本入历史：接续对话需要看到上一轮的回答。附真实 usage 供外挂策略防陈旧估算。
 			appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, Usage: &resp.Usage})
-			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
+			return Result{Text: resp.Text, Steps: step, Finish: finishStop}, nil
 		}
 
 		msgs, err = handleToolCalls(ctx, cfg, step, resp, toolByName, msgs, &newMsgs, hooks, logger)
 		if err != nil {
-			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
+			return Result{Steps: step}, err
 		}
 		// 撞迭代上限且刚执行完工具：注入总结请求让 LLM 输出最终文本（允许一次额外调用）；
 		// 未成则回落 finishMaxIterations（总结逻辑外提为 summarizeAtLimit，主循环保持简洁）。
@@ -168,7 +175,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		}
 	}
 	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。Finish=finishMaxIterations 是终止信号。
-	return Result{Usage: total, Steps: iterLimit, Finish: finishMaxIterations, Messages: msgs, NewMessages: newMsgs}, nil
+	return Result{Steps: iterLimit, Finish: finishMaxIterations}, nil
 }
 
 // applyBeforeLLM 调 hooks.BeforeLLM（nil=透传，极简模式）并把它对 transcript / 持久化 / 用量 / 压缩标记的
