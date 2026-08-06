@@ -3,6 +3,28 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [4.2.0] - 2026-08-06
+
+> 核心策略彻底外挂：用量估算+预算判定、LLM 失败恢复、工具结果成型+落盘从 `Run` 内联移到默认钩子工厂，`Run` 真正零策略（仅做工具注册 / 上下文拼接 / 调 LLM / 执行工具 / 无 tool_calls 退出五件事）。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 minor。
+
+### Changed
+- **核心策略从 `Run` 内联移到默认钩子工厂**：原核心内置的三项策略——零 usage 本地估算 fallback + `MaxTotalTokens` 预算判定、`ErrContextLength` 历史收紧重试、工具结果截断（`trimForHistory`）+ 超限落盘（`toolOutputStore`）——提取为 `NewDefaultOnBudget` / `NewDefaultOnLLMError` / `NewDefaultShapeToolResult` 三个导出工厂。`Run` 不再读取 `LoopConfig` 的策略字段，仅累加真实 usage、不做估算/判定/截断/落盘/错误恢复；`Run` 注释承诺的「核心不做任何上下文管理」至此与实现一致。
+- **`OnBudget` 扩签以承载估算**：签名从 `func(step int, total Usage) error` 改为 `func(ctx, step int, in BudgetInput, total *Usage) error`（新增 `BudgetInput` 携带本轮 `ToSend`/`System`/`Tools`/`Resp`，`total` 改指针可累加估算）。原核心内联估算无法外挂的根因——钩子拿不到请求侧上下文——由此消除。
+- **`ShapeToolResult` nil 时核心透传原文**：此前 nil 走核心内置 `defaultShapeResult`（截断+落盘）；现 nil = 零成型、透传 `ToolResult.Output`，成型完全交钩子。
+- **cmd 层一行装配默认钩子**：`main.go` 用三个 `NewDefault*` 工厂替代原自写的 `OnBudget` 闭包；`store` 连同落盘逻辑整体下沉进 `NewDefaultShapeToolResult`（构造时 `cleanup` 一次，等价原 `Run` 入口行为）。
+
+### Added
+- **`OnLLMError` 钩子缝**：LLM 失败路径的唯一开放缝（`BeforeLLM`/`AfterLLM` 均在成功路径）。返回 `recoveredMsgs` + `retry` 时核心替换 transcript 并重试一次；nil = 失败直接上抛。
+- **`NewDefaultOnLLMError` / `NewDefaultOnBudget` / `NewDefaultShapeToolResult`**：承载原核心内置策略的默认钩子工厂，cmd 层组装即复用原行为。
+- **`BudgetInput`**：`OnBudget` 的请求侧上下文类型。
+
+### Breaking (internal API)
+- `LoopHooks.OnBudget` 签名变更、`LoopHooks` 新增 `OnLLMError` 字段、`defaultShapeResult` 移除。相关类型均在 `internal/` 下（外部无法导入），仅影响项目自身调用方（`cmd/miniagent`，已同步）。CLI / 事件契约零变更。
+
+### Notes
+- `LoopConfig` 的策略字段（`MaxTotalTokens`/`MaxToolResultChars`/`ToolOutputDir`/`ToolOutputRetention`）保留作配置载体（核心不读，由 `NewDefault*` 工厂读取），避免牵连 `config.go`/`resolve.go`；字段注释已更新为「配置载体」。
+- 与 4.1.0 一脉相承：4.1.0 解耦 provider（`LLM`/`Doer` 接口），本版解耦上下文/用量/成型策略。真正库化（移出 `internal/`）仍计划于 5.0.0。
+
 ## [4.1.0] - 2026-08-06
 
 > 内部架构重构：核心经接口解耦具体 client、子包化（compaction/event/openai provider）。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 minor。
