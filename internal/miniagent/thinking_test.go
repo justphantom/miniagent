@@ -73,16 +73,16 @@ func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}, nil
 }
 
-// 400 含 thinking 特征 → callLLM 去 thinking 重试一次（审查 v2 #7）。
+// 400 含 thinking 特征 → callLLMWithDowngrade 去 thinking 重试一次（审查 v2 #7）。
 func TestCallLLM_Thinking400Downgrade(t *testing.T) {
 	tr := &recordingTransport{plan: []transportResp{
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
 		{status: http.StatusOK, body: textResponse("ok")},
 	}}
 	llm := testClients(tr)
-	resp, err := callLLM(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	resp, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("callLLM: %v", err)
+		t.Fatalf("callLLMWithDowngrade: %v", err)
 	}
 	if resp.Text != "ok" {
 		t.Errorf("Text = %q", resp.Text)
@@ -104,7 +104,7 @@ func TestCallLLM_Plain400NoDowngrade(t *testing.T) {
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
 	}}
 	llm := testClients(tr)
-	_, err := callLLM(context.Background(), llm, LoopConfig{Model: "m"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	_, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error for plain 400")
 	}

@@ -186,7 +186,7 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && miniagent.IsContextLengthError(raw) {
 			return miniagent.Response{}, false, 0, fmt.Errorf("%w: %s", miniagent.ErrContextLength, text.Truncate(string(raw), 500, "…"))
 		}
-		// thinking 参数不被支持（400 + 特征词）：callLLM 据此去字段重试一次（审查 v2 #7）。
+		// thinking 参数不被支持（400 + 特征词）：callLLMWithDowngrade 据此去字段重试一次（审查 v2 #7）。
 		if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
 			return miniagent.Response{}, false, 0, fmt.Errorf("%w: %s", miniagent.ErrThinkingUnsupported, text.Truncate(string(raw), 500, "…"))
 		}

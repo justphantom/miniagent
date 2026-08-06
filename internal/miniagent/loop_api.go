@@ -138,7 +138,7 @@ type Result struct {
 	// 决定是否 rewrite session 文件——append-only 落盘的 newMsgs 含被屏障的旧 summary 与
 	// 被压中段，长会话需机会性 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。
 	Compacted bool
-	// ThinkingDowngraded 标记本轮 callLLM 是否发生过 thinking 降级。交互层据此清
+	// ThinkingDowngraded 标记本轮 callLLMWithDowngrade 是否发生过 thinking 降级。交互层据此清
 	// baseCfg.ThinkingLevel，避免下一轮重传原值再撞一次 400（审查 P2 thinking 跨轮固化）。
 	ThinkingDowngraded bool
 }
@@ -165,10 +165,10 @@ type LoopConfig struct {
 	// MaxTotalTokens 单轮累计 token（输入+输出）上限；<=0 不限。策略配置载体——核心 Run 不读，
 	// 由 NewDefaultOnBudget 据此判定熔断（超限返回 ErrBudgetExceeded，走 error 事件 + 退出码 1）。
 	MaxTotalTokens int
-	// Stream 为 true 时 callLLM 走流式（DoStream），增量经 LoopHooks.OnDelta 推出；
+	// Stream 为 true 时 callLLMOnce 走流式（DoStream），增量经 LoopHooks.OnDelta 推出；
 	// 默认 false（非流式 Do）。
 	Stream bool
-	// ThinkingLevel / Thinking 透传到每次 callLLM 的 Request（思考级别 + 供应商映射）。
+	// ThinkingLevel / Thinking 透传到每次 callLLMOnce 的 Request（思考级别 + 供应商映射）。
 	ThinkingLevel string
 	Thinking      *ThinkingMapping
 	// MaxToolResultChars 是 tool 结果入历史的默认字符上限（兜底 Tool.ResultLimit；<=0 用内置默认）。

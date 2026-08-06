@@ -8,15 +8,8 @@ import (
 	"log/slog"
 )
 
-// callLLM 保持原签名供 thinking_test.go 直接调用，委托 callLLMWithDowngrade 并丢弃
-// downgraded。Run 改用 callLLMWithDowngrade 以跨步固化 thinking 降级（P2-2）。
-func callLLM(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, error) {
-	resp, _, err := callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
-	return resp, err
-}
-
 // callLLMWithDowngrade：callLLMOnce 之上做单步 thinking 降级重试，回传 downgraded 供 Run
-// 跨步固化 cfg；其余（重试一次、日志、截断告警）与原 callLLM 一致。
+// 跨步固化 cfg；其余（重试一次、日志、截断告警）原样保留。
 func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, bool, error) {
 	if logger != nil {
 		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream, "thinking", cfg.ThinkingLevel)

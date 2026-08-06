@@ -13,7 +13,7 @@ var ErrBudgetExceeded = errors.New("miniagent: token budget exceeded")
 var ErrContextLength = errors.New("miniagent: context length exceeded")
 
 // ErrThinkingUnsupported 由 HTTPClient 在端点返回疑似 thinking 参数不被支持的 400 时返回。
-// callLLM 据此一次性去 thinking 字段重试（审查 v2 #7）；误判无害（重试仍失败则上抛）。
+// callLLMWithDowngrade 据此一次性去 thinking 字段重试（审查 v2 #7）；误判无害（重试仍失败则上抛）。
 var ErrThinkingUnsupported = errors.New("miniagent: thinking parameter unsupported")
 
 // ErrToolDenied 由 OnToolUse 返回表示拒绝执行该工具（如危险命令未获确认）。
