@@ -74,7 +74,14 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 				if recovered != nil {
 					msgs = recovered
 				}
-				resp, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+				// 捕获重试路径的 downgraded：恢复重试若触发 thinking 降级，同样固化 cfg + 置位
+				// thinkingDowngraded——否则交互层下轮重传原 thinking 值再撞 400（与首次调用同款处理）。
+				var down2 bool
+				resp, down2, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+				if down2 {
+					cfg.ThinkingLevel, cfg.Thinking = "", nil
+					thinkingDowngraded = true
+				}
 			}
 		}
 		if err != nil {
@@ -123,14 +130,19 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			resp2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, step+1, msgs, hooks, logger)
 			if err2 == nil && len(resp2.ToolCalls) == 0 {
 				appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
+				// 总结步走与主路径一致的三段式（AfterLLM → 累加真实 usage → OnBudget），避免绕过预算熔断
+				// 成为逃逸通道、并消除内联估算与主路径的不一致（零 usage fallback 由 NewDefaultOnBudget 承载）。
+				if hooks.AfterLLM != nil {
+					if aerr := hooks.AfterLLM(ctx, step+1, resp2); aerr != nil {
+						return Result{Usage: total, Steps: step + 1, Messages: msgs, NewMessages: newMsgs}, aerr
+					}
+				}
 				total.InputTokens += resp2.Usage.InputTokens
 				total.OutputTokens += resp2.Usage.OutputTokens
-				if resp2.Usage.InputTokens == 0 && resp2.Usage.OutputTokens == 0 {
-					if logger != nil {
-						logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step+1)
+				if hooks.OnBudget != nil {
+					if berr := hooks.OnBudget(ctx, step+1, BudgetInput{ToSend: msgs, System: cfg.System, Tools: cfg.Tools, Resp: resp2}, &total); berr != nil {
+						return Result{Usage: total, Steps: step + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, berr
 					}
-					total.InputTokens += EstimateTokens(msgs, cfg.System, cfg.Tools)
-					total.OutputTokens += estimateResponseTokens(resp2)
 				}
 				return Result{Text: resp2.Text, Usage: total, Steps: step + 1, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
 			}

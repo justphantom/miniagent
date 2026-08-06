@@ -86,9 +86,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			if err := hooks.OnToolResult(tc.Name, tc.ID, tres); err != nil {
 				// 配对补全：下游不可写，剩余 calls（含当前 i）结果无法提交；但 assistant.tool_calls 已入历史，
 				// 须为每个补一条占位 tool 消息，否则 Messages 配对断裂、续跑被端点 400（P2-1）。
-				for j := i; j < len(calls); j++ {
-					appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
-				}
+				fillPlaceholderTail(&msgs, newMsgs, calls, i)
 				return msgs, err
 			}
 		}
@@ -100,9 +98,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			c, serr := hooks.ShapeToolResult(tc.Name, tc.ID, step, tres)
 			if serr != nil {
 				// 配对补全：成型钩子抛错时为剩余 calls（含当前 i）补占位 tool 消息，保 Messages 配对完整。
-				for j := i; j < len(calls); j++ {
-					appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
-				}
+				fillPlaceholderTail(&msgs, newMsgs, calls, i)
 				return msgs, serr
 			}
 			if c != "" {
@@ -112,6 +108,14 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 		appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: tc.ID, Content: content, IsError: tres.IsError})
 	}
 	return msgs, nil
+}
+
+// fillPlaceholderTail 在下游不可写（OnToolResult/ShapeToolResult 抛错）时，为 calls[from:] 每条
+// 补一条占位 tool 消息，保 Messages 配对完整——assistant.tool_calls 已入历史，缺配对会致续跑被端点 400。
+func fillPlaceholderTail(msgs, newMsgs *[]Message, calls []ToolCall, from int) {
+	for j := from; j < len(calls); j++ {
+		appendMsg(msgs, newMsgs, Message{Role: RoleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
+	}
 }
 
 // runToolsParallel 并行执行 calls，返回与 calls 同序的结果。

@@ -370,3 +370,18 @@ func defaultHooks(cfg LoopConfig, logger *slog.Logger) LoopHooks {
 		ShapeToolResult: NewDefaultShapeToolResult(cfg.Tools, cfg.ToolOutputDir, cfg.ToolOutputRetention, cfg.MaxToolResultChars, logger),
 	}
 }
+
+// 撞迭代上限的总结步走 OnBudget：累计超 MaxTotalTokens 应熔断（修复前总结步绕过 OnBudget 直接返回文本）。
+// 每步 tool usage 100+10=110；两步累计 220<250（主路径不熔断），总结步再 +110=330>250 触发熔断。
+func TestRun_SummaryStepEnforcesBudget(t *testing.T) {
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	toolStep := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`
+	summaryStep := `{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`
+	tr := &fakeTransport{responses: []string{toolStep, toolStep, summaryStep}}
+	llm := testClients(tr)
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 2, MaxTotalTokens: 250}
+	_, err := Run(context.Background(), llm, cfg, "x", defaultHooks(cfg, nil), nil)
+	if !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("err = %v, want ErrBudgetExceeded（总结步应走 OnBudget 熔断）", err)
+	}
+}
