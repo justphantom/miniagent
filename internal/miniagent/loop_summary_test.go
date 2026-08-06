@@ -100,3 +100,30 @@ func TestRun_SummaryRequestPromptConfigurable(t *testing.T) {
 		t.Errorf("second request should not contain default summary prompt: %s", secondBody)
 	}
 }
+
+// 总结步 LLM 调用失败（err2，如坏响应）时回落 finishMaxIterations——不上抛、不污染 transcript
+// （summaryReq 经临时 reqMsgs，失败也不进 Messages）。覆盖 summarizeAtLimit 的 err2 退出路径。
+func TestRun_SummaryLLMFailureFallsBack(t *testing.T) {
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
+		"not-valid-json", // 总结步解析失败 → err2
+	}}
+	llm := testClients(tr)
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}
+	res, err := Run(context.Background(), llm, cfg, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("总结 LLM 失败应回落而非上抛, got: %v", err)
+	}
+	if res.Finish != finishMaxIterations {
+		t.Errorf("Finish = %q, want %q（总结失败回落）", res.Finish, finishMaxIterations)
+	}
+	if res.Steps != 1 {
+		t.Errorf("Steps = %d, want 1（=iterLimit）", res.Steps)
+	}
+	for i, m := range res.Messages {
+		if m.Role == RoleSystem {
+			t.Errorf("Result.Messages[%d] 不应含 RoleSystem: %+v", i, m)
+		}
+	}
+}

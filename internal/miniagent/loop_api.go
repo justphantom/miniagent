@@ -77,7 +77,8 @@ type LoopHooks struct {
 	// OnToolUse 工具执行前通知；返回 error 沿链上抛到 Run 终止循环（下游管道关闭时）。
 	// 返回哨兵 ErrToolDenied（loop.go 定义）时仅拒绝该工具、不终止循环。
 	OnToolUse func(name, input string) error
-	// OnToolResult 工具执行后通知，透传 ToolResult（含 ExitCode / IsError）。
+	// OnToolResult 工具执行后通知，透传 ToolResult（含 ExitCode / IsError）。同一步内多个 tool_call 并行执行，
+	// 本回调在全部完成后按 tool_call 顺序串行通知——非「每工具完成即通知」，实时性受最慢工具制约。
 	OnToolResult func(name, callID string, r ToolResult) error
 	// ShapeToolResult 工具执行后、结果入历史前触发，返回该 tool 消息的 content。返回空串=核心用
 	// 内置默认成型（trimForHistory 截断 + 可选落盘）。返回 error 沿链上抛终止循环（下游管道关闭时），
