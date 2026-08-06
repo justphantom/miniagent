@@ -41,31 +41,3 @@ func TestIsContextLengthError(t *testing.T) {
 		}
 	}
 }
-
-// §P1-C isSilentContextOverflow：stop 超窗 / length+output=0+input≥99% 两类静默溢出 + 边界。
-func TestIsSilentContextOverflow(t *testing.T) {
-	cases := []struct {
-		name          string
-		finish        string
-		input, output int
-		window        int
-		want          bool
-	}{
-		{"stop_over_window", finishStop, 1500, 10, 1000, true},
-		{"stop_under_window", finishStop, 900, 10, 1000, false},
-		{"length_zero_output_99pct", finishLength, 990, 0, 1000, true}, // 990>=1000*99/100=990
-		{"length_zero_output_98pct", finishLength, 980, 0, 1000, false},
-		{"length_with_output", finishLength, 1500, 50, 1000, false}, // output!=0 → 非 Case3
-		{"window_zero", finishStop, 1500, 10, 0, false},
-		{"input_zero", finishStop, 0, 10, 1000, false},
-		{"other_finish", "tool_calls", 1500, 10, 1000, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			resp := Response{FinishReason: c.finish, Usage: Usage{InputTokens: c.input, OutputTokens: c.output}}
-			if got := isSilentContextOverflow(resp, c.window); got != c.want {
-				t.Errorf("isSilentContextOverflow = %v, want %v", got, c.want)
-			}
-		})
-	}
-}

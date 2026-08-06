@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/compaction"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
 )
 
@@ -127,7 +128,7 @@ func main() {
 	miniagent.SetShellStreamWindowBytes(into(resolved.Run.ShellStreamWindowBytes, 0))
 	miniagent.SetMaxSessionBytes(maxSessionBytesOf(resolved))
 
-	miniagent.SetSummaryMaxTokens(into(resolved.Run.SummaryMaxTokens, 0))
+	compaction.SetSummaryMaxTokens(into(resolved.Run.SummaryMaxTokens, 0))
 	miniagent.SetGrepMaxMatches(into(resolved.Run.GrepMaxMatches, 0))
 	miniagent.SetContextTrimToolChars(into(resolved.Run.ContextTrimToolChars, 0))
 
@@ -163,7 +164,7 @@ func main() {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
 	}
 	// 压缩作为外挂：经 NewCompaction 取 before/after 挂到 hooks（核心 Run 本身不含压缩）。
-	compBefore, compAfter := miniagent.NewCompaction(compactionOptions(resolved, f, meta, chat, compChat, baseCfg.System, tools, logger))
+	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, f, meta, chat, compChat, baseCfg.System, tools, logger))
 	hooks := buildHooks(*f.resultOnly)
 	hooks.BeforeLLM = compBefore
 	hooks.AfterLLM = compAfter
@@ -239,12 +240,12 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 
 // compactionOptions 把 resolved 的压缩策略装配成 CompactionOptions。chat 是摘要用 client
 // （compChat 非空用之，否则回落主 chat）。
-func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, chat, compChat *miniagent.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) miniagent.CompactionOptions {
+func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, chat, compChat *miniagent.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
 	compClient := compChat
 	if compClient == nil {
 		compClient = chat
 	}
-	return miniagent.CompactionOptions{
+	return compaction.CompactionOptions{
 		Chat:                 compClient,
 		MaxTokens:            into(resolved.Run.MaxTokens, *f.maxTokens),
 		ContextWindow:        into(resolved.Run.ContextWindow, 0),

@@ -1,4 +1,6 @@
-package miniagent
+package compaction
+
+import "github.com/justphantom/miniagent/internal/miniagent"
 
 import (
 	"context"
@@ -9,7 +11,7 @@ import (
 
 // §P2 applyCompactingHook 表驱动：nil noop / prompt override / context append / hook error abort。
 func TestApplyCompactingHook(t *testing.T) {
-	middle := []Message{{Role: RoleUser, Content: "m1"}}
+	middle := []miniagent.Message{{Role: miniagent.RoleUser, Content: "m1"}}
 	t.Run("nil_noop", func(t *testing.T) {
 		p, m, err := applyCompactingHook(context.Background(), nil, "s", "model", "orig", middle)
 		if err != nil || p != "orig" || len(m) != 1 {
@@ -45,7 +47,7 @@ func TestApplyCompactingHook(t *testing.T) {
 		if len(m) != 2 || m[0].Content != "m1" {
 			t.Errorf("context 注入应保留原 middle 在前: %+v", m)
 		}
-		if m[1].Role != RoleUser || !strings.Contains(m[1].Content, "ctx-a") || !strings.Contains(m[1].Content, "ctx-b") {
+		if m[1].Role != miniagent.RoleUser || !strings.Contains(m[1].Content, "ctx-a") || !strings.Contains(m[1].Content, "ctx-b") {
 			t.Errorf("末尾应追加一条含 context 的 user 消息: %+v", m[1])
 		}
 		if len(m[1].ToolCalls) != 0 {
@@ -75,15 +77,15 @@ func TestCompactWithSummary_HookReceivesAndOverrides(t *testing.T) {
 			gotIn = in
 			return CompactingOutput{Prompt: "CUSTOM"}, nil
 		},
-		Summarize: func(_ context.Context, _, sys, _ string, _ []Message) (string, Usage, error) {
+		Summarize: func(_ context.Context, _, sys, _ string, _ []miniagent.Message) (string, miniagent.Usage, error) {
 			gotSys = sys
-			return "summary", Usage{}, nil
+			return "summary", miniagent.Usage{}, nil
 		},
 	}
-	msgs := []Message{
-		{Role: RoleUser, Content: "h0"}, {Role: RoleUser, Content: "h1"}, {Role: RoleUser, Content: "h2"},
-		{Role: RoleUser, Content: "h3"}, {Role: RoleUser, Content: "h4"}, {Role: RoleUser, Content: "h5"},
-		{Role: RoleUser, Content: "cur"},
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "h0"}, {Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"},
+		{Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"},
+		{Role: miniagent.RoleUser, Content: "cur"},
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 2); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
@@ -110,14 +112,14 @@ func TestCompactWithSummary_HookErrorAborts(t *testing.T) {
 		Compacting: func(_ context.Context, _ CompactingInput) (CompactingOutput, error) {
 			return CompactingOutput{}, errors.New("hook boom")
 		},
-		Summarize: func(_ context.Context, _, _, _ string, _ []Message) (string, Usage, error) {
+		Summarize: func(_ context.Context, _, _, _ string, _ []miniagent.Message) (string, miniagent.Usage, error) {
 			summarized = true
-			return "x", Usage{}, nil
+			return "x", miniagent.Usage{}, nil
 		},
 	}
-	msgs := []Message{
-		{Role: RoleUser, Content: "h0"}, {Role: RoleUser, Content: "h1"}, {Role: RoleUser, Content: "h2"},
-		{Role: RoleUser, Content: "h3"}, {Role: RoleUser, Content: "h4"}, {Role: RoleUser, Content: "cur"},
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "h0"}, {Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"},
+		{Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "cur"},
 	}
 	_, _, _, err := compactWithSummary(context.Background(), budget, msgs, 2)
 	if err == nil {
@@ -137,11 +139,11 @@ func TestFitHistory_HookFiring(t *testing.T) {
 				calls++
 				return CompactingOutput{}, nil
 			},
-			Summarize: func(_ context.Context, _, _, _ string, _ []Message) (string, Usage, error) {
-				return "x", Usage{}, nil
+			Summarize: func(_ context.Context, _, _, _ string, _ []miniagent.Message) (string, miniagent.Usage, error) {
+				return "x", miniagent.Usage{}, nil
 			},
 		}
-		FitHistory(context.Background(), []Message{{Role: RoleUser, Content: "q"}}, budget, nil)
+		FitHistory(context.Background(), []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}, budget, nil)
 		if calls != 0 {
 			t.Errorf("noop fit 不应触发 hook: calls=%d", calls)
 		}
@@ -149,9 +151,9 @@ func TestFitHistory_HookFiring(t *testing.T) {
 	t.Run("overflow_fires_once", func(t *testing.T) {
 		calls := 0
 		big := strings.Repeat("x", 1000)
-		var msgs []Message
+		var msgs []miniagent.Message
 		for range 30 {
-			msgs = append(msgs, Message{Role: RoleUser, Content: big})
+			msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: big})
 		}
 		budget := ContextBudget{
 			ContextWindow: 4000,
@@ -160,8 +162,8 @@ func TestFitHistory_HookFiring(t *testing.T) {
 				calls++
 				return CompactingOutput{}, nil
 			},
-			Summarize: func(_ context.Context, _, _, _ string, _ []Message) (string, Usage, error) {
-				return "summary", Usage{}, nil
+			Summarize: func(_ context.Context, _, _, _ string, _ []miniagent.Message) (string, miniagent.Usage, error) {
+				return "summary", miniagent.Usage{}, nil
 			},
 		}
 		FitHistory(context.Background(), msgs, budget, nil)

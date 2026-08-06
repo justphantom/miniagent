@@ -1,4 +1,6 @@
-package miniagent
+package compaction
+
+import "github.com/justphantom/miniagent/internal/miniagent"
 
 import (
 	"slices"
@@ -12,14 +14,14 @@ import (
 // 与 trimHistoryForContext（被动、撞上限才清全部）互补：本函数主动、常态化、仅清「非最近 N 条」，
 // 保留当前推理上下文。仅改 context 侧拷贝——入参 msgs/newMsgs/session 不被改动（持久化仍留原 reasoning）。
 // keepN<0 视作 0；无非空 reasoning 可清、或全部在保留窗口内时原样返回（零拷贝）。
-func stripStaleReasoning(msgs []Message, keepN int) []Message {
+func stripStaleReasoning(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	if keepN < 0 {
 		keepN = 0
 	}
 	nAssistant := 0
 	hasReasoning := false
 	for _, m := range msgs {
-		if m.Role == RoleAssistant {
+		if m.Role == miniagent.RoleAssistant {
 			nAssistant++
 			if m.Reasoning != "" {
 				hasReasoning = true
@@ -29,12 +31,12 @@ func stripStaleReasoning(msgs []Message, keepN int) []Message {
 	if !hasReasoning || nAssistant <= keepN {
 		return msgs // 无可清 / 全在保留窗口内
 	}
-	out := make([]Message, len(msgs))
+	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
 	// 从后往前保留最近 keepN 条 assistant 的 reasoning，更早的清空。
 	kept := 0
 	for i := range slices.Backward(out) {
-		if out[i].Role != RoleAssistant {
+		if out[i].Role != miniagent.RoleAssistant {
 			continue
 		}
 		if kept < keepN {
@@ -51,11 +53,11 @@ func stripStaleReasoning(msgs []Message, keepN int) []Message {
 // 思考模型单条 Reasoning 常达数千~数万 token，是单条最大的上下文项；stripStaleReasoning 的「全有/全无」
 // 逻辑使保留的那条仍逐字全量回灌（wire.go 的 reasoning_content 字段），P1–P4 完全没减这部分体积。
 //
-// 仅当 Reasoning 超 threshold（rune）才截：复用 truncateHeadTail 的头 1/4 + 尾 3/4 比例——两端高价值
+// 仅当 Reasoning 超 threshold（rune）才截：复用 miniagent.TruncateHeadTail 的头 1/4 + 尾 3/4 比例——两端高价值
 // （开头建立问题框架、收尾收敛到结论/动作），中段多为发散探索/试错/自我纠正，参考价值最低。threshold<=0
 // 视作关闭原样返回；未超阈值、或保留窗口内无超长项时零拷贝原样返回。仅改 context 侧拷贝——Reasoning 是
 // string（不可变），改 out[i].Reasoning 不污染调用方输入/newMsgs/session；不动正文/tool_calls/配对。
-func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
+func truncateKeptReasoning(msgs []miniagent.Message, keepN, threshold int) []miniagent.Message {
 	if threshold <= 0 || keepN <= 0 {
 		return msgs
 	}
@@ -63,7 +65,7 @@ func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
 	kept := 0
 	hasOversized := false
 	for i := range slices.Backward(msgs) {
-		if msgs[i].Role != RoleAssistant {
+		if msgs[i].Role != miniagent.RoleAssistant {
 			continue
 		}
 		if kept >= keepN {
@@ -78,11 +80,11 @@ func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
 	if !hasOversized {
 		return msgs
 	}
-	out := make([]Message, len(msgs))
+	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
 	kept = 0
 	for i := range slices.Backward(out) {
-		if out[i].Role != RoleAssistant {
+		if out[i].Role != miniagent.RoleAssistant {
 			continue
 		}
 		if kept >= keepN {
@@ -90,7 +92,7 @@ func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
 		}
 		kept++
 		if len([]rune(out[i].Reasoning)) > threshold {
-			out[i].Reasoning = truncateHeadTail(out[i].Reasoning, threshold, "…[推理中段已省略]")
+			out[i].Reasoning = miniagent.TruncateHeadTail(out[i].Reasoning, threshold, "…[推理中段已省略]")
 		}
 	}
 	return out

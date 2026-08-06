@@ -1,4 +1,6 @@
-package miniagent
+package compaction
+
+import "github.com/justphantom/miniagent/internal/miniagent"
 
 import (
 	"context"
@@ -8,7 +10,7 @@ import (
 )
 
 // msgsContainContent 报告 msgs 中是否有任一 Content 含 sub。
-func msgsContainContent(msgs []Message, sub string) bool {
+func msgsContainContent(msgs []miniagent.Message, sub string) bool {
 	for _, m := range msgs {
 		if strings.Contains(m.Content, sub) {
 			return true
@@ -38,12 +40,12 @@ func TestPreserveRecentTokens(t *testing.T) {
 // §P1-E selectTailByTokens token 预算：大轮装不下进 middle（boundary shrink 失败时），最近小轮留 tail。
 func TestSelectTailByTokens_TokenBudget(t *testing.T) {
 	bigTool := strings.Repeat("x", 20000) // ~5000 tokens
-	rounds := [][]Message{
-		{{Role: RoleUser, Content: "a"}},
-		{{Role: RoleUser, Content: "b"}},
-		{{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
-			{Role: RoleTool, ToolCallID: "c1", Content: bigTool}},
-		{{Role: RoleUser, Content: "d"}}, // 最近
+	rounds := [][]miniagent.Message{
+		{{Role: miniagent.RoleUser, Content: "a"}},
+		{{Role: miniagent.RoleUser, Content: "b"}},
+		{{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
+			{Role: miniagent.RoleTool, ToolCallID: "c1", Content: bigTool}},
+		{{Role: miniagent.RoleUser, Content: "d"}}, // 最近
 	}
 	tail, middle := selectTailByTokens(rounds, 4, 50)
 	if !msgsContainContent(tail, "d") {
@@ -62,12 +64,12 @@ func TestSelectTailByTokens_TokenBudget(t *testing.T) {
 
 // §P1-E selectTailByTokens 纯轮数回退（tokenBudget<=0）：tail=最近 maxTurns 轮，middle=其余。
 func TestSelectTailByTokens_LegacyFallback(t *testing.T) {
-	rounds := [][]Message{
-		{{Role: RoleUser, Content: "a"}},
-		{{Role: RoleUser, Content: "b"}},
-		{{Role: RoleUser, Content: "c"}},
-		{{Role: RoleUser, Content: "d"}},
-		{{Role: RoleUser, Content: "e"}},
+	rounds := [][]miniagent.Message{
+		{{Role: miniagent.RoleUser, Content: "a"}},
+		{{Role: miniagent.RoleUser, Content: "b"}},
+		{{Role: miniagent.RoleUser, Content: "c"}},
+		{{Role: miniagent.RoleUser, Content: "d"}},
+		{{Role: miniagent.RoleUser, Content: "e"}},
 	}
 	tail, middle := selectTailByTokens(rounds, 2, 0)
 	if len(tail) != 2 || !msgsContainContent(tail, "d") || !msgsContainContent(tail, "e") {
@@ -80,9 +82,9 @@ func TestSelectTailByTokens_LegacyFallback(t *testing.T) {
 
 // §P1-E selectTailByTokens all-fit：全部轮装下（n<=maxTurns 且未触 token 上界）→ tail=全部、middle=空。
 func TestSelectTailByTokens_AllFit(t *testing.T) {
-	rounds := [][]Message{
-		{{Role: RoleUser, Content: "a"}},
-		{{Role: RoleUser, Content: "b"}},
+	rounds := [][]miniagent.Message{
+		{{Role: miniagent.RoleUser, Content: "a"}},
+		{{Role: miniagent.RoleUser, Content: "b"}},
 	}
 	tail, middle := selectTailByTokens(rounds, 5, 1000)
 	if len(tail) != 2 || !msgsContainContent(tail, "a") || !msgsContainContent(tail, "b") {
@@ -96,21 +98,21 @@ func TestSelectTailByTokens_AllFit(t *testing.T) {
 // §P1-E splitRoundByTokens 配对安全：tool-call 轮返回 nil（不可安全切）；多消息文本轮切在消息边界。
 func TestSplitRoundByTokens_PairingSafe(t *testing.T) {
 	// tool-call 轮：[A(tc=[c1,c2]), T(c1), T(c2)] → 不可切（切点后缀不能以 tool 开头）。
-	tcRound := []Message{
-		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}, {ID: "c2", Name: "t", Args: "{}"}}},
-		{Role: RoleTool, ToolCallID: "c1", Content: "r1"},
-		{Role: RoleTool, ToolCallID: "c2", Content: "r2"},
+	tcRound := []miniagent.Message{
+		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}, {ID: "c2", Name: "t", Args: "{}"}}},
+		{Role: miniagent.RoleTool, ToolCallID: "c1", Content: "r1"},
+		{Role: miniagent.RoleTool, ToolCallID: "c2", Content: "r2"},
 	}
 	if got := splitRoundByTokens(tcRound, 100); got != nil {
 		t.Errorf("tool-call 轮应返回 nil（不可安全切）: %+v", got)
 	}
 	// 多消息文本轮（手动构造）：切点落在使后缀 fit 的最早消息边界。
-	textRound := []Message{
-		{Role: RoleUser, Content: "x"},
-		{Role: RoleUser, Content: "y"},
-		{Role: RoleUser, Content: "z"},
+	textRound := []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "x"},
+		{Role: miniagent.RoleUser, Content: "y"},
+		{Role: miniagent.RoleUser, Content: "z"},
 	}
-	suffix := splitRoundByTokens(textRound, estimateRoundTokens([]Message{{Role: RoleUser, Content: "z"}}))
+	suffix := splitRoundByTokens(textRound, estimateRoundTokens([]miniagent.Message{{Role: miniagent.RoleUser, Content: "z"}}))
 	if len(suffix) != 1 || suffix[0].Content != "z" {
 		t.Errorf("文本轮应切出后缀 [z]: %+v", suffix)
 	}
@@ -118,9 +120,9 @@ func TestSplitRoundByTokens_PairingSafe(t *testing.T) {
 
 // §P1-E shrinkRoundToolContents：保 assistant.tool_calls 与 tool 结果配对不变，仅 tool content 被截。
 func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
-	round := []Message{
-		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
-		{Role: RoleTool, ToolCallID: "c1", Content: strings.Repeat("x", 8000)},
+	round := []miniagent.Message{
+		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
+		{Role: miniagent.RoleTool, ToolCallID: "c1", Content: strings.Repeat("x", 8000)},
 	}
 	shrunk := shrinkRoundToolContents(round, 200)
 	if len(shrunk) != 2 {
@@ -129,13 +131,13 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	if len(shrunk[0].ToolCalls) != 1 || shrunk[0].ToolCalls[0].ID != "c1" {
 		t.Errorf("assistant.tool_calls 应原样保留: %+v", shrunk[0].ToolCalls)
 	}
-	if shrunk[1].Role != RoleTool || shrunk[1].ToolCallID != "c1" {
+	if shrunk[1].Role != miniagent.RoleTool || shrunk[1].ToolCallID != "c1" {
 		t.Errorf("tool 结果应保留 id 配对: %+v", shrunk[1])
 	}
 	if len(shrunk[1].Content) >= 8000 {
 		t.Errorf("tool content 应被压缩: len=%d", len(shrunk[1].Content))
 	}
-	if err := validateToolPairing(shrunk); err != nil {
+	if err := miniagent.ValidateToolPairing(shrunk); err != nil {
 		t.Errorf("shrink 后配对应自洽: %v", err)
 	}
 }
@@ -145,17 +147,17 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 // 若 tokenBudget 误改成 0（纯轮数回退），tail=最近 keepRecent 轮会含 bigTool，此断言失败。
 func TestCompactWithSummary_TokenBudgetTailE2E(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("sum")}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	bigTool := strings.Repeat("x", 20000) // ~5000 tokens > preserveRecentTokens=2000
-	msgs := []Message{
-		{Role: RoleUser, Content: "h0"},
-		{Role: RoleUser, Content: "h1"},
-		{Role: RoleUser, Content: "h2"},
-		{Role: RoleUser, Content: "h3"},
-		{Role: RoleUser, Content: "h4"},
-		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
-		{Role: RoleTool, ToolCallID: "c1", Content: bigTool},
-		{Role: RoleUser, Content: "cur"},
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "h0"},
+		{Role: miniagent.RoleUser, Content: "h1"},
+		{Role: miniagent.RoleUser, Content: "h2"},
+		{Role: miniagent.RoleUser, Content: "h3"},
+		{Role: miniagent.RoleUser, Content: "h4"},
+		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
+		{Role: miniagent.RoleTool, ToolCallID: "c1", Content: bigTool},
+		{Role: miniagent.RoleUser, Content: "cur"},
 	}
 	budget := ContextBudget{
 		Model:         "m",
@@ -163,8 +165,8 @@ func TestCompactWithSummary_TokenBudgetTailE2E(t *testing.T) {
 		Summarize:     testBudget(llm).Summarize,
 	}
 	out, summary, _, err := compactWithSummary(context.Background(), budget, msgs, 4)
-	if err != nil || summary.Kind != KindSummary {
-		t.Fatalf("应生成 KindSummary: kind=%v err=%v", summary.Kind, err)
+	if err != nil || summary.Kind != miniagent.KindSummary {
+		t.Fatalf("应生成 miniagent.KindSummary: kind=%v err=%v", summary.Kind, err)
 	}
 	if len(out) == 0 || out[0].Content != "h0" {
 		t.Errorf("out[0] 应为 head h0: %+v", out)

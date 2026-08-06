@@ -1,4 +1,6 @@
-package miniagent
+package compaction
+
+import "github.com/justphantom/miniagent/internal/miniagent"
 
 import (
 	"context"
@@ -10,10 +12,10 @@ import (
 
 // testBudget 用 llm 构造 ContextBudget：Summarize 回调调 summarizeMiddle（maxChars=内置上限）。
 // Model/CompactionModel/System/Tools 留零值（这些测试不关心 token 估算窗口，直接调 compactWithSummary）。
-func testBudget(llm *ChatClient) ContextBudget {
+func testBudget(llm *miniagent.ChatClient) ContextBudget {
 	return ContextBudget{
 		Model: "m",
-		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []Message) (string, Usage, error) {
+		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, middle)
 		},
 	}
@@ -21,52 +23,52 @@ func testBudget(llm *ChatClient) ContextBudget {
 
 // applyCompactionBarrier：有 summary → 返回最新 summary 及之后；无 → 原样。
 func TestApplyCompactionBarrier(t *testing.T) {
-	msgs := []Message{
-		{Role: RoleUser, Content: "old1"},
-		{Role: RoleUser, Kind: KindSummary, Content: "sum1"},
-		{Role: RoleUser, Content: "old2"},
-		{Role: RoleUser, Kind: KindSummary, Content: "sum2"},
-		{Role: RoleUser, Content: "recent"},
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "old1"},
+		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "sum1"},
+		{Role: miniagent.RoleUser, Content: "old2"},
+		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "sum2"},
+		{Role: miniagent.RoleUser, Content: "recent"},
 	}
 	out := applyCompactionBarrier(msgs)
 	if len(out) != 2 || out[0].Content != "sum2" || out[1].Content != "recent" {
 		t.Errorf("barrier should keep latest summary onward: %+v", out)
 	}
-	none := applyCompactionBarrier([]Message{{Role: RoleUser, Content: "x"}})
+	none := applyCompactionBarrier([]miniagent.Message{{Role: miniagent.RoleUser, Content: "x"}})
 	if len(none) != 1 {
 		t.Errorf("no summary → unchanged: %+v", none)
 	}
 }
 
-// compactWithSummary：中段摘要为 KindSummary，结构（最早 1 轮 + summary + 最近 N 轮）正确，
+// compactWithSummary：中段摘要为 miniagent.KindSummary，结构（最早 1 轮 + summary + 最近 N 轮）正确，
 // 且经 insertSummaryIntoNewMsgs 写入 newMsgs（持久化）。
 func TestCompactWithSummary_Success(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("压缩摘要")}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	var msgs []Message
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	var msgs []miniagent.Message
 	for i := range 10 {
-		msgs = append(msgs, Message{Role: RoleUser, Content: "q" + strconv.Itoa(i)})
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
-	var newMsgs []Message
+	var newMsgs []miniagent.Message
 	out, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
 	if err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
-	if summary.Kind != KindSummary {
-		t.Fatal("expected summary.Kind == KindSummary")
+	if summary.Kind != miniagent.KindSummary {
+		t.Fatal("expected summary.Kind == miniagent.KindSummary")
 	}
-	if err := validateToolPairing(out); err != nil {
+	if err := miniagent.ValidateToolPairing(out); err != nil {
 		t.Errorf("result pairing broken: %v", err)
 	}
 	// 最早 1 轮 + summary + 最近 3 轮
 	if len(out) != 1+1+3 {
 		t.Errorf("out len = %d, want 5", len(out))
 	}
-	if out[1].Kind != KindSummary || !strings.Contains(out[1].Content, "压缩摘要") {
+	if out[1].Kind != miniagent.KindSummary || !strings.Contains(out[1].Content, "压缩摘要") {
 		t.Errorf("summary slot wrong: %+v", out[1])
 	}
 	insertSummaryIntoNewMsgs(&newMsgs, summary)
-	if len(newMsgs) != 1 || newMsgs[0].Kind != KindSummary {
+	if len(newMsgs) != 1 || newMsgs[0].Kind != miniagent.KindSummary {
 		t.Errorf("summary not persisted to newMsgs: %+v", newMsgs)
 	}
 }
@@ -74,13 +76,13 @@ func TestCompactWithSummary_Success(t *testing.T) {
 // 中段配对断裂（孤立 tool 消息）→ 不摘要，返回 error（调用方回落有损）。
 func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	msgs := []Message{
-		{Role: RoleUser, Content: "first"},
-		{Role: RoleTool, ToolCallID: "orphan", Content: "x"}, // 断裂
-		{Role: RoleUser, Content: "u2"},
-		{Role: RoleUser, Content: "u3"},
-		{Role: RoleUser, Content: "u4"},
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "first"},
+		{Role: miniagent.RoleTool, ToolCallID: "orphan", Content: "x"}, // 断裂
+		{Role: miniagent.RoleUser, Content: "u2"},
+		{Role: miniagent.RoleUser, Content: "u3"},
+		{Role: miniagent.RoleUser, Content: "u4"},
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 1); err == nil {
 		t.Fatal("expected pairing-break error")
@@ -90,10 +92,10 @@ func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 // 无中段可摘（轮数 ≤ 1+keepRecent）→ summary.Kind==""，不发 LLM 请求，msgs 原样。
 func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("should-not-call")}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	msgs := []Message{{Role: RoleUser, Content: "u1"}, {Role: RoleUser, Content: "u2"}}
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "u1"}, {Role: miniagent.RoleUser, Content: "u2"}}
 	out, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 6)
-	if err != nil || summary.Kind == KindSummary {
+	if err != nil || summary.Kind == miniagent.KindSummary {
 		t.Fatalf("expected (no-summary,nil), got (kind=%v,err=%v)", summary.Kind, err)
 	}
 	if len(out) != len(msgs) {
@@ -107,8 +109,8 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 // summarizeMiddle 的 LLM 错误上抛（不吞）。
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}}); err == nil {
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
 	}
 }
@@ -117,8 +119,8 @@ func TestSummarizeMiddle_LLMError(t *testing.T) {
 func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}})
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
 	if err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
@@ -130,8 +132,8 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 // P3-1：摘要请求设置 MaxTokens=summaryMaxTokens。
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}}); err != nil {
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
@@ -141,19 +143,19 @@ func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 
 // compactWithSummary 应把 budget.CompactionModel 透传给 Summarize 回调。
 func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
 	var gotModel string
 	budget := ContextBudget{
 		Model:           "main-model",
 		CompactionModel: "compaction-model",
-		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []Message) (string, Usage, error) {
+		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotModel = model
 			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, middle)
 		},
 	}
-	var msgs []Message
+	var msgs []miniagent.Message
 	for i := range 10 {
-		msgs = append(msgs, Message{Role: RoleUser, Content: "q" + strconv.Itoa(i)})
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
@@ -197,7 +199,7 @@ func TestBuildSummarizerSystem_Override(t *testing.T) {
 	}
 }
 
-// §P0-A：stripSummaryPrefix 表驱动（前缀仅展示层，识别必须用 Kind==KindSummary）。
+// §P0-A：stripSummaryPrefix 表驱动（前缀仅展示层，识别必须用 Kind==miniagent.KindSummary）。
 func TestStripSummaryPrefix(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -214,68 +216,68 @@ func TestStripSummaryPrefix(t *testing.T) {
 	}
 }
 
-// §P0-A：默认路径（SummarizerPrompt=""）检测到 head 是旧 KindSummary 时，抽 prevSummary、
+// §P0-A：默认路径（SummarizerPrompt=""）检测到 head 是旧 miniagent.KindSummary 时，抽 prevSummary、
 // 不并入 middle、head 置空。旧摘要文本经 previousSummary 下传（UPDATE 模式）。
 func TestCompactWithSummary_UpdateModeExtractsPrevSummary(t *testing.T) {
 	var gotPrev string
-	var gotMiddle []Message
+	var gotMiddle []miniagent.Message
 	budget := ContextBudget{
 		Model: "m",
-		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []Message) (string, Usage, error) {
+		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotPrev = prevSummary
 			gotMiddle = middle
-			return "新摘要", Usage{}, nil
+			return "新摘要", miniagent.Usage{}, nil
 		},
 	}
-	msgs := []Message{
-		{Role: RoleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
-		{Role: RoleUser, Content: "real0"},
-		{Role: RoleUser, Content: "real1"},
-		{Role: RoleUser, Content: "real2"},
-		{Role: RoleUser, Content: "real3"},
-		{Role: RoleUser, Content: "real4"},
-		{Role: RoleUser, Content: "本轮"},
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: miniagent.RoleUser, Content: "real0"},
+		{Role: miniagent.RoleUser, Content: "real1"},
+		{Role: miniagent.RoleUser, Content: "real2"},
+		{Role: miniagent.RoleUser, Content: "real3"},
+		{Role: miniagent.RoleUser, Content: "real4"},
+		{Role: miniagent.RoleUser, Content: "本轮"},
 	}
 	out, summary, _, err := compactWithSummary(context.Background(), budget, msgs, 3)
-	if err != nil || summary.Kind != KindSummary {
+	if err != nil || summary.Kind != miniagent.KindSummary {
 		t.Fatalf("compactWithSummary: kind=%v err=%v", summary.Kind, err)
 	}
 	if gotPrev != "旧摘" {
 		t.Errorf("previousSummary = %q, want 旧摘", gotPrev)
 	}
 	for _, m := range gotMiddle {
-		if m.Kind == KindSummary {
-			t.Errorf("默认路径 middle 不应含 KindSummary（旧摘要应作 prevSummary 下传）：%+v", gotMiddle)
+		if m.Kind == miniagent.KindSummary {
+			t.Errorf("默认路径 middle 不应含 miniagent.KindSummary（旧摘要应作 prevSummary 下传）：%+v", gotMiddle)
 		}
 	}
 	// head 置空：out = summaryMsg + tail（3），首条为新 summary。
-	if len(out) != 1+3 || out[0].Kind != KindSummary {
+	if len(out) != 1+3 || out[0].Kind != miniagent.KindSummary {
 		t.Errorf("out 应为 summary+tail（head 已置空）：%+v", out)
 	}
 }
 
-// §P0-A：override 路径（SummarizerPrompt!=""）维持旧行为——旧 KindSummary 并入 middle，
+// §P0-A：override 路径（SummarizerPrompt!=""）维持旧行为——旧 miniagent.KindSummary 并入 middle，
 // previousSummary 传空。
 func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 	var gotPrev string
-	var gotMiddle []Message
+	var gotMiddle []miniagent.Message
 	budget := ContextBudget{
 		Model:            "m",
 		SummarizerPrompt: "自定义%d",
-		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []Message) (string, Usage, error) {
+		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotPrev = prevSummary
 			gotMiddle = middle
-			return "新摘要", Usage{}, nil
+			return "新摘要", miniagent.Usage{}, nil
 		},
 	}
-	msgs := []Message{
-		{Role: RoleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
-		{Role: RoleUser, Content: "real0"},
-		{Role: RoleUser, Content: "real1"},
-		{Role: RoleUser, Content: "real2"},
-		{Role: RoleUser, Content: "real3"},
-		{Role: RoleUser, Content: "real4"},
-		{Role: RoleUser, Content: "本轮"},
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: miniagent.RoleUser, Content: "real0"},
+		{Role: miniagent.RoleUser, Content: "real1"},
+		{Role: miniagent.RoleUser, Content: "real2"},
+		{Role: miniagent.RoleUser, Content: "real3"},
+		{Role: miniagent.RoleUser, Content: "real4"},
+		{Role: miniagent.RoleUser, Content: "本轮"},
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
@@ -283,16 +285,16 @@ func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 	if gotPrev != "" {
 		t.Errorf("override 路径 previousSummary 应为空，got %q", gotPrev)
 	}
-	if len(gotMiddle) == 0 || gotMiddle[0].Kind != KindSummary || !strings.Contains(gotMiddle[0].Content, "旧摘") {
-		t.Errorf("override 路径 middle 首条应为旧 KindSummary（旧行为）：%+v", gotMiddle)
+	if len(gotMiddle) == 0 || gotMiddle[0].Kind != miniagent.KindSummary || !strings.Contains(gotMiddle[0].Content, "旧摘") {
+		t.Errorf("override 路径 middle 首条应为旧 miniagent.KindSummary（旧行为）：%+v", gotMiddle)
 	}
 }
 
 // §P0-A：summarizeMiddle UPDATE 模式把 previous-summary 写进请求 system。
 func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("更新摘要")}}
-	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}}); err != nil {
+	llm := &miniagent.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	// lastBody 是 JSON-marshaled 请求体，< > 被转义成 < >；断言用未转义的标签名 + 旧锚点文本。

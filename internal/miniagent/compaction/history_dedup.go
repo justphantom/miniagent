@@ -1,4 +1,6 @@
-package miniagent
+package compaction
+
+import "github.com/justphantom/miniagent/internal/miniagent"
 
 import (
 	"encoding/json"
@@ -15,13 +17,13 @@ import (
 
 // windowStartOf 返回从后往前第 keepN 条 assistant 的 index（保留窗口起点：该 index 及之后不动）。
 // keepN<=0 视作 0；assistant 不足 keepN 时返回 0（全部在窗口内，无可裁剪）。
-func windowStartOf(msgs []Message, keepN int) int {
+func windowStartOf(msgs []miniagent.Message, keepN int) int {
 	if keepN <= 0 {
 		return 0
 	}
 	seen := 0
 	for i := range slices.Backward(msgs) {
-		if msgs[i].Role == RoleAssistant {
+		if msgs[i].Role == miniagent.RoleAssistant {
 			seen++
 			if seen == keepN {
 				return i
@@ -86,16 +88,16 @@ func shellCmdKey(args string) (string, bool) {
 // successWriteEditPaths 扫描 msgs，返回 path → 成功 write/edit 的 assistant msgIdx 升序列表。
 // 成功 = 对应 tool 消息 IsError=false（失败写入不改文件，不计入）。供 P8'/P11 判定
 // 「同 path 是否存在更晚的成功写入」——P8' 据此折叠更早的 write/edit args，P11 折叠更早的 read 结果。
-func successWriteEditPaths(msgs []Message) map[string][]int {
+func successWriteEditPaths(msgs []miniagent.Message) map[string][]int {
 	isErrOf := map[string]bool{}
 	for _, m := range msgs {
-		if m.Role == RoleTool && m.ToolCallID != "" {
+		if m.Role == miniagent.RoleTool && m.ToolCallID != "" {
 			isErrOf[m.ToolCallID] = m.IsError
 		}
 	}
 	succ := map[string][]int{}
 	for i, m := range msgs {
-		if m.Role != RoleAssistant {
+		if m.Role != miniagent.RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -120,7 +122,7 @@ func successWriteEditPaths(msgs []Message) map[string][]int {
 // tool 消息 IsError）——失败写入不改文件，前置 write/edit 正文仍有效，不能折叠（v5 §2 P8' 与
 // P4 的关键区别）。与 P4（compressToolArgs 压成前缀）互补：P4 减单条体积，P8' 在「被后续同 path
 // 写入取代」时整条折叠。无可折叠项零拷贝；深拷贝被改 assistant 的 ToolCalls slice。
-func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
+func foldStaleWriteEditArgs(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	succ := successWriteEditPaths(msgs)
 	if len(succ) == 0 {
 		return msgs
@@ -131,7 +133,7 @@ func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
 	}
 	var list []we
 	for i, m := range msgs {
-		if m.Role != RoleAssistant {
+		if m.Role != miniagent.RoleAssistant {
 			continue
 		}
 		for j, tc := range m.ToolCalls {
@@ -165,7 +167,7 @@ func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
 	if len(toFold) == 0 {
 		return msgs
 	}
-	out := make([]Message, len(msgs))
+	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
 	dirty := map[int]bool{}
 	for fk := range toFold {
@@ -175,7 +177,7 @@ func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
 		if !dirty[i] {
 			continue
 		}
-		calls := make([]ToolCall, len(out[i].ToolCalls))
+		calls := make([]miniagent.ToolCall, len(out[i].ToolCalls))
 		copy(calls, out[i].ToolCalls)
 		for j := range calls {
 			if p, ok := toFold[foldKey{i, j}]; ok {
@@ -204,10 +206,10 @@ func foldedWriteEditArgs(path string) string {
 // 每组保留时间序最后一次原文，更早的同义 command 折叠为占位。ReAct 会话高频重复探查命令
 // （pwd && ls、find ... -name），更早的同义命令对后续决策无价值（v5 §3 P9b）。无需 IsError。
 // 深拷贝被改 assistant 的 ToolCalls slice。
-func dedupShellCommands(msgs []Message, keepN int) []Message {
+func dedupShellCommands(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	shellKeyOf := map[string]string{}
 	for _, m := range msgs {
-		if m.Role != RoleAssistant {
+		if m.Role != miniagent.RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -230,7 +232,7 @@ func dedupShellCommands(msgs []Message, keepN int) []Message {
 	var list []se
 	order := 0
 	for i, m := range msgs {
-		if m.Role != RoleAssistant {
+		if m.Role != miniagent.RoleAssistant {
 			continue
 		}
 		for j, tc := range m.ToolCalls {
@@ -264,7 +266,7 @@ func dedupShellCommands(msgs []Message, keepN int) []Message {
 	if len(toFold) == 0 {
 		return msgs
 	}
-	out := make([]Message, len(msgs))
+	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
 	dirty := map[int]bool{}
 	for fk := range toFold {
@@ -274,7 +276,7 @@ func dedupShellCommands(msgs []Message, keepN int) []Message {
 		if !dirty[i] {
 			continue
 		}
-		calls := make([]ToolCall, len(out[i].ToolCalls))
+		calls := make([]miniagent.ToolCall, len(out[i].ToolCalls))
 		copy(calls, out[i].ToolCalls)
 		for j := range calls {
 			if toFold[foldKey{i, j}] {

@@ -29,14 +29,16 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.
 **极简模式**：`BeforeLLM=nil` → 核心原样发送 transcript，零上下文管理。要压缩，挂 `NewCompaction`：
 
 ```go
-before, after := miniagent.NewCompaction(miniagent.CompactionOptions{
+import "github.com/justphantom/miniagent/internal/miniagent/compaction"
+
+before, after := compaction.NewCompaction(compaction.CompactionOptions{
     Chat: chat, ContextWindow: 120000, Model: model, Auto: true, MaxTokens: maxTokens,
 })
 hooks := miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}
 result, err := miniagent.Run(ctx, chat, stream, cfg, prompt, hooks, logger)
 ```
 
-`NewCompaction` 封装原有摘要压缩引擎（超窗摘要中段 + 有损 fallback + 主动裁剪 + 静默溢出检测），是「压缩作为外挂」的默认实现。**不挂它即得无压缩的极简 agent。** CLI 默认装配 `NewCompaction`，故命令行行为不变。
+`compaction.NewCompaction` 封装摘要压缩引擎（超窗摘要中段 + 有损 fallback + 主动裁剪 + 静默溢出检测），是「压缩作为外挂」的默认实现，独立成 `internal/miniagent/compaction` 子包。**不挂它即得无压缩的极简 agent；想换压缩策略，实现自己的 `BeforeLLM` 即可，核心零改动。** CLI 默认装配 `compaction.NewCompaction`，故命令行行为不变。
 
 **自定义外挂示例**（注入一条长期记忆，仅本轮可见、不进 transcript）：
 

@@ -1,4 +1,6 @@
-package miniagent
+package compaction
+
+import "github.com/justphantom/miniagent/internal/miniagent"
 
 import "strconv"
 
@@ -6,10 +8,10 @@ import "strconv"
 // 的原文，更早的压成占位。覆盖两类（v5 §2.1）：连续同 (path,offset) read（P6a，零损失）与
 // read→edit/write→read 验证（P6b，消除 stale 旧内容）。无需 IsError——保留最后一次即正确语义
 // （失败 read 的错误内容被后续成功 read 覆盖天然合理）。不同 offset 不合并。无可压项零拷贝。
-func dedupReadResults(msgs []Message, keepN int) []Message {
+func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	readKeyOf := map[string]string{}
 	for _, m := range msgs {
-		if m.Role != RoleAssistant {
+		if m.Role != miniagent.RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -31,7 +33,7 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 	lastIdx := map[string]int{}
 	hasInWindow := map[string]bool{}
 	for i, m := range msgs {
-		if m.Role != RoleTool {
+		if m.Role != miniagent.RoleTool {
 			continue
 		}
 		key, ok := readKeyOf[m.ToolCallID]
@@ -46,7 +48,7 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 	}
 	toCompress := map[int]string{}
 	for i := range windowStart {
-		if msgs[i].Role != RoleTool {
+		if msgs[i].Role != miniagent.RoleTool {
 			continue
 		}
 		key, ok := readKeyOf[msgs[i].ToolCallID]
@@ -60,7 +62,7 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 	if len(toCompress) == 0 {
 		return msgs
 	}
-	out := make([]Message, len(msgs))
+	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
 	for i, marker := range toCompress {
 		out[i].Content = marker
@@ -74,10 +76,10 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 // 二者都漏「edit 后未再 read」的旧 read（v6 §4 实测：占 payload 36%）。P11 与 P8' 对称补全：同
 // path 更晚成功写入触发，按 path 不限 offset（edit 可影响任意行，同 path 所有 offset 的旧 read 均
 // 过期）。成功判定经 successWriteEditPaths（IsError）。无可压项零拷贝；仅改 tool 消息 Content 拷贝。
-func foldStaleReadResults(msgs []Message, keepN int) []Message {
+func foldStaleReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	readPathOf := map[string]string{}
 	for _, m := range msgs {
-		if m.Role != RoleAssistant {
+		if m.Role != miniagent.RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -99,7 +101,7 @@ func foldStaleReadResults(msgs []Message, keepN int) []Message {
 	windowStart := windowStartOf(msgs, keepN)
 	toFold := map[int]string{}
 	for i, m := range msgs {
-		if m.Role != RoleTool || i >= windowStart {
+		if m.Role != miniagent.RoleTool || i >= windowStart {
 			continue
 		}
 		rp, ok := readPathOf[m.ToolCallID]
@@ -116,7 +118,7 @@ func foldStaleReadResults(msgs []Message, keepN int) []Message {
 	if len(toFold) == 0 {
 		return msgs
 	}
-	out := make([]Message, len(msgs))
+	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
 	for i, marker := range toFold {
 		out[i].Content = marker

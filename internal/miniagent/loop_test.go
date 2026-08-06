@@ -233,51 +233,6 @@ func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
 	}
 }
 
-// testCompactionHooks 构造 NewCompaction 钩子对（测试用）：chat 做摘要，window 经 fn 可调。
-// 默认 Auto=true、MaxTokens=4096，模拟 CLI 默认装配。返回 (before, after) 供挂到 LoopHooks。
-func testCompactionHooks(chat *ChatClient, window int, fn func(*CompactionOptions)) (func(context.Context, StepInput) (StepOutput, error), func(context.Context, int, Response) error) {
-	o := CompactionOptions{Chat: chat, ContextWindow: window, Model: "m", MaxTokens: 4096, Auto: true}
-	if fn != nil {
-		fn(&o)
-	}
-	return NewCompaction(o)
-}
-
-// 压缩用不同 ChatClient 时，BeforeLLM 应调 compChat 做摘要、主 chat 做对话（压缩作为外挂的契约）。
-func TestRun_CompactionChatUsed(t *testing.T) {
-	mainTr := &fakeTransport{responses: []string{textResponse("final")}}
-	compTr := &fakeTransport{responses: []string{textResponse("compacted-by-other")}}
-
-	mainChat := &ChatClient{APIKey: "sk", ChatURL: "http://main", HTTP: &http.Client{Transport: mainTr}}
-	compChat := &ChatClient{APIKey: "sk", ChatURL: "http://comp", HTTP: &http.Client{Transport: compTr}}
-
-	var hist []Message
-	for range 10 {
-		hist = append(hist, Message{Role: RoleUser, Content: strings.Repeat("q", 50)})
-	}
-	before, after := NewCompaction(CompactionOptions{
-		Chat: compChat, ContextWindow: 600, Model: "main-model", CompactionModel: "comp-model", MaxTokens: 4096, Auto: true,
-	})
-	hooks := LoopHooks{BeforeLLM: before, AfterLLM: after}
-
-	res, err := Run(context.Background(), mainChat, nil, LoopConfig{Model: "main-model", History: hist}, "hi", hooks, nil)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if !res.Compacted {
-		t.Error("expected compaction to succeed")
-	}
-	if compTr.calls == 0 {
-		t.Error("compaction chat was not called")
-	}
-	if mainTr.calls == 0 {
-		t.Error("main chat was not called")
-	}
-	if res.Text != "final" {
-		t.Errorf("final text = %q, want final", res.Text)
-	}
-}
-
 // 极简模式（BeforeLLM=nil）：核心不做任何上下文管理——巨大历史原样发送，不压缩、Compacted=false。
 // 这是「核心极简 + 压缩外挂」的契约证明：不挂 NewCompaction 即得无压缩 agent。
 func TestRun_NilBeforeLLMIsMinimalNoCompaction(t *testing.T) {
@@ -340,5 +295,18 @@ func TestRun_OnBudgetReceivesEstimatedUsage(t *testing.T) {
 	}
 	if seen.InputTokens == 0 {
 		t.Errorf("OnBudget received zero input tokens; expected local estimate fallback, got %+v", seen)
+	}
+}
+
+// appendMsg 打戳：Ts==0 自动打戳（>0）；显式 Ts 保留。
+func TestAppendMsg_Timestamp(t *testing.T) {
+	var msgs, newMsgs []Message
+	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: "auto"})
+	if msgs[0].Ts == 0 {
+		t.Error("Ts==0 应被 appendMsg 自动打戳为 >0")
+	}
+	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: "manual", Ts: 42})
+	if msgs[1].Ts != 42 {
+		t.Errorf("显式 Ts 应保留: got %d, want 42", msgs[1].Ts)
 	}
 }

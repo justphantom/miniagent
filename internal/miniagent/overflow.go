@@ -71,21 +71,3 @@ func isContextLengthError(raw []byte) bool {
 	}
 	return false
 }
-
-// isSilentContextOverflow 识别 provider 200 成功但实际已超窗的两类静默溢出（移植 pi overflow.ts:143-158
-// Case 2/3，§P1-C）。直接用 Usage.InputTokens（OpenAI-compatible prompt_tokens 已含 cached，等价 pi 的
-// input+cacheRead 总入口径，避免重复计数）。只在 contextWindow>0 且有非零 usage 时生效。
-//   - Case 2（finishStop）：输入 token 数超 context window（z.ai 等成功返回但已超窗）。
-//   - Case 3（finishLength）：output=0 且输入 >= 99% window（Xiaomi MiMo 等输入撑满无生成空间）。
-func isSilentContextOverflow(resp Response, contextWindow int) bool {
-	if contextWindow <= 0 || resp.Usage.InputTokens <= 0 {
-		return false
-	}
-	switch resp.FinishReason {
-	case finishStop:
-		return resp.Usage.InputTokens > contextWindow
-	case finishLength:
-		return resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens >= contextWindow*99/100
-	}
-	return false
-}

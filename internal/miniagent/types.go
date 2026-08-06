@@ -3,7 +3,6 @@ package miniagent
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 )
 
@@ -203,9 +202,6 @@ type Result struct {
 const (
 	finishStop          = "stop"
 	finishMaxIterations = "max_iterations"
-	// finishLength 是 provider 在 output 撞 max_tokens 或输入撑满 context 无生成空间时返回的
-	// finish_reason（§P1-C 静默溢出 Case 3 判据）。
-	finishLength = "length"
 )
 
 // ErrBudgetExceeded 由 Run 在累计 token（输入+输出）超过 LoopConfig.MaxTotalTokens
@@ -256,41 +252,6 @@ type LoopConfig struct {
 	ToolOutputDir string
 	// ToolOutputRetention 是落盘文件保留时长；Run 启动时机会性清理更早文件。<=0 用 7d。
 	ToolOutputRetention time.Duration
-}
-
-// CompactionOptions 是 NewCompaction 的参数——把原散布在 LoopConfig 的上下文压缩策略集中到一处，
-// 让压缩成为可插拔的「外挂」而非核心配置。<=0/空 的字段在引擎内回落内置默认（见 context.go）。
-type CompactionOptions struct {
-	// Chat 是摘要压缩用的 client（可与主 chat 不同 provider）；nil 时调用方须自行注入 Summarize，
-	// 否则 NewCompaction 用它构造 summarizeMiddle 回调。
-	Chat *ChatClient
-	// MaxTokens 是主请求的单次输出上限，供 isUsageOverflow 判定静默溢出（对标原 cfg.MaxTokens）。
-	MaxTokens int
-	// ContextWindow 是模型 context 上限（tokens）；<=0 关闭主动压缩（仅保留 ErrContextLength 被动重试）。
-	ContextWindow int
-	// Model 是主模型 id；CompactionModel 空时回落此值做摘要。
-	Model string
-	// CompactionModel 是摘要专用模型 id（可跨 provider）；空回落 Model。
-	CompactionModel string
-	System          string
-	Tools           []Tool
-	KeepRecent      int // compactWithSummary 保留的最近轮数（<=0 用内置默认）。
-	// KeepReasoning/KeepToolArgs/KeepReasoningChars 是主动裁剪参数（P1/P4/P7，<=0/0 用内置默认）。
-	KeepReasoning        int
-	KeepToolArgs         int
-	KeepReasoningChars   int
-	SummarizerPrompt     string // 非空则全量 override 摘要 system prompt。
-	SummaryMaxChars      int
-	PreserveRecentTokens int
-	UseRealUsage         bool
-	// Auto 控制静默用量溢出检测（AfterLLM 采真实 usage 判溢出、置下步 Force 压缩）；false=关闭。
-	Auto     bool
-	Reserved int // 从 ContextWindow 预留的 token 缓冲（<=0 回落内置默认）。
-	// SessionID 透传给 OnCompacting（CompactingInput.SessionID），空串兼容无 session。
-	SessionID string
-	// OnCompacting 是每次摘要前的钩子（注入 context / 一次性替换 summarizerPrompt），nil=不启用。
-	OnCompacting CompactingHook
-	Logger       *slog.Logger
 }
 
 // ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。

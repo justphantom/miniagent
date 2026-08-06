@@ -1,4 +1,6 @@
-package miniagent
+package compaction
+
+import "github.com/justphantom/miniagent/internal/miniagent"
 
 import (
 	"encoding/json"
@@ -14,7 +16,7 @@ import (
 // 已落盘或已被替换（old_string 在文件中已不存在），历史里那份纯占位重发；保留 path 让模型知道改过
 // 哪个文件。仅当某字段超 toolArgsCompressThreshold 才压（小改动不动）；read/grep 等小 args 工具不压。
 // 无可压缩项（非 write/edit 会话、或大 args 全在保留窗口内）时原样返回（零拷贝）。
-func stripStaleToolArgs(msgs []Message, keepN int) []Message {
+func stripStaleToolArgs(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	if keepN < 0 {
 		keepN = 0
 	}
@@ -22,7 +24,7 @@ func stripStaleToolArgs(msgs []Message, keepN int) []Message {
 	kept := 0
 	hasCompressible := false
 	for i := range slices.Backward(msgs) {
-		if msgs[i].Role != RoleAssistant {
+		if msgs[i].Role != miniagent.RoleAssistant {
 			continue
 		}
 		if kept < keepN {
@@ -42,11 +44,11 @@ func stripStaleToolArgs(msgs []Message, keepN int) []Message {
 	if !hasCompressible {
 		return msgs
 	}
-	out := make([]Message, len(msgs))
+	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
 	kept = 0
 	for i := range slices.Backward(out) {
-		if out[i].Role != RoleAssistant {
+		if out[i].Role != miniagent.RoleAssistant {
 			continue
 		}
 		if kept < keepN {
@@ -66,7 +68,7 @@ func stripStaleToolArgs(msgs []Message, keepN int) []Message {
 		if !compressible {
 			continue
 		}
-		calls := make([]ToolCall, len(out[i].ToolCalls))
+		calls := make([]miniagent.ToolCall, len(out[i].ToolCalls))
 		copy(calls, out[i].ToolCalls)
 		for j := range calls {
 			if isLargeArgTool(calls[j].Name) {
@@ -126,7 +128,7 @@ func compressToolArgs(args string) string {
 		if !ok || len([]rune(s)) <= toolArgsCompressThreshold {
 			return v, false
 		}
-		return truncate(s, toolArgsKeepChars, "…[参数已省略]"), true
+		return miniagent.Truncate(s, toolArgsKeepChars, "…[参数已省略]"), true
 	}
 	for _, k := range []string{"content", "old_string", "new_string"} {
 		if _, ok := m[k]; ok {
