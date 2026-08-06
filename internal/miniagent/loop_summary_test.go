@@ -61,7 +61,7 @@ func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 	// 但 summary request 仍注入了历史（messages 含该 system 消息）。
 	hasSummary := false
 	for _, m := range res.Messages {
-		if m.Role == roleSystem && strings.Contains(m.Content, summaryRequestPrompt) {
+		if m.Role == RoleSystem && strings.Contains(m.Content, summaryRequestPrompt) {
 			hasSummary = true
 			break
 		}

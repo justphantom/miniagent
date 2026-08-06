@@ -9,11 +9,15 @@ import (
 
 // 消息 role 常量：loop/session/wire 多处匹配同一组取值，抽常量防拼写漂移。
 const (
-	roleSystem    = "system"
-	roleUser      = "user"
-	roleAssistant = "assistant"
-	roleTool      = "tool"
+	RoleSystem    = "system"
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+	RoleTool      = "tool"
 )
+
+// KindSummary 标记 summary 消息（Message.Kind）：结构化识别（applyCompactionBarrier / 压缩引擎用），
+// 替代脆弱的内容前缀嗅探。role=user 合法可持久化。属核心概念（压缩与 session 共享），故定义于此。
+const KindSummary = "summary"
 
 type Message struct {
 	Role       string     `json:"role"`

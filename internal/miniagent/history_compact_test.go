@@ -69,7 +69,7 @@ func TestCompactHistory(t *testing.T) {
 		t.Errorf("last round lost: %+v", out[len(out)-1])
 	}
 	for _, m := range out {
-		if m.Role == roleTool {
+		if m.Role == RoleTool {
 			t.Errorf("middle tool round not compacted: %+v", m)
 		}
 	}
@@ -93,8 +93,8 @@ func TestRun_SummaryReducesAndPersists(t *testing.T) {
 	var hist []Message
 	for i := range 10 {
 		hist = append(hist,
-			Message{Role: roleUser, Content: strings.Repeat("q", 50) + strconv.Itoa(i)},
-			Message{Role: roleAssistant, Content: strings.Repeat("a", 50) + strconv.Itoa(i)},
+			Message{Role: RoleUser, Content: strings.Repeat("q", 50) + strconv.Itoa(i)},
+			Message{Role: RoleAssistant, Content: strings.Repeat("a", 50) + strconv.Itoa(i)},
 		)
 	}
 	tr := &fakeTransport{responses: []string{textResponse("ok"), textResponse("done")}}

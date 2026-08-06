@@ -14,28 +14,28 @@ func uPtr(in, out int) *Usage { return &Usage{InputTokens: in, OutputTokens: out
 
 // §P0-B lastApplicableUsageIndex 表驱动：覆盖 B.5 的 8 个用例（含防陈旧核心 + 二次压缩防护）。
 func TestLastApplicableUsageIndex(t *testing.T) {
-	asst := func(ts int64, u *Usage) Message { return Message{Role: roleAssistant, Ts: ts, Usage: u} }
+	asst := func(ts int64, u *Usage) Message { return Message{Role: RoleAssistant, Ts: ts, Usage: u} }
 	cases := []struct {
 		name string
 		msgs []Message
 		want int
 	}{
 		{"empty", nil, -1},
-		{"only_user", []Message{{Role: roleUser, Ts: 1}}, -1},
+		{"only_user", []Message{{Role: RoleUser, Ts: 1}}, -1},
 		{"assistant_no_usage", []Message{asst(1, nil)}, -1},
 		{"assistant_zero_usage", []Message{asst(1, uPtr(0, 0))}, -1},
 		{"single_anchor", []Message{asst(1, uPtr(100, 50))}, 0},
-		{"last_of_two", []Message{asst(1, uPtr(100, 50)), {Role: roleUser, Ts: 2}, asst(3, uPtr(200, 80))}, 2},
+		{"last_of_two", []Message{asst(1, uPtr(100, 50)), {Role: RoleUser, Ts: 2}, asst(3, uPtr(200, 80))}, 2},
 		{
 			// 防陈旧核心：summary(Ts=3) 使 idx1 的 assistant(Ts=2) 失效，idx3(Ts=4) 新于 summary 重新可用。
 			"summary_invalidates_then_refreshed",
-			[]Message{{Role: roleUser, Ts: 1}, asst(2, uPtr(9000, 100)), {Role: roleUser, Kind: KindSummary, Ts: 3}, asst(4, uPtr(200, 80))},
+			[]Message{{Role: RoleUser, Ts: 1}, asst(2, uPtr(9000, 100)), {Role: RoleUser, Kind: KindSummary, Ts: 3}, asst(4, uPtr(200, 80))},
 			3,
 		},
 		{
 			// 二次压缩防护：summary 后无新 usage（仅 tool），全陈旧 → 回落。
 			"summary_no_new_usage",
-			[]Message{{Role: roleUser, Ts: 1}, asst(2, uPtr(9000, 100)), {Role: roleUser, Kind: KindSummary, Ts: 3}, {Role: roleTool, ToolCallID: "x", Ts: 3}},
+			[]Message{{Role: RoleUser, Ts: 1}, asst(2, uPtr(9000, 100)), {Role: RoleUser, Kind: KindSummary, Ts: 3}, {Role: RoleTool, ToolCallID: "x", Ts: 3}},
 			-1,
 		},
 	}
@@ -50,21 +50,21 @@ func TestLastApplicableUsageIndex(t *testing.T) {
 
 // §P0-B estimateTokensFromUsage：无锚点 ok=false；锚点末尾 tokens=Input+Output；锚点+trailing 含 CJK。
 func TestEstimateTokensFromUsage(t *testing.T) {
-	if _, ok := estimateTokensFromUsage([]Message{{Role: roleUser, Content: "x"}}); ok {
+	if _, ok := estimateTokensFromUsage([]Message{{Role: RoleUser, Content: "x"}}); ok {
 		t.Error("无 assistant usage 应 ok=false")
 	}
 	// 锚点在末尾，无 trailing → tokens = Input+Output。
 	tokens, ok := estimateTokensFromUsage([]Message{
-		{Role: roleUser, Content: "ignored"},
-		{Role: roleAssistant, Ts: 1, Usage: uPtr(1000, 200)},
+		{Role: RoleUser, Content: "ignored"},
+		{Role: RoleAssistant, Ts: 1, Usage: uPtr(1000, 200)},
 	})
 	if !ok || tokens != 1200 {
 		t.Errorf("锚点末尾: tokens=%d ok=%v, want 1200/true", tokens, ok)
 	}
 	// 锚点 + trailing：tokens = Input+Output + trailing 本地估算。"中文测试"=4 CJK → 4/2=2。
 	tokens, ok = estimateTokensFromUsage([]Message{
-		{Role: roleAssistant, Ts: 1, Usage: uPtr(500, 100)},
-		{Role: roleUser, Content: "中文测试"},
+		{Role: RoleAssistant, Ts: 1, Usage: uPtr(500, 100)},
+		{Role: RoleUser, Content: "中文测试"},
 	})
 	if !ok {
 		t.Error("锚点+trailing 应 ok=true")
@@ -76,13 +76,13 @@ func TestEstimateTokensFromUsage(t *testing.T) {
 
 // §P0-B estimateThreshold：无 usage 或 kill-switch=false 回落 estimateTokens；有 usage 且开关开用真实值。
 func TestEstimateThreshold_Fallback(t *testing.T) {
-	msgs := []Message{{Role: roleUser, Content: "hello world"}}
+	msgs := []Message{{Role: RoleUser, Content: "hello world"}}
 	want := estimateTokens(msgs, "sys", nil)
 	if got := estimateThreshold(msgs, "sys", nil, true); got != want {
 		t.Errorf("无 usage 回落: estimateThreshold=%d, want estimateTokens=%d", got, want)
 	}
 	// kill-switch=false 也回落 estimateTokens（即使有 usage）。
-	msgs2 := []Message{{Role: roleAssistant, Ts: 1, Usage: uPtr(100, 50)}}
+	msgs2 := []Message{{Role: RoleAssistant, Ts: 1, Usage: uPtr(100, 50)}}
 	want2 := estimateTokens(msgs2, "sys", nil)
 	if got := estimateThreshold(msgs2, "sys", nil, false); got != want2 {
 		t.Errorf("kill-switch=false: estimateThreshold=%d, want estimateTokens=%d", got, want2)
@@ -95,11 +95,11 @@ func TestEstimateThreshold_Fallback(t *testing.T) {
 // §P0-B appendMsg 打戳：Ts==0 自动打戳（>0）；显式 Ts 保留。
 func TestAppendMsg_Timestamp(t *testing.T) {
 	var msgs, newMsgs []Message
-	appendMsg(&msgs, &newMsgs, Message{Role: roleUser, Content: "auto"})
+	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: "auto"})
 	if msgs[0].Ts == 0 {
 		t.Error("Ts==0 应被 appendMsg 自动打戳为 >0")
 	}
-	appendMsg(&msgs, &newMsgs, Message{Role: roleUser, Content: "manual", Ts: 42})
+	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: "manual", Ts: 42})
 	if msgs[1].Ts != 42 {
 		t.Errorf("显式 Ts 应保留: got %d, want 42", msgs[1].Ts)
 	}
@@ -110,8 +110,8 @@ func TestAppendMsg_Timestamp(t *testing.T) {
 func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	msgs := []Message{
-		{Role: roleUser, Content: "q"},
-		{Role: roleAssistant, Content: "a", Usage: uPtr(123, 45), Ts: 999},
+		{Role: RoleUser, Content: "q"},
+		{Role: RoleAssistant, Content: "a", Usage: uPtr(123, 45), Ts: 999},
 	}
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, msgs); err != nil {
 		t.Fatalf("AppendMessages: %v", err)
@@ -156,8 +156,8 @@ func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	// user 巨大内容使本地 estimateTokens 远超窗；末尾 assistant 真实 usage 仅 150（未超窗）。
 	msgs := []Message{
-		{Role: roleUser, Content: strings.Repeat("x", 8000)}, // ~2000 token 本地估算
-		{Role: roleAssistant, Ts: 1, Usage: uPtr(100, 50), Content: "a"},
+		{Role: RoleUser, Content: strings.Repeat("x", 8000)}, // ~2000 token 本地估算
+		{Role: RoleAssistant, Ts: 1, Usage: uPtr(100, 50), Content: "a"},
 	}
 	budget := ContextBudget{
 		ContextWindow: 1000, // 4/5=800：本地 ~2000 超窗、真实 150 未超
@@ -195,13 +195,13 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 		},
 	}
 	msgs := []Message{
-		{Role: roleUser, Content: "u0"},
-		{Role: roleUser, Content: "u1"},
-		{Role: roleUser, Content: "u2"},
-		{Role: roleUser, Content: "u3"},
-		{Role: roleUser, Content: "u4"},
-		{Role: roleUser, Content: "u5"},
-		{Role: roleAssistant, Content: "recent", Ts: 100, Usage: uPtr(9000, 100)}, // 陈旧大 usage
+		{Role: RoleUser, Content: "u0"},
+		{Role: RoleUser, Content: "u1"},
+		{Role: RoleUser, Content: "u2"},
+		{Role: RoleUser, Content: "u3"},
+		{Role: RoleUser, Content: "u4"},
+		{Role: RoleUser, Content: "u5"},
+		{Role: RoleAssistant, Content: "recent", Ts: 100, Usage: uPtr(9000, 100)}, // 陈旧大 usage
 	}
 	// 第一次：陈旧大 usage（9100）超 1600 阈值 → 摘要。
 	out1, _, summarized1, _, err := FitHistory(context.Background(), msgs, budget, nil)
@@ -213,7 +213,7 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 	}
 	// 模拟下一步：在 out1（含带新 Ts 的 summary）后追加轮次，使第二轮有足够轮次可摘要。
 	msgs2 := append([]Message{}, out1...)
-	msgs2 = append(msgs2, Message{Role: roleUser, Content: "u6"}, Message{Role: roleUser, Content: "u7"})
+	msgs2 = append(msgs2, Message{Role: RoleUser, Content: "u6"}, Message{Role: RoleUser, Content: "u7"})
 	_, _, summarized2, _, err := FitHistory(context.Background(), msgs2, budget, nil)
 	if err != nil {
 		t.Fatalf("2nd FitHistory: %v", err)

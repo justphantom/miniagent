@@ -9,7 +9,7 @@ import (
 
 // §P2 applyCompactingHook 表驱动：nil noop / prompt override / context append / hook error abort。
 func TestApplyCompactingHook(t *testing.T) {
-	middle := []Message{{Role: roleUser, Content: "m1"}}
+	middle := []Message{{Role: RoleUser, Content: "m1"}}
 	t.Run("nil_noop", func(t *testing.T) {
 		p, m, err := applyCompactingHook(context.Background(), nil, "s", "model", "orig", middle)
 		if err != nil || p != "orig" || len(m) != 1 {
@@ -45,7 +45,7 @@ func TestApplyCompactingHook(t *testing.T) {
 		if len(m) != 2 || m[0].Content != "m1" {
 			t.Errorf("context 注入应保留原 middle 在前: %+v", m)
 		}
-		if m[1].Role != roleUser || !strings.Contains(m[1].Content, "ctx-a") || !strings.Contains(m[1].Content, "ctx-b") {
+		if m[1].Role != RoleUser || !strings.Contains(m[1].Content, "ctx-a") || !strings.Contains(m[1].Content, "ctx-b") {
 			t.Errorf("末尾应追加一条含 context 的 user 消息: %+v", m[1])
 		}
 		if len(m[1].ToolCalls) != 0 {
@@ -81,9 +81,9 @@ func TestCompactWithSummary_HookReceivesAndOverrides(t *testing.T) {
 		},
 	}
 	msgs := []Message{
-		{Role: roleUser, Content: "h0"}, {Role: roleUser, Content: "h1"}, {Role: roleUser, Content: "h2"},
-		{Role: roleUser, Content: "h3"}, {Role: roleUser, Content: "h4"}, {Role: roleUser, Content: "h5"},
-		{Role: roleUser, Content: "cur"},
+		{Role: RoleUser, Content: "h0"}, {Role: RoleUser, Content: "h1"}, {Role: RoleUser, Content: "h2"},
+		{Role: RoleUser, Content: "h3"}, {Role: RoleUser, Content: "h4"}, {Role: RoleUser, Content: "h5"},
+		{Role: RoleUser, Content: "cur"},
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 2); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
@@ -116,8 +116,8 @@ func TestCompactWithSummary_HookErrorAborts(t *testing.T) {
 		},
 	}
 	msgs := []Message{
-		{Role: roleUser, Content: "h0"}, {Role: roleUser, Content: "h1"}, {Role: roleUser, Content: "h2"},
-		{Role: roleUser, Content: "h3"}, {Role: roleUser, Content: "h4"}, {Role: roleUser, Content: "cur"},
+		{Role: RoleUser, Content: "h0"}, {Role: RoleUser, Content: "h1"}, {Role: RoleUser, Content: "h2"},
+		{Role: RoleUser, Content: "h3"}, {Role: RoleUser, Content: "h4"}, {Role: RoleUser, Content: "cur"},
 	}
 	_, _, _, err := compactWithSummary(context.Background(), budget, msgs, 2)
 	if err == nil {
@@ -141,7 +141,7 @@ func TestFitHistory_HookFiring(t *testing.T) {
 				return "x", Usage{}, nil
 			},
 		}
-		FitHistory(context.Background(), []Message{{Role: roleUser, Content: "q"}}, budget, nil)
+		FitHistory(context.Background(), []Message{{Role: RoleUser, Content: "q"}}, budget, nil)
 		if calls != 0 {
 			t.Errorf("noop fit 不应触发 hook: calls=%d", calls)
 		}
@@ -151,7 +151,7 @@ func TestFitHistory_HookFiring(t *testing.T) {
 		big := strings.Repeat("x", 1000)
 		var msgs []Message
 		for range 30 {
-			msgs = append(msgs, Message{Role: roleUser, Content: big})
+			msgs = append(msgs, Message{Role: RoleUser, Content: big})
 		}
 		budget := ContextBudget{
 			ContextWindow: 4000,

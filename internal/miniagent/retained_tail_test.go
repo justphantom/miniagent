@@ -39,11 +39,11 @@ func TestPreserveRecentTokens(t *testing.T) {
 func TestSelectTailByTokens_TokenBudget(t *testing.T) {
 	bigTool := strings.Repeat("x", 20000) // ~5000 tokens
 	rounds := [][]Message{
-		{{Role: roleUser, Content: "a"}},
-		{{Role: roleUser, Content: "b"}},
-		{{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
-			{Role: roleTool, ToolCallID: "c1", Content: bigTool}},
-		{{Role: roleUser, Content: "d"}}, // 最近
+		{{Role: RoleUser, Content: "a"}},
+		{{Role: RoleUser, Content: "b"}},
+		{{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
+			{Role: RoleTool, ToolCallID: "c1", Content: bigTool}},
+		{{Role: RoleUser, Content: "d"}}, // 最近
 	}
 	tail, middle := selectTailByTokens(rounds, 4, 50)
 	if !msgsContainContent(tail, "d") {
@@ -63,11 +63,11 @@ func TestSelectTailByTokens_TokenBudget(t *testing.T) {
 // §P1-E selectTailByTokens 纯轮数回退（tokenBudget<=0）：tail=最近 maxTurns 轮，middle=其余。
 func TestSelectTailByTokens_LegacyFallback(t *testing.T) {
 	rounds := [][]Message{
-		{{Role: roleUser, Content: "a"}},
-		{{Role: roleUser, Content: "b"}},
-		{{Role: roleUser, Content: "c"}},
-		{{Role: roleUser, Content: "d"}},
-		{{Role: roleUser, Content: "e"}},
+		{{Role: RoleUser, Content: "a"}},
+		{{Role: RoleUser, Content: "b"}},
+		{{Role: RoleUser, Content: "c"}},
+		{{Role: RoleUser, Content: "d"}},
+		{{Role: RoleUser, Content: "e"}},
 	}
 	tail, middle := selectTailByTokens(rounds, 2, 0)
 	if len(tail) != 2 || !msgsContainContent(tail, "d") || !msgsContainContent(tail, "e") {
@@ -81,8 +81,8 @@ func TestSelectTailByTokens_LegacyFallback(t *testing.T) {
 // §P1-E selectTailByTokens all-fit：全部轮装下（n<=maxTurns 且未触 token 上界）→ tail=全部、middle=空。
 func TestSelectTailByTokens_AllFit(t *testing.T) {
 	rounds := [][]Message{
-		{{Role: roleUser, Content: "a"}},
-		{{Role: roleUser, Content: "b"}},
+		{{Role: RoleUser, Content: "a"}},
+		{{Role: RoleUser, Content: "b"}},
 	}
 	tail, middle := selectTailByTokens(rounds, 5, 1000)
 	if len(tail) != 2 || !msgsContainContent(tail, "a") || !msgsContainContent(tail, "b") {
@@ -97,20 +97,20 @@ func TestSelectTailByTokens_AllFit(t *testing.T) {
 func TestSplitRoundByTokens_PairingSafe(t *testing.T) {
 	// tool-call 轮：[A(tc=[c1,c2]), T(c1), T(c2)] → 不可切（切点后缀不能以 tool 开头）。
 	tcRound := []Message{
-		{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}, {ID: "c2", Name: "t", Args: "{}"}}},
-		{Role: roleTool, ToolCallID: "c1", Content: "r1"},
-		{Role: roleTool, ToolCallID: "c2", Content: "r2"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}, {ID: "c2", Name: "t", Args: "{}"}}},
+		{Role: RoleTool, ToolCallID: "c1", Content: "r1"},
+		{Role: RoleTool, ToolCallID: "c2", Content: "r2"},
 	}
 	if got := splitRoundByTokens(tcRound, 100); got != nil {
 		t.Errorf("tool-call 轮应返回 nil（不可安全切）: %+v", got)
 	}
 	// 多消息文本轮（手动构造）：切点落在使后缀 fit 的最早消息边界。
 	textRound := []Message{
-		{Role: roleUser, Content: "x"},
-		{Role: roleUser, Content: "y"},
-		{Role: roleUser, Content: "z"},
+		{Role: RoleUser, Content: "x"},
+		{Role: RoleUser, Content: "y"},
+		{Role: RoleUser, Content: "z"},
 	}
-	suffix := splitRoundByTokens(textRound, estimateRoundTokens([]Message{{Role: roleUser, Content: "z"}}))
+	suffix := splitRoundByTokens(textRound, estimateRoundTokens([]Message{{Role: RoleUser, Content: "z"}}))
 	if len(suffix) != 1 || suffix[0].Content != "z" {
 		t.Errorf("文本轮应切出后缀 [z]: %+v", suffix)
 	}
@@ -119,8 +119,8 @@ func TestSplitRoundByTokens_PairingSafe(t *testing.T) {
 // §P1-E shrinkRoundToolContents：保 assistant.tool_calls 与 tool 结果配对不变，仅 tool content 被截。
 func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	round := []Message{
-		{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
-		{Role: roleTool, ToolCallID: "c1", Content: strings.Repeat("x", 8000)},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
+		{Role: RoleTool, ToolCallID: "c1", Content: strings.Repeat("x", 8000)},
 	}
 	shrunk := shrinkRoundToolContents(round, 200)
 	if len(shrunk) != 2 {
@@ -129,7 +129,7 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	if len(shrunk[0].ToolCalls) != 1 || shrunk[0].ToolCalls[0].ID != "c1" {
 		t.Errorf("assistant.tool_calls 应原样保留: %+v", shrunk[0].ToolCalls)
 	}
-	if shrunk[1].Role != roleTool || shrunk[1].ToolCallID != "c1" {
+	if shrunk[1].Role != RoleTool || shrunk[1].ToolCallID != "c1" {
 		t.Errorf("tool 结果应保留 id 配对: %+v", shrunk[1])
 	}
 	if len(shrunk[1].Content) >= 8000 {
@@ -148,14 +148,14 @@ func TestCompactWithSummary_TokenBudgetTailE2E(t *testing.T) {
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	bigTool := strings.Repeat("x", 20000) // ~5000 tokens > preserveRecentTokens=2000
 	msgs := []Message{
-		{Role: roleUser, Content: "h0"},
-		{Role: roleUser, Content: "h1"},
-		{Role: roleUser, Content: "h2"},
-		{Role: roleUser, Content: "h3"},
-		{Role: roleUser, Content: "h4"},
-		{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
-		{Role: roleTool, ToolCallID: "c1", Content: bigTool},
-		{Role: roleUser, Content: "cur"},
+		{Role: RoleUser, Content: "h0"},
+		{Role: RoleUser, Content: "h1"},
+		{Role: RoleUser, Content: "h2"},
+		{Role: RoleUser, Content: "h3"},
+		{Role: RoleUser, Content: "h4"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
+		{Role: RoleTool, ToolCallID: "c1", Content: bigTool},
+		{Role: RoleUser, Content: "cur"},
 	}
 	budget := ContextBudget{
 		Model:         "m",

@@ -36,9 +36,6 @@ func sessionBytes() int64 {
 const (
 	sessionTypeSession = "session"
 	sessionTypeMessage = "message"
-	// KindSummary 标记 summary 消息：结构化识别（applyCompactionBarrier 用），替代脆弱的
-	// 内容前缀嗅探（审查 v3 #2）。role=user 合法可持久化。
-	KindSummary = "summary"
 )
 
 // SessionMeta 是 jsonl 首行 metadata（type=session），便于会话列举与多 provider 溯源。
@@ -167,9 +164,9 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 
 func validateSessionMessage(m Message) error {
 	switch m.Role {
-	case roleUser, roleAssistant:
+	case RoleUser, RoleAssistant:
 		return nil
-	case roleTool:
+	case RoleTool:
 		if m.ToolCallID == "" {
 			return errors.New("tool 消息缺少 tool_call_id")
 		}
@@ -184,14 +181,14 @@ func validateToolPairing(msgs []Message) error {
 	pending := map[string]bool{}
 	for i, m := range msgs {
 		switch m.Role {
-		case roleAssistant:
+		case RoleAssistant:
 			for _, tc := range m.ToolCalls {
 				if pending[tc.ID] {
 					return fmt.Errorf("第 %d 条：tool_call id %q 重复", i+1, tc.ID)
 				}
 				pending[tc.ID] = true
 			}
-		case roleTool:
+		case RoleTool:
 			if !pending[m.ToolCallID] {
 				return fmt.Errorf("第 %d 条：tool 消息的 tool_call_id %q 没有对应的 assistant tool_call", i+1, m.ToolCallID)
 			}

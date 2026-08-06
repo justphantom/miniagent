@@ -45,7 +45,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 	msgs = append(msgs, cfg.History...)
 	// newMsgs 仅记本轮新增，main 据此 append-only 落盘；与 msgs 分离：裁剪只动 msgs。
 	var newMsgs []Message
-	appendMsg(&msgs, &newMsgs, Message{Role: roleUser, Content: userPrompt})
+	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: userPrompt})
 	total := Usage{}
 
 	iterLimit := cfg.MaxIterations
@@ -120,7 +120,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 
 		if len(resp.ToolCalls) == 0 {
 			// 最终文本入历史：接续对话需要看到上一轮的回答。附真实 usage 供外挂策略防陈旧估算。
-			appendMsg(&msgs, &newMsgs, Message{Role: roleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, Usage: &resp.Usage})
+			appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, Usage: &resp.Usage})
 			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
 		}
 
@@ -129,19 +129,19 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
 		}
 		// 撞迭代上限且刚执行完工具：注入总结请求让 LLM 输出最终文本（允许一次额外调用），
-		// 落回落至 finishMaxIterations。总结请求是内部引导消息，不持久化（LoadSession 拒绝 roleSystem）。
+		// 落回落至 finishMaxIterations。总结请求是内部引导消息，不持久化（LoadSession 拒绝 RoleSystem）。
 		if step == iterLimit {
 			summaryReq := cfg.SummaryRequest
 			if summaryReq == "" {
 				summaryReq = summaryRequestPrompt
 			}
-			msgs = append(msgs, Message{Role: roleSystem, Content: summaryReq})
+			msgs = append(msgs, Message{Role: RoleSystem, Content: summaryReq})
 			if logger != nil {
 				logger.Info("injecting summary request at iteration limit", "step", step)
 			}
 			resp2, _, err2 := callLLMWithDowngrade(ctx, chat, stream, cfg, step+1, msgs, hooks, logger)
 			if err2 == nil && len(resp2.ToolCalls) == 0 {
-				appendMsg(&msgs, &newMsgs, Message{Role: roleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
+				appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
 				total.InputTokens += resp2.Usage.InputTokens
 				total.OutputTokens += resp2.Usage.OutputTokens
 				if resp2.Usage.InputTokens == 0 && resp2.Usage.OutputTokens == 0 {

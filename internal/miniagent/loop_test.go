@@ -253,7 +253,7 @@ func TestRun_CompactionChatUsed(t *testing.T) {
 
 	var hist []Message
 	for range 10 {
-		hist = append(hist, Message{Role: roleUser, Content: strings.Repeat("q", 50)})
+		hist = append(hist, Message{Role: RoleUser, Content: strings.Repeat("q", 50)})
 	}
 	before, after := NewCompaction(CompactionOptions{
 		Chat: compChat, ContextWindow: 600, Model: "main-model", CompactionModel: "comp-model", MaxTokens: 4096, Auto: true,
@@ -284,7 +284,7 @@ func TestRun_NilBeforeLLMIsMinimalNoCompaction(t *testing.T) {
 	big := strings.Repeat("x", 1000)
 	hist := make([]Message, 20)
 	for i := range hist {
-		hist[i] = Message{Role: roleUser, Content: big}
+		hist[i] = Message{Role: RoleUser, Content: big}
 	}
 	tr := &fakeTransport{responses: []string{textResponse("done")}}
 	chat, stream := testClients(tr)

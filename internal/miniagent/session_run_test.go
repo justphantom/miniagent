@@ -194,7 +194,7 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 		t.Errorf("Messages len = %d, want %d", len(res.Messages), want)
 	}
 	// 最后一条应是 summary request system 消息。
-	if res.Messages[len(res.Messages)-1].Role != roleSystem {
-		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, roleSystem)
+	if res.Messages[len(res.Messages)-1].Role != RoleSystem {
+		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, RoleSystem)
 	}
 }

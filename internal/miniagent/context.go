@@ -211,7 +211,9 @@ func applyContextStrips(ctx context.Context, msgs []Message, keepReasoning, keep
 		return o
 	}
 	out := strip("P1_reasoning", func(m []Message) []Message { return stripStaleReasoning(m, keepReasoning) }, msgs)
-	out = strip("P7_reasoningTrunc", func(m []Message) []Message { return truncateKeptReasoning(m, keepReasoning, keepReasoningChars) }, out)
+	out = strip("P7_reasoningTrunc", func(m []Message) []Message {
+		return truncateKeptReasoning(m, keepReasoning, keepReasoningChars)
+	}, out)
 	out = strip("P4_toolArgs", func(m []Message) []Message { return stripStaleToolArgs(m, keepToolArgs) }, out)
 	out = strip("P6_dedupRead", func(m []Message) []Message { return dedupReadResults(m, keepToolArgs) }, out)
 	out = strip("P11_foldRead", func(m []Message) []Message { return foldStaleReadResults(m, keepToolArgs) }, out)
@@ -330,7 +332,7 @@ func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, mo
 	}
 	effMiddle = middle
 	if len(out.Context) > 0 {
-		injected := append(append([]Message{}, middle...), Message{Role: roleUser, Content: strings.Join(out.Context, "\n")})
+		injected := append(append([]Message{}, middle...), Message{Role: RoleUser, Content: strings.Join(out.Context, "\n")})
 		effMiddle = injected
 	}
 	return effPrompt, effMiddle, nil
@@ -439,7 +441,7 @@ func splitRoundByTokens(round []Message, tokenBudget int) []Message {
 		return nil
 	}
 	for i := 1; i < len(round); i++ {
-		if round[i].Role == roleTool {
+		if round[i].Role == RoleTool {
 			continue // 切点后缀不能以 tool 开头（孤立）
 		}
 		suffix := round[i:]
@@ -472,7 +474,7 @@ func shrinkRoundToolContents(round []Message, tokenBudget int) []Message {
 		ratio = 1
 	}
 	for i, m := range out {
-		if m.Role == roleTool && len(m.Content) > 0 {
+		if m.Role == RoleTool && len(m.Content) > 0 {
 			newLen := int(float64(len([]rune(m.Content))) * ratio)
 			newLen = max(1, newLen)
 			out[i].Content = truncateHeadTail(m.Content, newLen, "…[tool 结果已压缩]")
@@ -541,7 +543,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []Messag
 	// §P0-B：summaryMsg 显式打新戳 nowMs()（不经 appendMsg）——防陈旧的关键触发点：新 Ts 使其前
 	// assistant 的真实 usage 在下一轮 estimateTokensFromUsage 中失效（lastApplicableUsageIndex 的
 	// latestSummaryTs 抬高），强制回落本地估算重算压缩后的小体积历史，避免陈旧大 usage 立即二次压缩。
-	summaryMsg := Message{Role: roleUser, Kind: KindSummary, Content: summaryPrefix + text, Ts: nowMs()}
+	summaryMsg := Message{Role: RoleUser, Kind: KindSummary, Content: summaryPrefix + text, Ts: nowMs()}
 	out = append([]Message{}, head...)
 	out = append(out, summaryMsg)
 	out = append(out, tail...)

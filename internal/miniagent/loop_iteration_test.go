@@ -187,7 +187,7 @@ func TestRun_ToolResultLimitUsedInHistory(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, m := range res.Messages {
-		if m.Role != roleTool {
+		if m.Role != RoleTool {
 			continue
 		}
 		if len(m.Content) > 8200 || len(m.Content) <= maxToolResultInHistory {
@@ -211,7 +211,7 @@ func TestRun_ReasoningEntersHistory(t *testing.T) {
 	}
 	found := false
 	for _, m := range res.Messages {
-		if m.Role == roleAssistant && m.Reasoning == "think-step1" {
+		if m.Role == RoleAssistant && m.Reasoning == "think-step1" {
 			found = true
 		}
 	}
@@ -342,7 +342,7 @@ func TestRun_ToolOutputPreservesSplit(t *testing.T) {
 func lastToolMessage(t *testing.T, msgs []Message) Message {
 	t.Helper()
 	for idx := range slices.Backward(msgs) {
-		if msgs[idx].Role == roleTool {
+		if msgs[idx].Role == RoleTool {
 			return msgs[idx]
 		}
 	}

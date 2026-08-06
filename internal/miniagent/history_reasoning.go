@@ -19,7 +19,7 @@ func stripStaleReasoning(msgs []Message, keepN int) []Message {
 	nAssistant := 0
 	hasReasoning := false
 	for _, m := range msgs {
-		if m.Role == roleAssistant {
+		if m.Role == RoleAssistant {
 			nAssistant++
 			if m.Reasoning != "" {
 				hasReasoning = true
@@ -34,7 +34,7 @@ func stripStaleReasoning(msgs []Message, keepN int) []Message {
 	// 从后往前保留最近 keepN 条 assistant 的 reasoning，更早的清空。
 	kept := 0
 	for i := range slices.Backward(out) {
-		if out[i].Role != roleAssistant {
+		if out[i].Role != RoleAssistant {
 			continue
 		}
 		if kept < keepN {
@@ -63,7 +63,7 @@ func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
 	kept := 0
 	hasOversized := false
 	for i := range slices.Backward(msgs) {
-		if msgs[i].Role != roleAssistant {
+		if msgs[i].Role != RoleAssistant {
 			continue
 		}
 		if kept >= keepN {
@@ -82,7 +82,7 @@ func truncateKeptReasoning(msgs []Message, keepN, threshold int) []Message {
 	copy(out, msgs)
 	kept = 0
 	for i := range slices.Backward(out) {
-		if out[i].Role != roleAssistant {
+		if out[i].Role != RoleAssistant {
 			continue
 		}
 		if kept >= keepN {

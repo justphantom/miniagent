@@ -77,7 +77,7 @@ func TestStripStaleReasoning(t *testing.T) {
 	// keepN=0 → 清空全部 assistant reasoning。
 	out0 := stripStaleReasoning(msgs, 0)
 	for i, m := range out0 {
-		if m.Role == roleAssistant && m.Reasoning != "" {
+		if m.Role == RoleAssistant && m.Reasoning != "" {
 			t.Errorf("keepN=0 应清空所有 reasoning: out[%d]=%q", i, m.Reasoning)
 		}
 	}

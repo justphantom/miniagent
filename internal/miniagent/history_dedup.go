@@ -21,7 +21,7 @@ func windowStartOf(msgs []Message, keepN int) int {
 	}
 	seen := 0
 	for i := range slices.Backward(msgs) {
-		if msgs[i].Role == roleAssistant {
+		if msgs[i].Role == RoleAssistant {
 			seen++
 			if seen == keepN {
 				return i
@@ -89,13 +89,13 @@ func shellCmdKey(args string) (string, bool) {
 func successWriteEditPaths(msgs []Message) map[string][]int {
 	isErrOf := map[string]bool{}
 	for _, m := range msgs {
-		if m.Role == roleTool && m.ToolCallID != "" {
+		if m.Role == RoleTool && m.ToolCallID != "" {
 			isErrOf[m.ToolCallID] = m.IsError
 		}
 	}
 	succ := map[string][]int{}
 	for i, m := range msgs {
-		if m.Role != roleAssistant {
+		if m.Role != RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -131,7 +131,7 @@ func foldStaleWriteEditArgs(msgs []Message, keepN int) []Message {
 	}
 	var list []we
 	for i, m := range msgs {
-		if m.Role != roleAssistant {
+		if m.Role != RoleAssistant {
 			continue
 		}
 		for j, tc := range m.ToolCalls {
@@ -207,7 +207,7 @@ func foldedWriteEditArgs(path string) string {
 func dedupShellCommands(msgs []Message, keepN int) []Message {
 	shellKeyOf := map[string]string{}
 	for _, m := range msgs {
-		if m.Role != roleAssistant {
+		if m.Role != RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -230,7 +230,7 @@ func dedupShellCommands(msgs []Message, keepN int) []Message {
 	var list []se
 	order := 0
 	for i, m := range msgs {
-		if m.Role != roleAssistant {
+		if m.Role != RoleAssistant {
 			continue
 		}
 		for j, tc := range m.ToolCalls {

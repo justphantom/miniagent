@@ -48,7 +48,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 		}
 	}
 	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。§P0-B：附真实 usage 供后续防陈旧估算。
-	appendMsg(&msgs, newMsgs, Message{Role: roleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
+	appendMsg(&msgs, newMsgs, Message{Role: RoleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
 
 	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
 	// OnToolUse 返回 ErrToolDenied 表示拒绝该工具（如危险命令未确认）：记录后继续
@@ -86,7 +86,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 				// 配对补全：下游不可写，剩余 calls（含当前 i）结果无法提交；但 assistant.tool_calls 已入历史，
 				// 须为每个补一条占位 tool 消息，否则 Messages 配对断裂、续跑被端点 400（P2-1）。
 				for j := i; j < len(calls); j++ {
-					appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
+					appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
 				}
 				return msgs, err
 			}
@@ -99,7 +99,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			if serr != nil {
 				// 配对补全：成型钩子抛错时为剩余 calls（含当前 i）补占位 tool 消息，保 Messages 配对完整。
 				for j := i; j < len(calls); j++ {
-					appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
+					appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
 				}
 				return msgs, serr
 			}
@@ -107,7 +107,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 				content = c
 			}
 		}
-		appendMsg(&msgs, newMsgs, Message{Role: roleTool, ToolCallID: tc.ID, Content: content, IsError: tres.IsError})
+		appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: tc.ID, Content: content, IsError: tres.IsError})
 	}
 	return msgs, nil
 }

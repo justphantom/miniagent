@@ -9,7 +9,7 @@ import "strconv"
 func dedupReadResults(msgs []Message, keepN int) []Message {
 	readKeyOf := map[string]string{}
 	for _, m := range msgs {
-		if m.Role != roleAssistant {
+		if m.Role != RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -31,7 +31,7 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 	lastIdx := map[string]int{}
 	hasInWindow := map[string]bool{}
 	for i, m := range msgs {
-		if m.Role != roleTool {
+		if m.Role != RoleTool {
 			continue
 		}
 		key, ok := readKeyOf[m.ToolCallID]
@@ -46,7 +46,7 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 	}
 	toCompress := map[int]string{}
 	for i := range windowStart {
-		if msgs[i].Role != roleTool {
+		if msgs[i].Role != RoleTool {
 			continue
 		}
 		key, ok := readKeyOf[msgs[i].ToolCallID]
@@ -77,7 +77,7 @@ func dedupReadResults(msgs []Message, keepN int) []Message {
 func foldStaleReadResults(msgs []Message, keepN int) []Message {
 	readPathOf := map[string]string{}
 	for _, m := range msgs {
-		if m.Role != roleAssistant {
+		if m.Role != RoleAssistant {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
@@ -99,7 +99,7 @@ func foldStaleReadResults(msgs []Message, keepN int) []Message {
 	windowStart := windowStartOf(msgs, keepN)
 	toFold := map[int]string{}
 	for i, m := range msgs {
-		if m.Role != roleTool || i >= windowStart {
+		if m.Role != RoleTool || i >= windowStart {
 			continue
 		}
 		rp, ok := readPathOf[m.ToolCallID]

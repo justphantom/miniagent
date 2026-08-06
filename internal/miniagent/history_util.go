@@ -161,7 +161,7 @@ func lastApplicableUsageIndex(msgs []Message) int {
 	}
 	idx := -1
 	for i, m := range msgs {
-		if m.Role == roleAssistant && m.Usage != nil &&
+		if m.Role == RoleAssistant && m.Usage != nil &&
 			(m.Usage.InputTokens > 0 || m.Usage.OutputTokens > 0) &&
 			m.Ts >= latestSummaryTs {
 			idx = i
@@ -250,7 +250,7 @@ func splitRounds(msgs []Message) [][]Message {
 		}
 	}
 	for _, m := range msgs {
-		if m.Role == roleTool && len(cur) > 0 {
+		if m.Role == RoleTool && len(cur) > 0 {
 			cur = append(cur, m) // tool 归属当前开启的 assistant(tool_calls) 轮
 			continue
 		}
@@ -325,7 +325,7 @@ func trimHistoryForContext(msgs []Message) []Message {
 	copy(out, msgs)
 	for i := range out {
 		out[i].Reasoning = ""
-		if out[i].Role == roleTool {
+		if out[i].Role == RoleTool {
 			out[i].Content = truncate(strings.TrimSpace(out[i].Content), getContextTrimToolChars(), "…[context_trim]")
 		}
 	}

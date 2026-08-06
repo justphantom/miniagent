@@ -22,7 +22,7 @@ func stripStaleToolArgs(msgs []Message, keepN int) []Message {
 	kept := 0
 	hasCompressible := false
 	for i := range slices.Backward(msgs) {
-		if msgs[i].Role != roleAssistant {
+		if msgs[i].Role != RoleAssistant {
 			continue
 		}
 		if kept < keepN {
@@ -46,7 +46,7 @@ func stripStaleToolArgs(msgs []Message, keepN int) []Message {
 	copy(out, msgs)
 	kept = 0
 	for i := range slices.Backward(out) {
-		if out[i].Role != roleAssistant {
+		if out[i].Role != RoleAssistant {
 			continue
 		}
 		if kept < keepN {

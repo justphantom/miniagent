@@ -58,7 +58,7 @@ func buildChatBody(req Request) ([]byte, error) {
 	}
 	msgs := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
-		msgs = append(msgs, chatMessage{Role: roleSystem, Content: req.System})
+		msgs = append(msgs, chatMessage{Role: RoleSystem, Content: req.System})
 	}
 	for _, m := range req.Messages {
 		// 回灌 reasoning：assistant 的思考链以 reasoning_content 发回（DeepSeek 兼容）。

@@ -146,8 +146,8 @@ func TestAppendMessages_MkdirAll0700(t *testing.T) {
 func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
 	// 第 2 条（0-based 索引 1）出现重复 tool_call id。
 	msgs := []Message{
-		{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
-		{Role: roleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
 	}
 	err := validateToolPairing(msgs)
 	if err == nil {

@@ -22,17 +22,17 @@ func testBudget(llm *ChatClient) ContextBudget {
 // applyCompactionBarrier：有 summary → 返回最新 summary 及之后；无 → 原样。
 func TestApplyCompactionBarrier(t *testing.T) {
 	msgs := []Message{
-		{Role: roleUser, Content: "old1"},
-		{Role: roleUser, Kind: KindSummary, Content: "sum1"},
-		{Role: roleUser, Content: "old2"},
-		{Role: roleUser, Kind: KindSummary, Content: "sum2"},
-		{Role: roleUser, Content: "recent"},
+		{Role: RoleUser, Content: "old1"},
+		{Role: RoleUser, Kind: KindSummary, Content: "sum1"},
+		{Role: RoleUser, Content: "old2"},
+		{Role: RoleUser, Kind: KindSummary, Content: "sum2"},
+		{Role: RoleUser, Content: "recent"},
 	}
 	out := applyCompactionBarrier(msgs)
 	if len(out) != 2 || out[0].Content != "sum2" || out[1].Content != "recent" {
 		t.Errorf("barrier should keep latest summary onward: %+v", out)
 	}
-	none := applyCompactionBarrier([]Message{{Role: roleUser, Content: "x"}})
+	none := applyCompactionBarrier([]Message{{Role: RoleUser, Content: "x"}})
 	if len(none) != 1 {
 		t.Errorf("no summary → unchanged: %+v", none)
 	}
@@ -45,7 +45,7 @@ func TestCompactWithSummary_Success(t *testing.T) {
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []Message
 	for i := range 10 {
-		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
+		msgs = append(msgs, Message{Role: RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	var newMsgs []Message
 	out, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
@@ -76,11 +76,11 @@ func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []Message{
-		{Role: roleUser, Content: "first"},
-		{Role: roleTool, ToolCallID: "orphan", Content: "x"}, // 断裂
-		{Role: roleUser, Content: "u2"},
-		{Role: roleUser, Content: "u3"},
-		{Role: roleUser, Content: "u4"},
+		{Role: RoleUser, Content: "first"},
+		{Role: RoleTool, ToolCallID: "orphan", Content: "x"}, // 断裂
+		{Role: RoleUser, Content: "u2"},
+		{Role: RoleUser, Content: "u3"},
+		{Role: RoleUser, Content: "u4"},
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 1); err == nil {
 		t.Fatal("expected pairing-break error")
@@ -91,7 +91,7 @@ func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("should-not-call")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	msgs := []Message{{Role: roleUser, Content: "u1"}, {Role: roleUser, Content: "u2"}}
+	msgs := []Message{{Role: RoleUser, Content: "u1"}, {Role: RoleUser, Content: "u2"}}
 	out, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 6)
 	if err != nil || summary.Kind == KindSummary {
 		t.Fatalf("expected (no-summary,nil), got (kind=%v,err=%v)", summary.Kind, err)
@@ -108,7 +108,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err == nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
 	}
 }
@@ -118,7 +118,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}})
+	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}})
 	if err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
@@ -153,7 +153,7 @@ func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 	}
 	var msgs []Message
 	for i := range 10 {
-		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
+		msgs = append(msgs, Message{Role: RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
@@ -228,13 +228,13 @@ func TestCompactWithSummary_UpdateModeExtractsPrevSummary(t *testing.T) {
 		},
 	}
 	msgs := []Message{
-		{Role: roleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
-		{Role: roleUser, Content: "real0"},
-		{Role: roleUser, Content: "real1"},
-		{Role: roleUser, Content: "real2"},
-		{Role: roleUser, Content: "real3"},
-		{Role: roleUser, Content: "real4"},
-		{Role: roleUser, Content: "本轮"},
+		{Role: RoleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: RoleUser, Content: "real0"},
+		{Role: RoleUser, Content: "real1"},
+		{Role: RoleUser, Content: "real2"},
+		{Role: RoleUser, Content: "real3"},
+		{Role: RoleUser, Content: "real4"},
+		{Role: RoleUser, Content: "本轮"},
 	}
 	out, summary, _, err := compactWithSummary(context.Background(), budget, msgs, 3)
 	if err != nil || summary.Kind != KindSummary {
@@ -269,13 +269,13 @@ func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 		},
 	}
 	msgs := []Message{
-		{Role: roleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
-		{Role: roleUser, Content: "real0"},
-		{Role: roleUser, Content: "real1"},
-		{Role: roleUser, Content: "real2"},
-		{Role: roleUser, Content: "real3"},
-		{Role: roleUser, Content: "real4"},
-		{Role: roleUser, Content: "本轮"},
+		{Role: RoleUser, Kind: KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: RoleUser, Content: "real0"},
+		{Role: RoleUser, Content: "real1"},
+		{Role: RoleUser, Content: "real2"},
+		{Role: RoleUser, Content: "real3"},
+		{Role: RoleUser, Content: "real4"},
+		{Role: RoleUser, Content: "本轮"},
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
@@ -292,7 +292,7 @@ func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("更新摘要")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, []Message{{Role: roleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, []Message{{Role: RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	// lastBody 是 JSON-marshaled 请求体，< > 被转义成 < >；断言用未转义的标签名 + 旧锚点文本。

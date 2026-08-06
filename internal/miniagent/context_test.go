@@ -17,10 +17,10 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []Message
 	for i := range 10 {
-		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
+		msgs = append(msgs, Message{Role: RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	// 模拟 loop.go Run：入口已把本轮 user_prompt 加入 newMsgs 与 msgs。
-	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
+	newMsgs := []Message{{Role: RoleUser, Content: "本轮新问题"}}
 	msgs = append(msgs, newMsgs...)
 	_, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
 	if err != nil || summary.Kind != KindSummary {
@@ -33,7 +33,7 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	if newMsgs[0].Kind != KindSummary {
 		t.Errorf("newMsgs[0] 应为 summary，got %+v", newMsgs[0])
 	}
-	if newMsgs[1].Role != roleUser || newMsgs[1].Content != "本轮新问题" {
+	if newMsgs[1].Role != RoleUser || newMsgs[1].Content != "本轮新问题" {
 		t.Errorf("newMsgs[1] 应为本轮 user_prompt，got %+v", newMsgs[1])
 	}
 }
@@ -45,9 +45,9 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []Message
 	for i := range 10 {
-		msgs = append(msgs, Message{Role: roleUser, Content: "hist" + strconv.Itoa(i)})
+		msgs = append(msgs, Message{Role: RoleUser, Content: "hist" + strconv.Itoa(i)})
 	}
-	newMsgs := []Message{{Role: roleUser, Content: "上一轮问题"}}
+	newMsgs := []Message{{Role: RoleUser, Content: "上一轮问题"}}
 	msgs = append(msgs, newMsgs...)
 	_, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	}
 	insertSummaryIntoNewMsgs(&newMsgs, summary)
 	// 模拟上一轮 Run 末尾把 assistant 最终回答加入 newMsgs（接续对话依赖上一轮答案）。
-	newMsgs = append(newMsgs, Message{Role: roleAssistant, Content: "上一轮回答"})
+	newMsgs = append(newMsgs, Message{Role: RoleAssistant, Content: "上一轮回答"})
 
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, newMsgs); err != nil {
@@ -91,9 +91,9 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []Message
 	for i := range 20 {
-		msgs = append(msgs, Message{Role: roleUser, Content: "q" + strconv.Itoa(i)})
+		msgs = append(msgs, Message{Role: RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
-	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
+	newMsgs := []Message{{Role: RoleUser, Content: "本轮新问题"}}
 	msgs = append(msgs, newMsgs...)
 
 	out, summary1, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
@@ -104,7 +104,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	insertSummaryIntoNewMsgs(&newMsgs, summary1)
 	// 模拟步进：追加更多轮使再次超窗触发第二次压缩（Run 的 appendMsg 同时写 msgs/newMsgs）。
 	for i := range 10 {
-		m := Message{Role: roleUser, Content: "more" + strconv.Itoa(i)}
+		m := Message{Role: RoleUser, Content: "more" + strconv.Itoa(i)}
 		msgs = append(msgs, m)
 		newMsgs = append(newMsgs, m)
 	}
@@ -141,15 +141,15 @@ func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("新摘要内容")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []Message{
-		{Role: roleUser, Kind: KindSummary, Content: "[既往对话摘要]\n远古摘要内容-旧"},
-		{Role: roleUser, Content: "real0"},
-		{Role: roleUser, Content: "real1"},
-		{Role: roleUser, Content: "real2"},
-		{Role: roleUser, Content: "real3"},
-		{Role: roleUser, Content: "real4"},
-		{Role: roleUser, Content: "real5"},
+		{Role: RoleUser, Kind: KindSummary, Content: "[既往对话摘要]\n远古摘要内容-旧"},
+		{Role: RoleUser, Content: "real0"},
+		{Role: RoleUser, Content: "real1"},
+		{Role: RoleUser, Content: "real2"},
+		{Role: RoleUser, Content: "real3"},
+		{Role: RoleUser, Content: "real4"},
+		{Role: RoleUser, Content: "real5"},
 	}
-	newMsgs := []Message{{Role: roleUser, Content: "本轮新问题"}}
+	newMsgs := []Message{{Role: RoleUser, Content: "本轮新问题"}}
 	msgs = append(msgs, newMsgs...)
 
 	out, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
@@ -192,7 +192,7 @@ func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 func TestFitHistory_NoWindowNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
 	llm := &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	msgs := []Message{{Role: roleUser, Content: "q"}}
+	msgs := []Message{{Role: RoleUser, Content: "q"}}
 	out, summary, summarized, usage, err := FitHistory(context.Background(), msgs, ContextBudget{Summarize: testBudget(llm).Summarize}, nil)
 	if err != nil || summarized || summary.Kind == KindSummary {
 		t.Fatalf("expected noop, got out=%d summarized=%v kind=%v err=%v", len(out), summarized, summary.Kind, err)
@@ -212,7 +212,7 @@ func TestFitHistory_SummarizeErrorFallsBackLossy(t *testing.T) {
 	big := strings.Repeat("x", 1000) // 每条 ~250 tokens，使 30 条远超窗、压到 4 条后落回窗内
 	var msgs []Message
 	for range 30 {
-		msgs = append(msgs, Message{Role: roleUser, Content: big})
+		msgs = append(msgs, Message{Role: RoleUser, Content: big})
 	}
 	// ContextWindow=4000 → 阈值 3200：30 条(~7900)超窗触发；compactHistory 压到 4 条(~1400)落回窗内。
 	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Summarize: testBudget(llm).Summarize}

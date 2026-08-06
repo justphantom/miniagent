@@ -73,7 +73,7 @@ func TestRun_ToolDeniedSkipped(t *testing.T) {
 	}
 	var aOut, bOut string
 	for _, m := range res.Messages {
-		if m.Role != roleTool {
+		if m.Role != RoleTool {
 			continue
 		}
 		if m.ToolCallID == "ca" {
@@ -150,12 +150,12 @@ func TestRun_OnToolResultErrorKeepsPairing(t *testing.T) {
 	var wantIDs []string
 	gotIDs := make(map[string]bool)
 	for _, m := range res.Messages {
-		if m.Role == roleAssistant && len(m.ToolCalls) > 0 {
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
 			for _, tc := range m.ToolCalls {
 				wantIDs = append(wantIDs, tc.ID)
 			}
 		}
-		if m.Role == roleTool {
+		if m.Role == RoleTool {
 			gotIDs[m.ToolCallID] = true
 		}
 	}
@@ -238,7 +238,7 @@ func TestRun_ShapeToolResultOverridesContent(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, m := range res.Messages {
-		if m.Role == roleTool && m.ToolCallID == "c1" {
+		if m.Role == RoleTool && m.ToolCallID == "c1" {
 			if m.Content != "SHAPED:raw-output" {
 				t.Errorf("tool content = %q, want SHAPED:raw-output", m.Content)
 			}
@@ -262,7 +262,7 @@ func TestRun_ShapeToolResultEmptyFallsBack(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, m := range res.Messages {
-		if m.Role == roleTool && m.ToolCallID == "c1" {
+		if m.Role == RoleTool && m.ToolCallID == "c1" {
 			if m.Content != "raw-output" {
 				t.Errorf("tool content = %q, want raw-output (default shaping)", m.Content)
 			}
@@ -298,12 +298,12 @@ func TestRun_ShapeToolResultErrorStopsKeepsPairing(t *testing.T) {
 	var wantIDs []string
 	gotIDs := make(map[string]bool)
 	for _, m := range res.Messages {
-		if m.Role == roleAssistant && len(m.ToolCalls) > 0 {
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
 			for _, tc := range m.ToolCalls {
 				wantIDs = append(wantIDs, tc.ID)
 			}
 		}
-		if m.Role == roleTool {
+		if m.Role == RoleTool {
 			gotIDs[m.ToolCallID] = true
 		}
 	}
