@@ -105,8 +105,13 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 			total.InputTokens += estimateTokens(toSend, cfg.System, cfg.Tools)
 			total.OutputTokens += estimateResponseTokens(resp)
 		}
-		// 预算熔断：以端点返回的真实 usage（或零 usage 时的本地估算）累计判定，超限即停。
-		if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
+		// 预算熔断：钩子非 nil 交调用方判定（可换策略），nil 回落内置 MaxTotalTokens 判定。
+		// 累计 total（含零 usage 估算）始终在核心累加，钩子据此决策。
+		if hooks.OnBudget != nil {
+			if berr := hooks.OnBudget(step, total); berr != nil {
+				return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, berr
+			}
+		} else if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, fmt.Errorf(
 				"%w: input=%d output=%d（累计超 MaxTotalTokens %d）",
 				ErrBudgetExceeded, total.InputTokens, total.OutputTokens, cfg.MaxTotalTokens,

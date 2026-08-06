@@ -2,6 +2,7 @@ package miniagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -300,5 +301,44 @@ func TestRun_NilBeforeLLMIsMinimalNoCompaction(t *testing.T) {
 	// 全部历史原样进请求体（无压缩、无裁剪）——压缩了就不会含完整 big blob。
 	if !strings.Contains(tr.lastBody, big) {
 		t.Errorf("minimal mode should send history verbatim, body lacks big blob: %s", tr.lastBody)
+	}
+}
+
+// OnBudget 返回 ErrBudgetExceeded → Run 立即终止并上抛该 error（预算外挂的熔断契约）。
+func TestRun_OnBudgetExceedsStops(t *testing.T) {
+	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c1", Name: "q", Args: "{}"}),
+		textResponse("done"),
+	}}
+	chat, stream := testClients(tr)
+	// 响应 usage={1,1}（见 toolResponse）：首步累计 total={1,1}，阈值 1 → 熔断。
+	hooks := LoopHooks{OnBudget: func(step int, total Usage) error {
+		if total.InputTokens+total.OutputTokens > 1 {
+			return ErrBudgetExceeded
+		}
+		return nil
+	}}
+	_, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	if !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
+	}
+}
+
+// OnBudget 收到的 total 含零 usage 时的本地估算 fallback（估算不丢，钩子据此决策）。
+func TestRun_OnBudgetReceivesEstimatedUsage(t *testing.T) {
+	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
+	tr := &fakeTransport{responses: []string{noUsage}}
+	chat, stream := testClients(tr)
+	var seen Usage
+	hooks := LoopHooks{OnBudget: func(step int, total Usage) error {
+		seen = total
+		return nil
+	}}
+	if _, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m"}, "a real prompt", hooks, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if seen.InputTokens == 0 {
+		t.Errorf("OnBudget received zero input tokens; expected local estimate fallback, got %+v", seen)
 	}
 }

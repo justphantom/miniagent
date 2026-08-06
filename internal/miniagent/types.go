@@ -129,11 +129,22 @@ type LoopHooks struct {
 	BeforeLLM func(ctx context.Context, in StepInput) (StepOutput, error)
 	// AfterLLM 每步 LLM 响应后触发，供观察用量、判定静默溢出、记账。nil=不通知。
 	AfterLLM func(ctx context.Context, step int, resp Response) error
+	// OnBudget 每步 LLM 响应累计用量（含零 usage 时的本地估算 fallback）后触发，拿到当前 step 与
+	// 累计 total。返回 error（典型 ErrBudgetExceeded）→ 核心止循环（error 直接上抛，走熔断退出码）。
+	// nil=核心内置预算判定（LoopConfig.MaxTotalTokens + 零 usage 本地估算 fallback）。预算成为可换策略：
+	// 调用方经此钩子外挂自定义预算/熔断逻辑，核心不内置特定预算策略。
+	OnBudget func(step int, total Usage) error
 	// OnToolUse 工具执行前通知；返回 error 沿链上抛到 Run 终止循环（下游管道关闭时）。
 	// 返回哨兵 ErrToolDenied（loop.go 定义）时仅拒绝该工具、不终止循环。
 	OnToolUse func(name, input string) error
 	// OnToolResult 工具执行后通知，透传 ToolResult（含 ExitCode / IsError）。
 	OnToolResult func(name, callID string, r ToolResult) error
+	// ShapeToolResult 工具执行后、结果入历史前触发，返回该 tool 消息的 content。返回空串=核心用
+	// 内置默认成型（trimForHistory 截断 + 可选落盘）。返回 error 沿链上抛终止循环（下游管道关闭时），
+	// 核心按 OnToolResult 同款路径为剩余 calls 补占位 tool 消息保配对。仅改 content，不可改 role/
+	// tool_call_id——配对不变量由核心保证。nil=内置默认成型。工具结果成型（截断/落盘/RAG 摘要等）
+	// 经此钩子外挂，核心不内置特定成型策略。
+	ShapeToolResult func(name, callID string, step int, r ToolResult) (string, error)
 	// OnDelta LLM 流式增量；非流式模式不触发。
 	OnDelta func(step int, kind DeltaKind, text string) error
 }

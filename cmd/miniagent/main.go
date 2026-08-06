@@ -166,6 +166,14 @@ func main() {
 	hooks := buildHooks(*f.resultOnly)
 	hooks.BeforeLLM = compBefore
 	hooks.AfterLLM = compAfter
+	// 预算作为外挂：经 OnBudget 把 MaxTotalTokens 判定从核心搬出（核心 Run 仅留 OnBudget=nil 时的回落）。
+	maxTotal := baseCfg.MaxTotalTokens
+	hooks.OnBudget = func(_ int, total miniagent.Usage) error {
+		if maxTotal > 0 && total.InputTokens+total.OutputTokens > maxTotal {
+			return miniagent.ErrBudgetExceeded
+		}
+		return nil
+	}
 
 	// runCtx 含 -max-duration 超时（若有）；信号处理由 main 顶部的 NotifyContext 提供。
 	runCtx := ctx
