@@ -48,7 +48,7 @@ func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 		{Role: "user", Content: "old"},
 		{Role: "assistant", Content: "oldans"},
 	}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
 	}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("final answer")}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{}, "q", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -128,14 +128,14 @@ func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 		textResponse("第一轮回答"),
 	}}
 	chat, stream := testClients(tr)
-	r1, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
+	r1, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn1: %v", err)
 	}
 
 	tr2 := &fakeTransport{responses: []string{textResponse("第二轮回答")}}
 	chat, stream = testClients(tr2)
-	_, err = Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
+	_, err = Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run turn2: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 		http.StatusServiceUnavailable,
 	}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{}, "hi", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -185,7 +185,7 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: responses}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -21,7 +21,7 @@ func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: responses}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("expected nil error on max iterations, got %v", err)
 	}
@@ -48,7 +48,7 @@ func TestRun_MaxIterationsOverride(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: responses}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, MaxIterations: 3}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, MaxIterations: 3}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRun_MaxIterationsNonPositiveUsesDefault(t *testing.T) {
 			textResponse("ok"),
 		}}
 		chat, stream := testClients(tr)
-		res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, MaxIterations: v}, "x", LoopHooks{}, nil)
+		res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, MaxIterations: v}, "x", LoopHooks{}, nil)
 		if err != nil {
 			t.Fatalf("MaxIterations=%d: %v", v, err)
 		}
@@ -142,7 +142,7 @@ func TestRun_BudgetExceeded(t *testing.T) {
 	bigUsage := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1000,"completion_tokens":100}}`
 	tr := &fakeTransport{responses: []string{bigUsage, bigUsage}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 1000}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 1000}, "x", LoopHooks{}, nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
 	}
@@ -159,7 +159,7 @@ func TestRun_BudgetZeroUnlimited(t *testing.T) {
 		textResponse("ok"),
 	}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 0}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 0}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestRun_ToolResultLimitUsedInHistory(t *testing.T) {
 		textResponse("done"),
 	}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestRun_ReasoningEntersHistory(t *testing.T) {
 	step1 := `{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"think-step1","tool_calls":[{"id":"c1","type":"function","function":{"name":"q","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 	tr := &fakeTransport{responses: []string{step1, textResponse("done")}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestRun_ContextLengthFallbackOnce(t *testing.T) {
 		responses: []string{`{"error":{"message":"maximum context length exceeded"}}`, textResponse("recovered")},
 	}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestRun_ContextLengthFallbackStillTooLong(t *testing.T) {
 		responses: []string{body, body},
 	}
 	chat, stream := testClients(tr)
-	_, err := Run(context.Background(), chat, stream, LoopConfig{}, "x", LoopHooks{}, nil)
+	_, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "x", LoopHooks{}, nil)
 	if !errors.Is(err, ErrContextLength) {
 		t.Fatalf("err = %v, want ErrContextLength", err)
 	}
@@ -269,7 +269,7 @@ func TestRun_ToolOutputStoredOnTruncation(t *testing.T) {
 	}}
 	chat, stream := testClients(tr)
 	dir := t.TempDir()
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestRun_ToolOutputDisabledByDefault(t *testing.T) {
 		textResponse("done"),
 	}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "q", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestRun_ToolOutputPreservesSplit(t *testing.T) {
 	}}
 	chat, stream := testClients(tr)
 	dir := t.TempDir()
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -25,12 +25,9 @@ const summaryRequestPrompt = "所有工具调用已完成。请输出一段总�
 //
 // Result.Messages 是截至返回的全量 transcript，所有 return 路径均带回；NewMessages 是本轮新增（main 据此
 // append-only 落盘）。ErrContextLength 会触发一次收紧重试（核心健壮性，防长会话崩溃），其余错误上抛。
-func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (result Result, err error) {
-	if chat == nil {
-		return Result{}, errors.New("miniagent: chat client is nil")
-	}
-	if cfg.Stream && stream == nil {
-		return Result{}, errors.New("miniagent: stream client is nil in stream mode")
+func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (result Result, err error) {
+	if llm == nil {
+		return Result{}, errors.New("miniagent: llm provider is nil")
 	}
 	// thinkingDowngraded/compacted 跨循环累积，统一经 defer 写入命名返回 result 的对应字段。
 	var thinkingDowngraded, compacted bool
@@ -70,7 +67,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, perr
 		}
 
-		resp, downgraded, err := callLLMWithDowngrade(ctx, chat, stream, cfg, step, toSend, hooks, logger)
+		resp, downgraded, err := callLLMWithDowngrade(ctx, llm, cfg, step, toSend, hooks, logger)
 		if downgraded {
 			cfg.ThinkingLevel, cfg.Thinking = "", nil
 			thinkingDowngraded = true
@@ -81,7 +78,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 			if logger != nil {
 				logger.Warn("context length exceeded; trimmed history; retrying step", "step", step)
 			}
-			resp, _, err = callLLMWithDowngrade(ctx, chat, stream, cfg, step, msgs, hooks, logger)
+			resp, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
 		}
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
@@ -139,7 +136,7 @@ func Run(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopCo
 			if logger != nil {
 				logger.Info("injecting summary request at iteration limit", "step", step)
 			}
-			resp2, _, err2 := callLLMWithDowngrade(ctx, chat, stream, cfg, step+1, msgs, hooks, logger)
+			resp2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, step+1, msgs, hooks, logger)
 			if err2 == nil && len(resp2.ToolCalls) == 0 {
 				appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
 				total.InputTokens += resp2.Usage.InputTokens

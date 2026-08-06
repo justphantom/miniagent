@@ -25,7 +25,7 @@ func TestRun_OnToolResultFired(t *testing.T) {
 			return nil
 		},
 	}
-	if _, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil); err != nil {
+	if _, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(got) != 1 || got[0] != "q:c1:res" {
@@ -43,7 +43,7 @@ func TestRun_OnToolResultErrorStops(t *testing.T) {
 	chat, stream := testClients(tr)
 	stop := errors.New("downstream closed")
 	hooks := LoopHooks{OnToolResult: func(string, string, ToolResult) error { return stop }}
-	_, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	_, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, stop) {
 		t.Fatalf("err = %v, want %v", err, stop)
 	}
@@ -67,7 +67,7 @@ func TestRun_ToolDeniedSkipped(t *testing.T) {
 		}
 		return nil
 	}}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{toolA, toolB}}, "x", hooks, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{toolA, toolB}}, "x", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestRun_ZeroUsageWarns(t *testing.T) {
 	chat, stream := testClients(tr)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", MaxTotalTokens: 10000}, "q", LoopHooks{}, logger)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m", MaxTotalTokens: 10000}, "q", LoopHooks{}, logger)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestRun_ZeroUsageBudgetEnforced(t *testing.T) {
 	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
 	tr := &fakeTransport{responses: []string{noUsage}}
 	chat, stream := testClients(tr)
-	_, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", MaxTotalTokens: 100}, "q", LoopHooks{}, nil)
+	_, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m", MaxTotalTokens: 100}, "q", LoopHooks{}, nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got %v", err)
 	}
@@ -142,7 +142,7 @@ func TestRun_OnToolResultErrorKeepsPairing(t *testing.T) {
 		}
 		return nil
 	}}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, stop) {
 		t.Fatalf("err = %v, want %v", err, stop)
 	}
@@ -185,7 +185,7 @@ func TestRun_UnknownToolExitCodeNotSet(t *testing.T) {
 		}
 		return nil
 	}}
-	if _, err := Run(context.Background(), chat, stream, LoopConfig{}, "x", hooks, nil); err != nil {
+	if _, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "x", hooks, nil); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got == nil {
@@ -210,7 +210,7 @@ func (p *panicTransport) RoundTrip(*http.Request) (*http.Response, error) {
 func TestRun_LLMCallPanicRecovered(t *testing.T) {
 	tr := &panicTransport{}
 	chat, stream := testClients(tr)
-	_, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m"}, "x", LoopHooks{}, nil)
+	_, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m"}, "x", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error from recovered LLM panic, got nil")
 	}
@@ -233,7 +233,7 @@ func TestRun_ShapeToolResultOverridesContent(t *testing.T) {
 	hooks := LoopHooks{ShapeToolResult: func(name, callID string, step int, r ToolResult) (string, error) {
 		return "SHAPED:" + r.Output, nil
 	}}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestRun_ShapeToolResultEmptyFallsBack(t *testing.T) {
 	}}
 	chat, stream := testClients(tr)
 	hooks := LoopHooks{ShapeToolResult: func(string, string, int, ToolResult) (string, error) { return "", nil }}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestRun_ShapeToolResultErrorStopsKeepsPairing(t *testing.T) {
 		}
 		return "", nil
 	}}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, stop) {
 		t.Fatalf("err = %v, want %v", err, stop)
 	}

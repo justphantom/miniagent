@@ -97,6 +97,20 @@ type Usage struct {
 	OutputTokens int
 }
 
+// Doer 是「发一个非流式 chat 请求」的最小能力。压缩的摘要调用只需此（summarizeMiddle）。
+// 把它从具体 *ChatClient 抽成接口，使压缩可挂任意能 Do 的 provider。
+type Doer interface {
+	Do(ctx context.Context, req Request) (Response, error)
+}
+
+// LLM 是 Run 依赖的 provider 接口：Do（非流式）+ DoStream（流式）。核心据此与具体 provider 解耦——
+// 调用方可挂任意实现（OpenAI 兼容、Anthropic 原生、本地、mock），核心循环零改动。嵌入 Doer 复用 Do 契约。
+// 这是核心对外部 provider 的唯一依赖缝口（除工具/压缩/事件钩子外）。
+type LLM interface {
+	Doer
+	DoStream(ctx context.Context, req Request, onDelta func(Delta) error) (Response, error)
+}
+
 // exitCodeNotSet 标记 shell 命令未产生有效退出码（超时或启动失败），与正常退出的
 // 0（成功）/N（命令退出码）区分，供消费方识别「命令没真正跑完」。
 const exitCodeNotSet = -1

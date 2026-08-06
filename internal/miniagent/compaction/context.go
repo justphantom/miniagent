@@ -269,7 +269,7 @@ func stripSummaryPrefix(content string) string {
 // summarizeMiddle 调 LLM 把中段 msgs 压成一段摘要文本（不带 tools）。返回经 maxChars 截断的
 // 摘要 + 该次调用的 miniagent.Usage（供上游累加入预算）。复用 miniagent.ChatClient.Do；调用方据 error 回落
 // 有损压缩（审查 v2 #6）。previousSummary 非空时走 UPDATE 模式（buildSummarizerSystem 判定）。
-func summarizeMiddle(ctx context.Context, llm *miniagent.ChatClient, model, summarizerPrompt, previousSummary string, maxChars int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
+func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerPrompt, previousSummary string, maxChars int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
 	if len(msgs) == 0 {
 		return "", miniagent.Usage{}, errors.New("无中段可摘要")
 	}

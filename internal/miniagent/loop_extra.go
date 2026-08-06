@@ -10,19 +10,18 @@ import (
 
 // callLLM 保持原签名供 thinking_test.go 直接调用，委托 callLLMWithDowngrade 并丢弃
 // downgraded。Run 改用 callLLMWithDowngrade 以跨步固化 thinking 降级（P2-2）。
-// stream 可为 nil（非流式模式不会用到）；流式模式下 stream==nil 由调用方保证不进入。
-func callLLM(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, error) {
-	resp, _, err := callLLMWithDowngrade(ctx, chat, stream, cfg, step, msgs, hooks, logger)
+func callLLM(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, error) {
+	resp, _, err := callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
 	return resp, err
 }
 
 // callLLMWithDowngrade：callLLMOnce 之上做单步 thinking 降级重试，回传 downgraded 供 Run
 // 跨步固化 cfg；其余（重试一次、日志、截断告警）与原 callLLM 一致。
-func callLLMWithDowngrade(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, bool, error) {
+func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, bool, error) {
 	if logger != nil {
 		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream, "thinking", cfg.ThinkingLevel)
 	}
-	resp, err := callLLMOnce(ctx, chat, stream, cfg, step, msgs, hooks)
+	resp, err := callLLMOnce(ctx, llm, cfg, step, msgs, hooks)
 	downgraded := false
 	// thinking 不被支持：去字段重试一次（仅当确实发了 thinking，避免无谓重试，审查 v2 #7）。
 	if errors.Is(err, ErrThinkingUnsupported) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
@@ -32,7 +31,7 @@ func callLLMWithDowngrade(ctx context.Context, chat *ChatClient, stream *StreamC
 		down := cfg
 		down.ThinkingLevel = ""
 		down.Thinking = nil
-		resp, err = callLLMOnce(ctx, chat, stream, down, step, msgs, hooks)
+		resp, err = callLLMOnce(ctx, llm, down, step, msgs, hooks)
 		downgraded = true
 	}
 	if err != nil {
@@ -51,13 +50,13 @@ func callLLMWithDowngrade(ctx context.Context, chat *ChatClient, stream *StreamC
 	return resp, downgraded, nil
 }
 
-// callLLMOnce 构造 Request（含 thinking）并单次调用 chat.Do/stream.DoStream，不含降级/重试逻辑。
+// callLLMOnce 构造 Request（含 thinking）并单次调用 llm.Do / llm.DoStream，不含降级/重试逻辑。
 //
 // 放在 loop_extra.go 是为了携带 panic 兜底（审查 P3 LLM panic 兜底）：Do/DoStream 的响应
 // 解析路径（parseChatResponse / parseSSE）在畸形 payload 上可能 panic，无兜底则单次坏响应
 // 就崩进程——与防 tool panic 的 safeCall 不对称。recover 转为 error，使 callLLMWithDowngrade
 // 沿正常 error 路径处理（降级/重试逻辑仍适用，误判无害）。命名返回值让 defer 能在 panic 后赋值 err。
-func callLLMOnce(ctx context.Context, chat *ChatClient, stream *StreamClient, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks) (resp Response, err error) {
+func callLLMOnce(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks) (resp Response, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("llm call panicked: %v", r)
@@ -73,12 +72,12 @@ func callLLMOnce(ctx context.Context, chat *ChatClient, stream *StreamClient, cf
 		Thinking:      cfg.Thinking,
 	}
 	if cfg.Stream {
-		return stream.DoStream(ctx, req, func(d Delta) error {
+		return llm.DoStream(ctx, req, func(d Delta) error {
 			if hooks.OnDelta != nil {
 				return hooks.OnDelta(step, d.Kind, d.Text)
 			}
 			return nil
 		})
 	}
-	return chat.Do(ctx, req)
+	return llm.Do(ctx, req)
 }

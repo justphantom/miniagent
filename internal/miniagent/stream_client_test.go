@@ -44,7 +44,7 @@ data: [DONE]
 		deltas = append(deltas, text)
 		return nil
 	}}
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", Stream: true}, "hi", hooks, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m", Stream: true}, "hi", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

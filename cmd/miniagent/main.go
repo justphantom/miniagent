@@ -186,7 +186,8 @@ func main() {
 	}
 
 	prompt := mustReadPrompt(os.Stdin)
-	result, err := miniagent.Run(runCtx, chat, stream, baseCfg, string(prompt), hooks, logger)
+	llm := &miniagent.Provider{Chat: chat, Stream: stream}
+	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
 	if err != nil {
 		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。
 		if errors.Is(err, context.Canceled) {

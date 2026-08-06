@@ -9,7 +9,7 @@ import "log/slog"
 type CompactionOptions struct {
 	// Chat 是摘要压缩用的 client（可与主 chat 不同 provider）；nil 时调用方须自行注入 Summarize，
 	// 否则 NewCompaction 用它构造 summarizeMiddle 回调。
-	Chat *miniagent.ChatClient
+	Chat miniagent.Doer
 	// MaxTokens 是主请求的单次输出上限，供 isUsageOverflow 判定静默溢出（对标原 cfg.MaxTokens）。
 	MaxTokens int
 	// ContextWindow 是模型 context 上限（tokens）；<=0 关闭主动压缩（仅保留 ErrContextLength 被动重试）。

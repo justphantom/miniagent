@@ -241,3 +241,20 @@ func (c *ChatClient) prepareDo(req Request) (*http.Client, *url.URL, []byte, err
 	}
 	return client, u, body, nil
 }
+
+// Provider 是核心自带的 OpenAI 兼容 LLM 实现：把已有的 ChatClient（Do，非流式）与 StreamClient
+// （DoStream，流式）组合，满足 LLM 接口。cmd 装配它喂给 Run；自定义 provider 实现 LLM 即可替换，
+// 核心 Run 零改动（这是「provider 作为外挂」的默认实现）。Stream 仅在 cfg.Stream=true 时被调，
+// 非流式场景可为 nil。
+type Provider struct {
+	Chat   *ChatClient
+	Stream *StreamClient
+}
+
+func (p *Provider) Do(ctx context.Context, req Request) (Response, error) {
+	return p.Chat.Do(ctx, req)
+}
+
+func (p *Provider) DoStream(ctx context.Context, req Request, onDelta func(Delta) error) (Response, error) {
+	return p.Stream.DoStream(ctx, req, onDelta)
+}

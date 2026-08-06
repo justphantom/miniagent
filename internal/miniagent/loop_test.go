@@ -62,7 +62,7 @@ func toolResponse(calls ...ToolCall) string {
 func TestRun_TextOnlyReturnsImmediately(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("hello world")}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", System: "be brief"}, "hi", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m", System: "be brief"}, "hi", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	chat, stream := testClients(tr)
 	var uses []string
 	onToolUse := func(name, input string) error { uses = append(uses, name); return nil }
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{OnToolUse: onToolUse}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{OnToolUse: onToolUse}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestRun_UnknownToolYieldsErrorResult(t *testing.T) {
 		textResponse("ok"),
 	}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestRun_ToolPanicRecovered(t *testing.T) {
 		textResponse("recovered"),
 	}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestRun_LLMErrorPropagates(t *testing.T) {
 		http.StatusServiceUnavailable,
 	}}
 	chat, stream := testClients(tr)
-	_, err := Run(context.Background(), chat, stream, LoopConfig{}, "hi", LoopHooks{}, nil)
+	_, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{}, "hi", LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -170,7 +170,7 @@ func TestRun_LLMErrorPropagates(t *testing.T) {
 }
 
 func TestRun_NilClientErrors(t *testing.T) {
-	if _, err := Run(context.Background(), nil, nil, LoopConfig{}, "hi", LoopHooks{}, nil); err == nil {
+	if _, err := Run(context.Background(), nil, LoopConfig{}, "hi", LoopHooks{}, nil); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -186,7 +186,7 @@ func TestRun_MultiStepReAct(t *testing.T) {
 		textResponse("final answer"),
 	}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
 		responses: []string{thinkErr, toolResponse(ToolCall{ID: "c1", Name: "q", Args: "{}"}), textResponse("done")},
 	}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m", ThinkingLevel: "medium", Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m", ThinkingLevel: "medium", Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestRun_NilBeforeLLMIsMinimalNoCompaction(t *testing.T) {
 	}
 	tr := &fakeTransport{responses: []string{textResponse("done")}}
 	chat, stream := testClients(tr)
-	res, err := Run(context.Background(), chat, stream, LoopConfig{History: hist}, "x", LoopHooks{}, nil)
+	res, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{History: hist}, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestRun_OnBudgetExceedsStops(t *testing.T) {
 		}
 		return nil
 	}}
-	_, err := Run(context.Background(), chat, stream, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	_, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
 	}
@@ -290,7 +290,7 @@ func TestRun_OnBudgetReceivesEstimatedUsage(t *testing.T) {
 		seen = total
 		return nil
 	}}
-	if _, err := Run(context.Background(), chat, stream, LoopConfig{Model: "m"}, "a real prompt", hooks, nil); err != nil {
+	if _, err := Run(context.Background(), &Provider{Chat: chat, Stream: stream}, LoopConfig{Model: "m"}, "a real prompt", hooks, nil); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if seen.InputTokens == 0 {

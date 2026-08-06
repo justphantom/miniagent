@@ -115,7 +115,7 @@ func TestRun_SilentUsageOverflowTriggersCompaction(t *testing.T) {
 	// 6 轮 history + prompt → step2 压缩时有中段可摘（>1+keepRecent=5）。
 	history := []miniagent.Message{{Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"}, {Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"}, {Role: miniagent.RoleUser, Content: "h6"}}
 	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: true, Model: "m"})
-	res, err := miniagent.Run(context.Background(), chat, stream, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
+	res, err := miniagent.Run(context.Background(), &miniagent.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestRun_SilentUsageOverflowDisabled(t *testing.T) {
 	chat, stream := testClients(tr)
 	history := []miniagent.Message{{Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"}, {Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"}, {Role: miniagent.RoleUser, Content: "h6"}}
 	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: false, Model: "m"})
-	res, err := miniagent.Run(context.Background(), chat, stream, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
+	res, err := miniagent.Run(context.Background(), &miniagent.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run: %v", err)
 	}

@@ -23,8 +23,11 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.
 | `OnToolUse(name, input) error` | 工具执行前 | 审批/拒绝（返回 `ErrToolDenied` 仅拒该工具，不终止循环） |
 | `OnToolResult(name, callID, ToolResult) error` | 工具执行后 | 结果观察、事件下发 |
 | `OnDelta(step, kind, text) error` | 流式增量 | 实时输出 |
+| `OnBudget(step, total Usage) error` | 每步用量累计后 | 预算熔断判定（nil 回落内置 `MaxTotalTokens`） |
 
 `StepOutput.View` 是发给 LLM 的消息；`Commit=true` 则同时替换运行 transcript（压缩语义）；`Persist` 追加到持久化增量；`ExtraUsage` 计入用量；`Compacted=true` 标记压缩（交互层据此 rewrite session）。
+
+**provider 也是外挂**：`Run` 依赖 `LLM` 接口（`Do` 非流式 + `DoStream` 流式），不绑死任何供应商。核心自带 `Provider`（OpenAI 兼容实现，组合 `ChatClient`+`StreamClient`）；自定义 provider 实现 `LLM` 即可替换（Anthropic 原生、本地、mock），核心零改动。压缩的摘要调用用更窄的 `Doer`（仅 `Do`）。工具是 `Tool.Call` 函数字段，核心不认识任何具体工具——`cfg.Tools []Tool` 由调用方自由组装。
 
 **极简模式**：`BeforeLLM=nil` → 核心原样发送 transcript，零上下文管理。要压缩，挂 `NewCompaction`：
 
