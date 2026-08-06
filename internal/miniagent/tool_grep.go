@@ -14,7 +14,6 @@ import (
 	"regexp/syntax"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/justphantom/miniagent/internal/text"
@@ -27,24 +26,6 @@ const (
 	maxGrepRegexNodes = 100
 )
 
-// maxGrepMatchesOverride 允许配置覆盖内置默认；nil 用常量默认。
-// 用 atomic 保护并发 Set/Get，防 -race 检测告警。
-var maxGrepMatchesOverride atomic.Int64
-
-// SetGrepMaxMatches 覆盖 grep 命中上限；测试用，正常流程由 Resolve 调用。
-func SetGrepMaxMatches(n int) {
-	if n > 0 {
-		maxGrepMatchesOverride.Store(int64(n))
-	}
-}
-
-func getGrepMaxMatches() int {
-	if v := maxGrepMatchesOverride.Load(); v > 0 {
-		return int(v)
-	}
-	return maxGrepMatches
-}
-
 type grepArgs struct {
 	Pattern string `json:"pattern"`
 	Path    string `json:"path,omitempty"`
@@ -54,13 +35,19 @@ type grepArgs struct {
 // GrepTool 递归正则搜索文本文件，输出 file:lineno:line（与 grep -n 一致）。
 // workspaceRoot 为空且 path 缺省时，搜调用方进程 cwd。
 // timeout<=0 用默认 fileOpTimeout。
-func GrepTool(workspaceRoot string, timeout time.Duration) Tool {
+func GrepTool(workspaceRoot string, timeout time.Duration, maxMatches, maxOutputChars int) Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
 	}
+	if maxMatches <= 0 {
+		maxMatches = maxGrepMatches
+	}
+	if maxOutputChars <= 0 {
+		maxOutputChars = maxShellOutputChars
+	}
 	return Tool{
 		Name:        "grep",
-		Description: "递归正则搜索文本文件内容。输出 path:lineno:line（与 grep -n 一致，便于定位）。默认搜 workdir；可用 glob 按文件名过滤（仅匹配 base name，* 不跨 /，如 sub/*.go 不命中）。命中行上限 " + strconv.Itoa(getGrepMaxMatches()) + "，输出超 " + strconv.Itoa(shellOutputChars()) + " 字符截断。跳过 .git、二进制与超过 50MB 的文件。",
+		Description: "递归正则搜索文本文件内容。输出 path:lineno:line（与 grep -n 一致，便于定位）。默认搜 workdir；可用 glob 按文件名过滤（仅匹配 base name，* 不跨 /，如 sub/*.go 不命中）。命中行上限 " + strconv.Itoa(maxMatches) + "，输出超 " + strconv.Itoa(maxOutputChars) + " 字符截断。跳过 .git、二进制与超过 50MB 的文件。",
 		Parameters: object(map[string]any{
 			"pattern": map[string]any{"type": "string", "description": "正则表达式（Go regexp 语法，如 foo、Foo.*、(?i)error）"},
 			"path":    map[string]any{"type": "string", "description": "搜索根目录，相对 workdir 或绝对，默认 workdir"},
@@ -75,7 +62,7 @@ func GrepTool(workspaceRoot string, timeout time.Duration) Tool {
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			done := make(chan ToolResult, 1)
-			go func() { done <- runGrep(workspaceRoot, args) }()
+			go func() { done <- runGrep(workspaceRoot, args, maxMatches, maxOutputChars) }()
 			select {
 			case r := <-done:
 				return r
@@ -86,7 +73,7 @@ func GrepTool(workspaceRoot string, timeout time.Duration) Tool {
 	}
 }
 
-func runGrep(workspaceRoot, args string) ToolResult {
+func runGrep(workspaceRoot, args string, maxMatches, maxOutputChars int) ToolResult {
 	a, err := parseGrepArgs(args)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
@@ -106,7 +93,7 @@ func runGrep(workspaceRoot, args string) ToolResult {
 			return ok
 		}
 	}
-	matches, truncated, err := grepWalk(root, re, globFn)
+	matches, truncated, err := grepWalk(root, re, globFn, maxMatches)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("搜索 %q 失败：%v", a.Path, err)}
 	}
@@ -117,9 +104,9 @@ func runGrep(workspaceRoot, args string) ToolResult {
 	for _, m := range matches {
 		fmt.Fprintf(&sb, "%s:%d:%s\n", m.file, m.line, m.text)
 	}
-	out := text.Truncate(sb.String(), shellOutputChars(), "…[grep 输出已截断]")
+	out := text.Truncate(sb.String(), maxOutputChars, "…[grep 输出已截断]")
 	if truncated {
-		out += fmt.Sprintf("\n…（命中超过 %d 行，已停止收集）", getGrepMaxMatches())
+		out += fmt.Sprintf("\n…（命中超过 %d 行，已停止收集）", maxMatches)
 	}
 	return ToolResult{Output: out}
 }
@@ -166,7 +153,7 @@ type grepMatch struct {
 
 // grepWalk 遍历 root，对每个文本文件逐行匹配。不可访问的子树/文件跳过而非整体
 // 失败（部分可读仍有益）。跳过 .git、符号链接（防递归误入）。
-func grepWalk(root string, re *regexp.Regexp, globFn func(string) bool) ([]grepMatch, bool, error) {
+func grepWalk(root string, re *regexp.Regexp, globFn func(string) bool, maxMatches int) ([]grepMatch, bool, error) {
 	var matches []grepMatch
 	truncated := false
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -185,7 +172,7 @@ func grepWalk(root string, re *regexp.Regexp, globFn func(string) bool) ([]grepM
 		if globFn != nil && !globFn(d.Name()) {
 			return nil
 		}
-		if len(matches) >= getGrepMaxMatches() {
+		if len(matches) >= maxMatches {
 			truncated = true
 			return filepath.SkipAll
 		}
@@ -198,7 +185,7 @@ func grepWalk(root string, re *regexp.Regexp, globFn func(string) bool) ([]grepM
 			return nil //nolint:nilerr // 二进制/读取失败：跳过该文件，不整体失败
 		}
 		for _, m := range ms {
-			if len(matches) >= getGrepMaxMatches() {
+			if len(matches) >= maxMatches {
 				truncated = true
 				break
 			}

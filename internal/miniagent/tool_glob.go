@@ -23,9 +23,12 @@ type globArgs struct {
 // GlobTool 递归列举匹配通配的文件路径，每行一个相对 workdir 的路径。
 // filepath.Match 通配（*, ?, [...]），不跨 /、不支持 **——需递归用 grep 或 shell。
 // timeout<=0 用默认 fileOpTimeout。
-func GlobTool(workspaceRoot string, timeout time.Duration) Tool {
+func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
+	}
+	if maxOutputChars <= 0 {
+		maxOutputChars = maxShellOutputChars
 	}
 	return Tool{
 		Name:        "glob",
@@ -42,7 +45,7 @@ func GlobTool(workspaceRoot string, timeout time.Duration) Tool {
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			done := make(chan ToolResult, 1)
-			go func() { done <- runGlob(workspaceRoot, args) }()
+			go func() { done <- runGlob(workspaceRoot, args, maxOutputChars) }()
 			select {
 			case r := <-done:
 				return r
@@ -53,7 +56,7 @@ func GlobTool(workspaceRoot string, timeout time.Duration) Tool {
 	}
 }
 
-func runGlob(workspaceRoot, args string) ToolResult {
+func runGlob(workspaceRoot, args string, maxOutputChars int) ToolResult {
 	var a globArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
@@ -101,7 +104,7 @@ func runGlob(workspaceRoot, args string) ToolResult {
 	if len(paths) == 0 {
 		return ToolResult{Output: "无匹配"}
 	}
-	out := text.Truncate(strings.Join(paths, "\n"), shellOutputChars(), "…[glob 输出已截断]")
+	out := text.Truncate(strings.Join(paths, "\n"), maxOutputChars, "…[glob 输出已截断]")
 	if truncated {
 		out += fmt.Sprintf("\n…（超过 %d 条，已停止收集）", maxGlobEntries)
 	}

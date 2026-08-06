@@ -125,14 +125,14 @@ func main() {
 
 	// 应用运行时配置覆盖（优先级：config>builtin）。
 	limits := miniagent.Limits{
-		MaxReadFileBytes: maxReadFileBytesOf(resolved),
+		MaxReadFileBytes:       maxReadFileBytesOf(resolved),
+		MaxShellOutputChars:    maxShellOutputCharsOf(resolved),
+		ShellStreamWindowBytes: into(resolved.Run.ShellStreamWindowBytes, 0),
+		MaxGrepMatches:         into(resolved.Run.GrepMaxMatches, 0),
 	}
-	miniagent.SetMaxShellOutputChars(maxShellOutputCharsOf(resolved))
-	miniagent.SetShellStreamWindowBytes(into(resolved.Run.ShellStreamWindowBytes, 0))
 	miniagent.SetMaxSessionBytes(maxSessionBytesOf(resolved))
 
 	compaction.SetSummaryMaxTokens(into(resolved.Run.SummaryMaxTokens, 0))
-	miniagent.SetGrepMaxMatches(into(resolved.Run.GrepMaxMatches, 0))
 	miniagent.SetContextTrimToolChars(into(resolved.Run.ContextTrimToolChars, 0))
 
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))

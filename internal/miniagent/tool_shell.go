@@ -11,55 +11,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
-// maxShellOutputChars 是 shell 命令输出字符上限：100KB 足够覆盖典型命令输出。
-// 可通过 SetMaxShellOutputChars 覆盖。n<=0 用默认。
+// maxShellOutputChars 是 shell/glob/grep 共享的工具输出字符上限：100KB 覆盖典型命令输出。
+// 运行时经 Limits.MaxShellOutputChars 覆盖（<=0 用此默认）。streamWindow 默认 = maxOutputChars*8。
 const maxShellOutputChars = 100000
-
-// maxShellOutputCharsOverride 允许测试/配置覆盖内置上限；nil 用常量默认。
-// 用 atomic 保护并发 Set/Get，防 -race 检测告警。
-var maxShellOutputCharsOverride atomic.Int64
-
-// SetMaxShellOutputChars 覆盖 shell 输出字符上限；测试用，正常流程由 Resolve 调用。
-func SetMaxShellOutputChars(n int) {
-	if n > 0 {
-		maxShellOutputCharsOverride.Store(int64(n))
-	}
-}
-
-func shellOutputChars() int {
-	if v := maxShellOutputCharsOverride.Load(); v > 0 {
-		return int(v)
-	}
-	return maxShellOutputChars
-}
-
-func shellOutputBytes() int {
-	return shellOutputChars() * 4
-}
-
-// shellStreamWindowOverride 是滑窗字节上限的 atomic-override（§P1-D，复刻 maxShellOutputCharsOverride 模式），
-// 默认回落 shellOutputBytes()*2。Resolve/main 注入、测试覆盖。
-var shellStreamWindowOverride atomic.Int64
-
-// SetShellStreamWindowBytes 覆盖 shell 输出滑窗字节上限（保尾部）；n<=0 回落默认 2*shellOutputBytes。测试/正常流程由 Resolve 调用。
-func SetShellStreamWindowBytes(n int) {
-	if n > 0 {
-		shellStreamWindowOverride.Store(int64(n))
-	} else {
-		shellStreamWindowOverride.Store(0)
-	}
-}
-
-func shellStreamWindowBytes() int {
-	if v := shellStreamWindowOverride.Load(); v > 0 {
-		return int(v)
-	}
-	return shellOutputBytes() * 2
-}
 
 const shellTimeout = 120 * time.Second
 
@@ -72,13 +29,19 @@ var sudoSuRe = regexp.MustCompile(`\b(sudo|su|doas|pkexec|gsudo|run0|setpriv|nse
 
 // ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 用默认 shellTimeout。
 // workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。mode=default 时拒绝 sudo/su。
-func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
+func ShellTool(workspaceRoot string, timeout time.Duration, mode string, maxOutputChars, streamWindow int) Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}
+	if maxOutputChars <= 0 {
+		maxOutputChars = maxShellOutputChars
+	}
+	if streamWindow <= 0 {
+		streamWindow = maxOutputChars * 8
+	}
 	return Tool{
 		Name:        "shell",
-		Description: "通过 sh -c 执行一条 shell 命令。返回 stdout+stderr 合并输出。命令最长运行 " + timeout.String() + "；输出超过 " + strconv.Itoa(shellOutputChars()) + " 字符会被截断。",
+		Description: "通过 sh -c 执行一条 shell 命令。返回 stdout+stderr 合并输出。命令最长运行 " + timeout.String() + "；输出超过 " + strconv.Itoa(maxOutputChars) + " 字符会被截断。",
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令"},
 		}, "command"),
@@ -94,7 +57,7 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 			if strings.TrimSpace(a.Command) == "" {
 				return ToolResult{IsError: true, Output: "参数缺失：command"}
 			}
-			return runShellCommand(ctx, workspaceRoot, mode, a.Command, timeout)
+			return runShellCommand(ctx, workspaceRoot, mode, a.Command, timeout, maxOutputChars, streamWindow)
 		},
 	}
 }
@@ -103,12 +66,18 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string) Tool {
 // shell 工具与 script 工具共用（P1：.miniagent/scripts.json 注册的工具继承同一套安全策略）。
 // timeout<=0 用默认 shellTimeout。区分 shell 自身超时与父 ctx 取消：父 ctx 未取消、仅 runCtx 到期
 // 才是 shell 自身超时；非 0 退出是命令的合法结果（IsError=false，LLM 据 ExitCode 判成败）。
-func runShellCommand(ctx context.Context, workdir, mode, command string, timeout time.Duration) ToolResult {
+func runShellCommand(ctx context.Context, workdir, mode, command string, timeout time.Duration, maxOutputChars, streamWindow int) ToolResult {
 	if mode == ModeDefault && sudoSuRe.MatchString(command) {
 		return ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: "default 模式禁止特权提升器 sudo/su/doas/pkexec/gsudo/run0/setpriv/nsenter/unshare/chroot/machinectl（用 -mode auto 放行）"}
 	}
 	if timeout <= 0 {
 		timeout = shellTimeout
+	}
+	if maxOutputChars <= 0 {
+		maxOutputChars = maxShellOutputChars
+	}
+	if streamWindow <= 0 {
+		streamWindow = maxOutputChars * 8
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -120,7 +89,7 @@ func runShellCommand(ctx context.Context, workdir, mode, command string, timeout
 	// 独立进程组：超时 kill(-pgid) 才能连带清理 sh 派生的孙子进程，
 	// 否则 make/find 之类会成孤儿继续跑。
 	setPGID(cmd)
-	body, err := runShellLimited(runCtx, cmd)
+	body, err := runShellLimited(runCtx, cmd, maxOutputChars, streamWindow)
 	if err != nil {
 		// runCtx 是 ctx 的子，父超时也会令 runCtx 到期；仅父 ctx 未取消时才算 shell 自身超时。
 		if ctx.Err() == nil && runCtx.Err() != nil {
@@ -135,7 +104,7 @@ func runShellCommand(ctx context.Context, workdir, mode, command string, timeout
 	return ToolResult{Output: body, ExitCode: 0}
 }
 
-func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
+func runShellLimited(ctx context.Context, cmd *exec.Cmd, maxOutputChars, streamWindow int) (string, error) {
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw
@@ -159,7 +128,7 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	// §P1-D：字节滑窗累积器——运行中保最近 keep 字节（尾部）、超窗丢中段（保住 shell 错误/退出码所在尾部），
 	// 子进程因 pipe 被持续排空不阻塞、不被输出量打断（移除旧 LimitReader+volume-kill），跑到 Wait 返回可信 ExitCode。
 	// phase-1 落盘默认关（headSpillBytes=0）。
-	accum := newOutputAccum(shellStreamWindowBytes(), 0, "", "miniagent_shell_")
+	accum := newOutputAccum(streamWindow, 0, "", "miniagent_shell_")
 	buf := make([]byte, 32*1024)
 	for {
 		n, rerr := pr.Read(buf)
@@ -174,7 +143,7 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	err := <-waitErr
 	// 兜底：正常退出后也整组清理一次，防后台 & 残留（不再为 volume kill）。
 	killProcessGroup(cmd)
-	return accum.finalize(shellOutputChars()), err
+	return accum.finalize(maxOutputChars), err
 }
 
 // scrubEnv 复制 env 并移除：所有 MINIAGENT_* 前缀条目，以及变量名（大写后）含

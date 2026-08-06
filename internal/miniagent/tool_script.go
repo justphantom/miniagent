@@ -24,7 +24,7 @@ func shellQuote(s string) string {
 // name 自动加 script_ 前缀避免与内置工具冲突；description 来自 scripts.json。
 // 可选 args（字符串）追加到 command 末尾（空格分隔），复用 runShellCommand 的安全策略
 // （mode 黑名单 / env 剥离 / 超时 / 进程组 / 输出截断）。继承 default 模式约束。
-func ScriptTool(name, description, command, workdir string, timeout time.Duration, mode string) Tool {
+func ScriptTool(name, description, command, workdir string, timeout time.Duration, mode string, maxOutputChars, streamWindow int) Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}
@@ -50,7 +50,7 @@ func ScriptTool(name, description, command, workdir string, timeout time.Duratio
 			if strings.TrimSpace(a.Args) != "" {
 				full = command + " " + shellQuote(a.Args)
 			}
-			return runShellCommand(ctx, workdir, mode, full, timeout)
+			return runShellCommand(ctx, workdir, mode, full, timeout, maxOutputChars, streamWindow)
 		},
 	}
 }

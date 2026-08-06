@@ -132,7 +132,7 @@ func TestConfineWrap_GrepWithoutPathWorks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello foo bar"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	grep := confineWrap(miniagent.GrepTool(root, 0), root)
+	grep := confineWrap(miniagent.GrepTool(root, 0, 0, 0), root)
 	r := grep.Call(context.Background(), `{"pattern":"foo"}`)
 	if r.IsError {
 		t.Fatalf("grep without path should work (default workdir), got error: %+v", r)
@@ -153,7 +153,7 @@ func TestConfineWrap_ConfinesEscapePath(t *testing.T) {
 		t.Errorf("write escaping workdir should be rejected: %+v", r)
 	}
 	// grep 带绝对路径越界（grep 用 workspaceRoot 仍需 confine 防绝对路径逃逸）
-	grep := confineWrap(miniagent.GrepTool(root, 0), root)
+	grep := confineWrap(miniagent.GrepTool(root, 0, 0, 0), root)
 	r = grep.Call(context.Background(), fmt.Sprintf(`{"pattern":"x","path":%q}`, outside))
 	if !r.IsError || !strings.Contains(r.Output, "越出 workdir") {
 		t.Errorf("grep escaping workdir should be rejected: %+v", r)

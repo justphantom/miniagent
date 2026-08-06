@@ -33,8 +33,8 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		write = confineWrap(write, workdir)
 		edit = confineWrap(edit, workdir)
 	}
-	grep := miniagent.GrepTool(workdir, fileOpTimeout)
-	glob := miniagent.GlobTool(workdir, fileOpTimeout)
+	grep := miniagent.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
+	glob := miniagent.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
 	codemap := miniagent.CodemapTool(workdir, fileOpTimeout)
 	if mode == miniagent.ModeDefault && workdir != "" {
 		grep = confineWrap(grep, workdir)
@@ -48,14 +48,14 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		grep,
 		glob,
 		codemap,
-		miniagent.ShellTool(workdir, shellTimeout, shellMode),
+		miniagent.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
 	}
 	// P1：项目脚本注册为 script_<name> 工具，复用 shell 的安全策略（runShellCommand）。
 	for _, s := range scripts {
 		if s.Name == "" || s.Command == "" {
 			continue
 		}
-		tools = append(tools, miniagent.ScriptTool(s.Name, s.Description, s.Command, workdir, shellTimeout, shellMode))
+		tools = append(tools, miniagent.ScriptTool(s.Name, s.Description, s.Command, workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes))
 	}
 	return tools
 }
