@@ -48,6 +48,15 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		iterLimit = maxIterations
 	}
 
+	// captureDowngrade 固化 thinking 降级：清 cfg 的 thinking 字段 + 置位 thinkingDowngraded。
+	// 主路径 / OnLLMError 重试 / 总结闭包三处共用——callLLMWithDowngrade 的 downgraded 返回值统一处理点。
+	captureDowngrade := func(down bool) {
+		if down {
+			cfg.ThinkingLevel, cfg.Thinking = "", nil
+			thinkingDowngraded = true
+		}
+	}
+
 	// summarizeAtLimit 撞迭代上限时注入 RoleSystem 总结请求并额外调一次 LLM 求最终文本。逻辑外提为闭包，
 	// 使主循环 for 体聚焦五件事；捕获 Run 全部局部状态，仅 step 作参数（闭包定义先于 for，循环变量不可直接捕获）。
 	// 总结请求经临时 reqMsgs 发送——不污染 transcript（内部引导消息不进 Result.Messages / newMsgs）。
@@ -64,12 +73,8 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		reqMsgs = append(reqMsgs, msgs...)
 		reqMsgs = append(reqMsgs, Message{Role: RoleSystem, Content: summaryReq})
 		resp2, down2, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
-		// 捕获总结步 downgraded：与主路径/C 重试同款，防 Result.ThinkingDowngraded 漏报
-		// 致交互层下轮重传原 thinking 再撞 400。
-		if down2 {
-			cfg.ThinkingLevel, cfg.Thinking = "", nil
-			thinkingDowngraded = true
-		}
+		// 捕获总结步 downgraded（经 captureDowngrade 统一固化）。
+		captureDowngrade(down2)
 		if err2 != nil {
 			if logger != nil {
 				logger.Warn("summary LLM call failed", "step", s+1, "error", err2)
@@ -106,10 +111,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		}
 
 		resp, downgraded, err := callLLMWithDowngrade(ctx, llm, cfg, step, toSend, hooks, logger)
-		if downgraded {
-			cfg.ThinkingLevel, cfg.Thinking = "", nil
-			thinkingDowngraded = true
-		}
+		captureDowngrade(downgraded)
 		// 开放缝 OnLLMError：LLM 失败恢复（典型 ErrContextLength 收紧重试）。nil=error 直接上抛。
 		// 核心不做任何错误恢复策略；默认实现 NewDefaultOnLLMError 承载原 trimHistoryForContext。
 		if err != nil && hooks.OnLLMError != nil {
@@ -121,14 +123,10 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 				if recovered != nil {
 					msgs = recovered
 				}
-				// 捕获重试路径的 downgraded：恢复重试若触发 thinking 降级，同样固化 cfg + 置位
-				// thinkingDowngraded——否则交互层下轮重传原 thinking 值再撞 400（与首次调用同款处理）。
+				// 捕获重试路径的 downgraded（经 captureDowngrade 统一固化）。
 				var down2 bool
 				resp, down2, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
-				if down2 {
-					cfg.ThinkingLevel, cfg.Thinking = "", nil
-					thinkingDowngraded = true
-				}
+				captureDowngrade(down2)
 			}
 		}
 		if err != nil {

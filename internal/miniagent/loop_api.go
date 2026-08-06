@@ -20,7 +20,9 @@ type Tool struct {
 	// read/edit 等带行号的代码类工具保持 head-only（false）：前截断才符合「分段读大文件」语义。
 	// 不参与工具 schema 序列化（与 ResultLimit 同属入历史策略，非 LLM 可见参数）。
 	SplitTruncate bool
-	// Call 加 json:"-"：防未来误 json.Marshal(Tool) 时报 unsupported type。
+	// Call 是工具的实际执行函数。实现须尊重 ctx：ctx 取消须及时返回，否则 runToolsParallel 的
+	// wg.Wait 会挂死、Run 不响应 SIGINT（Go 无法强制终止 goroutine，核心不内置超时——由各工具自实现，
+	// 如 shell 的 shellTimeout）。加 json:"-"：防误 json.Marshal(Tool) 报 unsupported type。
 	Call func(ctx context.Context, args string) ToolResult `json:"-"`
 }
 
