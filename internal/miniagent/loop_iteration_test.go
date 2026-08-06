@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -144,7 +145,8 @@ func TestRun_BudgetExceeded(t *testing.T) {
 	bigUsage := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1000,"completion_tokens":100}}`
 	tr := &fakeTransport{responses: []string{bigUsage, bigUsage}}
 	llm := testClients(tr)
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 1000}, "x", LoopHooks{}, nil)
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxTotalTokens: 1000}
+	res, err := Run(context.Background(), llm, cfg, "x", defaultHooks(cfg, nil), nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
 	}
@@ -184,7 +186,8 @@ func TestRun_ToolResultLimitUsedInHistory(t *testing.T) {
 		textResponse("done"),
 	}}
 	llm := testClients(tr)
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	cfg := LoopConfig{Tools: []Tool{tool}}
+	res, err := Run(context.Background(), llm, cfg, "x", defaultHooks(cfg, nil), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -232,7 +235,8 @@ func TestRun_ContextLengthFallbackOnce(t *testing.T) {
 		responses: []string{`{"error":{"message":"maximum context length exceeded"}}`, textResponse("recovered")},
 	}
 	llm := testClients(tr)
-	res, err := Run(context.Background(), llm, LoopConfig{}, "x", LoopHooks{}, nil)
+	cfg := LoopConfig{}
+	res, err := Run(context.Background(), llm, cfg, "x", defaultHooks(cfg, nil), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -252,7 +256,8 @@ func TestRun_ContextLengthFallbackStillTooLong(t *testing.T) {
 		responses: []string{body, body},
 	}
 	llm := testClients(tr)
-	_, err := Run(context.Background(), llm, LoopConfig{}, "x", LoopHooks{}, nil)
+	cfg := LoopConfig{}
+	_, err := Run(context.Background(), llm, cfg, "x", defaultHooks(cfg, nil), nil)
 	if !errors.Is(err, ErrContextLength) {
 		t.Fatalf("err = %v, want ErrContextLength", err)
 	}
@@ -271,7 +276,8 @@ func TestRun_ToolOutputStoredOnTruncation(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	dir := t.TempDir()
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
+	cfg := LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}
+	res, err := Run(context.Background(), llm, cfg, "q", defaultHooks(cfg, nil), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -301,7 +307,8 @@ func TestRun_ToolOutputDisabledByDefault(t *testing.T) {
 		textResponse("done"),
 	}}
 	llm := testClients(tr)
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "q", LoopHooks{}, nil)
+	cfg := LoopConfig{Tools: []Tool{tool}}
+	res, err := Run(context.Background(), llm, cfg, "q", defaultHooks(cfg, nil), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -327,7 +334,8 @@ func TestRun_ToolOutputPreservesSplit(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	dir := t.TempDir()
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}, "q", LoopHooks{}, nil)
+	cfg := LoopConfig{Tools: []Tool{tool}, ToolOutputDir: dir}
+	res, err := Run(context.Background(), llm, cfg, "q", defaultHooks(cfg, nil), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -350,4 +358,15 @@ func lastToolMessage(t *testing.T, msgs []Message) Message {
 	}
 	t.Fatalf("no tool message in msgs: %+v", msgs)
 	return Message{}
+}
+
+// defaultHooks 复刻 main.go 的默认钩子组装（OnLLMError + OnBudget + ShapeToolResult），
+// 供依赖原核心内置策略（失败重试/用量估算+预算熔断/工具结果截断+落盘）的集成测试一键恢复默认行为。
+// 核心 Run 现零策略，测试须显式挂默认钩子才等价于旧行为。
+func defaultHooks(cfg LoopConfig, logger *slog.Logger) LoopHooks {
+	return LoopHooks{
+		OnLLMError:      NewDefaultOnLLMError(logger),
+		OnBudget:        NewDefaultOnBudget(cfg.MaxTotalTokens, logger),
+		ShapeToolResult: NewDefaultShapeToolResult(cfg.Tools, cfg.ToolOutputDir, cfg.ToolOutputRetention, cfg.MaxToolResultChars, logger),
+	}
 }

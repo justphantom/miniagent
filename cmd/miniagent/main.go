@@ -169,14 +169,11 @@ func main() {
 	hooks := buildHooks(*f.resultOnly)
 	hooks.BeforeLLM = compBefore
 	hooks.AfterLLM = compAfter
-	// 预算作为外挂：经 OnBudget 把 MaxTotalTokens 判定从核心搬出（核心 Run 仅留 OnBudget=nil 时的回落）。
-	maxTotal := baseCfg.MaxTotalTokens
-	hooks.OnBudget = func(_ int, total miniagent.Usage) error {
-		if maxTotal > 0 && total.InputTokens+total.OutputTokens > maxTotal {
-			return miniagent.ErrBudgetExceeded
-		}
-		return nil
-	}
+	// 三项原核心内置策略（用量估算+预算判定 / LLM 失败恢复 / 工具结果成型+落盘）经默认钩子工厂外挂：
+	// 核心 Run 零策略，cmd 层装配即恢复原行为。MaxTotalTokens/ToolOutputDir 等是配置载体（核心不读）。
+	hooks.OnLLMError = miniagent.NewDefaultOnLLMError(logger)
+	hooks.OnBudget = miniagent.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
+	hooks.ShapeToolResult = miniagent.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
 
 	// runCtx 含 -max-duration 超时（若有）；信号处理由 main 顶部的 NotifyContext 提供。
 	runCtx := ctx
@@ -216,8 +213,8 @@ func main() {
 	}
 }
 
-// loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig（仅核心字段——压缩策略已移出，
-// 经 NewCompaction 外挂）。System 空回落默认 prompt。
+// loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig（循环本体 + 策略载体字段；
+// 压缩策略经 NewCompaction 外挂，其余策略经 NewDefault* 钩子工厂外挂，核心 Run 零策略）。System 空回落默认 prompt。
 func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
 	system := resolved.System
 	if system == "" {

@@ -3,7 +3,6 @@ package miniagent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/justphantom/miniagent/internal/text"
@@ -16,16 +15,14 @@ const maxIterations = 20
 const summaryRequestPrompt = "所有工具调用已完成。请输出一段总结性回复，说明完成了什么、关键结果是什么。不要在此之后继续调用工具。"
 
 // Run 是极简的 ReAct 核心循环：发 userPrompt → LLM 回工具则执行回灌 → 直到模型给出无 tool_calls 的
-// 最终文本或撞 maxIterations。核心不做任何上下文管理（压缩/记忆/溢出/估算全无）——一切上下文策略经
-// LoopHooks.BeforeLLM/AfterLLM 外挂（见 NewCompaction）。logger 为 nil 时静默。
-//
-// 开放缝：
-//   - BeforeLLM（每步调 LLM 前）：改写消息视图、收缩 transcript、注入记忆/RAG、提交持久化摘要、累加用量。
-//     nil=透传（极简模式：原样发 transcript，零上下文管理）。
-//   - AfterLLM（每步响应后）：用量记账、静默溢出判定（压缩插件据此置下步强制压缩）。
+// 最终文本或撞 maxIterations。核心只做五件事：注册工具、拼接上下文、调 LLM、按 LLM 要求执行工具、
+// LLM 无 tool_calls 则退出循环。一切上下文管理（压缩/记忆/溢出）、用量估算、预算判定、工具结果成型、
+// LLM 失败恢复——经 LoopHooks 外挂（OnBudget/OnLLMError/ShapeToolResult/BeforeLLM/AfterLLM），核心零策略。
+// 默认行为经 NewDefault* 工厂复用（cmd 层组装）。logger 为 nil 时静默。
 //
 // Result.Messages 是截至返回的全量 transcript，所有 return 路径均带回；NewMessages 是本轮新增（main 据此
-// append-only 落盘）。ErrContextLength 会触发一次收紧重试（核心健壮性，防长会话崩溃），其余错误上抛。
+// append-only 落盘）。LLM 失败默认直接上抛（OnLLMError nil 时）；默认钩子 NewDefaultOnLLMError 承载
+// ErrContextLength 收紧重试（防长会话崩溃）。
 func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks LoopHooks, logger *slog.Logger) (result Result, err error) {
 	if llm == nil {
 		return Result{}, errors.New("miniagent: llm provider is nil")
@@ -51,13 +48,6 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		iterLimit = maxIterations
 	}
 
-	// 工具输出落盘 store（cfg.ToolOutputDir 空=禁用）。仍属核心工具结果成型策略，跨步复用。
-	var store *toolOutputStore
-	if cfg.ToolOutputDir != "" {
-		store = newToolOutputStore(cfg.ToolOutputDir, cfg.ToolOutputRetention, logger)
-		store.cleanup()
-	}
-
 	for step := 1; step <= iterLimit; step++ {
 		if err := ctx.Err(); err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
@@ -73,13 +63,19 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			cfg.ThinkingLevel, cfg.Thinking = "", nil
 			thinkingDowngraded = true
 		}
-		// 撞 context 上限：收紧历史（清 reasoning + 压 tool content）后重试一次——核心健壮性，仍超则上抛。
-		if errors.Is(err, ErrContextLength) {
-			msgs = trimHistoryForContext(msgs)
-			if logger != nil {
-				logger.Warn("context length exceeded; trimmed history; retrying step", "step", step)
+		// 开放缝 OnLLMError：LLM 失败恢复（典型 ErrContextLength 收紧重试）。nil=error 直接上抛。
+		// 核心不做任何错误恢复策略；默认实现 NewDefaultOnLLMError 承载原 trimHistoryForContext。
+		if err != nil && hooks.OnLLMError != nil {
+			recovered, retry, rerr := hooks.OnLLMError(ctx, step, msgs, err)
+			if rerr != nil {
+				return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, rerr
 			}
-			resp, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+			if retry {
+				if recovered != nil {
+					msgs = recovered
+				}
+				resp, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+			}
 		}
 		if err != nil {
 			return Result{Usage: total, Steps: step - 1, Messages: msgs, NewMessages: newMsgs}, err
@@ -92,28 +88,15 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			}
 		}
 
+		// 核心只累加真实 usage（零 usage 时的本地估算 fallback 由 OnBudget 钩子做，核心不估算）。
 		total.InputTokens += resp.Usage.InputTokens
 		total.OutputTokens += resp.Usage.OutputTokens
-		// usage 全零（流式端点常不 honor include_usage / 非流式缺失）：用本地估算 fallback，
-		// 避免预算熔断静默失效。估算计入请求侧（toSend+system+tools）与响应侧。
-		if resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0 {
-			if logger != nil {
-				logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step)
-			}
-			total.InputTokens += EstimateTokens(toSend, cfg.System, cfg.Tools)
-			total.OutputTokens += estimateResponseTokens(resp)
-		}
-		// 预算熔断：钩子非 nil 交调用方判定（可换策略），nil 回落内置 MaxTotalTokens 判定。
-		// 累计 total（含零 usage 估算）始终在核心累加，钩子据此决策。
+		// 开放缝 OnBudget：用量记账（零 usage 估算 fallback）+ 预算判定。nil=核心不估算不熔断（极简）。
+		// 默认实现 NewDefaultOnBudget 承载原 EstimateTokens fallback + MaxTotalTokens 判定。
 		if hooks.OnBudget != nil {
-			if berr := hooks.OnBudget(step, total); berr != nil {
+			if berr := hooks.OnBudget(ctx, step, BudgetInput{ToSend: toSend, System: cfg.System, Tools: cfg.Tools, Resp: resp}, &total); berr != nil {
 				return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, berr
 			}
-		} else if cfg.MaxTotalTokens > 0 && total.InputTokens+total.OutputTokens > cfg.MaxTotalTokens {
-			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, fmt.Errorf(
-				"%w: input=%d output=%d（累计超 MaxTotalTokens %d）",
-				ErrBudgetExceeded, total.InputTokens, total.OutputTokens, cfg.MaxTotalTokens,
-			)
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -122,7 +105,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			return Result{Text: resp.Text, Usage: total, Steps: step, Finish: finishStop, Messages: msgs, NewMessages: newMsgs}, nil
 		}
 
-		msgs, err = handleToolCalls(ctx, cfg, step, resp, toolByName, msgs, &newMsgs, hooks, store, logger)
+		msgs, err = handleToolCalls(ctx, cfg, step, resp, toolByName, msgs, &newMsgs, hooks, logger)
 		if err != nil {
 			return Result{Usage: total, Steps: step, Messages: msgs, NewMessages: newMsgs}, err
 		}

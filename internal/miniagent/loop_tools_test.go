@@ -99,7 +99,8 @@ func TestRun_ZeroUsageWarns(t *testing.T) {
 	llm := testClients(tr)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	res, err := Run(context.Background(), llm, LoopConfig{Model: "m", MaxTotalTokens: 10000}, "q", LoopHooks{}, logger)
+	cfg := LoopConfig{Model: "m", MaxTotalTokens: 10000}
+	res, err := Run(context.Background(), llm, cfg, "q", defaultHooks(cfg, logger), logger)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -116,7 +117,8 @@ func TestRun_ZeroUsageBudgetEnforced(t *testing.T) {
 	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
 	tr := &fakeTransport{responses: []string{noUsage}}
 	llm := testClients(tr)
-	_, err := Run(context.Background(), llm, LoopConfig{Model: "m", MaxTotalTokens: 100}, "q", LoopHooks{}, nil)
+	cfg := LoopConfig{Model: "m", MaxTotalTokens: 100}
+	_, err := Run(context.Background(), llm, cfg, "q", defaultHooks(cfg, nil), nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got %v", err)
 	}

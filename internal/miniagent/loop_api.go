@@ -49,9 +49,11 @@ const (
 	DeltaReasoning DeltaKind = "reasoning"
 )
 
-// LoopHooks 是 Run 在循环各点回调消费方的钩子集合，所有字段可 nil（不通知）。
-// 这是 agent 核心的开放缝口：BeforeLLM/AfterLLM 让一切上下文策略（压缩、记忆、RAG 注入、
-// 用量记账、溢出检测）外挂实现，核心循环本身不做任何上下文管理。
+// LoopHooks 是 Run 在循环各点回调消费方的钩子集合，所有字段可 nil（不通知；极简模式）。
+// 这是 agent 核心的开放缝口：BeforeLLM/AfterLLM（上下文视图/观察）、OnBudget（用量记账+预算判定）、
+// OnLLMError（失败恢复）、ShapeToolResult（工具结果成型）让一切上下文/用量/成型策略外挂实现，
+// 核心循环本身不做任何上下文管理、估算、预算判定或错误恢复——仅做工具注册/上下文拼接/调 LLM/
+// 执行工具/退出循环五件事。默认钩子实现见 NewDefault* 工厂（cmd 层组装即可复用原内置行为）。
 type LoopHooks struct {
 	// BeforeLLM 每步调 LLM 前触发：可改写发给 LLM 的消息视图、提交持久化增量、累加用量、
 	// 标记压缩。nil=透传（极简模式：核心不做上下文管理，原样发送 transcript）。
@@ -59,11 +61,17 @@ type LoopHooks struct {
 	BeforeLLM func(ctx context.Context, in StepInput) (StepOutput, error)
 	// AfterLLM 每步 LLM 响应后触发，供观察用量、判定静默溢出、记账。nil=不通知。
 	AfterLLM func(ctx context.Context, step int, resp Response) error
-	// OnBudget 每步 LLM 响应累计用量（含零 usage 时的本地估算 fallback）后触发，拿到当前 step 与
-	// 累计 total。返回 error（典型 ErrBudgetExceeded）→ 核心止循环（error 直接上抛，走熔断退出码）。
-	// nil=核心内置预算判定（LoopConfig.MaxTotalTokens + 零 usage 本地估算 fallback）。预算成为可换策略：
-	// 调用方经此钩子外挂自定义预算/熔断逻辑，核心不内置特定预算策略。
-	OnBudget func(step int, total Usage) error
+	// OnBudget 每步 LLM 响应后触发：核心已把真实 usage 累加进 total，本钩子负责零 usage 时的本地
+	// 估算 fallback（向 total 累加）与预算判定。返回 error（典型 ErrBudgetExceeded）→ 核心止循环
+	// （error 直接上抛，走熔断退出码）。nil=核心不估算不判定（极简模式：仅累加真实 usage，不熔断）。
+	// 预算成为可换策略：调用方经此钩子外挂自定义预算/熔断逻辑，核心不内置特定预算策略。
+	// 默认实现见 NewDefaultOnBudget（承载原 EstimateTokens fallback + MaxTotalTokens 判定）。
+	OnBudget func(ctx context.Context, step int, in BudgetInput, total *Usage) error
+	// OnLLMError 单步 LLM 调用失败后触发，供外挂错误恢复（典型：ErrContextLength 时收紧历史重试一次）。
+	// 返回 recoveredMsgs 非 nil → 核心用其替换运行 transcript 后重试本次调用；retry=false 或钩子 nil →
+	// 核心不做恢复，error 直接上抛终止循环；返回的 err 非 nil 同样上抛。重试仅一次（核心不递归）。
+	// 这是 LLM 失败路径的唯一缝口（BeforeLLM/AfterLLM 都在成功路径）。默认实现见 NewDefaultOnLLMError。
+	OnLLMError func(ctx context.Context, step int, msgs []Message, callErr error) (recoveredMsgs []Message, retry bool, retErr error)
 	// OnToolUse 工具执行前通知；返回 error 沿链上抛到 Run 终止循环（下游管道关闭时）。
 	// 返回哨兵 ErrToolDenied（loop.go 定义）时仅拒绝该工具、不终止循环。
 	OnToolUse func(name, input string) error
@@ -104,6 +112,15 @@ type StepOutput struct {
 	Compacted bool
 }
 
+// BudgetInput 是 OnBudget 的请求侧上下文：本轮发给 LLM 的消息视图 + 请求级 System/Tools + 响应。
+// 供钩子做零 usage 本地估算 fallback（EstimateTokens 计 toSend/system/tools；estimateResponseTokens 计 resp）。
+type BudgetInput struct {
+	ToSend []Message
+	System string
+	Tools  []Tool
+	Resp   Response
+}
+
 type Result struct {
 	Text  string
 	Usage Usage
@@ -131,9 +148,10 @@ const (
 	finishMaxIterations = "max_iterations"
 )
 
-// LoopConfig 是 Run 的核心配置——只含 agent 循环本体所需：模型、系统提示、工具、历史、限额、流式、思考。
-// 一切上下文策略（压缩窗口、保留轮数、摘要模板、真实用量、溢出检测…）已移出，经 LoopHooks.BeforeLLM/AfterLLM
-// 外挂（见 NewCompaction）。这使得 Run 成为一个极简、无策略的 ReAct 核心调用方按需组装能力。
+// LoopConfig 是 Run 的配置。字段分两类：循环本体字段（Model/System/Tools/History/MaxIterations/
+// MaxTokens/Stream/Thinking…）核心 Run 直接读；策略字段（MaxTotalTokens/MaxToolResultChars/
+// ToolOutputDir/ToolOutputRetention）核心 Run 不读，仅作配置载体，由调用方提取喂给 NewDefault* 钩子
+// 工厂（见 cmd/miniagent）。一切上下文/用量/成型策略经 LoopHooks 外挂，Run 是极简、无策略的 ReAct 核心。
 type LoopConfig struct {
 	Model          string
 	System         string
@@ -144,8 +162,8 @@ type LoopConfig struct {
 	History []Message
 	// MaxIterations 覆盖单轮 LLM 调用上限；<=0 用 maxIterations 默认值。
 	MaxIterations int
-	// MaxTotalTokens 单轮累计 token（输入+输出）上限；<=0 不限。超限 Run 返回
-	// ErrBudgetExceeded（走 error 事件 + 退出码 1）。
+	// MaxTotalTokens 单轮累计 token（输入+输出）上限；<=0 不限。策略配置载体——核心 Run 不读，
+	// 由 NewDefaultOnBudget 据此判定熔断（超限返回 ErrBudgetExceeded，走 error 事件 + 退出码 1）。
 	MaxTotalTokens int
 	// Stream 为 true 时 callLLM 走流式（DoStream），增量经 LoopHooks.OnDelta 推出；
 	// 默认 false（非流式 Do）。
@@ -154,14 +172,16 @@ type LoopConfig struct {
 	ThinkingLevel string
 	Thinking      *ThinkingMapping
 	// MaxToolResultChars 是 tool 结果入历史的默认字符上限（兜底 Tool.ResultLimit；<=0 用内置默认）。
+	// 策略配置载体——核心 Run 不读，由 NewDefaultShapeToolResult 读取。
 	MaxToolResultChars int
 	// MaxParallelTools 是单步并行工具上限（<=0 用内置默认）。
 	MaxParallelTools int
 	// ToolOutputDir 非空时启用「工具输出落盘 + path 回读」：超 limit 的工具全文写入
 	// <ToolOutputDir>/tool_<step>_<callID>_<n>.txt，历史 Content 改为预览+绝对路径提示。
-	// 空=禁用（保留 trimForHistory 一次性硬截断）。
+	// 空=禁用（仅 trimForHistory 截断）。策略配置载体——核心 Run 不读，由 NewDefaultShapeToolResult 读取。
 	ToolOutputDir string
-	// ToolOutputRetention 是落盘文件保留时长；Run 启动时时机性清理更早文件。<=0 用 7d。
+	// ToolOutputRetention 是落盘文件保留时长；NewDefaultShapeToolResult 构造时机会性清理更早文件。<=0 用 7d。
+	// 策略配置载体——核心 Run 不读。
 	ToolOutputRetention time.Duration
 }
 

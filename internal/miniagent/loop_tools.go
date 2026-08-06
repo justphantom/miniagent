@@ -40,7 +40,7 @@ func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
 	return toolByName
 }
 
-func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Response, toolByName map[string]Tool, msgs []Message, newMsgs *[]Message, hooks LoopHooks, store *toolOutputStore, logger *slog.Logger) ([]Message, error) {
+func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Response, toolByName map[string]Tool, msgs []Message, newMsgs *[]Message, hooks LoopHooks, logger *slog.Logger) ([]Message, error) {
 	calls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		calls[i] = tc
@@ -92,9 +92,10 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 				return msgs, err
 			}
 		}
-		// 工具结果成型：钩子 nil 用内置默认（截断 + 可选落盘），非 nil 调用方覆盖。
+		// 工具结果成型：经 ShapeToolResult 钩子外挂（截断/落盘/RAG 摘要等）。nil=核心透传原文、零成型
+		// （极简模式）；默认实现 NewDefaultShapeToolResult 承载原 trimForHistory 截断 + 可选落盘。
 		// 只改 tool 消息 content，不动 role/tool_call_id——配对不变量由核心保证。
-		content := defaultShapeResult(cfg, store, toolByName, step, tc, tres)
+		content := tres.Output
 		if hooks.ShapeToolResult != nil {
 			c, serr := hooks.ShapeToolResult(tc.Name, tc.ID, step, tres)
 			if serr != nil {
@@ -149,37 +150,6 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 	}
 	wg.Wait()
 	return results
-}
-
-// defaultShapeResult 是 ShapeToolResult 钩子 nil 时的内置默认成型：trimForHistory 截断
-// （Tool.ResultLimit/SplitTruncate + cfg.MaxToolResultChars）+ 可选落盘（store.bound）。
-// 即原 handleToolCalls 内联的成型逻辑，抽出供钩子 nil 时复用；返回入历史 tool 消息的 content。
-func defaultShapeResult(cfg LoopConfig, store *toolOutputStore, toolByName map[string]Tool, step int, tc ToolCall, tres ToolResult) string {
-	limit := 0
-	split := false
-	if t, ok := toolByName[tc.Name]; ok {
-		limit = t.ResultLimit
-		split = t.SplitTruncate
-	}
-	// 工具未声明 ResultLimit 时回落 cfg.MaxToolResultChars（S4 可覆盖）；trimForHistory
-	// 仍有 <=0→maxToolResultInHistory 的最终兜底，双保险。split 对 shell/grep 类工具走头尾分段截断。
-	if limit <= 0 {
-		limit = cfg.MaxToolResultChars
-	}
-	preview := trimForHistory(tres.Output, limit, split)
-	content := preview
-	if store != nil {
-		// §P1-A：超 limit 的全文落盘，入历史 Content 改为 preview+路径提示。truncated 判定用
-		// effective limit 的精确比较（trimForHistory 内部对 limit<=0 回落 maxToolResultInHistory，
-		// 此处复刻同一解析；截断 iff rune 数 > effective limit），避免 rune 长度差法在「输出刚好超 limit、
-		// preview marker 反而更长」时的假阴性（丢全文不落盘）。
-		effLimit := limit
-		if effLimit <= 0 {
-			effLimit = maxToolResultInHistory
-		}
-		content = store.bound(step, tc.ID, tres.Output, preview, len([]rune(tres.Output)) > effLimit)
-	}
-	return content
 }
 
 // trimForHistory 把工具结果裁到 limit 字符后入历史；limit<=0 用默认上限。

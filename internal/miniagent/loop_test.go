@@ -268,7 +268,7 @@ func TestRun_OnBudgetExceedsStops(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	// 响应 usage={1,1}（见 toolResponse）：首步累计 total={1,1}，阈值 1 → 熔断。
-	hooks := LoopHooks{OnBudget: func(step int, total Usage) error {
+	hooks := LoopHooks{OnBudget: func(_ context.Context, _ int, _ BudgetInput, total *Usage) error {
 		if total.InputTokens+total.OutputTokens > 1 {
 			return ErrBudgetExceeded
 		}
@@ -280,21 +280,20 @@ func TestRun_OnBudgetExceedsStops(t *testing.T) {
 	}
 }
 
-// OnBudget 收到的 total 含零 usage 时的本地估算 fallback（估算不丢，钩子据此决策）。
-func TestRun_OnBudgetReceivesEstimatedUsage(t *testing.T) {
-	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
-	tr := &fakeTransport{responses: []string{noUsage}}
-	llm := testClients(tr)
-	var seen Usage
-	hooks := LoopHooks{OnBudget: func(step int, total Usage) error {
-		seen = total
-		return nil
-	}}
-	if _, err := Run(context.Background(), llm, LoopConfig{Model: "m"}, "a real prompt", hooks, nil); err != nil {
-		t.Fatalf("Run: %v", err)
+// NewDefaultOnBudget 在 resp.Usage 全零时补本地估算 fallback（EstimateTokens 计请求侧）。
+// 估算原属核心内置，现外挂到默认钩子；本测试直接覆盖该工厂，保 fallback 行为不丢。
+func TestNewDefaultOnBudget_EstimatesZeroUsage(t *testing.T) {
+	hook := NewDefaultOnBudget(0, nil)
+	total := &Usage{}
+	in := BudgetInput{
+		ToSend: []Message{{Role: RoleUser, Content: "a real prompt"}},
+		Resp:   Response{Usage: Usage{}}, // 全零 → 触发本地估算
 	}
-	if seen.InputTokens == 0 {
-		t.Errorf("OnBudget received zero input tokens; expected local estimate fallback, got %+v", seen)
+	if err := hook(context.Background(), 1, in, total); err != nil {
+		t.Fatalf("OnBudget: %v", err)
+	}
+	if total.InputTokens == 0 {
+		t.Errorf("OnBudget did not estimate zero-usage; expected local estimate fallback, got %+v", total)
 	}
 }
 
