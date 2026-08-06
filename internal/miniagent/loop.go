@@ -63,7 +63,13 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		reqMsgs := make([]Message, 0, len(msgs)+1)
 		reqMsgs = append(reqMsgs, msgs...)
 		reqMsgs = append(reqMsgs, Message{Role: RoleSystem, Content: summaryReq})
-		resp2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
+		resp2, down2, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
+		// 捕获总结步 downgraded：与主路径/C 重试同款，防 Result.ThinkingDowngraded 漏报
+		// 致交互层下轮重传原 thinking 再撞 400。
+		if down2 {
+			cfg.ThinkingLevel, cfg.Thinking = "", nil
+			thinkingDowngraded = true
+		}
 		if err2 != nil {
 			if logger != nil {
 				logger.Warn("summary LLM call failed", "step", s+1, "error", err2)
@@ -71,6 +77,10 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			return Result{}, false, nil
 		}
 		if len(resp2.ToolCalls) != 0 {
+			// 回落：模型仍要调工具，但已撞上限不再执行。这次调用 token 仍消耗，记账与主路径对齐
+			// （主路径 tool_calls 也累加 usage），但不执行工具、回落 finishMaxIterations。
+			total.InputTokens += resp2.Usage.InputTokens
+			total.OutputTokens += resp2.Usage.OutputTokens
 			return Result{}, false, nil
 		}
 		appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})

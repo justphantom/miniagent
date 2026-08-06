@@ -145,3 +145,29 @@ func TestRun_RetryPathCapturesDowngrade(t *testing.T) {
 		t.Errorf("降级后应去 thinking: %s", tr.bodies[2])
 	}
 }
+
+// 总结步触发 thinking 降级时 Result.ThinkingDowngraded 应置位（与主路径/C 重试同款；
+// 修复前闭包 `resp2, _, err2` 忽略 downgraded，致交互层下轮重传原 thinking 再撞 400）。
+func TestRun_SummaryStepCapturesDowngrade(t *testing.T) {
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &recordingTransport{plan: []transportResp{
+		{status: http.StatusOK, body: toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"})},
+		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
+		{status: http.StatusOK, body: textResponse("总结完成")},
+	}}
+	llm := testClients(tr)
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1, ThinkingLevel: "medium"}
+	res, err := Run(context.Background(), llm, cfg, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Text != "总结完成" {
+		t.Errorf("Text = %q, want 总结完成", res.Text)
+	}
+	if !res.ThinkingDowngraded {
+		t.Errorf("ThinkingDowngraded = false, want true（总结步降级应被捕获）")
+	}
+	if tr.calls != 3 {
+		t.Errorf("calls = %d, want 3（step1 tool + 总结 thinking 400 + 总结降级 ok）", tr.calls)
+	}
+}

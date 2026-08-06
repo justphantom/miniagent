@@ -433,3 +433,24 @@ func TestRun_SummaryPathDoesNotLeakSystemPrompt(t *testing.T) {
 		}
 	}
 }
+
+// 总结步返回 tool_calls（回落 finishMaxIterations）时，该次调用 usage 仍应记账（与主路径 tool_calls 一致；
+// 修复前 tool_calls 分支在累加前 return，致总结步 token 未进 total）。
+func TestRun_SummaryFallbackAccountsUsage(t *testing.T) {
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	step1 := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`
+	summary := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":200,"completion_tokens":20}}`
+	tr := &fakeTransport{responses: []string{step1, summary}}
+	llm := testClients(tr)
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}
+	res, err := Run(context.Background(), llm, cfg, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Finish != finishMaxIterations {
+		t.Errorf("Finish = %q, want %q", res.Finish, finishMaxIterations)
+	}
+	if res.Usage.InputTokens != 300 || res.Usage.OutputTokens != 30 {
+		t.Errorf("Usage = %+v, want {300, 30}（step1 100+10 + 总结 200+20）", res.Usage)
+	}
+}

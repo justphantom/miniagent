@@ -89,6 +89,9 @@ type LoopHooks struct {
 
 // StepInput 是 BeforeLLM 的入参：当前运行 transcript（只读意图）+ step + 请求级 System/Tools。
 // BeforeLLM 据此决定本轮发给 LLM 的消息视图（可压缩、可注入、可原样透传）。
+//
+// Msgs 与运行 transcript 共享底层数组（仅 slice header 拷贝），钩子须只读——原地改 Msgs[i] 字段会
+// 污染 Run 的 transcript。需改写应经 StepOutput.View/Persist 返回，由核心折叠回状态。
 type StepInput struct {
 	Step   int
 	Msgs   []Message
