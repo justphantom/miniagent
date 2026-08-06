@@ -31,6 +31,8 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.
 
 **极简模式**：`BeforeLLM=nil` → 核心原样发送 transcript，零上下文管理。要压缩，挂 `NewCompaction`：
 
+> 注：以下 import 路径位于 `internal/` 下，Go 禁止外部模块导入，当前仅作架构示意；将核心、`compaction` 等移出 `internal/` 的库化计划于 **5.0.0**。
+
 ```go
 import "github.com/justphantom/miniagent/internal/miniagent/compaction"
 

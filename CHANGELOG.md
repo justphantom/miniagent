@@ -3,6 +3,21 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [4.1.0] - 2026-08-06
+
+> 内部架构重构：核心经接口解耦具体 client、子包化（compaction/event/openai provider）。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 minor。
+
+### Changed
+- **核心经 `LLM`/`Doer` 接口解耦具体 client**：`Run` 不再直接依赖具体 HTTP client 类型，改为依赖 `LLM`（`Do` 非流式 + `DoStream` 流式）与更窄的 `Doer`（仅 `Do`，供压缩摘要调用）；新增核心自带 `Provider`（OpenAI 兼容默认实现，组合 `ChatClient`+`StreamClient`）。自定义 provider 实现 `LLM` 即可替换，核心零改动（`a5bad2c`）。
+- **LLM 契约与供应商实现分离**：openai 由「唯一内置后端」降级为 core 下的一个 provider 实现，落在 `internal/provider/openai` 子包；LLM 类型/接口提取到 core（`d5381a5`）。
+- **compaction 引擎独立成子包**：摘要压缩引擎（超窗摘要中段 + 有损 fallback + 主动裁剪序列 + 静默溢出检测）从 `internal/miniagent` 提取到 `internal/miniagent/compaction`，并拆分为 `assemble`/`budget`/`split` 等文件（`3b2fe5b`、`d5381a5`）。
+- **event emitters 独立成子包**：事件发射器提取到 `internal/miniagent/event`（`8c941e4`）。
+- **导出供子包复用的 helper**：跨子包共享的 `role`、`KindSummary` 等提升为包级常量并经 `export.go` 暴露，消除子包对未导出符号的依赖（`8228334`）。
+
+### Notes
+- 上述均为 `internal/` 内部重构，无对外行为变更。
+- 项目定位为「可被集成的库」，但核心公开面（`miniagent`、`compaction`、`event`、`provider/openai`）目前仍在 `internal/` 下，Go 禁止外部模块导入。将这些包移出 `internal/` 的真正库化计划于 **5.0.0**（属 breaking，故单列 major）。
+
 ## [4.0.1] - 2026-08-05
 
 > session id 输出契约迁移到 stdout NDJSON、Provider 字段补全、id 随机段扩位。
