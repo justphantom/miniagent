@@ -124,7 +124,9 @@ func main() {
 	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), resolved.Mode)
 
 	// 应用运行时配置覆盖（优先级：config>builtin）。
-	miniagent.SetMaxReadFileBytes(maxReadFileBytesOf(resolved))
+	limits := miniagent.Limits{
+		MaxReadFileBytes: maxReadFileBytesOf(resolved),
+	}
 	miniagent.SetMaxShellOutputChars(maxShellOutputCharsOf(resolved))
 	miniagent.SetShellStreamWindowBytes(into(resolved.Run.ShellStreamWindowBytes, 0))
 	miniagent.SetMaxSessionBytes(maxSessionBytesOf(resolved))
@@ -152,7 +154,7 @@ func main() {
 		compChat, _ = secondaryClient("compaction", resolved.CompactionProvider)
 	}
 
-	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts)
+	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts, limits)
 	baseCfg := loopCfg(resolved, f, history, tools)
 	// §P1-A：工具输出落盘目录——config 显式优先；否则 -save-session/-session 激活时按 session 目录
 	// 派生 <sessionDir>/<id>.tool-output/（无 session 且 config 未配则禁用）。

@@ -9,36 +9,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/justphantom/miniagent/internal/text"
 )
 
 // maxReadFileBytes 是 read 单文件读取上限：1MB 覆盖大文件（generated code、大数据常量），
-// 同时防止超大日志/生成文件撑爆内存。可通过 SetMaxReadFileBytes 覆盖。n<=0 用默认。
+// 同时防止超大日志/生成文件撑爆内存。运行时经 Limits.MaxReadFileBytes 覆盖（<=0 用此默认）。
 const maxReadFileBytes = 1 << 20 // 1MB
-
-// maxReadFileBytesOverride 允许测试/配置覆盖内置上限；用 atomic 保护并发 Set/Get，防 -race。
-var maxReadFileBytesOverride atomic.Int64
-
-// SetMaxReadFileBytes 覆盖 read 单文件读取上限；测试用，正常流程由 Resolve 调用。
-func SetMaxReadFileBytes(n int) {
-	if n > 0 {
-		maxReadFileBytesOverride.Store(int64(n))
-	}
-}
-
-func readFileBytes() int {
-	if v := maxReadFileBytesOverride.Load(); v > 0 {
-		return int(v)
-	}
-	return maxReadFileBytes
-}
-
-func readFileChars() int {
-	return readFileBytes() / 4
-}
 
 // fileOpTimeout 是 read/edit 的内置操作超时：IsRegular 已切断 FIFO 阻塞主因，
 // 此处兜底挂起的文件系统（NFS 服务端失联、坏盘、网络黑洞）。
@@ -59,13 +37,18 @@ type readFileArgs struct {
 }
 
 // ReadFileTool returns a read tool bound to workspaceRoot. timeout<=0 用默认 fileOpTimeout。
-func ReadFileTool(workspaceRoot string, timeout time.Duration) Tool {
+// maxBytes<=0 用默认 maxReadFileBytes（Limits.MaxReadFileBytes 注入）。
+func ReadFileTool(workspaceRoot string, timeout time.Duration, maxBytes int) Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
 	}
+	if maxBytes <= 0 {
+		maxBytes = maxReadFileBytes
+	}
+	maxChars := maxBytes / 4
 	return Tool{
 		Name:        "read",
-		Description: fmt.Sprintf("读取文本文件，输出带行号（N │ line，edit 据此定位 offset）。支持 offset/limit 分段读大文件。拒绝二进制（含 NUL）、最终分量符号链接（中间目录 symlink 仍跟随）与非普通文件。单文件 %d 字节、输出 %d 字符上限。path 相对 workdir 或绝对。", readFileBytes(), readFileChars()),
+		Description: fmt.Sprintf("读取文本文件，输出带行号（N │ line，edit 据此定位 offset）。支持 offset/limit 分段读大文件。拒绝二进制（含 NUL）、最终分量符号链接（中间目录 symlink 仍跟随）与非普通文件。单文件 %d 字节、输出 %d 字符上限。path 相对 workdir 或绝对。", maxBytes, maxChars),
 		Parameters: object(map[string]any{
 			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workdir 或绝对路径"},
 			"offset": map[string]any{"type": "integer", "description": "起始行号（1-based），默认 1（从头开始）"},
@@ -79,7 +62,7 @@ func ReadFileTool(workspaceRoot string, timeout time.Duration) Tool {
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			done := make(chan ToolResult, 1)
-			go func() { done <- runReadFile(workspaceRoot, args) }()
+			go func() { done <- runReadFile(workspaceRoot, args, maxBytes) }()
 			select {
 			case r := <-done:
 				return r
@@ -90,7 +73,7 @@ func ReadFileTool(workspaceRoot string, timeout time.Duration) Tool {
 	}
 }
 
-func runReadFile(workspaceRoot, args string) ToolResult {
+func runReadFile(workspaceRoot, args string, maxBytes int) ToolResult {
 	a, err := parseReadArgs(args)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
@@ -109,7 +92,7 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 		// 在此拦截，给出清晰错误而非落到 openNoFollow 的 O_NOFOLLOW errno。
 		return ToolResult{IsError: true, Output: fmt.Sprintf("%q 不是普通文件（mode=%s），仅支持 regular file", a.Path, info.Mode().String())}
 	}
-	content, err := readFileContent(full)
+	content, err := readFileContent(full, maxBytes)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
 	}
@@ -124,7 +107,7 @@ func runReadFile(workspaceRoot, args string) ToolResult {
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
 	}
-	return ToolResult{Output: text.Truncate(formatted, readFileChars(), "…")}
+	return ToolResult{Output: text.Truncate(formatted, maxBytes/4, "…")}
 }
 
 func parseReadArgs(args string) (readFileArgs, error) {
@@ -143,13 +126,13 @@ func parseReadArgs(args string) (readFileArgs, error) {
 
 // LimitReader 天然处理超大文件：超过 maxReadFileBytes 的部分直接丢弃，
 // 无需按 size 预分支。
-func readFileContent(full string) (string, error) {
+func readFileContent(full string, maxBytes int) (string, error) {
 	f, err := openNoFollow(full, os.O_RDONLY, 0)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, int64(readFileBytes())))
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)))
 	if err != nil {
 		return "", err
 	}

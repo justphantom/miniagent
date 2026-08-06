@@ -12,7 +12,7 @@ import (
 
 func TestReadFile_RelativePath(t *testing.T) {
 	dir := writeTemp(t, "a.txt", "hello world")
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"a.txt"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"a.txt"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -24,7 +24,7 @@ func TestReadFile_RelativePath(t *testing.T) {
 
 func TestReadFile_AbsoluteInsideRoot(t *testing.T) {
 	dir := writeTemp(t, "b.txt", "abs ok")
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"`+filepath.Join(dir, "b.txt")+`"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"`+filepath.Join(dir, "b.txt")+`"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -35,7 +35,7 @@ func TestReadFile_AbsoluteInsideRoot(t *testing.T) {
 
 func TestReadFile_Range(t *testing.T) {
 	dir := writeTemp(t, "r.txt", "line1\nline2\nline3\n")
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"r.txt","offset":2,"limit":1}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"r.txt","offset":2,"limit":1}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -45,9 +45,9 @@ func TestReadFile_Range(t *testing.T) {
 }
 
 func TestReadFile_Truncates(t *testing.T) {
-	long := strings.Repeat("a", readFileChars()+500)
+	long := strings.Repeat("a", maxReadFileBytes/4+500)
 	dir := writeTemp(t, "big.txt", long)
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"big.txt"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"big.txt"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -70,7 +70,7 @@ func TestReadFile_SymlinkFinalComponentRejected(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"link"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"link"}`)
 	if !res.IsError {
 		t.Fatal("expected symlink final component to be rejected")
 	}
@@ -86,7 +86,7 @@ func TestReadFile_SymlinkFinalComponentRejected(t *testing.T) {
 // workdir 为空：read 用相对路径仍能工作（依赖调用方进程 cwd）。
 func TestReadFile_EmptyWorkdir(t *testing.T) {
 	dir := writeTemp(t, "cwd.txt", "from-cwd")
-	res := ReadFileTool("", 0).Call(context.Background(), `{"path":"`+filepath.Join(dir, "cwd.txt")+`"}`)
+	res := ReadFileTool("", 0, 0).Call(context.Background(), `{"path":"`+filepath.Join(dir, "cwd.txt")+`"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -98,7 +98,7 @@ func TestReadFile_EmptyWorkdir(t *testing.T) {
 // offset 超过文件行数应作为 IsError 返回（而非静默空输出）。
 func TestReadFile_OffsetOutOfBoundsIsError(t *testing.T) {
 	dir := writeTemp(t, "small.txt", "only one line")
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"small.txt","offset":42}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"small.txt","offset":42}`)
 	if !res.IsError {
 		t.Fatal("expected error for offset out of bounds")
 	}
@@ -110,7 +110,7 @@ func TestReadFile_OffsetOutOfBoundsIsError(t *testing.T) {
 // 空文件不应输出"1 │ "伪空行，直接返回空串。
 func TestReadFile_EmptyFileReturnsBlank(t *testing.T) {
 	dir := writeTemp(t, "empty.txt", "")
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"empty.txt"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"empty.txt"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
@@ -128,7 +128,7 @@ func TestReadFile_RejectsNonRegular(t *testing.T) {
 	if err := exec.CommandContext(ctx, "mkfifo", fifo).Run(); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"fifo"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"fifo"}`)
 	if !res.IsError {
 		t.Fatal("expected FIFO to be rejected")
 	}
@@ -142,7 +142,7 @@ func TestReadFile_RejectsDevice(t *testing.T) {
 	if _, err := os.Stat("/dev/null"); err != nil {
 		t.Skipf("/dev/null unavailable: %v", err)
 	}
-	res := ReadFileTool("", 0).Call(context.Background(), `{"path":"/dev/null"}`)
+	res := ReadFileTool("", 0, 0).Call(context.Background(), `{"path":"/dev/null"}`)
 	if !res.IsError {
 		t.Fatal("expected device file to be rejected")
 	}
@@ -158,7 +158,7 @@ func TestReadFile_RejectsBinary(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("ABC\x00\x01DEF\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"bin.dat"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"bin.dat"}`)
 	if !res.IsError {
 		t.Fatal("expected binary to be rejected")
 	}
@@ -176,7 +176,7 @@ func TestReadFile_TextWithLateNULPasses(t *testing.T) {
 	if err := os.WriteFile(bin, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res := ReadFileTool(dir, 0).Call(context.Background(), `{"path":"late.txt"}`)
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"late.txt"}`)
 	if res.IsError {
 		t.Fatalf("late-NUL text should pass: %s", res.Output)
 	}

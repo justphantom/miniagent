@@ -159,7 +159,7 @@ func TestFileTools_RespectCancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for name, tool := range map[string]Tool{
-		"read":  ReadFileTool(dir, 0),
+		"read":  ReadFileTool(dir, 0, 0),
 		"write": WriteFileTool(dir, 0),
 		"edit":  EditFileTool(dir, 0),
 	} {

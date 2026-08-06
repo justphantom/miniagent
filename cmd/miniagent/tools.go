@@ -15,12 +15,12 @@ import (
 // fileOpTimeout<=0 用默认 30s；writeTimeout<=0 用默认 30s。
 // fileResultLimit>0 时覆盖 read/edit 的 Tool.ResultLimit（S4：config run.max_file_result_chars），
 // <=0 保留构造器内置默认（maxFileResultInHistory）。scripts 中 name/command 为空者跳过。
-func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, scripts []scriptDef) []miniagent.Tool {
+func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, scripts []scriptDef, limits miniagent.Limits) []miniagent.Tool {
 	shellMode := mode
 	if shellMode == "" {
 		shellMode = miniagent.ModeDefault
 	}
-	read := miniagent.ReadFileTool(workdir, fileOpTimeout)
+	read := miniagent.ReadFileTool(workdir, fileOpTimeout, limits.MaxReadFileBytes)
 	write := miniagent.WriteFileTool(workdir, writeTimeout)
 	edit := miniagent.EditFileTool(workdir, fileOpTimeout)
 	if fileResultLimit > 0 {

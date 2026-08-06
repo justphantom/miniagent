@@ -148,7 +148,7 @@ func TestBuildTools_RegistersScriptTools(t *testing.T) {
 		{"", "echo x", "空 name 跳过"},
 		{"lint", "", "空 command 跳过"},
 	}
-	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, scripts)
+	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, scripts, miniagent.Limits{})
 	names := map[string]bool{}
 	for _, tl := range tools {
 		names[tl.Name] = true
