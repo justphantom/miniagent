@@ -14,7 +14,7 @@ import (
 // NewDefaultOnLLMError 返回承载 ErrContextLength 收紧重试的默认 OnLLMError 钩子。
 // 仅对 ErrContextLength 触发：trimHistoryForContext（清 reasoning + 压 tool content）收紧后 retry=true，
 // 核心据此重试一次本次调用；其他 error 透传（retry=false），核心照常上抛。logger 仅用于收紧告警。
-func NewDefaultOnLLMError(logger *slog.Logger) func(context.Context, int, []Message, error) ([]Message, bool, error) {
+func NewDefaultOnLLMError(logger *slog.Logger, contextTrim int) func(context.Context, int, []Message, error) ([]Message, bool, error) {
 	return func(_ context.Context, _ int, msgs []Message, err error) ([]Message, bool, error) {
 		if !errors.Is(err, ErrContextLength) {
 			return nil, false, nil
@@ -22,7 +22,7 @@ func NewDefaultOnLLMError(logger *slog.Logger) func(context.Context, int, []Mess
 		if logger != nil {
 			logger.Warn("context length exceeded; trimmed history; retrying step")
 		}
-		return trimHistoryForContext(msgs), true, nil
+		return trimHistoryForContext(msgs, contextTrim), true, nil
 	}
 }
 

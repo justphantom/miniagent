@@ -365,7 +365,7 @@ func lastToolMessage(t *testing.T, msgs []Message) Message {
 // 核心 Run 现零策略，测试须显式挂默认钩子才等价于旧行为。
 func defaultHooks(cfg LoopConfig, logger *slog.Logger) LoopHooks {
 	return LoopHooks{
-		OnLLMError:      NewDefaultOnLLMError(logger),
+		OnLLMError:      NewDefaultOnLLMError(logger, 0),
 		OnBudget:        NewDefaultOnBudget(cfg.MaxTotalTokens, logger),
 		ShapeToolResult: NewDefaultShapeToolResult(cfg.Tools, cfg.ToolOutputDir, cfg.ToolOutputRetention, cfg.MaxToolResultChars, logger),
 	}

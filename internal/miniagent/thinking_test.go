@@ -123,7 +123,7 @@ func TestRun_RetryPathCapturesDowngrade(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	cfg := LoopConfig{Model: "m", ThinkingLevel: "medium"}
-	hooks := LoopHooks{OnLLMError: NewDefaultOnLLMError(nil)}
+	hooks := LoopHooks{OnLLMError: NewDefaultOnLLMError(nil, 0)}
 	res, err := Run(context.Background(), llm, cfg, "x", hooks, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

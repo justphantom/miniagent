@@ -35,7 +35,7 @@ func TestGenerateSessionID_Unique(t *testing.T) {
 
 // 无状态：saveNew=false 且 sessionArg="" → 空 path、零 meta、nil history。
 func TestResolveSessionForRun_Stateless(t *testing.T) {
-	path, meta, history := resolveSessionForRun(false, "", t.TempDir(), "p/m", "p", "/wd")
+	path, meta, history := resolveSessionForRun(false, "", t.TempDir(), "p/m", "p", "/wd", 0)
 	if path != "" {
 		t.Errorf("path = %q, 想空（无状态不落盘）", path)
 	}
@@ -51,7 +51,7 @@ func TestResolveSessionForRun_Stateless(t *testing.T) {
 // Provider 独立于 modelSpec 单列，便于会话列举/多 provider 溯源免解析字符串。
 func TestResolveSessionForRun_NewSession_FillsProvider(t *testing.T) {
 	sessionDir := t.TempDir()
-	path, meta, history := resolveSessionForRun(true, "", sessionDir, "openai/gpt-4o", "openai", "/repo")
+	path, meta, history := resolveSessionForRun(true, "", sessionDir, "openai/gpt-4o", "openai", "/repo", 0)
 	wantPath := filepath.Join(sessionDir, meta.ID+".jsonl")
 	if path != wantPath {
 		t.Errorf("path = %q, want %q", path, wantPath)

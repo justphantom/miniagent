@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync/atomic"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
@@ -18,23 +17,6 @@ const (
 	// 对应的 token 量，不限会先生成超长输出再被字符截断，白烧 token（审查 P3-1）。
 	summaryMaxTokens = 1024
 )
-
-// summaryMaxTokensOverride 允许配置覆盖内置默认；用 atomic 保护并发 Set/GET，防 -race。
-var summaryMaxTokensOverride atomic.Int64
-
-// SetSummaryMaxTokens 覆盖摘要最大 token 数；测试用，正常流程由 Resolve 调用。
-func SetSummaryMaxTokens(n int) {
-	if n > 0 {
-		summaryMaxTokensOverride.Store(int64(n))
-	}
-}
-
-func getSummaryMaxTokens() int {
-	if v := summaryMaxTokensOverride.Load(); v > 0 {
-		return int(v)
-	}
-	return summaryMaxTokens
-}
 
 // ContextBudget 是 FitHistory 的单一参数包：上下文窗口、保留轮数、摘要提示与模型、
 // 以及把中段压成摘要的可注入回调（解耦 context.go 与 HTTPClient，便于测试注入假摘要）。

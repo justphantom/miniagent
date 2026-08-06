@@ -17,7 +17,7 @@ func testBudget(llm *openai.ChatClient) ContextBudget {
 	return ContextBudget{
 		Model: "m",
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
-			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, middle)
+			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, 0, middle)
 		},
 	}
 }
@@ -111,7 +111,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err == nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
 	}
 }
@@ -121,7 +121,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
+	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
 	if err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
@@ -151,7 +151,7 @@ func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 		CompactionModel: "compaction-model",
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotModel = model
-			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, middle)
+			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, 0, middle)
 		},
 	}
 	var msgs []miniagent.Message
@@ -295,7 +295,7 @@ func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("更新摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	// lastBody 是 JSON-marshaled 请求体，< > 被转义成 < >；断言用未转义的标签名 + 旧锚点文本。

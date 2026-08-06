@@ -19,6 +19,4 @@ type Limits struct {
 	MaxSessionBytes int
 	// ContextTrimToolChars：context 超限时 tool content 压缩上限（第3步）。
 	ContextTrimToolChars int
-	// SummaryMaxTokens：compaction 摘要 max tokens（第4步）。
-	SummaryMaxTokens int
 }

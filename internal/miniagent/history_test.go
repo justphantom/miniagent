@@ -12,7 +12,7 @@ func TestTrimHistoryForContext(t *testing.T) {
 		{Role: "assistant", Content: "a", Reasoning: "long thought", ToolCalls: []ToolCall{{ID: "c1", Name: "read", Args: "{}"}}},
 		{Role: "tool", ToolCallID: "c1", Content: strings.Repeat("x", 5000)},
 	}
-	out := trimHistoryForContext(msgs)
+	out := trimHistoryForContext(msgs, 0)
 
 	if out[1].Reasoning != "" {
 		t.Errorf("reasoning not cleared: %q", out[1].Reasoning)

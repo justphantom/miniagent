@@ -3,7 +3,6 @@ package miniagent
 import (
 	"encoding/json"
 	"strings"
-	"sync/atomic"
 	"unicode"
 
 	"github.com/justphantom/miniagent/internal/text"
@@ -104,34 +103,21 @@ func estimateResponseTokens(resp Response) int {
 }
 
 // contextTrimToolChars 是 context 超限时把每条 tool 结果 content 压到的字符上限。
+// 运行时经 Limits.ContextTrimToolChars 覆盖（<=0 用此默认），由 NewDefaultOnLLMError 注入。
 const contextTrimToolChars = 2000
-
-// contextTrimToolCharsOverride 允许配置覆盖内置默认；用 atomic 保护并发 Set/Get，防 -race 告警。
-var contextTrimToolCharsOverride atomic.Int64
-
-// SetContextTrimToolChars 覆盖 context 超限时 tool 结果压缩上限；测试用，正常流程由 Resolve 调用。
-func SetContextTrimToolChars(n int) {
-	if n > 0 {
-		contextTrimToolCharsOverride.Store(int64(n))
-	}
-}
-
-func getContextTrimToolChars() int {
-	if v := contextTrimToolCharsOverride.Load(); v > 0 {
-		return int(v)
-	}
-	return contextTrimToolChars
-}
 
 // trimHistoryForContext 在端点返回 context_length_exceeded 时收紧历史，供 Run 单次重试。
 // 不删消息：删 tool 消息会破坏 assistant.tool_calls / tool 配对。
-func trimHistoryForContext(msgs []Message) []Message {
+func trimHistoryForContext(msgs []Message, contextTrim int) []Message {
+	if contextTrim <= 0 {
+		contextTrim = contextTrimToolChars
+	}
 	out := make([]Message, len(msgs))
 	copy(out, msgs)
 	for i := range out {
 		out[i].Reasoning = ""
 		if out[i].Role == RoleTool {
-			out[i].Content = text.Truncate(strings.TrimSpace(out[i].Content), getContextTrimToolChars(), "…[context_trim]")
+			out[i].Content = text.Truncate(strings.TrimSpace(out[i].Content), contextTrim, "…[context_trim]")
 		}
 	}
 	return out

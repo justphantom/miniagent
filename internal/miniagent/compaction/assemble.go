@@ -90,7 +90,10 @@ func stripSummaryPrefix(content string) string {
 // summarizeMiddle 调 LLM 把中段 msgs 压成一段摘要文本（不带 tools）。返回经 maxChars 截断的
 // 摘要 + 该次调用的 miniagent.Usage（供上游累加入预算）。复用 miniagent.ChatClient.Do；调用方据 error 回落
 // 有损压缩（审查 v2 #6）。previousSummary 非空时走 UPDATE 模式（buildSummarizerSystem 判定）。
-func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerPrompt, previousSummary string, maxChars int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
+func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerPrompt, previousSummary string, maxChars, maxSummaryTokens int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
+	if maxSummaryTokens <= 0 {
+		maxSummaryTokens = summaryMaxTokens
+	}
 	if len(msgs) == 0 {
 		return "", miniagent.Usage{}, errors.New("无中段可摘要")
 	}
@@ -99,7 +102,7 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 		Model:     model,
 		System:    system,
 		Messages:  msgs,
-		MaxTokens: getSummaryMaxTokens(),
+		MaxTokens: maxSummaryTokens,
 	})
 	if err != nil {
 		return "", miniagent.Usage{}, err
@@ -187,7 +190,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		Compacting:           opts.OnCompacting,
 		SessionID:            opts.SessionID,
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
-			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, maxChars, middle)
+			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, maxChars, opts.SummaryMaxTokens, middle)
 		},
 	}
 	var overflowPending bool

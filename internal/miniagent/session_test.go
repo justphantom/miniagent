@@ -8,9 +8,8 @@ import (
 	"testing"
 )
 
-// 用较小上限覆盖内置 50MB，避免 race detector 下 JSON marshal 大字符串超时。
+// TestMain 保留 os.Exit 语义；session 上限改为各测试经 LoadSession/AppendMessages 的 maxBytes 参数注入。
 func TestMain(m *testing.M) {
-	SetMaxSessionBytes(1 << 20) // 1MB，足够覆盖边界测试，race 下快速
 	os.Exit(m.Run())
 }
 
@@ -100,11 +99,12 @@ func TestLoadSession_ToolMissingCallIDFails(t *testing.T) {
 }
 
 func TestLoadSession_OversizedFails(t *testing.T) {
+	const max = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "big.jsonl")
-	if err := os.WriteFile(path, make([]byte, sessionBytes()+1), 0o600); err != nil {
+	if err := os.WriteFile(path, make([]byte, max+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadSession(path); err == nil {
+	if _, _, err := LoadSession(path, max); err == nil {
 		t.Fatal("expected error for oversized session file")
 	}
 }
@@ -150,12 +150,13 @@ func TestLoadSession_KindSummaryRecognized(t *testing.T) {
 // P2-7：单条大消息（>1MiB 旧行上限、<maxSessionBytes 总上限）可正常 load，
 // 不再因 scanner ErrTooLong 致整会话不可读、append-only 无法修复。
 func TestLoadSession_LargeSingleLineOK(t *testing.T) {
+	const max = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	big := strings.Repeat("x", int(sessionBytes()/2))
-	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}); err != nil {
+	big := strings.Repeat("x", int(max/2))
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}, max); err != nil {
 		t.Fatalf("AppendMessages: %v", err)
 	}
-	_, msgs, err := LoadSession(path)
+	_, msgs, err := LoadSession(path, max)
 	if err != nil {
 		t.Fatalf("P2-7：大单行 load 失败（scanner 单行上限不足）: %v", err)
 	}

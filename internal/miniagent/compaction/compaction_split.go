@@ -25,11 +25,13 @@ type CompactionOptions struct {
 	Tools           []miniagent.Tool
 	KeepRecent      int // compactWithSummary 保留的最近轮数（<=0 用内置默认）。
 	// KeepReasoning/KeepToolArgs/KeepReasoningChars 是主动裁剪参数（P1/P4/P7，<=0/0 用内置默认）。
-	KeepReasoning        int
-	KeepToolArgs         int
-	KeepReasoningChars   int
-	SummarizerPrompt     string // 非空则全量 override 摘要 system prompt。
-	SummaryMaxChars      int
+	KeepReasoning      int
+	KeepToolArgs       int
+	KeepReasoningChars int
+	SummarizerPrompt   string // 非空则全量 override 摘要 system prompt。
+	SummaryMaxChars    int
+	// SummaryMaxTokens 限制摘要请求输出 token 数（默认 summaryMaxTokens=1024）；<=0 用默认。
+	SummaryMaxTokens     int
 	PreserveRecentTokens int
 	UseRealUsage         bool
 	// Auto 控制静默用量溢出检测（AfterLLM 采真实 usage 判溢出、置下步 Force 压缩）；false=关闭。

@@ -109,7 +109,7 @@ func main() {
 	}
 	workdir := effectiveWorkdir(resolved, f)
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
-	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, resolved.Provider.Name, workdir)
+	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, resolved.Provider.Name, workdir, int64(maxSessionBytesOf(resolved)))
 	if *f.saveSession {
 		// 新建会话：session 元数据作为 stdout NDJSON 首条事件（与 jsonl 首行同构），供消费方程序化捕获接续 id。
 		// 互斥保证 -result-only 下不会触发，不污染 subagent 的纯文本 stdout。
@@ -129,11 +129,9 @@ func main() {
 		MaxShellOutputChars:    maxShellOutputCharsOf(resolved),
 		ShellStreamWindowBytes: into(resolved.Run.ShellStreamWindowBytes, 0),
 		MaxGrepMatches:         into(resolved.Run.GrepMaxMatches, 0),
+		MaxSessionBytes:        maxSessionBytesOf(resolved),
+		ContextTrimToolChars:   into(resolved.Run.ContextTrimToolChars, 0),
 	}
-	miniagent.SetMaxSessionBytes(maxSessionBytesOf(resolved))
-
-	compaction.SetSummaryMaxTokens(into(resolved.Run.SummaryMaxTokens, 0))
-	miniagent.SetContextTrimToolChars(into(resolved.Run.ContextTrimToolChars, 0))
 
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 
@@ -173,7 +171,7 @@ func main() {
 	hooks.AfterLLM = compAfter
 	// 三项原核心内置策略（用量估算+预算判定 / LLM 失败恢复 / 工具结果成型+落盘）经默认钩子工厂外挂：
 	// 核心 Run 零策略，cmd 层装配即恢复原行为。MaxTotalTokens/ToolOutputDir 等是配置载体（核心不读）。
-	hooks.OnLLMError = miniagent.NewDefaultOnLLMError(logger)
+	hooks.OnLLMError = miniagent.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
 	hooks.OnBudget = miniagent.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
 	hooks.ShapeToolResult = miniagent.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
 
@@ -203,9 +201,9 @@ func main() {
 		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
 		var saveErr error
 		if result.Compacted {
-			saveErr = miniagent.RewriteMessages(sessPath, meta, result.Messages)
+			saveErr = miniagent.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
 		} else {
-			saveErr = miniagent.AppendMessages(sessPath, meta, result.NewMessages)
+			saveErr = miniagent.AppendMessages(sessPath, meta, result.NewMessages, int64(limits.MaxSessionBytes))
 		}
 		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		if saveErr != nil {
@@ -260,6 +258,7 @@ func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent
 		KeepReasoningChars:   into(resolved.Run.ContextKeepReasoningChars, 0),
 		SummarizerPrompt:     resolved.SummarizerPrompt,
 		SummaryMaxChars:      into(resolved.Run.SummaryMaxChars, 0),
+		SummaryMaxTokens:     into(resolved.Run.SummaryMaxTokens, 0),
 		PreserveRecentTokens: into(resolved.Run.PreserveRecentTokens, 0),
 		UseRealUsage:         intoBool(resolved.Run.ContextUseRealUsage, true),
 		Auto:                 resolved.CompactionAuto,

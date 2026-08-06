@@ -58,20 +58,21 @@ func TestAppendMessages_AppendsAcrossCalls(t *testing.T) {
 // P1-4：追加后将超过 maxSessionBytes 时返回 error，不写入。读侧硬封顶，写侧不预判会让
 // 某轮落盘后文件刚越 4MiB，下一轮 LoadSession 永久失败致会话不可接续。
 func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
+	const max = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	meta := SessionMeta{ID: "s"}
-	big := strings.Repeat("x", int(sessionBytes()/2)+100)
-	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}); err != nil {
+	big := strings.Repeat("x", int(max/2)+100)
+	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}, max); err != nil {
 		t.Fatalf("首次追加应成功: %v", err)
 	}
-	// 再追加同样大小，总和超 maxSessionBytes → 写侧预判应返回 error。
-	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}); err == nil {
-		t.Fatal("P1-4：追加后超 maxSessionBytes 应返回 error")
+	// 再追加同样大小，总和超 max → 写侧预判应返回 error。
+	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}, max); err == nil {
+		t.Fatal("P1-4：追加后超 max 应返回 error")
 	}
 	// 第二次失败不应让文件越过上限（写侧预判在写入前）。
 	info, _ := os.Stat(path)
-	if info.Size() > sessionBytes() {
-		t.Errorf("文件大小 %d 超 maxSessionBytes %d", info.Size(), sessionBytes())
+	if info.Size() > max {
+		t.Errorf("文件大小 %d 超 max %d", info.Size(), max)
 	}
 }
 
@@ -227,11 +228,12 @@ func TestRewriteMessages_EmptyMsgsWritesMeta(t *testing.T) {
 
 // RewriteMessages 超 maxSessionBytes 报错，不创建/不替换文件。
 func TestRewriteMessages_OversizedFails(t *testing.T) {
+	const max = int64(1 << 20)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
-	big := strings.Repeat("x", int(sessionBytes())+1)
-	if err := RewriteMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}); err == nil {
-		t.Fatal("超 maxSessionBytes 应报错")
+	big := strings.Repeat("x", int(max)+1)
+	if err := RewriteMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}, max); err == nil {
+		t.Fatal("超 max 应报错")
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Error("超限 rewrite 不应创建文件（写临时文件前预判）")

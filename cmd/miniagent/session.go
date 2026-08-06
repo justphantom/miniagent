@@ -19,7 +19,7 @@ const defaultSessionDir = ".miniagent/sessions"
 //   - saveNew=true：新建会话，generateSessionID 生成 id，构造 meta（id 的 stdout NDJSON 输出由 main 的 EmitSession 负责），history=nil。
 //   - sessionArg!=""：接续，校验 id 后 LoadSession；文件不存在（meta.Type==""）报错防 typo 建垃圾会话。
 //   - 两者皆空：无状态，返回空 path（main 据此跳过落盘）。
-func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string) (string, miniagent.SessionMeta, []miniagent.Message) {
+func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (string, miniagent.SessionMeta, []miniagent.Message) {
 	if !saveNew && sessionArg == "" {
 		return "", miniagent.SessionMeta{}, nil
 	}
@@ -32,7 +32,7 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provi
 		fmt.Fprintf(os.Stderr, "miniagent: session: %v\n", err)
 		os.Exit(1)
 	}
-	meta, history, err := miniagent.LoadSession(sessPath)
+	meta, history, err := miniagent.LoadSession(sessPath, maxSessionBytes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
 		os.Exit(1)

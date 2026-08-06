@@ -9,29 +9,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 )
 
 // maxSessionBytes 是 session 文件默认大小上限：50MB 覆盖长会话，同时防止无限增长。
-// 可通过 SetMaxSessionBytes 覆盖。n<=0 用默认。
+// 运行时经 Limits.MaxSessionBytes 覆盖（<=0 用此默认），由 LoadSession/AppendMessages/RewriteMessages 注入。
 const maxSessionBytes = 50 << 20 // 50MB
-
-// maxSessionBytesOverride 允许测试/配置覆盖内置上限；用 atomic 保护并发 Set/Get，防 -race。
-var maxSessionBytesOverride atomic.Int64
-
-// SetMaxSessionBytes 覆盖 session 文件大小上限；测试用，正常流程由 Resolve 调用。
-func SetMaxSessionBytes(n int) {
-	if n > 0 {
-		maxSessionBytesOverride.Store(int64(n))
-	}
-}
-
-func sessionBytes() int64 {
-	if v := maxSessionBytesOverride.Load(); v > 0 {
-		return v
-	}
-	return int64(maxSessionBytes)
-}
 
 const (
 	sessionTypeSession = "session"
@@ -89,7 +71,11 @@ func ResolveSessionPath(arg, dir string) (string, error) {
 // LoadSession 读取 jsonl：首行 session metadata（若无则零值 meta），其余为 message 行。
 // 文件不存在返回 (零 meta, nil, nil) 等同新会话。损坏（非法 JSON 行、role 未知、tool 消息
 // 缺 tool_call_id、配对断裂、超大小上限）返回 error，调用方应报错退出而非静默丢历史。
-func LoadSession(path string) (SessionMeta, []Message, error) {
+func LoadSession(path string, opts ...int64) (SessionMeta, []Message, error) {
+	mb := int64(maxSessionBytes)
+	if len(opts) > 0 && opts[0] > 0 {
+		mb = opts[0]
+	}
 	f, err := openNoFollow(path, os.O_RDONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return SessionMeta{}, nil, nil
@@ -99,18 +85,18 @@ func LoadSession(path string) (SessionMeta, []Message, error) {
 	}
 	defer func() { _ = f.Close() }()
 	// 单次 open + LimitReader：消除 Stat/ReadFile 间 TOCTOU，并硬封顶读取量防撑爆内存。
-	data, err := io.ReadAll(io.LimitReader(f, sessionBytes()+1))
+	data, err := io.ReadAll(io.LimitReader(f, mb+1))
 	if err != nil {
 		return SessionMeta{}, nil, err
 	}
-	if int64(len(data)) > sessionBytes() {
-		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, sessionBytes())
+	if int64(len(data)) > mb {
+		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, mb)
 	}
 	var meta SessionMeta
 	var msgs []Message
 	sc := bufio.NewScanner(bytes.NewReader(data))
-	// 单行上限对齐 sessionBytes()：避免单条大消息触发 ErrTooLong 致整会话不可读、append-only 无法修复（P2-7）。
-	sc.Buffer(make([]byte, 64*1024), int(sessionBytes()+1))
+	// 单行上限对齐 mb：避免单条大消息触发 ErrTooLong 致整会话不可读、append-only 无法修复（P2-7）。
+	sc.Buffer(make([]byte, 64*1024), int(mb+1))
 	var corruptLine int // 挂起的非法 JSON 行号（1-based），0=无
 	var corruptErr error
 	for i := 0; sc.Scan(); i++ {
@@ -204,7 +190,11 @@ func ValidateToolPairing(msgs []Message) error {
 // AppendMessages append-only 追加 msgs 到 jsonl（新建/空时先写 metadata 行）。写侧护栏：flock
 // 跨进程锁防行边界交织非法 JSON（P2-13）；预序列化按 info.Size()+待写 超限拒绝，避免写入成功
 // 延后失败到 LoadSession 致永久卡死（P1-4）。withSessionLock 统一 O_NOFOLLOW + MkdirAll 0o700 + flock（P3）。
-func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
+func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64) error {
+	mb := int64(maxSessionBytes)
+	if len(opts) > 0 && opts[0] > 0 {
+		mb = opts[0]
+	}
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -235,8 +225,8 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 			buf.Write(b)
 			buf.WriteByte('\n')
 		}
-		if info.Size()+int64(buf.Len()) > sessionBytes() {
-			return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, info.Size()+int64(buf.Len()), sessionBytes())
+		if info.Size()+int64(buf.Len()) > mb {
+			return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, info.Size()+int64(buf.Len()), mb)
 		}
 		w := bufio.NewWriter(f)
 		if _, err := w.Write(buf.Bytes()); err != nil {
@@ -254,16 +244,20 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message) error {
 // result.Compacted 时调用：append-only 落盘的 newMsgs 含被屏障的旧 summary 与被压中段，长会话
 // 需 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。msgs 是全量 transcript；锁与临时文件策略
 // 见 withSessionLock；write/rename 失败都清理临时文件。rename 后下轮 LoadSession 读精简文件。
-func RewriteMessages(path string, meta SessionMeta, msgs []Message) error {
+func RewriteMessages(path string, meta SessionMeta, msgs []Message, opts ...int64) error {
+	mb := int64(maxSessionBytes)
+	if len(opts) > 0 && opts[0] > 0 {
+		mb = opts[0]
+	}
 	var buf bytes.Buffer
 	if meta.Type == "" {
 		meta.Type = sessionTypeSession
 	}
-	mb, err := json.Marshal(meta)
+	b, err := json.Marshal(meta)
 	if err != nil {
 		return err
 	}
-	buf.Write(mb)
+	buf.Write(b)
 	buf.WriteByte('\n')
 	for _, m := range msgs {
 		//nolint:musttag // sessionLine 嵌入 Message 是 session 文件格式约定（非 wire）
@@ -274,8 +268,8 @@ func RewriteMessages(path string, meta SessionMeta, msgs []Message) error {
 		buf.Write(b)
 		buf.WriteByte('\n')
 	}
-	if int64(buf.Len()) > sessionBytes() {
-		return fmt.Errorf("session rewrite 后 %d 字节超上限 %d", buf.Len(), sessionBytes())
+	if int64(buf.Len()) > mb {
+		return fmt.Errorf("session rewrite 后 %d 字节超上限 %d", buf.Len(), mb)
 	}
 	dir := filepath.Dir(path)
 	return withSessionLock(path, os.O_WRONLY|os.O_CREATE, func(*os.File) error {
