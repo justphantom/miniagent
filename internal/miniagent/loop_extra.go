@@ -36,7 +36,8 @@ func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int
 	if logger != nil {
 		logger.Info("llm call done", "step", step, "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
 	}
-	// finish_reason 非 stop/tool_calls 表示回答被 max_tokens 或内容过滤截断。
+	// finish_reason 非 stop/tool_calls 表示回答被 max_tokens 或内容过滤截断。核心仅告警、不续写——
+	// 截断的 resp.Text 会被当作最终文本/工具调用继续处理（LLM 层限制，核心无法廉价自动续写）。
 	if logger != nil && resp.FinishReason != "" && resp.FinishReason != "stop" && resp.FinishReason != "tool_calls" {
 		logger.Warn("llm response truncated", "step", step, "finish_reason", resp.FinishReason)
 	}

@@ -85,7 +85,8 @@ type LoopHooks struct {
 	// tool_call_id——配对不变量由核心保证。nil=内置默认成型。工具结果成型（截断/落盘/RAG 摘要等）
 	// 经此钩子外挂，核心不内置特定成型策略。
 	ShapeToolResult func(name, callID string, step int, r ToolResult) (string, error)
-	// OnDelta LLM 流式增量；非流式模式不触发。
+	// OnDelta LLM 流式增量；非流式模式不触发。返回 error 会中止流——经 callLLMOnce 上抛到 Run 终止循环
+	// （非 ErrThinkingUnsupported，不触发降级）。下游管道关闭时用此提前终止，避免继续烧 token。
 	OnDelta func(step int, kind DeltaKind, text string) error
 }
 
@@ -129,6 +130,8 @@ type BudgetInput struct {
 type Result struct {
 	Text  string
 	Usage Usage
+	// Steps 是本轮已记账 usage 的 LLM 调用数（usage 在 recordStepUsage 累加：未记的失败路径计
+	// step-1、已记的计 step；总结额外调用计 step+1）。出错/取消路径同此语义。仅观察用，非逻辑依赖。
 	Steps int
 	// Finish 是终止原因：finishStop（模型给出最终文本）或
 	// finishMaxIterations（撞迭代上限，Text 为空）。出错返回时为空串。

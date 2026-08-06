@@ -91,7 +91,9 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
 		if hooks.AfterLLM != nil {
 			if aerr := hooks.AfterLLM(ctx, s+1, resp2); aerr != nil {
-				return Result{Usage: total, Steps: s + 1, Messages: msgs, NewMessages: newMsgs}, true, aerr
+				// recordStepUsage 未执行（在其后），按 Steps=已记账 usage 调用数 的语义计 s（=(s+1)-1），
+				// 与主路径 AfterLLM err 的 step-1 对齐。
+				return Result{Usage: total, Steps: s, Messages: msgs, NewMessages: newMsgs}, true, aerr
 			}
 		}
 		if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {

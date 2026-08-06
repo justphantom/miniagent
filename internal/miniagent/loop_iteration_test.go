@@ -454,3 +454,30 @@ func TestRun_SummaryFallbackAccountsUsage(t *testing.T) {
 		t.Errorf("Usage = %+v, want {300, 30}（step1 100+10 + 总结 200+20）", res.Usage)
 	}
 }
+
+// 总结步 AfterLLM 抛错时 Steps 计 s（=iterLimit），与主路径 AfterLLM err 的 step-1 语义一致
+// （recordStepUsage 未执行、usage 未记这步）。修复前误记 s+1。
+func TestRun_SummaryAfterLLMErrorSteps(t *testing.T) {
+	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
+		textResponse("总结"),
+	}}
+	llm := testClients(tr)
+	hooks := LoopHooks{
+		AfterLLM: func(_ context.Context, step int, _ Response) error {
+			if step == 2 { // 总结步 s+1
+				return errors.New("afterllm boom")
+			}
+			return nil
+		},
+	}
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}
+	res, err := Run(context.Background(), llm, cfg, "x", hooks, nil)
+	if err == nil {
+		t.Fatal("expected AfterLLM error")
+	}
+	if res.Steps != 1 {
+		t.Errorf("Steps = %d, want 1（总结 AfterLLM err 按 usage-未记语义计 s=iterLimit）", res.Steps)
+	}
+}
