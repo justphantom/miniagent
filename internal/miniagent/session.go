@@ -289,6 +289,11 @@ func RewriteMessages(path string, meta SessionMeta, msgs []Message, opts ...int6
 			return writeErr
 		}
 		// rename 原子替换 path：withSessionLock 持的 fd 此刻指向 unlinked 旧 inode，defer unlock/close 仍正确（fd 关闭释放锁）；下轮拿新 inode 的锁。
-		return os.Rename(tmpPath, path)
+		// rename 失败（权限/磁盘满/文件系统异常）同样清理 tmp，与 write/sync 失败一致（注释承诺"write/rename 失败都清理"）。
+		if err := os.Rename(tmpPath, path); err != nil {
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		return nil
 	})
 }
