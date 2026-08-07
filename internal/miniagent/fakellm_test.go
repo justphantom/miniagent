@@ -141,15 +141,10 @@ func testBuildChatBody(req Request) ([]byte, error) {
 	if req.MaxTokens > 0 {
 		payload["max_tokens"] = req.MaxTokens
 	}
-	if req.ThinkingLevel != "" && req.ThinkingLevel != ThinkingOff {
-		field, val := "reasoning_effort", req.ThinkingLevel
-		if req.Thinking != nil {
-			if req.Thinking.Field != "" {
-				field = req.Thinking.Field
-			}
-			if mapped, ok := req.Thinking.Map[req.ThinkingLevel]; ok {
-				val = mapped
-			}
+	if req.ThinkingLevel != "" && req.ThinkingLevel != ThinkingOff && req.Thinking != nil {
+		field, val := req.Thinking.Field, req.ThinkingLevel
+		if mapped, ok := req.Thinking.Map[req.ThinkingLevel]; ok {
+			val = mapped
 		}
 		payload[field] = val
 	}

@@ -93,7 +93,7 @@ make test       # go test -race ./...
 -session string          接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错；仅允许字母/数字/-）
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
 -system string           系统提示词（默认为面向工程代码开发的代码向 prompt）
--thinking string         思考级别 off|minimal|low|medium|high|xhigh|max（默认 off，wire 透传 reasoning_effort）
+-thinking string         思考级别（默认 off；启用时 provider 必声明 thinking{field,map}，wire 必经映射，见 config.example.json）
 -version                 显示版本号并退出
 -workdir string          工作目录（default 模式写工具边界 + shell 的 cwd；也是 .miniagent/ 规则发现根）
 ```

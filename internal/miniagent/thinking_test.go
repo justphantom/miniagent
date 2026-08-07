@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildChatBody_ThinkingLevelWritten(t *testing.T) {
-	body, err := testBuildChatBody(Request{Model: "m", ThinkingLevel: "medium"})
+	body, err := testBuildChatBody(Request{Model: "m", ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestCallLLM_Thinking400Downgrade(t *testing.T) {
 		{status: http.StatusOK, body: textResponse("ok")},
 	}}
 	llm := testClients(tr)
-	resp, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	resp, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("callLLMWithDowngrade: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRun_RetryPathCapturesDowngrade(t *testing.T) {
 		{status: http.StatusOK, body: textResponse("recovered")},
 	}}
 	llm := testClients(tr)
-	cfg := LoopConfig{Model: "m", ThinkingLevel: "medium"}
+	cfg := LoopConfig{Model: "m", ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}}
 	hooks := LoopHooks{OnLLMError: NewDefaultOnLLMError(nil, 0)}
 	res, err := Run(context.Background(), llm, cfg, "x", hooks, nil)
 	if err != nil {
@@ -156,7 +156,7 @@ func TestRun_SummaryStepCapturesDowngrade(t *testing.T) {
 		{status: http.StatusOK, body: textResponse("总结完成")},
 	}}
 	llm := testClients(tr)
-	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1, ThinkingLevel: "medium"}
+	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1, ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}}
 	res, err := Run(context.Background(), llm, cfg, "x", LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

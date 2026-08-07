@@ -161,7 +161,7 @@ return finishMaxIterations
 
 **降级重试**（`loop_extra.go:callLLMWithDowngrade`）：单步 thinking 降级——`ErrThinkingUnsupported` 时去 thinking 字段重试一次，`downgraded` 标记回传 Run **跨步固化** `cfg.ThinkingLevel=""`（避免下一轮重传再撞 400）。`callLLMOnce` 携带 panic 兜底（畸形 payload 致解析 panic 不崩进程），与防 tool panic 的 `safeCall` 对称。
 
-**wire 层**（`internal/provider/openai/wire.go`）：`chatMessage`/`chatToolCall` 与 domain `Message`/`ToolCall` 字段刻意重复，上层 domain 不绑死厂商 JSON 形状。`buildChatBody` 写入思考级别（默认字段 `reasoning_effort`，`ThinkingMapping` 可覆盖字段名与级别映射，跨供应商兼容），含请求体大小预估拦截防 OOM。`Message.Kind`/`Usage`/`IsError` 是 session 层标记，**绝不泄漏给 LLM**（`buildChatBody` 独立构造）。
+**wire 层**（`internal/provider/openai/wire.go`）：`chatMessage`/`chatToolCall` 与 domain `Message`/`ToolCall` 字段刻意重复，上层 domain 不绑死厂商 JSON 形状。`buildChatBody` 写入思考级别（钉死：必经 `provider.ThinkingMapping` 的 `field`+`map[level]`，`req.Thinking==nil` 不发；跨供应商兼容），含请求体大小预估拦截防 OOM。`Message.Kind`/`Usage`/`IsError` 是 session 层标记，**绝不泄漏给 LLM**（`buildChatBody` 独立构造）。
 
 ## 8. 会话持久化（`session.go`）
 
@@ -181,7 +181,7 @@ return finishMaxIterations
 
 **成对规则**：`provider/model` 须成对（`-provider`/`-model` 同传覆盖 defaults 对，同缺以 defaults 为准）；`compaction.provider/model` 可跨 provider，同空回落 defaults。
 
-**key 解析**：`provider.Key（config）> $MINIAGENT_API_KEY`，机密建议用环境变量。`thinking.field` 黑名单防 clobber 标准 payload key。
+**key 解析**：`provider.Key（config）> $MINIAGENT_API_KEY`，机密建议用环境变量。`thinking.field` 黑名单防 clobber 标准 payload key（钉死后 `reasoning_effort` 合法，已移出黑名单）。
 
 **`Limits` 运行时覆盖**（`limits.go`）：main 据 resolved 构造 `Limits`（`MaxReadFileBytes`/`MaxShellOutputChars`/`ShellStreamWindowBytes`/`MaxGrepMatches`/`MaxSessionBytes`/`ContextTrimToolChars`），经工具构建函数 / session 函数 / 钩子工厂显式注入。替代旧 `Set*` 包级 atomic override——消除包级可变状态，支持多实例（subagent fork 用不同 limits）、无 race（不需 atomic）、测试隔离（传参而非 Set 全局）。零值字段在各注入点回落模块内置默认。
 

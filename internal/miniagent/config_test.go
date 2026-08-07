@@ -135,6 +135,17 @@ func TestLoadConfig_ThinkingKeyScopedToDefaultProvider(t *testing.T) {
 	}
 }
 
+// 钉死：defaults.thinking≠off 但 provider 完全未声明 thinking → 启动期报错（强制声明 {field,map}）。
+func TestLoadConfig_ThinkingPinRequiresDeclaration(t *testing.T) {
+	body := `{
+  "providers":[{"name":"a","chat_url":"https://a/v1/chat/completions","models":["m"]}],
+  "defaults":{"provider":"a","model":"m","thinking":"medium"}
+}`
+	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
+		t.Fatal("defaults.thinking≠off 且 provider 未声明 thinking 应报错（钉死：启用思考必声明 {field,map}）")
+	}
+}
+
 // 成对规则：defaults 对必填；compaction 只设一个字段即报错。
 func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	providers := `"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}]`
@@ -203,7 +214,7 @@ func TestLoadConfig_StrategyConstants(t *testing.T) {
 }
 
 // config.example.json 是发版旗舰示例：strip // 注释后必须可被 LoadConfig 加载
-// （曾因 openai provider 显式写 thinking.field:"reasoning_effort" 触发黑名单被拒）。
+// （钉死后 openai provider 显式声明 thinking{field:reasoning_effort,map:identity}；defaults.thinking=off 不强制）。
 func TestLoadConfig_ExampleFile(t *testing.T) {
 	data, err := os.ReadFile("../../config.example.json")
 	if err != nil {

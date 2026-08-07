@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// ThinkingMapping 让 provider 显式声明思考字段的 wire 名（默认 reasoning_effort）
-// 与级别取值映射（跨供应商兼容）。
+// ThinkingMapping 让 provider 显式声明思考字段的 wire 名（如 openai 的 reasoning_effort）
+// 与级别取值映射（跨供应商兼容）。钉死：启用思考时 provider 必声明 {field,map}，wire 必经映射。
 type ThinkingMapping struct {
 	Field string            `json:"field"`
 	Map   map[string]string `json:"map,omitempty"`
@@ -160,9 +160,9 @@ func LoadConfig(path string) (*Config, error) {
 
 // thinkingFieldBlacklist 列出 buildChatBody 写入的标准 payload key（wire.go）。
 // ThinkingMapping.Field 若指向这些 key，payload[field]=val 会 clobber 标准字段
-// （如 field:"max_tokens" 覆盖 max_tokens 限额、field:"tools" 覆盖工具表）；
-// reasoning_effort 是默认 field（wire.go），无需显式 mapping，显式写视同误配
-// （审查 v3 P3）。
+// （如 field:"max_tokens" 覆盖 max_tokens 限额、field:"tools" 覆盖工具表）。
+// 注：钉死后 reasoning_effort 不再是「默认冗余 field」，而是 provider 显式声明的合法 field（openai 标准映射），
+// 故已从黑名单移除——provider.thinking.field:"reasoning_effort" 现合法。
 var thinkingFieldBlacklist = map[string]bool{
 	"messages":          true,
 	"tools":             true,
@@ -173,35 +173,21 @@ var thinkingFieldBlacklist = map[string]bool{
 	"top_p":             true,
 	"frequency_penalty": true,
 	"presence_penalty":  true,
-	"reasoning_effort":  true,
 	"stop":              true,
 	"n":                 true,
 	"seed":              true,
 }
 
-// standardThinkingLevels 是 CLI/config 可直接使用的思考级别（空串/off 均表示关闭）。
-var standardThinkingLevels = map[string]bool{
-	ThinkingOff: true,
-	"minimal":   true,
-	"low":       true,
-	"medium":    true,
-	"high":      true,
-	"xhigh":     true,
-	"max":       true,
-}
-
-// validateThinking 校验 thinking 取值：标准级别、customKeys 中的自定义 key，或空串/off 均合法。
+// validateThinking 校验 thinking 取值（钉死）：空串/off 合法；非 off 必须在 customKeys（= 主 provider.thinking.map
+// keys）中声明——wire 必经 provider 映射，不再原样接受标准级别。迫使 provider 显式声明枚举映射（level→value）。
 func validateThinking(thinking string, customKeys map[string]bool) error {
 	if thinking == "" || thinking == ThinkingOff {
-		return nil
-	}
-	if standardThinkingLevels[thinking] {
 		return nil
 	}
 	if customKeys[thinking] {
 		return nil
 	}
-	return fmt.Errorf("thinking %q 非法（支持：%s 或 provider.thinking.map 自定义键）", thinking, strings.Join([]string{ThinkingOff, "minimal", "low", "medium", "high", "xhigh", "max"}, ", "))
+	return fmt.Errorf("thinking %q 未在 provider.thinking.map 中声明（钉死：level 必经 provider 映射，请补 defaults 所指 provider 的 thinking.map）", thinking)
 }
 
 func validateConfig(cfg *Config) error {
@@ -230,8 +216,8 @@ func validateConfig(cfg *Config) error {
 		}
 		// thinking.field 不得指向 buildChatBody 的保留 payload key：buildChatBody 用
 		// payload[field]=val 写思考级别（wire.go），命中保留 key 会 clobber 标准字段
-		// （如 max_tokens/tools）。reasoning_effort 是默认 field，无需显式 mapping
-		// （审查 v3 P3）。
+		// （如 max_tokens/tools）。钉死后 thinking.field 必显式声明（reasoning_effort 等合法，
+		// 已从黑名单移除），但仍禁指向其他标准字段。
 		if p.Thinking != nil && p.Thinking.Field != "" && thinkingFieldBlacklist[p.Thinking.Field] {
 			return fmt.Errorf("provider %q thinking.field %q 是保留 payload key，会覆盖标准字段", p.Name, p.Thinking.Field)
 		}
@@ -243,8 +229,19 @@ func validateConfig(cfg *Config) error {
 	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != ModeDefault && cfg.Defaults.Mode != ModeAuto {
 		return fmt.Errorf("defaults.mode %q 非法（%s|%s）", cfg.Defaults.Mode, ModeDefault, ModeAuto)
 	}
-	// 用 defaults 所指 provider（defProv）的自定义 thinking 键校验，与 Resolve 的 per-provider 校验一致；
-	// 聚合所有 provider 会让「只在 provider B 声明的自定义键」通过 config 却在 resolve（provider A）失败。
+	// 钉死：defaults.thinking≠off → 主 provider 必声明 thinking{field≠"", map 非空}，wire 必经 provider 映射。
+	if cfg.Defaults.Thinking != "" && cfg.Defaults.Thinking != ThinkingOff {
+		if defProv.Thinking == nil {
+			return fmt.Errorf("defaults.thinking %q 已启用，但 provider %q 未声明 thinking（钉死：启用思考必须声明 {field,map}）", cfg.Defaults.Thinking, defProv.Name)
+		}
+		if defProv.Thinking.Field == "" {
+			return fmt.Errorf("provider %q thinking.field 为空（钉死：field 必填）", defProv.Name)
+		}
+		if len(defProv.Thinking.Map) == 0 {
+			return fmt.Errorf("provider %q thinking.map 为空（钉死：map 必填，枚举必经映射）", defProv.Name)
+		}
+	}
+	// 用 defaults 所指 provider（defProv）的 thinking.map keys 校验（per-provider，与 Resolve 一致）。
 	defCustomKeys := map[string]bool{}
 	if defProv.Thinking != nil {
 		for k := range defProv.Thinking.Map {

@@ -85,17 +85,12 @@ func buildChatBody(req miniagent.Request) ([]byte, error) {
 	if req.MaxTokens > 0 {
 		payload["max_tokens"] = req.MaxTokens
 	}
-	// 思考级别：空/ThinkingOff 不写入；默认字段 reasoning_effort，provider 的 ThinkingMapping
-	// 可覆盖字段名与级别取值映射（跨供应商兼容，审查 v2 #7）。
-	if req.ThinkingLevel != "" && req.ThinkingLevel != miniagent.ThinkingOff {
-		field, val := "reasoning_effort", req.ThinkingLevel
-		if req.Thinking != nil {
-			if req.Thinking.Field != "" {
-				field = req.Thinking.Field
-			}
-			if mapped, ok := req.Thinking.Map[req.ThinkingLevel]; ok {
-				val = mapped
-			}
+	// 思考级别（钉死）：必经 provider.Thinking（field+map），req.Thinking==nil → 不发（defensive，
+	// config 路径 validate 保证 defaults.thinking≠off 时 provider 必声明）。空/ThinkingOff 不写入。
+	if req.ThinkingLevel != "" && req.ThinkingLevel != miniagent.ThinkingOff && req.Thinking != nil {
+		field, val := req.Thinking.Field, req.ThinkingLevel
+		if mapped, ok := req.Thinking.Map[req.ThinkingLevel]; ok {
+			val = mapped
 		}
 		payload[field] = val
 	}
