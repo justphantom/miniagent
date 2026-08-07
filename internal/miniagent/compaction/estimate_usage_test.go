@@ -74,8 +74,8 @@ func TestEstimateTokensFromUsage(t *testing.T) {
 	if !ok {
 		t.Error("锚点+trailing 应 ok=true")
 	}
-	if tokens != 602 { // 600 + 2
-		t.Errorf("锚点+trailing(CJK): tokens=%d, want 602", tokens)
+	if tokens != 606 { // 600 + 2(CJK) + 4(trailing msg envelope，bug 5 补信封边际)
+		t.Errorf("锚点+trailing(CJK): tokens=%d, want 606", tokens)
 	}
 }
 

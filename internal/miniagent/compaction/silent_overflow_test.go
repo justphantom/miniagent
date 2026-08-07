@@ -63,7 +63,7 @@ func TestUsableTokens(t *testing.T) {
 		{0, 1000, 0, 0},
 		{100000, 4096, 0, 95904},
 		{100000, 4096, 5000, 95000},
-		{100, 4096, 0, 0}, // 100-4096<0 → clamp 0
+		{100, 4096, 0, 80}, // reserve clamp CW/5=20 → 100-20=80（防小 CW reserve 占过半与门控倒挂，bug 6）
 	}
 	for i, c := range cases {
 		if got := usableTokens(c.contextWindow, c.maxTokens, c.res); got != c.want {
@@ -109,8 +109,8 @@ func TestFitHistory_ForceCompactsRegardlessOfEstimate(t *testing.T) {
 // 需要 step1 返回 tool_call（使 miniagent.Run 继续）+ 巨大 usage；step2 FitHistory(Force) 摘要（消费一个响应）；step2 最终文本。
 func TestRun_SilentUsageOverflowTriggersCompaction(t *testing.T) {
 	tool := miniagent.Tool{Name: "t", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "tr"} }}
-	// step1：tool_call + 巨大 prompt_tokens（>= usable=5904）触发 overflow。
-	step1 := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"t","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":6000,"completion_tokens":100}}`
+	// step1：tool_call + 巨大 prompt_tokens（>= usable=8000：CW=10000 - reserve clamp 2000，bug 6）触发 overflow。
+	step1 := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"t","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":8500,"completion_tokens":100}}`
 	tr := &fakeTransport{responses: []string{step1, textResponse("compaction-summary"), textResponse("done")}}
 	chat, stream := testClients(tr)
 	// 6 轮 history + prompt → step2 压缩时有中段可摘（>1+keepRecent=5）。

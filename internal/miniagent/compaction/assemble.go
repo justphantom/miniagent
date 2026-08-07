@@ -112,7 +112,7 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 
 // CompactingInput 是摘要现场快照，让外部 hook 决定是否注入/替换（§P2，镜像 opencode experimental.session.compacting）。
 type CompactingInput struct {
-	// SessionID 是本次摘要所属会话 id（Run 经 LoopConfig.SessionID 透传）。空串兼容无 session 模式。
+	// SessionID 是本次摘要所属会话 id（经 CompactionOptions.SessionID 注入；cmd 层从 session meta.ID 透传）。空串兼容无 session 模式。
 	SessionID string
 	// Middle 是待摘要的中段（compactWithSummary 切出的 middle，含已并入的旧 miniagent.KindSummary）。
 	// 只读：hook 不应就地改 middle，注入经 CompactingOutput.Context 由 applyCompactingHook 追加。

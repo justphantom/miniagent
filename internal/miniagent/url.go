@@ -18,5 +18,10 @@ func ValidateURL(raw string) (*url.URL, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("url %q 的 scheme %q 不支持（仅 http/https）", raw, u.Scheme)
 	}
+	// 拒 embedded userinfo（https://key@host）：凭证嵌入 URL 会被日志/错误体记录，Go transport 还可能
+	// 作 Basic Auth 发送。API key 须经 provider.key / $MINIAGENT_API_KEY 注入，不进 URL。
+	if u.User != nil {
+		return nil, fmt.Errorf("url %q 含 userinfo（user:pass@host）——禁止，防凭证嵌入 URL 被记录或泄漏", raw)
+	}
 	return u, nil
 }

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/text"
 )
 
 // ListModels 调 GET ModelsURL，返回 id 列表。复用 ChatClient.modelsEndpoint/鉴权。
@@ -57,8 +56,11 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 		return nil, false, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	// 注入 provider 自定义头；Authorization 不在此覆盖。
+	// 注入 provider 自定义头；跳过 Authorization/Content-Type 防覆盖鉴权（与 ChatClient.doOnce 一致）。
 	for k, v := range c.Headers {
+		if ck := http.CanonicalHeaderKey(k); ck == "Authorization" || ck == "Content-Type" {
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	resp, err := client.Do(req)
@@ -67,12 +69,12 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		body := text.Truncate(string(raw), 500, "…")
-		if readErr != nil {
-			return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d: read body: %w (partial: %s)", resp.StatusCode, readErr, body)
+		// 排空 body 供连接 keepalive 复用；不回显响应体——恶意/调试代理可能在错误体回显 URL/Authorization，
+		// error 经 -list-models stdout 泄漏 key（与 ChatClient.doOnce 一致，仅回显状态码）。
+		if _, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096)); readErr != nil {
+			return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d: read body: %w", resp.StatusCode, readErr)
 		}
-		return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d: %s", resp.StatusCode, body)
+		return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d", resp.StatusCode)
 	}
 	var v struct {
 		Data []struct {

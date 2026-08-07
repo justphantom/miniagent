@@ -71,6 +71,7 @@ func ResolveSessionPath(arg, dir string) (string, error) {
 // LoadSession 读取 jsonl：首行 session metadata（若无则零值 meta），其余为 message 行。
 // 文件不存在返回 (零 meta, nil, nil) 等同新会话。损坏（非法 JSON 行、role 未知、tool 消息
 // 缺 tool_call_id、配对断裂、超大小上限）返回 error，调用方应报错退出而非静默丢历史。
+// opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
 func LoadSession(path string, opts ...int64) (SessionMeta, []Message, error) {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
@@ -190,6 +191,7 @@ func ValidateToolPairing(msgs []Message) error {
 // AppendMessages append-only 追加 msgs 到 jsonl（新建/空时先写 metadata 行）。写侧护栏：flock
 // 跨进程锁防行边界交织非法 JSON（P2-13）；预序列化按 info.Size()+待写 超限拒绝，避免写入成功
 // 延后失败到 LoadSession 致永久卡死（P1-4）。withSessionLock 统一 O_NOFOLLOW + MkdirAll 0o700 + flock（P3）。
+// opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
 func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64) error {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
@@ -244,6 +246,7 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64
 // result.Compacted 时调用：append-only 落盘的 newMsgs 含被屏障的旧 summary 与被压中段，长会话
 // 需 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。msgs 是全量 transcript；锁与临时文件策略
 // 见 withSessionLock；write/rename 失败都清理临时文件。rename 后下轮 LoadSession 读精简文件。
+// opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
 func RewriteMessages(path string, meta SessionMeta, msgs []Message, opts ...int64) error {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {

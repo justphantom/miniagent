@@ -50,8 +50,10 @@ type CompactionOptions struct {
 // isUsageOverflow/usableTokens/compactionReserve（静默溢出判定）。
 // 与 context.go / history_*.go 同属压缩簇，将一并外迁到 internal/miniagent/compaction。
 
-// estimateMessageTokensLocal 单条消息本地 token 估算（CJK≈1/2、其他≈1/4），
-// 仅计 Content+Reasoning+ToolCalls.Args，不计 system/schema/envelope。
+// estimateMessageTokensLocal 单条消息本地 token 估算（CJK≈1/2、其他≈1/4），计 Content+Reasoning+
+// ToolCalls.Args + 该消息入请求的边际开销（信封 EnvelopePerMsgTokens + tool_call 包装 EnvelopePerToolCallTokens）。
+// 不计 system/schema 全局开销（请求级常量，由 EstimateTokens 的 SystemOverheadTokens 兜底）。
+// 此前漏算信封/tool_call 包装，致 estimateTokensFromUsage 在长会话系统性低估（envelope 累积），压缩偏晚。
 func estimateMessageTokensLocal(m miniagent.Message) int {
 	var nonCJK, cjk int
 	n, c := text.CountCharsLocal(m.Content)
@@ -62,7 +64,7 @@ func estimateMessageTokensLocal(m miniagent.Message) int {
 		n, c = text.CountCharsLocal(tc.Args)
 		nonCJK, cjk = nonCJK+n, cjk+c
 	}
-	return nonCJK/4 + cjk/2
+	return nonCJK/4 + cjk/2 + miniagent.EnvelopePerMsgTokens + miniagent.EnvelopePerToolCallTokens*len(m.ToolCalls)
 }
 
 // contextTokensFromUsage 把单次响应 usage 折算成「该次请求前缀+输出 token 总量」。
@@ -136,11 +138,14 @@ func compactionReserve(maxTokens, reservedCfg int) int {
 }
 
 // usableTokens 返回可用于历史填充的 token 预算（对标 opencode usable()）。
+// reserve 上限 clamp 到 CW/5：防 compactionReserve（默认 min(20000,maxTokens)）在小 CW 下占 CW 过半，
+// 致 isUsageOverflow（usage>=usable）阈值低于 FitHistory 门控（CW*4/5=80%），Force 路径过早主导。
 func usableTokens(contextWindow, maxTokens, reservedCfg int) int {
 	if contextWindow <= 0 {
 		return 0
 	}
-	return max(0, contextWindow-compactionReserve(maxTokens, reservedCfg))
+	reserve := min(compactionReserve(maxTokens, reservedCfg), contextWindow/5)
+	return max(0, contextWindow-reserve)
 }
 
 // isUsageOverflow 判定上一步真实 usage 是否已撞上下文窗口（对标 opencode isOverflow，§P1-B）。

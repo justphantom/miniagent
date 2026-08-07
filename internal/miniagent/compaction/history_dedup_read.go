@@ -22,7 +22,9 @@ func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 			if !ok {
 				continue
 			}
-			readKeyOf[tc.ID] = normalizePath(p) + "\x00" + strconv.Itoa(argReadOffset(tc.Args))
+			// key 仅用于 map 去重 + 占位 marker 文案，用可读分隔符（path + offset=N）；
+			// 勿用 \x00 等不可见字节——marker 会进 tool Content → wire 请求体，致 tokenizer/proxy 报错或乱码。
+			readKeyOf[tc.ID] = normalizePath(p) + " offset=" + strconv.Itoa(argReadOffset(tc.Args))
 		}
 	}
 	if len(readKeyOf) == 0 {

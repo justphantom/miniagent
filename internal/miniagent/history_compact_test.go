@@ -7,16 +7,16 @@ import (
 
 func TestEstimateTokens(t *testing.T) {
 	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时 = 内容 + systemOverhead + 每条消息信封。
-	if n := EstimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+SystemOverheadTokens+envelopePerMsgTokens {
-		t.Errorf("ascii 8 chars = %d, want %d", n, 2+SystemOverheadTokens+envelopePerMsgTokens)
+	if n := EstimateTokens([]Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+SystemOverheadTokens+EnvelopePerMsgTokens {
+		t.Errorf("ascii 8 chars = %d, want %d", n, 2+SystemOverheadTokens+EnvelopePerMsgTokens)
 	}
 	// 纯中文：2 字符 ≈ 1 token
-	if n := EstimateTokens([]Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+SystemOverheadTokens+envelopePerMsgTokens {
-		t.Errorf("cjk 4 chars = %d, want %d", n, 2+SystemOverheadTokens+envelopePerMsgTokens)
+	if n := EstimateTokens([]Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+SystemOverheadTokens+EnvelopePerMsgTokens {
+		t.Errorf("cjk 4 chars = %d, want %d", n, 2+SystemOverheadTokens+EnvelopePerMsgTokens)
 	}
 	// tool_calls.Args 计入估算；每个 tool_call 额外计信封（嵌套 function 对象）。
-	if n := EstimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+SystemOverheadTokens+envelopePerMsgTokens+envelopePerToolCallTokens {
-		t.Errorf("args 4 chars = %d, want %d", n, 1+SystemOverheadTokens+envelopePerMsgTokens+envelopePerToolCallTokens)
+	if n := EstimateTokens([]Message{{Role: "assistant", ToolCalls: []ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+SystemOverheadTokens+EnvelopePerMsgTokens+EnvelopePerToolCallTokens {
+		t.Errorf("args 4 chars = %d, want %d", n, 1+SystemOverheadTokens+EnvelopePerMsgTokens+EnvelopePerToolCallTokens)
 	}
 }
 

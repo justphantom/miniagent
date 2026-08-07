@@ -12,10 +12,11 @@ import (
 // 从 context.go 迁出以使压缩子包可整体外迁。SystemOverheadTokens 导出供压缩的 estimateRoundTokens 复用。
 const SystemOverheadTokens = 400
 
-// envelopePerMsgTokens / envelopePerToolCallTokens 是请求信封的线性化 token 估算（随消息数与 tool_call 数增长）。
+// EnvelopePerMsgTokens / EnvelopePerToolCallTokens 是请求信封的线性化 token 估算（随消息数与 tool_call 数增长）。
+// 导出供 compaction.estimateMessageTokensLocal 复用同一口径（含信封边际），与 SystemOverheadTokens 同理。
 const (
-	envelopePerMsgTokens      = 4
-	envelopePerToolCallTokens = 20
+	EnvelopePerMsgTokens      = 4
+	EnvelopePerToolCallTokens = 20
 )
 
 // perToolSchemaTokens 粗估单个工具 schema 入请求的 token 数（schemaTokens 序列化失败的 flat 兜底）。
@@ -47,7 +48,7 @@ func EstimateTokens(msgs []Message, system string, tools []Tool) int {
 	}
 	add(system)
 	return nonCJK/4 + cjk/2 + SystemOverheadTokens +
-		envelopePerMsgTokens*len(msgs) + envelopePerToolCallTokens*toolCalls +
+		EnvelopePerMsgTokens*len(msgs) + EnvelopePerToolCallTokens*toolCalls +
 		schemaTokens(tools)
 }
 

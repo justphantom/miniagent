@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/text"
 )
 
 const maxChatBodyBytes = 4 << 20 // 4 MiB；恰好达到不截断，多 1 字节即报错
@@ -156,8 +155,11 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 	// 重定向安全：依赖标准库默认 CheckRedirect——跨域重定向前自动剥离 Authorization
 	// 等敏感头。若未来自定义 CheckRedirect，必须保留该语义。
 	httpReq.Header.Set("Content-Type", "application/json")
-	// 注入 provider 自定义头；Authorization / Content-Type 不在此覆盖。
+	// 注入 provider 自定义头；跳过 Authorization/Content-Type 防覆盖鉴权与内容类型（与下方注释承诺一致）。
 	for k, v := range c.Headers {
+		if ck := http.CanonicalHeaderKey(k); ck == "Authorization" || ck == "Content-Type" {
+			continue
+		}
 		httpReq.Header.Set(k, v)
 	}
 
@@ -184,13 +186,15 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		// context 超限（400/413 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
 		// §P1-C：状态门从仅 400 放宽到 400||413（Anthropic request_too_large 走 413）。
 		if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && miniagent.IsContextLengthError(raw) {
-			return miniagent.Response{}, false, 0, fmt.Errorf("%w: %s", miniagent.ErrContextLength, text.Truncate(string(raw), 500, "…"))
+			// raw 仅用于特征识别，不回显进 error——恶意/调试代理可能在错误体回显请求 URL/Authorization，
+			// error 经 emitRunError 进 NDJSON stdout 与 session jsonl 会泄漏 key。仅回显状态码 + 哨兵类型。
+			return miniagent.Response{}, false, 0, fmt.Errorf("%w（状态 %d）", miniagent.ErrContextLength, resp.StatusCode)
 		}
 		// thinking 参数不被支持（400 + 特征词）：callLLMWithDowngrade 据此去字段重试一次（审查 v2 #7）。
 		if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
-			return miniagent.Response{}, false, 0, fmt.Errorf("%w: %s", miniagent.ErrThinkingUnsupported, text.Truncate(string(raw), 500, "…"))
+			return miniagent.Response{}, false, 0, fmt.Errorf("%w（状态 %d）", miniagent.ErrThinkingUnsupported, resp.StatusCode)
 		}
-		msg := fmt.Sprintf("llm returned %d: %s", resp.StatusCode, text.Truncate(string(raw), 500, "…"))
+		msg := fmt.Sprintf("llm returned %d", resp.StatusCode)
 		if shouldRetryStatus(resp.StatusCode) {
 			return miniagent.Response{}, true, parseRetryAfter(resp.Header), errors.New(msg)
 		}

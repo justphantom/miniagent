@@ -13,8 +13,8 @@ type Request struct {
 	ThinkingLevel string
 	// Thinking 覆盖默认 wire 字段名（reasoning_effort）与级别取值映射；nil 用默认。
 	Thinking *ThinkingMapping
-	// Stream 决定 buildChatBody 是否生成 stream:true；由 prepareDo（false）/DoStream
-	// （true）强制设置，Do/DoStream 行为据此确定，不暴露给调用方决策。
+	// Stream 决定 buildChatBody 是否生成 stream:true。由 DoStream（true）/prepareDo（false）内部强制设置——
+	// 调用方应直接调 DoStream（流式）或 Do（非流式），不应手设 Stream；保留导出仅因 LLM 接口契约需 struct 传值。
 	Stream bool
 }
 

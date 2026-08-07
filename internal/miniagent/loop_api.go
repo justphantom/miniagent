@@ -75,7 +75,7 @@ type LoopHooks struct {
 	// 这是 LLM 失败路径的唯一缝口（BeforeLLM/AfterLLM 都在成功路径）。默认实现见 NewDefaultOnLLMError。
 	OnLLMError func(ctx context.Context, step int, msgs []Message, callErr error) (recoveredMsgs []Message, retry bool, retErr error)
 	// OnToolUse 工具执行前通知；返回 error 沿链上抛到 Run 终止循环（下游管道关闭时）。
-	// 返回哨兵 ErrToolDenied（loop.go 定义）时仅拒绝该工具、不终止循环。
+	// 返回哨兵 ErrToolDenied（errors.go 定义）时仅拒绝该工具、不终止循环。
 	OnToolUse func(name, input string) error
 	// OnToolResult 工具执行后通知，透传 ToolResult（含 ExitCode / IsError）。同一步内多个 tool_call 并行执行，
 	// 本回调在全部完成后按 tool_call 顺序串行通知——非「每工具完成即通知」，实时性受最慢工具制约。
@@ -143,7 +143,7 @@ type Result struct {
 	// NewMessages 是本轮 Run 新增的消息（不含 History）：main 据此 append-only
 	// 追加到 session jsonl，避免每次重写全量。出错轮可能为空/不完整，main 不落盘。
 	NewMessages []Message
-	// Compacted 标记本轮是否触发过摘要压缩（compactWithSummary 成功）。交互/入口层据此
+	// Compacted 标记本轮是否触发过摘要压缩（BeforeLLM 钩子置 StepOutput.Compacted，核心据此回填）。交互/入口层据此
 	// 决定是否 rewrite session 文件——append-only 落盘的 newMsgs 含被屏障的旧 summary 与
 	// 被压中段，长会话需机会性 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。
 	Compacted bool
