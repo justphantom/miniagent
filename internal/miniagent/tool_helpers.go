@@ -1,3 +1,7 @@
+// tool_helpers.go：工具构造/执行专用 helper（仅 tool_*.go 使用）。原位于核心 tools.go，
+// 移此修正「核心含工具专用 helper」的物理错放，为工具子包化（库化 5.0.0）铺路。
+// 逻辑上属工具侧，非核心循环职责；同包仅为历史物理布局，不构成逻辑耦合（只用公共类型 + 本组 helper）。
+
 package miniagent
 
 import (
