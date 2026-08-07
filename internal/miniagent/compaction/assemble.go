@@ -113,8 +113,13 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 
 // deriveSummaryMaxChars 解析摘要字符上限（方向 A）：configured>0 用用户显式值（覆盖）；cw<=0 回落内置
 // summaryMaxChars（无窗口兼容）；否则 min(summaryMaxChars, cw/summaryCharsPerWindowRatio)——小窗口自适应，
-// 避免 summary 本身 > CW×4/5 致压缩后终止（B 的边界），大窗口 clamp 内置上限。纯函数、易测；NewCompaction
-// 装配时调用，maxSummaryTokens 派生与 jointTailBudget 估算自动联动。
+// 避免 summary 本身 > CW×4/5 致压缩后终止（B 的边界），大窗口（CW≥25000）clamp 内置上限。纯函数、易测；
+// NewCompaction 装配时调用，maxSummaryTokens 派生与 jointTailBudget 估算自动联动。
+//
+// 硬边界：即便 summary 缩到最小，CW<~1536 仍可能终止（FitHistory 末尾 trim/error 兜底）。根因是请求级
+// 开销（SystemOverhead 400 + system prompt + 工具 schema）+ head 在极小 CW 占比过高，与 summary 体积无关——
+// 属物理极限，不应靠进一步压缩 summary 硬撑（摘要将无信息量），应经文档约定「不支持过小 CW」。本函数把
+// 「压缩不终止」CW 下界从 ~5120（仅 B）降到 ~1536，覆盖所有实用小窗口模型。
 func deriveSummaryMaxChars(cw, configured int) int {
 	if configured > 0 {
 		return configured

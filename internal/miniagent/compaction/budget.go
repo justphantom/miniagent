@@ -15,8 +15,11 @@ const (
 	// 按 min(summaryMaxChars, ContextWindow/summaryCharsPerWindowRatio) 随窗口缩放（方向 A）——大窗口取此值，
 	// 小窗口自适应，避免 summary 本身 > CW×4/5 致压缩后终止（B 的边界）。用户显式 summary_max_chars 覆盖。
 	summaryMaxChars = 5000
-	// summaryCharsPerWindowRatio：默认 summaryMaxChars = ContextWindow/此值（summary token 占 CW ~10%）。
-	// 对标 tailBudgetFraction 内置比例风格；用户显式 summary_max_chars 覆盖派生。
+	// summaryCharsPerWindowRatio：默认 summaryMaxChars = ContextWindow/此值。取 5 → summary token（chars/2）
+	// 占 CW ~10%，给 head+tail+LLM 输出留 ~90%——平衡「摘要信息量」与「不挤压 tail/输出」。更小值（如 8）摘要
+	// 更精简、CW 下界更低但信息量降；更大值（如 4）反之。对标 tailBudgetFraction 内置比例风格；用户显式
+	// summary_max_chars 覆盖派生。注：即便 summary 缩到 0，CW<~1.5k 仍可能终止（请求级 overhead 400 + system
+	// + schema + head 占 CW 过半，物理极限，非本比例可解，详见 deriveSummaryMaxChars 硬边界）。
 	summaryCharsPerWindowRatio = 5
 	// summaryMaxTokens 是摘要输出 token 上限的兜底常量，从 summaryMaxChars 派生（/2）。
 	// 口径与 EstimateTokens 的 CJK≈1token/2chars 同源：chars/2 恰是「纯 CJK 摘要填满 chars 上限」
@@ -208,8 +211,9 @@ func preserveRecentTokens(budget ContextBudget) int {
 // headAdj 精确化：默认路径（SummarizerPrompt==""）下 head 是旧 KindSummary 时，它被抽为 prevSummary
 // 走 UPDATE、不进 out，故 headAdj=0 不误扣；其余（首轮非 summary、override 路径）head 进 out → 扣
 // estimateRoundTokens(head)。avail<=0（小 CW：summary+head+overhead 已占满 4/5）→ 返回 0，selectTailByTokens
-// 退化最近轮强制保留、FitHistory 末尾 trim/error 兜底——本函数不消除极小 CW 终止（summary 本身装不下，
-// 需 summaryMaxChars 随 CW 缩放，见方向 A）。
+// 退化最近轮强制保留、FitHistory 末尾 trim/error 兜底。本函数不消除极小 CW 终止；方向 A
+// （deriveSummaryMaxChars 随 CW 缩放 summaryMaxChars）把该边界上推至 CW<~1536——此后请求级 overhead+head
+// 占主导，非压缩预算可解（物理极限，详见 deriveSummaryMaxChars 硬边界）。
 func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 	if budget.ContextWindow <= 0 {
 		return preserveRecentTokens(budget)
