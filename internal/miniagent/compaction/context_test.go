@@ -196,7 +196,7 @@ func TestFitHistory_NoWindowNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}
-	out, summary, summarized, usage, err := FitHistory(context.Background(), msgs, ContextBudget{Summarize: testBudget(llm).Summarize}, nil)
+	out, summary, summarized, _, usage, err := FitHistory(context.Background(), msgs, ContextBudget{Summarize: testBudget(llm).Summarize}, nil)
 	if err != nil || summarized || summary.Kind == miniagent.KindSummary {
 		t.Fatalf("expected noop, got out=%d summarized=%v kind=%v err=%v", len(out), summarized, summary.Kind, err)
 	}
@@ -219,7 +219,7 @@ func TestFitHistory_SummarizeErrorFallsBackLossy(t *testing.T) {
 	}
 	// ContextWindow=4000 → 阈值 3200：30 条(~7900)超窗触发；compactHistory 压到 4 条(~1400)落回窗内。
 	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Summarize: testBudget(llm).Summarize}
-	out, _, summarized, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("lossy fallback should not error when it fits: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestFitHistory_NilSummarizeFallsBackLossy(t *testing.T) {
 	}
 	// Force=true 跳过 4/5 门控直接进 compactWithSummary；Summarize=nil（零值）触发 nil 守卫→有损 fallback。
 	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Force: true}
-	out, _, summarized, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("nil Summarize 应回落有损而非报错: %v", err)
 	}

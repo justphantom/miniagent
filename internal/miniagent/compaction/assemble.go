@@ -251,11 +251,11 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		}
 		b := budget
 		b.Force = force
-		fitted, summary, summarized, sumUsage, err := FitHistory(ctx, barrier, b, opts.Logger)
+		fitted, summary, summarized, committed, sumUsage, err := FitHistory(ctx, barrier, b, opts.Logger)
 		if err != nil {
 			return miniagent.StepOutput{}, err
 		}
-		out := miniagent.StepOutput{View: fitted, Commit: true} // 压缩：收缩后的 fitted 即新 transcript
+		out := miniagent.StepOutput{View: fitted, Commit: committed} // 仅压缩/fallback 替换 transcript；非压缩 strip 仅本轮 View（transcript 保留原文）
 		if summarized {
 			out.Persist = []miniagent.Message{summary}
 			u := sumUsage

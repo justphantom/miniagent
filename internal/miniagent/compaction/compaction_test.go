@@ -66,12 +66,70 @@ func TestFitHistory_JointBudgetSavesMidWindow(t *testing.T) {
 	for range 20 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: strings.Repeat("历", 600)})
 	}
-	out, _, summarized, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("CW=5120 联合预算下应不终止，err=%v（out=%d msgs，summarized=%v）", err, len(out), summarized)
 	}
 	if !summarized {
 		t.Fatal("期望触发摘要压缩")
+	}
+}
+
+// FitHistory 压缩：tail 保留原文 reasoning（改 Commit 语义后压缩分支不 strip out），committed=true。
+// 改前 applyContextStrips(out) 清非最近 1 条 reasoning，tail 多条 assistant 只剩最新 1 条；改后全保留。
+func TestFitHistory_PreservesTailReasoningOnCompaction(t *testing.T) {
+	bigSummary := strings.Repeat("摘", 5000)
+	budget := ContextBudget{
+		ContextWindow:   5120,
+		SummaryMaxChars: 5000,
+		Model:           "m",
+		Summarize: func(ctx context.Context, model, sys, prev string, middle []miniagent.Message) (string, miniagent.Usage, error) {
+			return bigSummary, miniagent.Usage{}, nil
+		},
+	}
+	var msgs []miniagent.Message
+	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "head"})
+	for range 20 {
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: strings.Repeat("历", 600)})
+	}
+	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R1", Reasoning: "思考1"})
+	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q1"})
+	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R2", Reasoning: "思考2"})
+	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q2"})
+	out, _, _, committed, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	if err != nil {
+		t.Fatalf("FitHistory: %v", err)
+	}
+	reasoningCnt := 0
+	for _, m := range out {
+		if m.Role == miniagent.RoleAssistant && m.Reasoning != "" {
+			reasoningCnt++
+		}
+	}
+	if reasoningCnt < 2 {
+		t.Errorf("压缩 tail 应保留 ≥2 条原文 reasoning（改前 strip 清非最近 1 条），实际 %d", reasoningCnt)
+	}
+	if !committed {
+		t.Error("压缩应 committed=true")
+	}
+}
+
+// FitHistory 非压缩：committed=false（strip 仅本轮 View，transcript 保留原文不替换）。
+func TestFitHistory_NonCompactNotCommitted(t *testing.T) {
+	budget := ContextBudget{
+		ContextWindow: 128000,
+		Model:         "m",
+		Summarize: func(ctx context.Context, model, sys, prev string, middle []miniagent.Message) (string, miniagent.Usage, error) {
+			return "s", miniagent.Usage{}, nil
+		},
+	}
+	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q1"}, {Role: miniagent.RoleUser, Content: "q2"}}
+	_, _, _, committed, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	if err != nil {
+		t.Fatalf("FitHistory: %v", err)
+	}
+	if committed {
+		t.Error("非压缩应 committed=false（strip 仅本轮 View，不替换 transcript）")
 	}
 }
 

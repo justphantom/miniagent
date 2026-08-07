@@ -157,7 +157,7 @@ func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
 		Summarize:     testBudget(llm).Summarize,
 	}
 	_ = tr
-	out, _, summarized, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("FitHistory: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 		{Role: miniagent.RoleAssistant, Content: "recent", Ts: 100, Usage: uPtr(9000, 100)}, // 陈旧大 usage
 	}
 	// 第一次：陈旧大 usage（9100）超 1600 阈值 → 摘要。
-	out1, _, summarized1, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out1, _, summarized1, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("1st FitHistory: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 	// 模拟下一步：在 out1（含带新 Ts 的 summary）后追加轮次，使第二轮有足够轮次可摘要。
 	msgs2 := append([]miniagent.Message{}, out1...)
 	msgs2 = append(msgs2, miniagent.Message{Role: miniagent.RoleUser, Content: "u6"}, miniagent.Message{Role: miniagent.RoleUser, Content: "u7"})
-	_, _, summarized2, _, err := FitHistory(context.Background(), msgs2, budget, nil)
+	_, _, summarized2, _, _, err := FitHistory(context.Background(), msgs2, budget, nil)
 	if err != nil {
 		t.Fatalf("2nd FitHistory: %v", err)
 	}

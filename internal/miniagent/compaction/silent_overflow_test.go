@@ -96,7 +96,7 @@ func TestFitHistory_ForceCompactsRegardlessOfEstimate(t *testing.T) {
 		Force:         true,
 		Summarize:     testBudget(llm).Summarize,
 	}
-	_, summary, summarized, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	_, summary, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("FitHistory: %v", err)
 	}

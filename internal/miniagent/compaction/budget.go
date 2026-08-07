@@ -82,11 +82,14 @@ type ContextBudget struct {
 //   - out：处理后的 msgs（可能含新 summary）；
 //   - summary：本轮生成的 miniagent.KindSummary 消息（summary.Kind=="" 表示未生成，调用方据此判 summarized）；
 //   - summarized：是否成功摘要压缩（Run 据此设 result.Compacted 并把 summary 插入 newMsgs）；
+//   - committed：本轮 out 是否应替换运行 transcript（压缩成功/fallback=true；非压缩 strip 仅本轮 View=false）。
+//     非压缩不替换 → transcript 保留原文（reasoning/args 不被滚动 strip 丢失）；压缩替换为 [head,summary,tail]，
+//     tail 保留原文（不再 strip out），RewriteMessages 落盘完整近期上下文（消除压缩轮持久化不对称）。
 //   - usage：摘要调用的 token 用量（Run 累加进 total，MaxTotalTokens 预算含摘要调用）；
 //   - err：即使有损裁剪后仍超 window 时返回，Run 应终止避免循环烧请求。
 //
 // 不触碰 newMsgs——持久化层的 summary 插入/去重由 Run 经 mergePersisted 完成（loop.go:216）。
-func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBudget, logger *slog.Logger) (out []miniagent.Message, summary miniagent.Message, summarized bool, usage miniagent.Usage, err error) {
+func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBudget, logger *slog.Logger) (out []miniagent.Message, summary miniagent.Message, summarized, committed bool, usage miniagent.Usage, err error) {
 	keepReasoning := budget.KeepReasoning
 	if keepReasoning <= 0 {
 		keepReasoning = contextKeepReasoning
@@ -100,15 +103,15 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 		keepReasoningChars = contextKeepReasoningChars
 	}
 	// keepReasoningChars < 0 → truncateKeptReasoning 内部 threshold<=0 原样返回（关闭）。
-	// §P0-B：阈值判定改用 estimateThreshold（优先真实 usage、回落本地估算），补 miniagent.EstimateTokens
-	// 对缓存内容零感知的盲区，长会话不再系统性偏晚触发压缩。
-	// §P1-B：Force=true（上一步真实 usage 命中 isUsageOverflow）时跳过估算门控，直接进 compactWithSummary
-	// 分支，让压缩基于「已证实的真实占用」触发。Force 仅在 ContextWindow>0 时被置位，故不产生 ContextWindow<=0
-	// 的非法 Force 路径；后续 trimRecentRounds/终止门控（:116/:122）仍用 ContextWindow，不受影响。
-	if !budget.Force && (budget.ContextWindow <= 0 || estimateThreshold(msgs, budget.System, budget.Tools, budget.UseRealUsage) <= budget.ContextWindow*4/5) {
-		// P1/P4/P6/P7/P8'/P9b/P11 主动裁剪（各阶段语义见 applyContextStrips；Debug level 记录节省 token）。
-		out := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
-		return out, miniagent.Message{}, false, miniagent.Usage{}, nil
+	// 门控基于 strip View（=LLM 所见），非原文 msgs：非压缩步 Commit=false 后 transcript 保留原文，每轮从原文重算 strip。
+	// §P0-B：estimateThreshold 优先真实 usage、回落本地估算，补 miniagent.EstimateTokens 对缓存内容零感知的盲区。
+	// §P1-B：Force=true（上一步真实 usage 命中 isUsageOverflow）时跳过门控，直接进压缩分支（Force 仅 CW>0 置位）。
+	if !budget.Force {
+		stripped := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
+		if budget.ContextWindow <= 0 || estimateThreshold(stripped, budget.System, budget.Tools, budget.UseRealUsage) <= budget.ContextWindow*4/5 {
+			// 非压缩：strip 仅本轮 View（committed=false），transcript 保留原文，下轮从原文重算 strip。
+			return stripped, miniagent.Message{}, false, false, miniagent.Usage{}, nil
+		}
 	}
 	keepRecent := budget.KeepRecent
 	if keepRecent <= 0 {
@@ -125,14 +128,12 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	summarized = sm.Kind == miniagent.KindSummary
 	out = fitted
 	if !summarized {
+		// fallback 有损裁剪（原文）：无 jointTailBudget 兜底，保留 strip 防超窗。
 		out = compactHistory(msgs, keepRecent)
+		out = applyContextStrips(ctx, out, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
 	}
-	// P1/P4/P6/P7/P8'/P9b/P11 主动裁剪（语义见 applyContextStrips；放在 window 检查前——清理后 token 估计更低，
-	// 更可能免于触发 trimRecentRounds/终止报错。中段已并入 summary 不经此处）。
-	out = applyContextStrips(ctx, out, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
-	// 压缩后判定用本地 EstimateTokens（而非门控的 estimateThreshold）：压缩后真实 usage 已陈旧——
-	// 压缩成功时新 summary 重定义前缀（lastApplicableUsageIndex 失效回落本地）/ fallback 时保留尾 usage
-	// 反映压缩前（高估），故本地估算压缩后实际 out 更准。门控用 estimateThreshold（反映压缩前前缀，精确判需压）。
+	// summarized：out=fitted 不 strip——tail 原文 reasoning/args 保留，体积由 jointTailBudget 控制（≤ CW×4/5）。
+	// 压缩后判定用本地 EstimateTokens（门控用 estimateThreshold 反映压缩前前缀；压缩后真实 usage 陈旧，本地更准）。
 	if miniagent.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
@@ -142,9 +143,9 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	// 缓存 post-trim out 的 token 估算：下方判定与错误消息复用同一值（原三次 EstimateTokens 之一在此消除）。
 	est := miniagent.EstimateTokens(out, budget.System, budget.Tools)
 	if est > budget.ContextWindow*4/5 {
-		return out, sm, summarized, sumUsage, fmt.Errorf("history 超 context window（约 %d tokens）即使有损裁剪后仍超——终止以避免循环烧请求", est)
+		return out, sm, summarized, true, sumUsage, fmt.Errorf("history 超 context window（约 %d tokens）即使有损裁剪后仍超——终止以避免循环烧请求", est)
 	}
-	return out, sm, summarized, sumUsage, nil
+	return out, sm, summarized, true, sumUsage, nil
 }
 
 // applyContextStrips 跑全部主动裁剪（P1/P4/P6/P7/P8'/P9b/P11），仅改 context 侧拷贝，供 FitHistory
