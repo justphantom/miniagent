@@ -41,6 +41,7 @@ type cliFlags struct {
 	mode          *string
 	thinking      *string
 	resultOnly    *bool
+	replay        *string
 }
 
 func parseFlags() *cliFlags {
@@ -56,6 +57,7 @@ func parseFlags() *cliFlags {
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
 	f.session = flag.String("session", "", "接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错）")
 	f.saveSession = flag.Bool("save-session", false, "新建会话并落盘（id 内部生成；与 -session 互斥）")
+	f.replay = flag.String("replay", "", "回放指定会话（读 session 文件重显过程，不调 LLM；与 -save-session/-session/-result-only 互斥）")
 	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
 	f.maxIterations = flag.Int("max-iterations", 0, "单轮 LLM 调用上限（0=默认 20）")
 	f.stream = flag.Bool("stream", false, "流式输出（SSE）；默认非流式")
@@ -96,6 +98,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 		os.Exit(1)
 	}
+	// -replay：离线回放指定 session，不调 LLM/不需 key/不落盘/不读 stdin。短路位置经取舍：
+	// 在 Resolve 后（需 resolved.Session.Dir 解析 session 目录）、在 validateConversation 前
+	//（不需 workdir）、在 apiKey 前（不需 key）、在 mustReadPrompt 前（不读 stdin）。
+	// sessionDir 三行与下方主路径同逻辑，内联以避免挪动主流程结构。
+	if *f.replay != "" {
+		if *f.saveSession || *f.session != "" || *f.resultOnly {
+			fmt.Fprintln(os.Stderr, "miniagent: -replay 与 -save-session/-session/-result-only 互斥")
+			os.Exit(1)
+		}
+		sessionDir := defaultSessionDir
+		if resolved.Session.Dir != "" {
+			sessionDir = resolved.Session.Dir
+		}
+		runReplay(os.Stdout, sessionDir, *f.replay, int64(maxSessionBytesOf(resolved)))
+		return
+	}
+
 	apiKey := resolveFinalKey(resolved.Provider.Key)
 
 	validateConversation(resolved, f)

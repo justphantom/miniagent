@@ -38,12 +38,17 @@ type errorEvent struct {
 	Message string `json:"message"`
 }
 
+// EmitToolUse 写一条 tool_use 事件（工具名 + 原始 JSON 参数）。回放离线发事件直接调它；
+// 运行时经 ToolUseWriter 包装成 OnToolUse hook 在工具执行前触发。
+func EmitToolUse(w io.Writer, name, input string) error {
+	return json.NewEncoder(w).Encode(toolUseEvent{Type: "tool_use", Name: name, Input: input})
+}
+
 // ToolUseWriter 返回一个 OnToolUse 回调：每次调用把工具名与参数写成一条
 // NDJSON tool_use 事件到 w。错误契约见 OnToolUse。
 func ToolUseWriter(w io.Writer) miniagent.OnToolUse {
-	enc := json.NewEncoder(w)
 	return func(name, input string) error {
-		return enc.Encode(toolUseEvent{Type: "tool_use", Name: name, Input: input})
+		return EmitToolUse(w, name, input)
 	}
 }
 
