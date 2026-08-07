@@ -113,10 +113,9 @@ func TestValidateConfig_ThinkingFieldBlacklisted(t *testing.T) {
 	}
 }
 
-// 非保留 key（reasoning/thinking/extended_thinking）通过；reasoning_effort 虽是默认
-// field 但属保留（显式 mapping 视同误配），应拒绝。
+// 非保留 key（reasoning/thinking/extended_thinking/reasoning_effort）通过（不在 thinkingFieldBlacklist 中）。
 func TestValidateConfig_ThinkingFieldValid(t *testing.T) {
-	for _, ok := range []string{"reasoning", "thinking", "extended_thinking"} {
+	for _, ok := range []string{"reasoning", "thinking", "extended_thinking", "reasoning_effort"} {
 		cfg := mkFullConfig("main", "m", ProviderConfig{
 			Name:     "main",
 			ChatURL:  "https://api/v1/chat/completions",
@@ -125,16 +124,5 @@ func TestValidateConfig_ThinkingFieldValid(t *testing.T) {
 		if err := validateConfig(cfg); err != nil {
 			t.Errorf("field %q should pass, got: %v", ok, err)
 		}
-	}
-	// reasoning_effort 是默认 field（wire.go），显式 mapping 视同误配，应拒绝。
-	cfg := &Config{
-		Providers: []ProviderConfig{{
-			Name:     "main",
-			ChatURL:  "https://api/v1/chat/completions",
-			Thinking: &ThinkingMapping{Field: "reasoning_effort"},
-		}},
-	}
-	if err := validateConfig(cfg); err == nil {
-		t.Errorf("reasoning_effort is reserved (default field), should reject explicit mapping")
 	}
 }
