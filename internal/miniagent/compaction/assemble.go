@@ -209,6 +209,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		Tools:                opts.Tools,
 		UseRealUsage:         opts.UseRealUsage,
 		PreserveRecentTokens: opts.PreserveRecentTokens,
+		SummaryMaxChars:      maxChars,
 		Compacting:           opts.OnCompacting,
 		SessionID:            opts.SessionID,
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {

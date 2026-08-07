@@ -146,11 +146,12 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	if len(rounds) <= 1+keepRecent {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, nil // 无中段可摘
 	}
-	// §P1-E：tail 选择从纯轮数升级为 token 预算累加 + 边界轮细切（tokenBudget<=0 回落纯轮数，向后兼容）。
-	// 在 rounds[1:]（排除 head=rounds[0]）上选 tail，head 单独保留/并入 middle。
-	tokenBudget := preserveRecentTokens(budget)
-	tail, middleCore := selectTailByTokens(rounds[1:], keepRecent, tokenBudget)
 	head := rounds[0]
+	// §B：tail 预算改为联合预算（jointTailBudget）——从 CW×4/5 扣除 summary+head+请求开销后剩多少给 tail，
+	// 使不可压缩的 summary 优先、tail 主动让步，减少中等 CW 压缩后超窗 trim/终止。tokenBudget<=0 回落纯轮数
+	// 兼容（向后兼容老会话/无窗口）。§P1-E 边界轮细切（split/shrink）语义不变。
+	tokenBudget := jointTailBudget(budget, head)
+	tail, middleCore := selectTailByTokens(rounds[1:], keepRecent, tokenBudget)
 	prevSummary := ""
 	if len(head) == 1 && head[0].Kind == miniagent.KindSummary {
 		if budget.SummarizerPrompt == "" {

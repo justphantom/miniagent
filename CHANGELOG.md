@@ -7,6 +7,7 @@
 
 ### Fixed
 - **`summaryMaxTokens` 与 `summaryMaxChars` CJK 不一致修复**：原固定 `summaryMaxTokens=1024` 对 CJK 偏紧（1024 token≈1500 汉字，远低于 `summaryMaxChars=5000`），中文摘要被 `MaxTokens` 隐性截短到设计值约 30%；现默认从 `summaryMaxChars` 派生（`/2`，与 `EstimateTokens` 的 `CJK≈1token/2chars` 同口径），保证纯中文摘要填满字符上限不被 token 先截。新增纯函数 `deriveSummaryMaxTokens` 在 `NewCompaction` 装配时派生——只配 `summary_max_chars` 时 token 自动跟随，显式配 `summary_max_tokens` 仍可覆盖。（对应 `docs/codebase-third-evaluation.md` L3-5）
+- **`compactWithSummary` tail 预算改为联合预算（方向 B）**：原 tail 按 `preserveRecentTokens` 独立选取，不考虑摘要+head 已占空间，中等 ContextWindow（约 5k）下 `head+summary+tail` 超 `CW×4/5` → `trimRecentRounds` 后仍超 → 终止 error（白烧摘要调用）。新增 `jointTailBudget`：tail 预算 = `min(CW×4/5 − 请求开销 − head − 摘要估算, preserveRecentTokens)`，使不可压缩的 summary 优先、tail 让步，从源头消除中等 CW 的压缩后终止（实测 CW=5120 由终止→不终止）。UPDATE 路径下旧 summary 不进 out 时精确不扣 head。**边界**：极小 CW（≤~4k，summary 本身装不下 `CW×4/5`）仍终止，需调小 `summary_max_chars`（方向 A，未实现）。
 
 ## [4.2.0] - 2026-08-06
 

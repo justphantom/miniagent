@@ -53,6 +53,9 @@ type ContextBudget struct {
 	// <=0=自动：floor(ContextWindow/tailBudgetFraction) clamp [min,max]；ContextWindow<=0 时返回 0 关闭，
 	// 回落 KeepRecent 轮数模式（向后兼容老会话与无窗口配置）。
 	PreserveRecentTokens int
+	// SummaryMaxChars 是摘要字符上限，供 jointTailBudget 估算摘要 token 占用（CJK /2 口径）。<=0 回落
+	// summaryMaxChars 常量。由 NewCompaction 从 opts.SummaryMaxChars（已解析）注入。
+	SummaryMaxChars int
 	// Compacting 在每次摘要前触发（compactWithSummary 内、调 budget.Summarize 前），允许注入
 	// context 或一次性替换 summarizerPrompt（镜像 opencode experimental.session.compacting，§P2）。
 	// nil=不启用。Run 构造 budget 时从 LoopHooks.OnCompacting 桥接。
@@ -189,6 +192,36 @@ func preserveRecentTokens(budget ContextBudget) int {
 		return maxPreserveRecentTokens
 	}
 	return t
+}
+
+// jointTailBudget 返回 retainedTail 的联合 token 预算（§B）：从 CW×4/5 扣除不可压缩部分——请求级
+// system/schema/overhead（EstimateTokens([],System,Tools)，整请求出现一次）+ head 轮边际 + 摘要上限估算
+// （summaryMaxChars/2，CJK 最密口径，与 summaryMaxTokens 派生同源 + 单条信封）——使 tail 主动让出空间给
+// 不可压缩的 summary，从源头减少中等 CW 下 head+summary+tail 超窗致 trim/终止。与 preserveRecentTokens
+// （用户 tail 意愿上界）取 min：物理约束 ∧ 意愿上界。CW<=0 回落 preserveRecentTokens（无窗口纯轮数兼容）。
+//
+// headAdj 精确化：默认路径（SummarizerPrompt==""）下 head 是旧 KindSummary 时，它被抽为 prevSummary
+// 走 UPDATE、不进 out，故 headAdj=0 不误扣；其余（首轮非 summary、override 路径）head 进 out → 扣
+// estimateRoundTokens(head)。avail<=0（小 CW：summary+head+overhead 已占满 4/5）→ 返回 0，selectTailByTokens
+// 退化最近轮强制保留、FitHistory 末尾 trim/error 兜底——本函数不消除极小 CW 终止（summary 本身装不下，
+// 需 summaryMaxChars 随 CW 缩放，见方向 A）。
+func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
+	if budget.ContextWindow <= 0 {
+		return preserveRecentTokens(budget)
+	}
+	target := budget.ContextWindow * 4 / 5
+	reqOverhead := miniagent.EstimateTokens(nil, budget.System, budget.Tools)
+	headAdj := 0
+	if len(headRounds) != 1 || headRounds[0].Kind != miniagent.KindSummary || budget.SummarizerPrompt != "" {
+		headAdj = estimateRoundTokens(headRounds)
+	}
+	maxChars := budget.SummaryMaxChars
+	if maxChars <= 0 {
+		maxChars = summaryMaxChars
+	}
+	summaryEstimate := maxChars/2 + miniagent.EnvelopePerMsgTokens
+	avail := target - reqOverhead - headAdj - summaryEstimate
+	return min(max(avail, 0), preserveRecentTokens(budget))
 }
 
 // estimateRoundTokens 估算单轮的边际 token（content+reasoning+args+信封），不计 system/schema 全局开销

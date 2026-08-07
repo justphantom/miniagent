@@ -22,6 +22,59 @@ func testBudget(llm *openai.ChatClient) ContextBudget {
 	}
 }
 
+// jointTailBudget：CW<=0 回落 preserveRecentTokens(=0)；否则 min(CW×4/5 − reqOverhead − headAdj − summaryEstimate, userCap)。
+// headAdj 在默认路径下旧 summary 不进 out → 0。reqOverhead=EstimateTokens(nil,"",nil)=SystemOverhead=400；
+// head="q" 非summary → estimateRoundTokens=4；summaryEstimate=summaryMaxChars/2+Envelope=2504。
+func TestJointTailBudget(t *testing.T) {
+	head := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}                                   // 首轮非 summary
+	headSum := []miniagent.Message{{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "旧摘要"}} // UPDATE 路径 head
+	mk := func(cw int) ContextBudget { return ContextBudget{ContextWindow: cw, System: "", Tools: nil} }
+	cases := []struct {
+		name string
+		bud  ContextBudget
+		head []miniagent.Message
+		want int
+	}{
+		{"CW<=0 无窗口回落 0", mk(0), head, 0},                      // preserveRecentTokens(CW<=0)=0
+		{"大CW 128k 取 userCap 8000", mk(128000), head, 8000},    // avail 99492 > cap 8000
+		{"大CW 128k UPDATE head 不扣", mk(128000), headSum, 8000}, // headAdj=0 但 cap 主导
+		{"中CW 5120 扣 head", mk(5120), head, 1188},              // 4096-400-4-2504=1188 < cap 2000
+		{"中CW 5120 UPDATE 不扣 head", mk(5120), headSum, 1192},   // 4096-400-0-2504=1192
+		{"小CW 2048 avail<=0 归零", mk(2048), head, 0},            // 1638-400-4-2504<0 → 0
+	}
+	for _, c := range cases {
+		if got := jointTailBudget(c.bud, c.head); got != c.want {
+			t.Errorf("%s: jointTailBudget=%d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// FitHistory 联合预算（§B）：CW=5120 + summaryMaxChars=5000 的中等窗口，当前（独立 tail 预算）会
+// head+summary+tail 超窗 trim 后仍超 → 终止 error；联合预算让 tail 让步 → out est< CW×4/5，err==nil。
+// 20 轮 × 600 中文字（≈6480 token > 门控 4096 触发摘要），假摘要回调返回满 5000 字。
+func TestFitHistory_JointBudgetSavesMidWindow(t *testing.T) {
+	bigSummary := strings.Repeat("摘", 5000)
+	budget := ContextBudget{
+		ContextWindow:   5120,
+		SummaryMaxChars: 5000,
+		Model:           "m",
+		Summarize: func(ctx context.Context, model, sys, prev string, middle []miniagent.Message) (string, miniagent.Usage, error) {
+			return bigSummary, miniagent.Usage{}, nil
+		},
+	}
+	var msgs []miniagent.Message
+	for range 20 {
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: strings.Repeat("历", 600)})
+	}
+	out, _, summarized, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	if err != nil {
+		t.Fatalf("CW=5120 联合预算下应不终止，err=%v（out=%d msgs，summarized=%v）", err, len(out), summarized)
+	}
+	if !summarized {
+		t.Fatal("期望触发摘要压缩")
+	}
+}
+
 // applyCompactionBarrier：有 summary → 返回最新 summary 及之后；无 → 原样。
 func TestApplyCompactionBarrier(t *testing.T) {
 	msgs := []miniagent.Message{
