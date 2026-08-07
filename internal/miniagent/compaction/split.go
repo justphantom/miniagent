@@ -78,46 +78,19 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 	return tail, middle
 }
 
-// splitOrShrinkToRound 是边界轮的适配入口：先试 splitRoundByTokens 找安全消息边界切点（后缀并入 tail），
-// 切不动则 shrinkRoundToolContents 压 tool content 贴合 remaining。返回 (fitted, ok)；ok=false 表示
-// 边界轮无法并入 tail，应整轮进 middle。
+// splitOrShrinkToRound 是边界轮的适配入口：shrinkRoundToolContents 压 tool content 贴合 remaining。
+// 返回 (fitted, ok)；ok=false 表示边界轮无法并入 tail，应整轮进 middle。
+// （原 splitRoundByTokens 已删：miniagent splitRounds 使文本轮为单消息、tool-call 轮为 [A(tc)+tools]，
+// 单轮内无可安全切的非 tool 消息边界，该函数对生产轮恒返回 nil——YAGNI 删除，连带消除其成功路径丢 boundary 轮前缀的隐患。）
 func splitOrShrinkToRound(round []miniagent.Message, remaining int) ([]miniagent.Message, bool) {
 	if remaining <= 0 {
 		return nil, false
-	}
-	if suffix := splitRoundByTokens(round, remaining); suffix != nil {
-		return suffix, true
 	}
 	shrunk := shrinkRoundToolContents(round, remaining)
 	if estimateRoundTokens(shrunk) <= remaining {
 		return shrunk, true
 	}
 	return nil, false
-}
-
-// splitRoundByTokens 单轮内按 token 预算找安全切点，返回并入 tail 的后缀（移植 opencode splitTurn，§P1-E）。
-// 受 miniagent flat []miniagent.Message 配对约束：tool 角色消息不可作切点起点（会孤立 tool 于 assistant 之外），
-// 后缀须自洽（miniagent.ValidateToolPairing 守）。从 round[1] 起向后扫，返回最早 estimateRoundTokens<=tokenBudget 的合格后缀。
-// tokenBudget<=0 或 len(round)<=1（单消息轮无可切边界）返回 nil——由调用方整轮进 middle 或转 shrink。
-// 注：miniagent splitRounds 使文本轮为单消息、tool-call 轮为 [assistant(tc)+tools]，故本函数对生产轮恒返回 nil
-// （单消息轮 len<=1；tool-call 轮除 round[0] 外皆 tool 被跳过）；保留以服务手动构造的多消息轮与未来扩展。
-func splitRoundByTokens(round []miniagent.Message, tokenBudget int) []miniagent.Message {
-	if tokenBudget <= 0 || len(round) <= 1 {
-		return nil
-	}
-	for i := 1; i < len(round); i++ {
-		if round[i].Role == miniagent.RoleTool {
-			continue // 切点后缀不能以 tool 开头（孤立）
-		}
-		suffix := round[i:]
-		if estimateRoundTokens(suffix) <= tokenBudget {
-			if err := miniagent.ValidateToolPairing(suffix); err != nil {
-				continue
-			}
-			return suffix
-		}
-	}
-	return nil
 }
 
 // shrinkRoundToolContents 是 miniagent flat 模型下 opencode splitTurn 的语义等价物（§P1-E，REFUTED 后的必需补偿）：

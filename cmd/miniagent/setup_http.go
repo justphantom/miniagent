@@ -32,19 +32,14 @@ func warnProvidersInsecureURLs(providers []miniagent.ProviderConfig) {
 	}
 }
 
-// httpTimeoutFromConfig 解析 config 中的 run.http_timeout；未配置返回 0。
+// httpTimeoutFromConfig 解析 config 中的 run.http_timeout；未配置返回 0。复用 miniagent.ParseDuration
+// 统一 duration 校验语义与错误格式（list-models 路径绕过 Resolve，故此处单独解析）。
 func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
-	if cfg.Run.HTTPTimeout == nil {
-		return 0, nil
+	d, err := miniagent.ParseDuration(cfg.Run.HTTPTimeout, "run.http_timeout")
+	if err != nil || d == nil {
+		return 0, err
 	}
-	d, err := time.ParseDuration(*cfg.Run.HTTPTimeout)
-	if err != nil {
-		return 0, fmt.Errorf("run.http_timeout %q: %w", *cfg.Run.HTTPTimeout, err)
-	}
-	if d < 0 {
-		return 0, fmt.Errorf("run.http_timeout %q 负值不合法", *cfg.Run.HTTPTimeout)
-	}
-	return d, nil
+	return *d, nil
 }
 
 // listAllModels 按 provider 解析 key（provider.Key > $MINIAGENT_API_KEY）并复用统一

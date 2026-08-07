@@ -94,6 +94,9 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
 				return Result{Steps: s + 1}, true, berr
 			}
+			// 例外（已文档化，见 TestRun_SummaryInjectionFallsBack）：总结调用是「撞上限后劝模型收尾」的内部
+			// 引导，token 计入 total（防预算绕过）但 **不累计 Steps**——回落 ok=false 让 :179 返回 Steps=iterLimit。
+			// Steps 表「主动 ReAct 步数」，总结引导非主动步；故 usage 与 Steps 在此路径刻意不同步。
 			return Result{}, false, nil
 		}
 		appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})

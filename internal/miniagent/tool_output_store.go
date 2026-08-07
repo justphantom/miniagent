@@ -123,7 +123,8 @@ func (s *toolOutputStore) cleanup() {
 }
 
 // sanitizeFileSegment 把 callID 压成文件名安全段：保留 [A-Za-z0-9_-]，其余替换为 '_'，
-// 截断到 32 字符。防路径穿越（剔 / .. 等）。
+// 截断到 ≤32 字节（b.Len() 计字节，非 rune；多字节 rune 可使段长略超 32B，counter 后缀消解碰撞）。
+// 防路径穿越（剔 / .. 等）。
 func sanitizeFileSegment(s string) string {
 	var b strings.Builder
 	for _, r := range s {

@@ -104,6 +104,17 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 				// 成型钩子抛错：当前 i 已执行（OnToolResult 已成功通知真实结果），用原始 Output 入历史
 				// 保与消费方所见一致；剩余 calls 补占位保配对（区别于 OnToolResult 抛错：彼处消费方未确认，i 亦占位）。
 				appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: tc.ID, Content: tres.Output, IsError: tres.IsError})
+				// i+1.. 工具已执行（runToolsParallel 全跑），其真实结果尽力通知 OnToolResult——两钩子关注点可能独立
+				//（如 ShapeToolResult 落盘磁盘满，而 OnToolResult 的 stdout 管道仍可用），否则消费方漏看已执行工具的结果。
+				// OnToolResult 再抛错则从该处补占位并返回该错（下游不可写，继续通知无意义）。
+				if hooks.OnToolResult != nil {
+					for j := i + 1; j < len(calls); j++ {
+						if err := hooks.OnToolResult(calls[j].Name, calls[j].ID, results[j]); err != nil {
+							fillPlaceholderTail(&msgs, newMsgs, calls, j)
+							return msgs, err
+						}
+					}
+				}
 				fillPlaceholderTail(&msgs, newMsgs, calls, i+1)
 				return msgs, serr
 			}

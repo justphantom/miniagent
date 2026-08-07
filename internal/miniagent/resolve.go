@@ -194,27 +194,27 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	}
 	// durations：*string → *time.Duration。纯透传字段不经此（消费方读 Resolved.RunConfig）。
 	var err error
-	r.MaxDuration, err = parseDur(cfg.Run.MaxDuration, "run.max_duration")
+	r.MaxDuration, err = ParseDuration(cfg.Run.MaxDuration, "run.max_duration")
 	if err != nil {
 		return r, err
 	}
-	r.ShellTimeout, err = parseDur(cfg.Run.ShellTimeout, "run.shell_timeout")
+	r.ShellTimeout, err = ParseDuration(cfg.Run.ShellTimeout, "run.shell_timeout")
 	if err != nil {
 		return r, err
 	}
-	r.FileOpTimeout, err = parseDur(cfg.Run.FileOpTimeout, "run.file_op_timeout")
+	r.FileOpTimeout, err = ParseDuration(cfg.Run.FileOpTimeout, "run.file_op_timeout")
 	if err != nil {
 		return r, err
 	}
-	r.WriteTimeout, err = parseDur(cfg.Run.WriteTimeout, "run.write_timeout")
+	r.WriteTimeout, err = ParseDuration(cfg.Run.WriteTimeout, "run.write_timeout")
 	if err != nil {
 		return r, err
 	}
-	r.HTTPTimeout, err = parseDur(cfg.Run.HTTPTimeout, "run.http_timeout")
+	r.HTTPTimeout, err = ParseDuration(cfg.Run.HTTPTimeout, "run.http_timeout")
 	if err != nil {
 		return r, err
 	}
-	r.ToolOutputRetention, err = parseDur(cfg.Run.ToolOutputRetention, "run.tool_output_retention")
+	r.ToolOutputRetention, err = ParseDuration(cfg.Run.ToolOutputRetention, "run.tool_output_retention")
 	if err != nil {
 		return r, err
 	}
@@ -228,8 +228,9 @@ func pickInt(ov, cv *int) *int {
 	return cv
 }
 
-// parseDur 解析 config 中的 duration 字符串（"30s"）；nil 表示未配置。
-func parseDur(cv *string, label string) (*time.Duration, error) {
+// ParseDuration 解析 config 中的 duration 字符串（"30s"）；cv 为 nil 表示未配置，返回 (nil, nil)。
+// 负值不合法。供 Resolve 与 cmd 层（httpTimeoutFromConfig）共享，统一 duration 校验语义与错误格式。
+func ParseDuration(cv *string, label string) (*time.Duration, error) {
 	if cv == nil {
 		return nil, nil
 	}

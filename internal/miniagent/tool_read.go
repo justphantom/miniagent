@@ -135,7 +135,8 @@ func formatLines(content string, offset, limit int) (string, error) {
 	if content == "" {
 		return "", nil
 	}
-	if limit < 0 || limit > maxLineLimit {
+	// limit<=0（含负数）视作读到末尾（不截断）；仅 limit>maxLineLimit 才截到上限。与 doc「limit<=0…读到末尾」一致。
+	if limit > maxLineLimit {
 		limit = maxLineLimit
 	}
 	lines := strings.Split(content, "\n")

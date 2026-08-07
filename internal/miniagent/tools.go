@@ -7,8 +7,9 @@ import (
 )
 
 // resolveToolPath 解析工具路径：workspaceRoot 为空或 p 已是绝对路径时原样返回；
-// 否则 join(workspaceRoot, p)。不做 EvalSymlinks 与越界判断——本形态不做
-// 路径边界约束，越界保护由具体工具的 openNoFollow / 文件大小上限兜底。
+// 否则 join(workspaceRoot, p)（join 内含 Clean，但 ../ 向上逃逸会被解析到 workdir 外）。
+// free 模式**无路径边界约束**：../ 与绝对路径均可越出 workdir，隔离由调用方（容器/低权限用户）保证
+// （README §运行隔离）。openNoFollow 仅拒最终分量符号链接，不构成边界；文件大小上限与边界无关。
 func resolveToolPath(workspaceRoot, p string) string {
 	if workspaceRoot == "" || filepath.IsAbs(p) {
 		return p

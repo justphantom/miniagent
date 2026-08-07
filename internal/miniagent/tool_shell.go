@@ -97,6 +97,12 @@ func runShellCommand(ctx context.Context, workdir, mode, command string, timeout
 		}
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
+			if ee.ExitCode() < 0 {
+				// 信号杀死（含父 ctx 取消的 SIGKILL、shell 超时后的进程组清理）：非命令合法退出，
+				// 按 IsError + exitCodeNotSet 记——守住「exitCodeNotSet ⟺ IsError」约定（与超时/取消一致），
+				// 避免 LLM 看到 IsError=false + 负退出码的矛盾结果。
+				return ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: body + fmt.Sprintf("\n命令被信号终止：%v。", ee)}
+			}
 			return ToolResult{Output: body, ExitCode: ee.ExitCode()}
 		}
 		return ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: body + fmt.Sprintf("\n执行失败：%v", err)}

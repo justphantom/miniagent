@@ -135,29 +135,6 @@ func TestSelectTailByTokens_RecentRoundExceedsBudget(t *testing.T) {
 	}
 }
 
-// §P1-E splitRoundByTokens 配对安全：tool-call 轮返回 nil（不可安全切）；多消息文本轮切在消息边界。
-func TestSplitRoundByTokens_PairingSafe(t *testing.T) {
-	// tool-call 轮：[A(tc=[c1,c2]), T(c1), T(c2)] → 不可切（切点后缀不能以 tool 开头）。
-	tcRound := []miniagent.Message{
-		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}, {ID: "c2", Name: "t", Args: "{}"}}},
-		{Role: miniagent.RoleTool, ToolCallID: "c1", Content: "r1"},
-		{Role: miniagent.RoleTool, ToolCallID: "c2", Content: "r2"},
-	}
-	if got := splitRoundByTokens(tcRound, 100); got != nil {
-		t.Errorf("tool-call 轮应返回 nil（不可安全切）: %+v", got)
-	}
-	// 多消息文本轮（手动构造）：切点落在使后缀 fit 的最早消息边界。
-	textRound := []miniagent.Message{
-		{Role: miniagent.RoleUser, Content: "x"},
-		{Role: miniagent.RoleUser, Content: "y"},
-		{Role: miniagent.RoleUser, Content: "z"},
-	}
-	suffix := splitRoundByTokens(textRound, estimateRoundTokens([]miniagent.Message{{Role: miniagent.RoleUser, Content: "z"}}))
-	if len(suffix) != 1 || suffix[0].Content != "z" {
-		t.Errorf("文本轮应切出后缀 [z]: %+v", suffix)
-	}
-}
-
 // §P1-E shrinkRoundToolContents：保 assistant.tool_calls 与 tool 结果配对不变，仅 tool content 被截。
 func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	round := []miniagent.Message{

@@ -124,8 +124,10 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 			logger.Warn("仍超 window，裁到最近轮", "msgs", len(out))
 		}
 	}
-	if miniagent.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
-		return out, sm, summarized, sumUsage, fmt.Errorf("history 超 context window（约 %d tokens）即使有损裁剪后仍超——终止以避免循环烧请求", miniagent.EstimateTokens(out, budget.System, budget.Tools))
+	// 缓存 post-trim out 的 token 估算：下方判定与错误消息复用同一值（原三次 EstimateTokens 之一在此消除）。
+	est := miniagent.EstimateTokens(out, budget.System, budget.Tools)
+	if est > budget.ContextWindow*4/5 {
+		return out, sm, summarized, sumUsage, fmt.Errorf("history 超 context window（约 %d tokens）即使有损裁剪后仍超——终止以避免循环烧请求", est)
 	}
 	return out, sm, summarized, sumUsage, nil
 }

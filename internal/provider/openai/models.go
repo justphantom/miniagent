@@ -27,7 +27,7 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		ids, retryable, err := c.listModelsOnce(ctx, client, u)
+		ids, retryable, retryAfter, err := c.listModelsOnce(ctx, client, u)
 		if err == nil {
 			return ids, nil
 		}
@@ -37,7 +37,7 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 			}
 			return nil, err
 		}
-		delay := capRetryDelay(backoff, -1)
+		delay := capRetryDelay(backoff, retryAfter)
 		if c.Logger != nil {
 			c.Logger.Warn("list models failed, retrying", "failed_attempt", attempt+1, "delay_ms", delay.Milliseconds(), "error", err)
 		}
@@ -49,11 +49,12 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	return nil, errors.New("list models retry loop exited unexpectedly")
 }
 
-// listModelsOnce 单次 GET /models，返回 (ids, retryable, error)。
-func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u *url.URL) ([]string, bool, error) {
+// listModelsOnce 单次 GET /models，返回 (ids, retryable, retryAfter, error)。retryAfter 解析自
+// Retry-After 头（-1=未提供），供 ListModels 重试退避与 ChatClient.Do 对齐（此前恒 -1 致忽略上游 backpressure）。
+func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u *url.URL) ([]string, bool, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("build request: %w", err)
+		return nil, false, 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	// 注入 provider 自定义头；跳过 Authorization/Content-Type 防覆盖鉴权（与 ChatClient.doOnce 一致）。
@@ -65,16 +66,17 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, true, fmt.Errorf("llm request: %w", err)
+		return nil, true, -1, fmt.Errorf("llm request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		// 排空 body 供连接 keepalive 复用；不回显响应体——恶意/调试代理可能在错误体回显 URL/Authorization，
 		// error 经 -list-models stdout 泄漏 key（与 ChatClient.doOnce 一致，仅回显状态码）。
+		retryAfter := parseRetryAfter(resp.Header)
 		if _, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096)); readErr != nil {
-			return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d: read body: %w", resp.StatusCode, readErr)
+			return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d: read body: %w", resp.StatusCode, readErr)
 		}
-		return nil, shouldRetryStatus(resp.StatusCode), fmt.Errorf("llm returned %d", resp.StatusCode)
+		return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d", resp.StatusCode)
 	}
 	var v struct {
 		Data []struct {
@@ -82,13 +84,13 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-		return nil, false, fmt.Errorf("parse response: %w", err)
+		return nil, false, 0, fmt.Errorf("parse response: %w", err)
 	}
 	ids := make([]string, 0, len(v.Data))
 	for _, m := range v.Data {
 		ids = append(ids, m.ID)
 	}
-	return ids, false, nil
+	return ids, false, 0, nil
 }
 
 // ListAllModels 聚合多个 provider 的可用模型，以 miniagent.ModelRef 切片返回（provider/model 分离）。

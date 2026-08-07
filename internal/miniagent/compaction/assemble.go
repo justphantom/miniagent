@@ -167,8 +167,9 @@ func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, mo
 // NewCompaction 把整套上下文压缩引擎（FitHistory：超窗摘要中段 + 有损 fallback + 主动裁剪；§P1-B 静默溢出
 // 检测）封装为一对可外挂的 LoopHooks 钩子。这是「压缩作为外挂」的默认实现：核心 Run 不含任何压缩，
 // 调用方经 NewCompaction(opts) 取回 (before, after) 挂到 LoopHooks.BeforeLLM/AfterLLM 即恢复完整压缩能力；
-// 不挂则得极简无压缩 agent。before 每步做 applyCompactionBarrier + FitHistory；after 采真实 usage 判溢出、
-// 置下步 Force（跨步共享 overflowPending 状态）。opts.Chat 必须非 nil（摘要 LLM 调用需 client）。
+// 不挂则得极简无压缩 agent。before 每步做 applyCompactionBarrier + FitHistory + 静默溢出判定（从 in.Msgs
+// 真实 usage 推断 Force）。after 自 4.2.0 起恒为 nil（溢出判定已并入 before，无跨步状态）——调用方挂
+// AfterLLM 前须判 nil。opts.Chat 必须非 nil（摘要 LLM 调用需 client）。
 func NewCompaction(opts CompactionOptions) (before func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error), after func(context.Context, int, miniagent.Response) error) {
 	maxChars := opts.SummaryMaxChars
 	if maxChars <= 0 {

@@ -79,6 +79,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	// SIGINT 与 SIGTERM 都路由到 ctx 取消 → 退出码 130（128+SIGINT）作通用「信号中断」码，
+	// 不区分 POSIX 的 SIGTERM=143：消费方只需识别「被信号打断」而非具体信号，多数工具合并处理。
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -133,24 +135,8 @@ func main() {
 		ContextTrimToolChars:   into(resolved.RunConfig.ContextTrimToolChars, 0),
 	}
 
-	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
-
-	// secondaryClient 为与主 provider 不同的二级 provider 解析 key + 建非流式 client（仅 Do）。
-	secondaryClient := func(label string, prov miniagent.ProviderConfig) (*openai.ChatClient, string) {
-		key := resolveFinalKey(prov.Key)
-		if key == "" {
-			fmt.Fprintf(os.Stderr, "miniagent: %s provider API key 缺失（provider.key / $MINIAGENT_API_KEY）\n", label)
-			os.Exit(1)
-		}
-		warnProviderInsecureURLs(prov)
-		return buildChatClient(key, prov, logger, httpTimeoutOf(resolved)), key
-	}
-
-	// compaction client：与主 provider 相同则留 nil（loop 回落主 chat），否则新建。
-	var compChat *openai.ChatClient
-	if resolved.CompactionProvider.Name != resolved.Provider.Name {
-		compChat, _ = secondaryClient("compaction", resolved.CompactionProvider)
-	}
+	// 主 provider chat/stream +（跨 provider 时）摘要 compChat；key 缺失或端点非法时 os.Exit。
+	chat, stream, compChat := buildRuntimeClients(resolved, apiKey, logger)
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), pr.scripts, limits)
 	baseCfg := loopCfg(resolved, f, history, tools)
@@ -164,16 +150,9 @@ func main() {
 	if resolved.Run.ToolOutputRetention != nil {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
 	}
-	// 压缩作为外挂：经 NewCompaction 取 before/after 挂到 hooks（核心 Run 本身不含压缩）。
+	// 压缩作为外挂：经 NewCompaction 取 before/after；三项默认策略（OnLLMError/OnBudget/ShapeToolResult）经 assembleHooks 外挂。
 	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, f, meta, chat, compChat, baseCfg.System, tools, logger))
-	hooks := buildHooks(*f.resultOnly)
-	hooks.BeforeLLM = compBefore
-	hooks.AfterLLM = compAfter
-	// 三项原核心内置策略（用量估算+预算判定 / LLM 失败恢复 / 工具结果成型+落盘）经默认钩子工厂外挂：
-	// 核心 Run 零策略，cmd 层装配即恢复原行为。MaxTotalTokens/ToolOutputDir 等是配置载体（核心不读）。
-	hooks.OnLLMError = miniagent.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
-	hooks.OnBudget = miniagent.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
-	hooks.ShapeToolResult = miniagent.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
+	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, baseCfg, tools, limits, logger)
 
 	// runCtx 含 -max-duration 超时（若有）；信号处理由 main 顶部的 NotifyContext 提供。
 	runCtx := ctx
@@ -211,6 +190,38 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// buildRuntimeClients 构造主 provider 的 chat/stream client 与（compaction 跨 provider 时）摘要用 compChat。
+// compChat 与主 provider 同名时留 nil（loop 回落主 chat）。key 缺失或端点非法时 os.Exit（原 secondaryClient 闭包仅 compaction 一处用，内联）。
+func buildRuntimeClients(resolved *miniagent.Resolved, apiKey string, logger *slog.Logger) (chat *openai.ChatClient, stream *openai.StreamClient, compChat *openai.ChatClient) {
+	chat, stream = buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
+	if resolved.CompactionProvider.Name != resolved.Provider.Name {
+		key := resolveFinalKey(resolved.CompactionProvider.Key)
+		if key == "" {
+			fmt.Fprintf(os.Stderr, "miniagent: compaction provider API key 缺失（provider.key / $MINIAGENT_API_KEY）\n")
+			os.Exit(1)
+		}
+		warnProviderInsecureURLs(resolved.CompactionProvider)
+		compChat = buildChatClient(key, resolved.CompactionProvider, logger, httpTimeoutOf(resolved))
+	}
+	return chat, stream, compChat
+}
+
+// assembleHooks 组装 LoopHooks：事件输出（buildHooks）+ 压缩 before/after + 三项默认策略外挂
+// （OnLLMError 历史收紧重试 / OnBudget 估算+熔断 / ShapeToolResult 截断+落盘）。核心 Run 零策略，本函数装配即恢复完整能力。
+func assembleHooks(
+	compBefore func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error),
+	compAfter func(context.Context, int, miniagent.Response) error,
+	resultOnly bool, baseCfg miniagent.LoopConfig, tools []miniagent.Tool, limits miniagent.Limits, logger *slog.Logger,
+) miniagent.LoopHooks {
+	hooks := buildHooks(resultOnly)
+	hooks.BeforeLLM = compBefore
+	hooks.AfterLLM = compAfter
+	hooks.OnLLMError = miniagent.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
+	hooks.OnBudget = miniagent.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
+	hooks.ShapeToolResult = miniagent.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
+	return hooks
 }
 
 // loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig（循环本体 + 策略载体字段；

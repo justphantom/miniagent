@@ -18,16 +18,18 @@ import (
 // 流式的 *http.Client 不带总 Timeout（覆盖 body 读取会砍断长生成，P2-5），总时长交由 ctx 控制。
 // 非流式走 ChatClient（P4 拆分）；SSE 解析见 stream_parse.go。
 type StreamClient struct {
-	APIKey            string
-	ChatURL           string
-	Headers           map[string]string // 自定义请求头，不覆盖 Authorization / Content-Type
-	chatURL           *url.URL
-	chatOnce          sync.Once
-	chatErr           error
-	HTTP              *http.Client
-	Logger            *slog.Logger
-	defaultClient     *http.Client // c.HTTP==nil 时缓存的流式 client（无 Timeout）
-	defaultClientOnce sync.Once
+	APIKey             string
+	ChatURL            string
+	Headers            map[string]string // 自定义请求头，不覆盖 Authorization / Content-Type
+	chatURL            *url.URL
+	chatOnce           sync.Once
+	chatErr            error
+	HTTP               *http.Client
+	Logger             *slog.Logger
+	defaultClient      *http.Client // c.HTTP==nil 时缓存的流式 client（无 Timeout）
+	defaultClientOnce  sync.Once
+	injectedClient     *http.Client // c.HTTP 带总 Timeout 时借用其 Transport 另造的无 Timeout client（缓存）
+	injectedClientOnce sync.Once
 }
 
 // NewStreamClient 构造时 parse 并缓存 chatURL。headers 为 provider 自定义请求头，可为 nil。
@@ -53,7 +55,10 @@ func (c *StreamClient) chatEndpoint() (*url.URL, error) {
 func (c *StreamClient) streamClient() *http.Client {
 	if c.HTTP != nil {
 		if c.HTTP.Timeout > 0 {
-			return &http.Client{Transport: c.HTTP.Transport}
+			// 注入 client 带总 Timeout 会砍断 body；借其 Transport 另造无 Timeout client 并缓存（与 defaultClientOnce 对称，
+			// 原每次新造与缓存意图不对称——当前仅 DoStream 顶部调一次代价可忽略，缓存以消除不对称）。
+			c.injectedClientOnce.Do(func() { c.injectedClient = &http.Client{Transport: c.HTTP.Transport} })
+			return c.injectedClient
 		}
 		return c.HTTP
 	}
