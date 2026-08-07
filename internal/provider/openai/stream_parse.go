@@ -80,6 +80,8 @@ func parseSSE(r io.Reader, onDelta func(miniagent.Delta) error) (miniagent.Respo
 	sc.Buffer(make([]byte, 64*1024), 4<<20)
 	for sc.Scan() {
 		line := sc.Text()
+		// 剥前导 UTF-8 BOM：少数代理/网关在 SSE 流首插入 BOM，否则首行 "data: ..." 不匹配 HasPrefix("data:") 而丢首事件。
+		line = strings.TrimPrefix(line, "\xef\xbb\xbf")
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue
 		}

@@ -117,18 +117,23 @@ func codemapWalk(ctx context.Context, root string, maxDepth int) ([]string, bool
 			lines = append(lines, indent+d.Name()+"/ (? items)")
 			return filepath.SkipDir
 		}
-		lines = append(lines, fmt.Sprintf("%s%s/ (%d items)", indent, d.Name(), countDirItems(path)))
+		n, ok := countDirItems(path)
+		if ok {
+			lines = append(lines, fmt.Sprintf("%s%s/ (%d items)", indent, d.Name(), n))
+		} else {
+			lines = append(lines, indent+d.Name()+"/ (? items)")
+		}
 		return nil
 	})
 	return lines, truncated, err
 }
 
 // countDirItems 数 dir 的直接子条目（跳过 .git 与符号链接，与遍历口径一致）。
-// 读取失败返回 0——目录行已列出，计数缺失不阻断整体遍历。
-func countDirItems(dir string) int {
+// ok=false 表示读取失败（权限等）：调用方据此标注 "? items" 而非谎报 0，与深度边界标注一致。
+func countDirItems(dir string) (int, bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0
+		return 0, false
 	}
 	n := 0
 	for _, e := range entries {
@@ -137,5 +142,5 @@ func countDirItems(dir string) int {
 		}
 		n++
 	}
-	return n
+	return n, true
 }

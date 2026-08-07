@@ -156,16 +156,17 @@ func parseEditArgs(args string) (editFileArgs, error) {
 	return a, nil
 }
 
-// checkReplaceAllSize 预检 replaceAll 放大：短 old + 长 new + 多命中可使输出体积远超 read 端 maxBytes 封顶，
-// strings.ReplaceAll 在内存构造巨串致 OOM（read 封 10MB 但 replaceAll 可放大数倍～数千倍）。
-// 先按 count*(len(new)-len(old)) 估算输出体积，超 maxBytes 拒绝（在 ReplaceAll 分配前）。单段 replace 不放大，跳过。
-func checkReplaceAllSize(content, old, newText string, replaceAll bool, maxBytes int) error {
-	if !replaceAll {
-		return nil
+// checkEditSize 预检替换放大致输出超限：短 old + 长 new + 多命中（replaceAll）或单次长 new（单段）都可使
+// 输出远超 read 端 maxBytes 封顶，strings.Replace/ReplaceAll 在内存构造巨串致 OOM。按 count*(len(new)-len(old))
+// 估算：replaceAll 用实命中数，单段计 1（applyOne 已保证单段唯一命中）。超 maxBytes 在替换分配前拒绝。
+func checkEditSize(content, old, newText string, replaceAll bool, maxBytes int) error {
+	count := 1
+	if replaceAll {
+		count = strings.Count(content, old)
 	}
-	est := len(content) + strings.Count(content, old)*(len(newText)-len(old))
+	est := len(content) + count*(len(newText)-len(old))
 	if est > maxBytes {
-		return fmt.Errorf("replace_all 将产生约 %d 字节（超 %d 上限），已拒绝写盘", est, maxBytes)
+		return fmt.Errorf("替换将产生约 %d 字节（超 %d 上限），已拒绝写盘", est, maxBytes)
 	}
 	return nil
 }
@@ -205,7 +206,7 @@ func applyEdit(full string, info os.FileInfo, a editFileArgs) ToolResult {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 读取超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
 	}
 	content := string(data)
-	if cerr := checkReplaceAllSize(content, a.OldString, a.NewString, a.ReplaceAll, maxEditFileBytes); cerr != nil {
+	if cerr := checkEditSize(content, a.OldString, a.NewString, a.ReplaceAll, maxEditFileBytes); cerr != nil {
 		return ToolResult{IsError: true, Output: cerr.Error()}
 	}
 	updated, count, err := applyOne(content, a.OldString, a.NewString, a.ReplaceAll)
@@ -245,7 +246,7 @@ func applyEdits(full string, info os.FileInfo, path string, edits []editOne) Too
 	originLen := len(updated)
 	totalMatches := 0
 	for i, e := range edits {
-		if cerr := checkReplaceAllSize(updated, e.OldString, e.NewString, e.ReplaceAll, maxEditFileBytes); cerr != nil {
+		if cerr := checkEditSize(updated, e.OldString, e.NewString, e.ReplaceAll, maxEditFileBytes); cerr != nil {
 			return ToolResult{IsError: true, Output: fmt.Sprintf("第 %d 处替换失败：%s（文件 %q）", i+1, cerr, path)}
 		}
 		u, count, aerr := applyOne(updated, e.OldString, e.NewString, e.ReplaceAll)

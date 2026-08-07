@@ -179,10 +179,8 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 		if r, err := filepath.Rel(root, path); err == nil {
 			rel = r
 		}
-		ms, err := grepFile(path, rel, re)
-		if err != nil {
-			return nil //nolint:nilerr // 二进制/读取失败：跳过该文件，不整体失败
-		}
+		// grepFile 错误（binary/too-large/ErrTooLong 等）仅跳过该文件剩余；ms 含 ErrTooLong 前的 partial 命中仍可用。
+		ms, _ := grepFile(path, rel, re, maxMatches)
 		for _, m := range ms {
 			if len(matches) >= maxMatches {
 				truncated = true
@@ -198,7 +196,7 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 // grepFile 读 path 逐行匹配，display 作为输出里的文件名（通常是相对 root 的路径）。
 // 含 NUL 视为二进制跳过（与 read 工具一致，防乱码污染上下文）。入口 Stat 限制单文
 // 件大小：无匹配的超大文件（日志/生成物）会逐行扫到 fileOpTimeout，纯耗 IO。
-func grepFile(path, display string, re *regexp.Regexp) ([]grepMatch, error) {
+func grepFile(path, display string, re *regexp.Regexp, maxMatches int) ([]grepMatch, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -225,10 +223,15 @@ func grepFile(path, display string, re *regexp.Regexp) ([]grepMatch, error) {
 		lineno++
 		if re.MatchString(scanner.Text()) {
 			matches = append(matches, grepMatch{file: display, line: lineno, text: scanner.Text()})
+			// 单文件命中封顶：防巨文件（每行命中）在 grepWalk 的全局 maxMatches 截断前，瞬态分配整文件命中切片。
+			if len(matches) >= maxMatches {
+				return matches, nil
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		// ErrTooLong（>1MB 单行）等：返回已收集的 partial 命中而非丢弃，调用方仍可用。
+		return matches, err
 	}
 	return matches, nil
 }

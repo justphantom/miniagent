@@ -107,7 +107,8 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 	if err != nil {
 		return "", miniagent.Usage{}, err
 	}
-	return text.Truncate(strings.TrimSpace(resp.Text), maxChars, "…[摘要已截断]"), resp.Usage, nil
+	// 头尾分段截断（头 1/4 + 尾 3/4）：摘要的可操作部分（「下一步」「相关文件」）常在末尾，纯头截断会先丢这些。
+	return text.TruncateHeadTail(strings.TrimSpace(resp.Text), maxChars, "…[摘要已截断]"), resp.Usage, nil
 }
 
 // CompactingInput 是摘要现场快照，让外部 hook 决定是否注入/替换（§P2，镜像 opencode experimental.session.compacting）。

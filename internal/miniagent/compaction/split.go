@@ -4,6 +4,7 @@ package compaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -136,6 +137,11 @@ func shrinkRoundToolContents(round []miniagent.Message, tokenBudget int) []minia
 //
 // 下轮 barrier 命中新 summary 后旧 summary 被丢弃；首轮非 summary（正常 user 轮）维持原行为。
 func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniagent.Message, keepRecent int) (out []miniagent.Message, summary miniagent.Message, usage miniagent.Usage, err error) {
+	// FitHistory 是导出函数，直接调用方可能漏设 Summarize；nil 时无法摘要，返回 error 让 FitHistory 回落有损压缩
+	// （NewCompaction 内部总设 Summarize，生产路径不触发此分支）。
+	if budget.Summarize == nil {
+		return msgs, miniagent.Message{}, miniagent.Usage{}, errors.New("ContextBudget.Summarize 未配置，无法摘要")
+	}
 	rounds := splitRounds(msgs)
 	if len(rounds) <= 1+keepRecent {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, nil // 无中段可摘

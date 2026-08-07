@@ -107,7 +107,7 @@ func TestGrepFile_SkipsOversized(t *testing.T) {
 	}
 	_ = f.Close()
 	re := regexp.MustCompile("foo")
-	_, err = grepFile(big, big, re)
+	_, err = grepFile(big, big, re, maxGrepMatches)
 	if err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Errorf("grepFile should skip oversized file with \"too large\" error, got %v", err)
 	}
