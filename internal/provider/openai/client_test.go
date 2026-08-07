@@ -254,17 +254,15 @@ func TestChatClient_Do_ContextLength400(t *testing.T) {
 	}
 }
 
-// P3-5：c.HTTP==nil 时 client() 缓存同一 *http.Client（首次 defaultTimeout 固化，后续忽略）；
-// 注入 HTTP 时沿用注入值。
-func TestChatClient_DefaultClientCached(t *testing.T) {
+// NEW-6：c.HTTP==nil 时 client() 每次按 defaultTimeout 构造（去缓存）。原 defaultClient 缓存被
+// chat(120s)/models(30s) 端点共用、sync.Once 使首调用方 timeout 固化、后续被静默忽略；现每次取自身 timeout。
+func TestChatClient_DefaultClientPerCallTimeout(t *testing.T) {
 	c := &ChatClient{APIKey: "sk", ChatURL: "http://x"}
-	a := c.client(2 * time.Second)
-	b := c.client(5 * time.Second)
-	if a != b {
-		t.Error("default client not cached across calls")
+	if got := c.client(2 * time.Second); got.Timeout != 2*time.Second {
+		t.Errorf("first call Timeout = %v, want 2s", got.Timeout)
 	}
-	if a.Timeout != 2*time.Second {
-		t.Errorf("Timeout = %v, want first-call 2s (cached value preserved)", a.Timeout)
+	if got := c.client(5 * time.Second); got.Timeout != 5*time.Second {
+		t.Errorf("second call Timeout = %v, want 5s（去缓存后各取自身 timeout，不被首调用固化）", got.Timeout)
 	}
 	inj := &http.Client{Timeout: 30 * time.Second}
 	c2 := &ChatClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}

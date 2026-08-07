@@ -15,6 +15,19 @@ const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真
 - 精确修改：用 edit 时 old_string 须与文件精确匹配且唯一；多处相同改动用 replace_all；新建文件用 write。
 - 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。`
 
+// assembleSystemPrompt 装配最终 system prompt：空 base 兜底 defaultSystemPrompt → merge 项目规则
+// （persona>rules>defaults）→ inject subagent 引导。集中三步使默认兜底可单测（NEW-1 回归）。
+//
+// 默认配置（无 -system / config 无 system_prompt / 无 .miniagent/persona）下 resolved.System 为空：
+// 须兜底 defaultSystemPrompt。否则 injectSubagentGuidance 向空串追加 subagent 引导使其非空，
+// loopCfg 的 `if system == ""` fallback 永不触发（死代码），agent 静默丢失全部 ReAct 约束。
+func assembleSystemPrompt(base string, pr projectRules, configAbsPath, mode string) string {
+	if base == "" {
+		base = defaultSystemPrompt
+	}
+	return injectSubagentGuidance(mergeSystemPrompt(base, pr.persona, pr.rules, pr.hasAny()), configAbsPath, mode)
+}
+
 // injectSubagentGuidance 把 subagent fork 引导附加到 system prompt：注入 config 绝对路径
 // （审查 v1 #12 + v2 #9 + v3 #6/#8）。configAbsPath 空则不注入。mode 透传父会话权限模式
 // （审查 v3 P3）：不再硬编码 default，auto 父会话 fork 出的 subagent 继承 auto；空值回落 default。

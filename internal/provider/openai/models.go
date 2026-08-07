@@ -17,6 +17,10 @@ import (
 
 // ListModels 调 GET ModelsURL，返回 id 列表。复用 ChatClient.modelsEndpoint/鉴权。
 // 对 429/5xx 与网络错误自动重试 maxRetries 次，退避策略与 Do 一致。
+const maxModelsBodyBytes = 1 << 20 // 1 MiB；models 列表远小于 chat body，封顶防 OOM
+
+// ListModels 调 GET ModelsURL，返回 id 列表。复用 ChatClient.modelsEndpoint/鉴权。
+// 对 429/5xx 与网络错误自动重试 maxRetries 次，退避策略与 Do 一致。
 func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	client, u, err := c.modelsEndpoint(30 * time.Second)
 	if err != nil {
@@ -70,20 +74,28 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		// 排空 body 供连接 keepalive 复用；不回显响应体——恶意/调试代理可能在错误体回显 URL/Authorization，
-		// error 经 -list-models stdout 泄漏 key（与 ChatClient.doOnce 一致，仅回显状态码）。
+		// 排空 body 供连接 keepalive 复用（重试可能复用同一连接）；不回显响应体——恶意/调试代理可能在
+		// 错误体回显 URL/Authorization，error 经 -list-models stdout 泄漏 key（与 doOnce 一致，仅回显状态码）。
 		retryAfter := parseRetryAfter(resp.Header)
-		if _, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096)); readErr != nil {
+		if _, readErr := io.Copy(io.Discard, resp.Body); readErr != nil {
 			return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d: read body: %w", resp.StatusCode, readErr)
 		}
 		return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d", resp.StatusCode)
+	}
+	// 200 路径封顶防 OOM（与 doOnce 的 LimitReader(maxChatBodyBytes+1) 对齐；models 响应更小，取 1 MiB）。
+	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxModelsBodyBytes+1))
+	if rerr != nil {
+		return nil, false, 0, fmt.Errorf("read response: %w", rerr)
+	}
+	if int64(len(raw)) > maxModelsBodyBytes {
+		return nil, false, 0, fmt.Errorf("models 响应超过 %d 字节上限", maxModelsBodyBytes)
 	}
 	var v struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+	if err := json.Unmarshal(raw, &v); err != nil {
 		return nil, false, 0, fmt.Errorf("parse response: %w", err)
 	}
 	ids := make([]string, 0, len(v.Data))

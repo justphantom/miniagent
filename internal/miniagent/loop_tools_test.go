@@ -332,6 +332,62 @@ func TestRun_ShapeToolResultErrorStopsKeepsPairing(t *testing.T) {
 	}
 }
 
+// REG-1 回归：ShapeToolResult 抛错后通知 i+1.. OnToolResult 时，若 OnToolResult 在 j 再抛错，
+// 须从 i+1（非 j）补占位，否则 i+1..j-1 缺配对 tool 消息。原 L13 实现误用 j 致配对断裂。
+func TestRun_ShapeToolResultThenOnToolResultErrorKeepsPairing(t *testing.T) {
+	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(
+			ToolCall{ID: "c0", Name: "q", Args: "{}"},
+			ToolCall{ID: "c1", Name: "q", Args: "{}"},
+			ToolCall{ID: "c2", Name: "q", Args: "{}"},
+			ToolCall{ID: "c3", Name: "q", Args: "{}"},
+		),
+		textResponse("done"),
+	}}
+	llm := testClients(tr)
+	shapeErr := errors.New("shape failed")
+	onErr := errors.New("onresult failed")
+	hooks := LoopHooks{
+		ShapeToolResult: func(name, callID string, step int, r ToolResult) (string, error) {
+			if callID == "c1" {
+				return "", shapeErr
+			}
+			return "", nil
+		},
+		OnToolResult: func(name, callID string, r ToolResult) error {
+			if callID == "c3" {
+				return onErr
+			}
+			return nil
+		},
+	}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	if !errors.Is(err, onErr) {
+		t.Fatalf("err = %v, want %v（OnToolResult 错优先返回）", err, onErr)
+	}
+	var wantIDs []string
+	gotIDs := make(map[string]bool)
+	for _, m := range res.Messages {
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				wantIDs = append(wantIDs, tc.ID)
+			}
+		}
+		if m.Role == RoleTool {
+			gotIDs[m.ToolCallID] = true
+		}
+	}
+	if len(wantIDs) != 4 {
+		t.Fatalf("want 4 tool_calls, got %d (%+v)", len(wantIDs), wantIDs)
+	}
+	for _, id := range wantIDs {
+		if !gotIDs[id] {
+			t.Errorf("tool_call %q 缺配对 tool 消息（REG-1：应从 i+1 补占位，非 j）", id)
+		}
+	}
+}
+
 // OnToolUse 返回非 ErrToolDenied error 时，assistant.tool_calls 的每个 id 仍须有配对 tool 消息（占位）。
 // 与 OnToolResult 错误路径对齐（P2-1）。回归：此前该路径直接 return 不补占位，破坏配对不变量。
 func TestRun_OnToolUseErrorKeepsPairing(t *testing.T) {

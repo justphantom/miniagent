@@ -63,7 +63,10 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 			return cerr
 		}
 		if err != nil {
-			return err
+			if path == root {
+				return err // 根目录不可访问：真实错误上抛（codemap 走 Stat 预检，glob 在此区分）
+			}
+			return nil //nolint:nilerr // 子树不可访问跳过，保留可访问部分（与 grep/codemap 一致）
 		}
 		if d.IsDir() {
 			if d.Name() == ".git" || d.Type()&fs.ModeSymlink != 0 {

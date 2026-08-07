@@ -138,7 +138,7 @@ return finishMaxIterations
 
 **静默溢出检测**（`overflow.go`）：provider 200 成功但实际已超窗的两类——Case2（`finishStop` 但 input > window）、Case3（`finishLength` 且 output=0 且 input ≥ 99% window）。`before` 钩子下一步从已入史的 assistant.Usage 据此置 `Force`，撞 provider 400 前先压。
 
-**context 超限识别**：`isContextLengthError` 用 24 条正则 + 3 条排除（防 throttling/rate-limit 误命中），状态门从仅 400 放宽到 `400||413`。
+**context 超限识别**：`isContextLengthError` 用 24 条正则 + 4 条排除（防 throttling/rate-limit 误命中），状态门从仅 400 放宽到 `400||413`。
 
 ## 6. 工具系统
 

@@ -206,5 +206,25 @@ func trimRecentRounds(msgs []miniagent.Message, keepRecent int) []miniagent.Mess
 	if len(rounds) <= keepRecent {
 		return msgs
 	}
-	return flatten(rounds[len(rounds)-keepRecent:])
+	trimmed := flatten(rounds[len(rounds)-keepRecent:])
+	// 保留最新一条 KindSummary（可能在被裁掉的头部——刚花摘要调用生成）：前插到裁剪结果头部，
+	// 否则白烧一次摘要 + 模型丢失中段摘要与初始上下文。裁剪结果已含 summary 或无 summary 可保则原样返回。
+	var latestSummary miniagent.Message
+	hasSummary := false
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Kind == miniagent.KindSummary {
+			latestSummary = msgs[i]
+			hasSummary = true
+			break
+		}
+	}
+	if !hasSummary {
+		return trimmed
+	}
+	for _, m := range trimmed {
+		if m.Kind == miniagent.KindSummary {
+			return trimmed
+		}
+	}
+	return append([]miniagent.Message{latestSummary}, trimmed...)
 }

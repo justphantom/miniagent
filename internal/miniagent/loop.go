@@ -108,7 +108,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			}
 		}
 		if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
-			return Result{Steps: s + 1, Finish: finishStop}, true, berr
+			return Result{Steps: s + 1}, true, berr // 预算错误：Finish 留空（出错返回不变量），与 :107 及主循环对齐
 		}
 		return Result{Text: resp2.Text, Steps: s + 1, Finish: finishStop}, true, nil
 	}

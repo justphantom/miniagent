@@ -115,15 +115,15 @@ func main() {
 	if *f.saveSession {
 		// 新建会话：session 元数据作为 stdout NDJSON 首条事件（与 jsonl 首行同构），供消费方程序化捕获接续 id。
 		// 互斥保证 -result-only 下不会触发，不污染 subagent 的纯文本 stdout。
+		// ⚠️ id 在 Run 前 emit，jsonl 直到 Run 成功才落盘；Run 失败/空 stdin 时消费方捕获的 id 磁盘上不存在，须校验退出码。
 		if err := event.EmitSession(os.Stdout, meta); err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: emit session: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	// P0：发现 .miniagent/ 项目规则，合并进 system prompt（persona>rules>defaults）。
+	// P0：发现 .miniagent/ 项目规则，合并进 system prompt（persona>rules>defaults + 默认兜底，见 assembleSystemPrompt）。
 	pr := loadProjectRules(workdir, logger)
-	resolved.System = mergeSystemPrompt(resolved.System, pr.persona, pr.rules, pr.hasAny())
-	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), resolved.Mode)
+	resolved.System = assembleSystemPrompt(resolved.System, pr, absConfigPath(*f.configPath), resolved.Mode)
 
 	// 应用运行时配置覆盖（优先级：config>builtin）。
 	limits := miniagent.Limits{
@@ -154,15 +154,15 @@ func main() {
 	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, f, meta, chat, compChat, baseCfg.System, tools, logger))
 	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, baseCfg, tools, limits, logger)
 
-	// runCtx 含 -max-duration 超时（若有）；信号处理由 main 顶部的 NotifyContext 提供。
+	prompt := mustReadPrompt(ctx, os.Stdin)
+	// runCtx 含 -max-duration 超时（若有）；在 stdin 读取之后构造——mustReadPrompt 用 signal ctx 不受限，
+	// 若 runCtx 在前则慢 stdin 会消耗 max-duration 预算致 Run 拿到已过期 ctx（DeadlineExceeded exit 1）。
 	runCtx := ctx
 	if d := maxDurationOf(resolved); d > 0 {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(runCtx, d)
 		defer cancel()
 	}
-
-	prompt := mustReadPrompt(ctx, os.Stdin)
 	llm := &openai.Provider{Chat: chat, Stream: stream}
 	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
 	if err != nil {

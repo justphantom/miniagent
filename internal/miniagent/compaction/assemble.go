@@ -135,14 +135,16 @@ type CompactingOutput struct {
 // CompactingHook 在每次摘要前同步触发（compactWithSummary 内、调 budget.Summarize 前）。
 // 镜像 opencode experimental.session.compacting：可注入 context 或替换 prompt，不可 cancel
 // （pi 才支持 cancel；miniagent 现阶段不支持）。
-// 契约（实现 A，与 opencode plugin.trigger 默认语义一致）：hook 抛错上抛中止压缩。
+// 契约（实现 A，与 opencode plugin.trigger 默认语义一致，详见 HOOKS.md §2.9）：hook 抛错上抛
+// 中止**本次摘要**压缩——FitHistory 据此回落有损 compactHistory（非完全放弃压缩，防上下文无界增长）。
 // nil = 无 hook，applyCompactingHook 零开销短路。
 type CompactingHook func(ctx context.Context, in CompactingInput) (CompactingOutput, error)
 
 // applyCompactingHook 在 compactWithSummary 内、调 budget.Summarize 之前触发 hook（§P2），
 // 把 hook 输出折叠回 (effPrompt, effMiddle)：Prompt 非空覆盖本次 summarizerPrompt；Context 非空
 // 以一条 role=user 消息 append 到 middle 末尾（进摘要输入，不进 system 通道）。
-// 契约：hook==nil 直接返回原 prompt/middle（零开销短路）。hook 返回 error → 上抛中止压缩（实现 A）。
+// 契约：hook==nil 直接返回原 prompt/middle（零开销短路）。hook 返回 error → 上抛中止本次摘要压缩，
+// compactWithSummary 返回该 error、FitHistory 回落有损 compactHistory（HOOKS.md §2.9）。
 // context 注入只追加无 tool_calls 的 user 消息，不破坏 tool 配对（调用前已过 miniagent.ValidateToolPairing）。
 func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, model, summarizerPrompt string, middle []miniagent.Message) (effPrompt string, effMiddle []miniagent.Message, err error) {
 	if hook == nil {

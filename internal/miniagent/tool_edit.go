@@ -18,6 +18,8 @@ const maxEditFileBytes = 10 << 20
 // （A、B 各 read 旧内容→各自写，后写覆盖先写）。write 是原子覆盖（writeFileAtomic）无需锁；
 // 跨进程文件竞态不在本工具职责内（同 session 多写者本就应避免）。非 package-level：每个
 // EditFileTool 实例自持一份，由其唯一 Call 闭包在该工具的并行调用间共享，符合「无包级可变状态」约定。
+// 取舍：map 不回收——长 session 编辑大量不同文件会累积条目（每条目一个 mutex）；单进程 CLI session
+// 中等寿命，接受此取舍（跨进程/长跑 fork 场景由调用方控制）。
 type pathLocks struct {
 	mu sync.Mutex
 	m  map[string]*sync.Mutex
@@ -154,6 +156,20 @@ func parseEditArgs(args string) (editFileArgs, error) {
 	return a, nil
 }
 
+// checkReplaceAllSize 预检 replaceAll 放大：短 old + 长 new + 多命中可使输出体积远超 read 端 maxBytes 封顶，
+// strings.ReplaceAll 在内存构造巨串致 OOM（read 封 10MB 但 replaceAll 可放大数倍～数千倍）。
+// 先按 count*(len(new)-len(old)) 估算输出体积，超 maxBytes 拒绝（在 ReplaceAll 分配前）。单段 replace 不放大，跳过。
+func checkReplaceAllSize(content, old, newText string, replaceAll bool, maxBytes int) error {
+	if !replaceAll {
+		return nil
+	}
+	est := len(content) + strings.Count(content, old)*(len(newText)-len(old))
+	if est > maxBytes {
+		return fmt.Errorf("replace_all 将产生约 %d 字节（超 %d 上限），已拒绝写盘", est, maxBytes)
+	}
+	return nil
+}
+
 // applyOne 在 content 上应用一次替换，返回新 content 与命中处数。纯内存，不写盘。
 // 0 处返回 (content, 0, error)；非 replaceAll 且多处返回 (content, n, error)。
 // 调用方据 count 区分「未找到」与「多次匹配」给出具体提示。edits 事务复用此做逐段。
@@ -189,6 +205,9 @@ func applyEdit(full string, info os.FileInfo, a editFileArgs) ToolResult {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 读取超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
 	}
 	content := string(data)
+	if cerr := checkReplaceAllSize(content, a.OldString, a.NewString, a.ReplaceAll, maxEditFileBytes); cerr != nil {
+		return ToolResult{IsError: true, Output: cerr.Error()}
+	}
 	updated, count, err := applyOne(content, a.OldString, a.NewString, a.ReplaceAll)
 	if err != nil {
 		// 保留具体提示：未找到 vs 多次匹配，附文件名与 read 建议。
@@ -226,6 +245,9 @@ func applyEdits(full string, info os.FileInfo, path string, edits []editOne) Too
 	originLen := len(updated)
 	totalMatches := 0
 	for i, e := range edits {
+		if cerr := checkReplaceAllSize(updated, e.OldString, e.NewString, e.ReplaceAll, maxEditFileBytes); cerr != nil {
+			return ToolResult{IsError: true, Output: fmt.Sprintf("第 %d 处替换失败：%s（文件 %q）", i+1, cerr, path)}
+		}
 		u, count, aerr := applyOne(updated, e.OldString, e.NewString, e.ReplaceAll)
 		if aerr != nil {
 			return ToolResult{IsError: true, Output: fmt.Sprintf("第 %d 处替换失败：%s（文件 %q，命中 %d 次）", i+1, aerr, path, count)}

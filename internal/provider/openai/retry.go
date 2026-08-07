@@ -29,7 +29,7 @@ func shouldRetryStatus(code int) bool {
 }
 
 // isContextLengthError 的识别在 core（overflow.go，miniagent.IsContextLengthError）：
-// 24 正则 + 3 排除（§P1-C）。本包经 miniagent.IsContextLengthError 调用，避免分叉。
+// 24 正则 + 4 排除（§P1-C）。本包经 miniagent.IsContextLengthError 调用，避免分叉。
 
 // isThinkingError 启发式识别 thinking 参数（reasoning_effort 等）不被支持的 400：跨供应商
 // 措辞不一（"reasoning_effort"/"unknown parameter"/"unrecognized"）。强信号（字段名）直接命中；

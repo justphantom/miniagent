@@ -61,3 +61,21 @@ func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
 		t.Errorf("empty config path should not inject, got: %s", got)
 	}
 }
+
+// NEW-1 回归：默认配置（空 base + 无项目规则）下 assembleSystemPrompt 须兜底 defaultSystemPrompt，
+// 最终 prompt 含 ReAct 约束；否则 injectSubagentGuidance 向空串追加使 loopCfg 空串 fallback 失效（死代码），
+// agent 静默丢失全部工作流约束。
+func TestAssembleSystemPrompt_DefaultApplied(t *testing.T) {
+	got := assembleSystemPrompt("", projectRules{}, "/abs/miniagent.json", "default")
+	if !strings.Contains(got, "先观察后动手") {
+		t.Errorf("默认配置下 system prompt 应含 defaultSystemPrompt 的 ReAct 约束: %q", got)
+	}
+	// persona 取代默认 prompt（优先级 persona>defaults）
+	got = assembleSystemPrompt("", projectRules{persona: "你是专属助手"}, "/abs/miniagent.json", "default")
+	if !strings.Contains(got, "你是专属助手") {
+		t.Errorf("persona 应进入 prompt: %q", got)
+	}
+	if strings.Contains(got, "先观察后动手") {
+		t.Errorf("persona 应取代默认 prompt（不再含默认约束）: %q", got)
+	}
+}

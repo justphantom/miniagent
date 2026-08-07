@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // chatCompletionChunk 是流式响应的单个 SSE 载荷（OpenAI chat.completion.chunk）。
@@ -54,6 +55,10 @@ type streamToolCall struct {
 // maxStreamResponseBytes 限制单个流式响应累积的字节数，防止恶意/异常 provider 无限流导致 OOM。
 const maxStreamResponseBytes = 4 << 20 // 4 MiB
 
+// maxErrorChunkChars 截断 provider error chunk 的 message 字段，防恶意代理在 error message 回显
+// 凭证/超大文本（与非 200 路径不回显 body 策略对齐）。
+const maxErrorChunkChars = 256
+
 // streamAccum 把多个 chunk 聚合成完整 Response。
 type streamAccum struct {
 	text       strings.Builder
@@ -93,8 +98,9 @@ func parseSSE(r io.Reader, onDelta func(miniagent.Delta) error) (miniagent.Respo
 			return miniagent.Response{}, fmt.Errorf("parse sse chunk: %w", err)
 		}
 		// provider/网关以 error chunk 报错（内容过滤/上游故障）：上抛而非吞掉当成功（P1-3）。
+		// 截断 message：与非 200 路径不回显 body 的策略对齐（防恶意代理在 error message 回显凭证/超大文本）。
 		if chunk.Error != nil {
-			return miniagent.Response{}, fmt.Errorf("stream error from provider: %s", chunk.Error.Message)
+			return miniagent.Response{}, fmt.Errorf("stream error from provider: %s", text.Truncate(chunk.Error.Message, maxErrorChunkChars, "…"))
 		}
 		if err := acc.apply(chunk, onDelta); err != nil {
 			return miniagent.Response{}, err
@@ -164,9 +170,15 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(miniagent.Delta
 			a.callOrder = append(a.callOrder, tc.Index)
 		}
 		if tc.ID != "" {
+			if err := a.guardAdd(len(tc.ID)); err != nil {
+				return err
+			}
 			acc.id = tc.ID
 		}
 		if tc.Function.Name != "" {
+			if err := a.guardAdd(len(tc.Function.Name)); err != nil {
+				return err
+			}
 			acc.name = tc.Function.Name
 		}
 		if tc.Function.Arguments != "" {

@@ -37,7 +37,7 @@ func CodemapTool(workspaceRoot string, timeout time.Duration) Tool {
 			strconv.Itoa(maxCodemapEntries) + "。用于低成本了解仓库布局；要看文件内容用 read，按文件名过滤用 glob。",
 		Parameters: object(map[string]any{
 			"path":  map[string]any{"type": "string", "description": "根目录，相对 workdir 或绝对，默认 workdir"},
-			"depth": map[string]any{"type": "integer", "description": "最大递归深度，默认 " + strconv.Itoa(defaultCodemapDepth) + "；<=0 不限（仍受条目上限约束）"},
+			"depth": map[string]any{"type": "integer", "description": "最大递归深度，默认 " + strconv.Itoa(defaultCodemapDepth) + "（缺省/0 同义）；<0 不限（仍受条目上限约束）"},
 		}),
 		ResultLimit:   maxToolResultInHistory,
 		SplitTruncate: true, // 条目上限提示在尾部，前截断会丢失

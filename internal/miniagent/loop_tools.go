@@ -110,7 +110,9 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 				if hooks.OnToolResult != nil {
 					for j := i + 1; j < len(calls); j++ {
 						if err := hooks.OnToolResult(calls[j].Name, calls[j].ID, results[j]); err != nil {
-							fillPlaceholderTail(&msgs, newMsgs, calls, j)
+							// OnToolResult 在 j 处再抛错：i+1..j-1 虽已成功通知消费方，但 transcript 未 append
+							// 任何 tool 消息（仅 :106 追加了 i）。故从 i+1 起全补占位（非 j），否则 i+1..j-1 缺配对。
+							fillPlaceholderTail(&msgs, newMsgs, calls, i+1)
 							return msgs, err
 						}
 					}

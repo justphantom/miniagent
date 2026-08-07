@@ -297,6 +297,12 @@ func RewriteMessages(path string, meta SessionMeta, msgs []Message, opts ...int6
 			_ = os.Remove(tmpPath)
 			return err
 		}
+		// fsync 父目录提交 rename 的目录元数据：防崩溃落在 rename 与目录元数据提交窗口内致 rewrite 丢失
+		// （与已披露的 flock+rename 并发问题是不同维度——这是崩溃耐久性）。失败仅 best-effort（rename 已成功）。
+		if d, derr := os.Open(dir); derr == nil {
+			_ = d.Sync()
+			_ = d.Close()
+		}
 		return nil
 	})
 }

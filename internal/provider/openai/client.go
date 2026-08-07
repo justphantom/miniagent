@@ -21,20 +21,18 @@ const maxChatBodyBytes = 4 << 20 // 4 MiB；恰好达到不截断，多 1 字节
 // 懒解析（直接 struct 构造的测试路径）用 sync.Once 保护，确保并发 Do 无竞争（修复 R4）。
 // 流式走 StreamClient（P4 拆分）；本 client 的 *http.Client 带总 Timeout 兜底防单次调用挂死。
 type ChatClient struct {
-	APIKey            string
-	ChatURL           string
-	ModelsURL         string
-	Headers           map[string]string // 自定义请求头，不覆盖 Authorization / Content-Type
-	chatURL           *url.URL
-	chatOnce          sync.Once
-	chatErr           error
-	modelsURL         *url.URL
-	modelsOnce        sync.Once
-	modelsErr         error
-	HTTP              *http.Client
-	Logger            *slog.Logger
-	defaultClient     *http.Client // c.HTTP==nil 时缓存的非流式 client（P3-5）
-	defaultClientOnce sync.Once
+	APIKey     string
+	ChatURL    string
+	ModelsURL  string
+	Headers    map[string]string // 自定义请求头，不覆盖 Authorization / Content-Type
+	chatURL    *url.URL
+	chatOnce   sync.Once
+	chatErr    error
+	modelsURL  *url.URL
+	modelsOnce sync.Once
+	modelsErr  error
+	HTTP       *http.Client
+	Logger     *slog.Logger
 }
 
 // NewChatClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
@@ -92,13 +90,14 @@ func (c *ChatClient) modelsEndpoint(defaultTimeout time.Duration) (*http.Client,
 	return c.client(defaultTimeout), c.modelsURL, nil
 }
 
-// client 返回非流式 http.Client。c.HTTP!=nil 沿用注入；否则懒构造并缓存带 defaultTimeout 的 client（P3-5）。
+// client 返回非流式 http.Client。c.HTTP!=nil 沿用注入；否则每次按 defaultTimeout 构造（构造廉价、
+// 共享 DefaultTransport 故连接池不受影响）。原 defaultClient 缓存被 chat(120s)/models(30s) 端点共用，
+// sync.Once 使首调用方 timeout 固化、后续 defaultTimeout 被静默忽略，故去缓存。
 func (c *ChatClient) client(defaultTimeout time.Duration) *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	c.defaultClientOnce.Do(func() { c.defaultClient = &http.Client{Timeout: defaultTimeout} })
-	return c.defaultClient
+	return &http.Client{Timeout: defaultTimeout}
 }
 
 // Do 调用 POST ChatURL（非流式），解析 choices[0] / usage / finish_reason。响应 body

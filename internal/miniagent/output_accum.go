@@ -61,6 +61,7 @@ func (a *outputAccum) write(chunk string) error {
 					return err
 				}
 			}
+			a.file = a.sink.Name() // 首次 dump 全部成功后才置 file，finalize 据此决定 banner 是否标「全文：<file>」
 		} else if a.sink != nil {
 			if _, err := a.sink.WriteString(chunk); err != nil {
 				return err
@@ -77,14 +78,14 @@ func (a *outputAccum) write(chunk string) error {
 	return nil
 }
 
-// createSink 首次落盘时创建临时文件（os.CreateTemp 默认 0600），记 file、置 cut。
+// createSink 首次落盘时创建临时文件（os.CreateTemp 默认 0600），置 sink 与 cut。
+// 不在此置 a.file——由 write 在首次 dump 全部 chunk 成功后置，否则 dump 中途失败时 finalize 仍标「全文：<file>」指向残文件。
 func (a *outputAccum) createSink() error {
 	f, err := os.CreateTemp(a.spillDir, a.spillPrefix+"*.log")
 	if err != nil {
 		return err
 	}
 	a.sink = f
-	a.file = f.Name()
 	a.cut = true
 	return nil
 }

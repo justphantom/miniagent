@@ -280,7 +280,9 @@ func dedupShellCommands(msgs []miniagent.Message, keepN int) []miniagent.Message
 		copy(calls, out[i].ToolCalls)
 		for j := range calls {
 			if toFold[foldKey{i, j}] {
-				calls[j].Args = `{"command":"…[此前的同类 shell 命令已被后续执行取代]"}`
+				// json.Marshal 构造占位（与 foldedWriteEditArgs 一致），防硬编码 JSON 因文案引入引号/反斜杠而断裂。
+				placeholder, _ := json.Marshal(map[string]string{"command": "…[此前的同类 shell 命令已被后续执行取代]"})
+				calls[j].Args = string(placeholder)
 			}
 		}
 		out[i].ToolCalls = calls

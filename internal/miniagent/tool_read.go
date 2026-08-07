@@ -140,6 +140,11 @@ func formatLines(content string, offset, limit int) (string, error) {
 		limit = maxLineLimit
 	}
 	lines := strings.Split(content, "\n")
+	// POSIX 文本文件以换行结尾时 Split 产生末尾空串，当作一行会输出假末空行（N │ ）误导 LLM 行号/编辑。
+	// 仅当原内容以 \n 结尾才丢末尾空串（保留无尾换行的真末行）。
+	if n := len(lines); n > 0 && lines[n-1] == "" && strings.HasSuffix(content, "\n") {
+		lines = lines[:n-1]
+	}
 	start := max(offset, 1)
 	end := len(lines)
 	if limit > 0 && start+limit-1 < end {
