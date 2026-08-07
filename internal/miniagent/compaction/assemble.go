@@ -190,13 +190,20 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		Compacting:           opts.OnCompacting,
 		SessionID:            opts.SessionID,
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
+			if opts.Chat == nil {
+				return "", miniagent.Usage{}, errors.New("compaction: Chat 为 nil，无法摘要（须配置 CompactionOptions.Chat）")
+			}
 			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, maxChars, opts.SummaryMaxTokens, middle)
 		},
 	}
-	var overflowPending bool
 	before = func(ctx context.Context, in miniagent.StepInput) (miniagent.StepOutput, error) {
 		barrier := applyCompactionBarrier(in.Msgs)
-		budget.Force = overflowPending
+		// §P1-B：从上一步已入史的 assistant.Usage 判静默溢出（撞 provider 前先压）。经 in.Msgs 推断
+		// Force，而非跨步闭包状态——支持多 Run 复用同一对 before/after（多实例安全、无 race）。
+		budget.Force = false
+		if idx := lastApplicableUsageIndex(in.Msgs); idx >= 0 {
+			budget.Force = isUsageOverflow(*in.Msgs[idx].Usage, opts.ContextWindow, opts.MaxTokens, opts.Reserved, opts.Auto)
+		}
 		fitted, summary, summarized, sumUsage, err := FitHistory(ctx, barrier, budget, opts.Logger)
 		if err != nil {
 			return miniagent.StepOutput{}, err
@@ -210,10 +217,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		}
 		return out, nil
 	}
-	after = func(_ context.Context, _ int, resp miniagent.Response) error {
-		// §P1-B：用上一步真实 usage 判静默溢出，置下步 Force（撞 provider 前先压）。
-		overflowPending = isUsageOverflow(resp.Usage, opts.ContextWindow, opts.MaxTokens, opts.Reserved, opts.Auto)
-		return nil
-	}
+	// after 不再持有跨步状态：溢出检测移到 before 从 in.Msgs 推断。返回 nil 让调用方跳过无意义的 AfterLLM。
+	after = nil
 	return before, after
 }
