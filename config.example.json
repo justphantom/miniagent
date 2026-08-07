@@ -1,24 +1,11 @@
-// miniagent 配置示例
-// 说明：JSON 标准不支持注释，复制到正式文件前请删除本文件中的所有 // 注释行。
-// 所有 duration 字段均为字符串，如 "30s"、"5m"、"2h"。
-// 本配置不支持 ${VAR} 环境变量注入；所有值均按字面量读取。
 {
-  // providers：至少配置一个；name 不得含 '/'。
   "providers": [
     {
       "name": "openai",
-      // chat_url：完整的 OpenAI 兼容 chat completions 端点。
       "chat_url": "https://api.openai.com/v1/chat/completions",
-      // models_url：可选；配置后 -list-models 会发 GET 请求，否则用静态 models 列表。
       "models_url": "https://api.openai.com/v1/models",
-      // key：API 密钥，按字面量读取；明文入文件，注意权限（建议 0600）。
-      // 也可留空改用 $MINIAGENT_API_KEY 环境变量注入。
       "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      // models：静态模型列表；models_url 为空时 -list-models 直接返回该列表。
       "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
-      // thinking（钉死）：启用思考（defaults.thinking≠off）时 provider 必声明 {field,map}，wire 必经映射。
-      // openai 标准映射如下（reasoning_effort + identity）。异字段 provider（如 anthropic 用 thinking 字段）
-      // 参考下方第二个 provider 的写法。
       "thinking": {
         "field": "reasoning_effort",
         "map": {
@@ -33,14 +20,12 @@
       }
     },
     {
-      // 第二个 provider 示例：Anthropic 兼容代理。
       "name": "anthropic",
       "chat_url": "https://api.anthropic.com/v1/messages",
       "models_url": "https://api.anthropic.com/v1/models",
       "key": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
       "models": ["claude-sonnet-4", "claude-opus-4"],
       "headers": {
-        // 部分代理/网关要求额外认证头或租户标识。
         "anthropic-version": "2023-06-01",
         "X-Tenant-Id": "my-tenant"
       },
@@ -56,104 +41,54 @@
       }
     }
   ],
-
-  // session：会话持久化配置。
   "session": {
-    // dir：session jsonl 文件存放目录；session id 会解析为该目录下的 .jsonl。
     "dir": ".sessions"
   },
-
-  // defaults：默认策略参数。
   "defaults": {
-    // provider：主会话 provider 名（必填，须为 providers[].name 之一）。
     "provider": "openai",
-    // model：主会话 model id（必填，不含 provider 前缀）。
     "model": "gpt-4o",
-    // thinking：思考级别 off|minimal|low|medium|high|xhigh|max。
     "thinking": "off",
-    // mode：权限模式 default|auto。default 模式要求 run.workdir 非空。
     "mode": "default",
-    // system_prompt：自定义系统提示词；空则使用内置代码向 prompt。
     "system_prompt": "",
-    // summary_request：撞 max_iterations 上限时注入的总结请求文案。
     "summary_request": "请总结已完成的工具和关键结果，不要继续调用工具。",
-    // summarizer_prompt：摘要压缩时使用的 system prompt。
     "summarizer_prompt": "你是上下文压缩助手，请用精简中文总结对话中段内容。"
   },
-
-  // run：运行参数与限额；所有字段均为可选，<=0 或缺省时使用内置默认值。
   "run": {
-    // workdir：default 模式下写工具边界与 shell 的 cwd；.miniagent/ 规则发现根。
     "workdir": "./repo",
-    // max_tokens：单次 LLM 调用最大输出 token 数。
     "max_tokens": 4096,
-    // max_iterations：单轮 ReAct 循环最大 LLM 调用次数。
     "max_iterations": 20,
-    // max_tokens_total：单轮累计 input+output token 上限，超限报错退出；0=不限。
     "max_tokens_total": 0,
-    // context_window：模型 context 上限；>0 时主动裁剪历史。
     "context_window": 128000,
-    // max_duration：整轮最大运行时长；0=不限。
     "max_duration": "5m",
-    // shell_timeout：shell/script 工具命令超时。
     "shell_timeout": "30s",
-    // file_op_timeout：read/grep/glob/edit 等文件操作超时。
     "file_op_timeout": "20s",
-    // write_timeout：write 工具超时。
     "write_timeout": "10s",
-    // http_timeout：非流式 LLM HTTP 调用总超时；流式不受此限制。
     "http_timeout": "180s",
-    // stream：true 启用 SSE 流式输出。
     "stream": false,
-    // max_tool_result_chars：工具结果入历史默认字符上限。
     "max_tool_result_chars": 2000,
-    // max_file_result_chars：read/edit 等代码类工具结果入历史字符上限。
     "max_file_result_chars": 8000,
-    // max_parallel_tools：同一步并行工具上限。
     "max_parallel_tools": 8,
-    // context_keep_recent：上下文压缩时保留的最近轮数。
     "context_keep_recent": 6,
-    // context_keep_reasoning：主动 reasoning 清理保留的最近 assistant 条数（P1）；<=0=内置默认 1。
     "context_keep_reasoning": 1,
-    // context_keep_tool_args：主动 write/edit 大 args 压缩保留的最近 assistant 条数（P4）；<=0=内置默认 2。
     "context_keep_tool_args": 2,
-    // context_keep_reasoning_chars：保留窗口内单条 reasoning 字符上限（P7），超过则头尾分段截断（压中段、留两端）；负数=关闭。
     "context_keep_reasoning_chars": 4000,
-    // summary_max_chars：摘要压缩输出字符上限。
     "summary_max_chars": 2000,
-    // summary_max_tokens：摘要 LLM 调用 max_tokens。
     "summary_max_tokens": 512,
-    // max_read_file_bytes：read 单文件读取字节上限。
     "max_read_file_bytes": 524288,
-    // max_shell_output_chars：shell 输出字符上限。
     "max_shell_output_chars": 100000,
-    // max_session_bytes：session 文件单文件大小上限。
     "max_session_bytes": 10485760,
-    // grep_max_matches：grep 命中行上限。
     "grep_max_matches": 500,
-    // context_trim_tool_chars：context 超限时 tool content 二次裁剪字符数。
     "context_trim_tool_chars": 1000,
-    // context_use_real_usage（§P0-B）：压缩阈值是否优先采纳 provider 真实 usage。true（默认）= 优先真实 usage + 时间戳防陈旧；false = kill-switch 回落纯本地 estimateTokens。
     "context_use_real_usage": true,
-    // shell_stream_window_bytes（§P1-D）：shell/script 输出滑窗字节上限（运行中保尾部、丢中段）；<=0 用默认 2*max_shell_output_chars*4。
     "shell_stream_window_bytes": 0,
-    // preserve_recent_tokens（§P1-E）：压缩时 retainedTail 的 token 预算上界；<=0 = 自动 floor(context_window/4) clamp [2000,8000]。
     "preserve_recent_tokens": 0,
-    // tool_output_dir（§P1-A）：工具输出落盘根目录；空 = 禁用，未设时按 session 目录自动派生 <id>.tool-output/（超 limit 的全文写盘、历史 Content 改为预览+路径提示）。
     "tool_output_dir": "",
-    // tool_output_retention（§P1-A）：工具输出落盘文件保留时长；<=0/缺省 = 7d。
     "tool_output_retention": "168h"
   },
-
-  // compaction：长会话摘要压缩配置。
   "compaction": {
-    // provider/model：摘要压缩用的 provider 与 model id。须成对设置（可跨 provider）；
-    // 整段留空则整体回落 defaults 对；只设其一报错。
     "provider": "openai",
     "model": "gpt-4o-mini",
-    // auto（§P1-B）：静默用量溢出检测。true（默认）= 撞 provider 前用上一步真实 usage 预压；false = 关闭，仅留 estimateTokens 主动压缩 + ErrContextLength 反应重试。
     "auto": true,
-    // reserved（§P1-B）：从 context_window 预留的输出/增长 token 缓冲；<=0/缺省 = 回落 min(20000, run.max_tokens)。
     "reserved": 0
   }
 }
