@@ -119,7 +119,7 @@ func main() {
 		}
 	}
 	// P0：发现 .miniagent/ 项目规则，合并进 system prompt（persona>rules>defaults）。
-	pr := loadProjectRules(workdir)
+	pr := loadProjectRules(workdir, logger)
 	resolved.System = mergeSystemPrompt(resolved.System, pr.persona, pr.rules, pr.hasAny())
 	resolved.System = injectSubagentGuidance(resolved.System, absConfigPath(*f.configPath), resolved.Mode)
 

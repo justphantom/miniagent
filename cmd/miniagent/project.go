@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,20 +36,20 @@ func (p projectRules) hasAny() bool {
 // loadProjectRules 读 <workdir>/.miniagent/ 和 ~/.miniagent/ 的项目规则。
 // 优先级：workdir/.miniagent/ > ~/.miniagent/ > 空。各文件单独覆盖（非合并）。
 // workdir 为空时仅从 home 目录读取。
-func loadProjectRules(workdir string) projectRules {
+func loadProjectRules(workdir string, logger *slog.Logger) projectRules {
 	var pr projectRules
 	// 从 home 目录读基线（若存在）
-	pr = loadProjectRulesFromDir("")
+	pr = loadProjectRulesFromDir("", logger)
 	// workdir 覆盖基线
 	if workdir != "" {
-		pr = mergeProjectRules(loadProjectRulesFromDir(filepath.Join(workdir, ".miniagent")), pr)
+		pr = mergeProjectRules(loadProjectRulesFromDir(filepath.Join(workdir, ".miniagent"), logger), pr)
 	}
 	return pr
 }
 
 // loadProjectRulesFromDir 从指定目录读 persona/rules/scripts。
 // dir="" 是特殊哨兵，表示从 ~/.miniagent/ 读取（由函数内部解析 home 目录）。
-func loadProjectRulesFromDir(dir string) projectRules {
+func loadProjectRulesFromDir(dir string, logger *slog.Logger) projectRules {
 	var pr projectRules
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -69,11 +70,20 @@ func loadProjectRulesFromDir(dir string) projectRules {
 	scriptsPath := filepath.Join(dir, "scripts.json")
 	if _, err := os.Stat(scriptsPath); err == nil {
 		pr.scriptsSet = true
-		if data, err := miniagent.ReadFileLimited(scriptsPath, maxProjectFileBytes); err == nil {
+		data, rerr := miniagent.ReadFileLimited(scriptsPath, maxProjectFileBytes)
+		if rerr != nil {
+			if logger != nil {
+				logger.Warn("读取 scripts.json 失败，跳过项目脚本", "path", scriptsPath, "error", rerr)
+			}
+		} else {
 			var s struct {
 				Scripts []scriptDef `json:"scripts"`
 			}
-			if json.Unmarshal(data, &s) == nil {
+			if jerr := json.Unmarshal(data, &s); jerr != nil {
+				if logger != nil {
+					logger.Warn("scripts.json 解析失败，跳过项目脚本", "path", scriptsPath, "error", jerr)
+				}
+			} else {
 				pr.scripts = s.Scripts
 			}
 		}
