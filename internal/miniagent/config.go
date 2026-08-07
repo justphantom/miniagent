@@ -240,8 +240,8 @@ func validateConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != "default" && cfg.Defaults.Mode != "auto" {
-		return fmt.Errorf("defaults.mode %q 非法（default|auto）", cfg.Defaults.Mode)
+	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != ModeDefault && cfg.Defaults.Mode != ModeAuto {
+		return fmt.Errorf("defaults.mode %q 非法（%s|%s）", cfg.Defaults.Mode, ModeDefault, ModeAuto)
 	}
 	// 用 defaults 所指 provider（defProv）的自定义 thinking 键校验，与 Resolve 的 per-provider 校验一致；
 	// 聚合所有 provider 会让「只在 provider B 声明的自定义键」通过 config 却在 resolve（provider A）失败。

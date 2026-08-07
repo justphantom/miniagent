@@ -7,7 +7,11 @@ import (
 
 // ValidateSessionID 白名单校验 id：仅允许拉丁字母、数字、连字符。禁路径分隔符/点/空格等，
 // 使 id 只作文件名主体（.jsonl 扩展名由 ResolveSessionPath 补），杜绝路径穿越与扩展名注入。
+// 空 id 直接拒绝（导出契约收紧：调用方虽多先检 arg==""，但本函数不应把空串当合法）。
 func ValidateSessionID(id string) error {
+	if id == "" {
+		return errors.New("session id 为空")
+	}
 	for _, r := range id {
 		switch {
 		case r >= 'a' && r <= 'z':

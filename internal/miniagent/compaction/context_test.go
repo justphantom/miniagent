@@ -230,3 +230,25 @@ func TestFitHistory_SummarizeErrorFallsBackLossy(t *testing.T) {
 		t.Errorf("lossy compaction should shrink msgs: out=%d in=%d", len(out), len(msgs))
 	}
 }
+
+// L3-6：FitHistory 是导出函数，直接调用方若漏设 Summarize（Force=true 或超窗进 compactWithSummary）→
+// nil 守卫返回 error → FitHistory 回落有损 compactHistory（不 panic、summarized=false、不报错）。
+func TestFitHistory_NilSummarizeFallsBackLossy(t *testing.T) {
+	big := strings.Repeat("x", 1000) // 每条 ~250 tokens
+	var msgs []miniagent.Message
+	for range 30 {
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: big})
+	}
+	// Force=true 跳过 4/5 门控直接进 compactWithSummary；Summarize=nil（零值）触发 nil 守卫→有损 fallback。
+	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Force: true}
+	out, _, summarized, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	if err != nil {
+		t.Fatalf("nil Summarize 应回落有损而非报错: %v", err)
+	}
+	if summarized {
+		t.Error("Summarize=nil → summarized 应为 false（有损 fallback）")
+	}
+	if len(out) >= len(msgs) {
+		t.Errorf("有损 fallback 应收缩: out=%d in=%d", len(out), len(msgs))
+	}
+}
