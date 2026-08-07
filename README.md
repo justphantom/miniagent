@@ -9,7 +9,7 @@
 - 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`internal/miniagent/platform_windows.go`）
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：`read` / `write` / `edit` / `grep` / `glob` / `codemap` / `shell`，外加 `.miniagent/scripts.json` 声明的项目脚本工具（`script_<name>`）
+- 工具：`read` / `write` / `edit` / `grep` / `glob` / `codemap` / `shell`
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行；**session 保存期间临时忽略信号**，避免截断 session 文件
 
 ## 架构：极简核心 + 开放钩子
@@ -311,7 +311,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 - **session 保存受信号保护**：收到 `SIGINT`/`SIGTERM` 后，正在进行的 LLM/工具调用会被取消，但 `AppendMessages`/`RewriteMessages` 期间会临时忽略信号，保证 session 文件原子落盘，避免半写截断。
 - 需要更强隔离时自行叠加容器 / 独立 UID / `hidepid` / 网络出口白名单等——这些**不在 miniagent 职责内**，由运行环境提供。
 
-> 一句话：miniagent 信任其运行用户的权限边界；default 模式仅拦误操作，越权访问的闸门是 OS 用户与文件权限。此外，工具/输入/输出/请求体均有大小上限（见「内部约束」），`grep` 拒绝复杂正则，`script_<name>` 参数经转义且禁止 `-` 开头参数，以降低误用与注入风险。
+> 一句话：miniagent 信任其运行用户的权限边界；default 模式仅拦误操作，越权访问的闸门是 OS 用户与文件权限。此外，工具/输入/输出/请求体均有大小上限（见「内部约束」），`grep` 拒绝复杂正则，以降低误用与注入风险。
 
 ## 内部约束（常量）
 
@@ -341,15 +341,14 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 在 `workdir` 下放 `.miniagent/` 目录，agent 启动时自动发现并把项目专属行为注入——核心引擎本身不感知任何具体项目，只「知道如何发现项目规则」：
 
-项目规则文件（`persona.md`/`rules.md`/`scripts.json`）采用双层查找：优先从 `workdir/.miniagent/` 读，不存在则回退到 `~/.miniagent/`。优先级：workdir > home > 空。
+项目规则文件（`persona.md`/`rules.md`）采用双层查找：优先从 `workdir/.miniagent/` 读，不存在则回退到 `~/.miniagent/`。优先级：workdir > home > 空。
 
 | 文件 | 作用 |
 |------|------|
 | `.miniagent/persona.md` | 角色/语气/回答格式。存在时取代默认 system prompt 作身份基线（优先级 persona > rules > defaults.system_prompt） |
 | `.miniagent/rules.md` | 项目专属约束（编码规范、禁止事项、审查清单），追加到 system prompt 的「## 项目规则」段 |
-| `.miniagent/scripts.json` | `{"scripts":[{"name","command","description"}]}`；每条注册为 `script_<name>` 工具，复用 shell 的安全策略（mode 黑名单/env 剥离/超时/进程组） |
 
-任一文件存在即触发 system prompt 末尾追加「（已加载 .miniagent/ 项目规则与脚本）」。该目录通常应加入 `.gitignore` 或按团队约定纳入版本控制。
+任一文件存在即触发 system prompt 末尾追加「（已加载 .miniagent/ 项目规则）」。该目录通常应加入 `.gitignore` 或按团队约定纳入版本控制。
 
 ```bash
 # 项目仓库结构示例
@@ -358,7 +357,6 @@ repo/
   .miniagent/
     persona.md              # 「你是 repo 的 Go 维护者…」
     rules.md                # 「禁止提交未跑 go test 的改动…」
-    scripts.json            # {"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}
 ```
 
 ### 配置示例（miniagent.json）

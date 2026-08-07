@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 func writeFile(t *testing.T, path, body string) {
@@ -75,7 +73,6 @@ func TestLoadProjectRules_AllWorkdirSources(t *testing.T) {
 	workdir := t.TempDir()
 	writeFile(t, filepath.Join(workdir, ".miniagent", "persona.md"), "你是本项目专属 agent。")
 	writeFile(t, filepath.Join(workdir, ".miniagent", "rules.md"), "禁止提交未跑测试的代码。")
-	writeFile(t, filepath.Join(workdir, ".miniagent", "scripts.json"), `{"scripts":[{"name":"test","command":"go test ./...","description":"跑测试"}]}`)
 
 	// 隔离 home，避免真实 ~/.miniagent 干扰。
 	oldHome := os.Getenv("HOME")
@@ -88,9 +85,6 @@ func TestLoadProjectRules_AllWorkdirSources(t *testing.T) {
 	}
 	if !strings.Contains(pr.rules, "禁止提交") {
 		t.Errorf("rules = %q", pr.rules)
-	}
-	if len(pr.scripts) != 1 || pr.scripts[0].Name != "test" || pr.scripts[0].Command != "go test ./..." {
-		t.Errorf("scripts = %+v", pr.scripts)
 	}
 	if !pr.hasAny() {
 		t.Error("hasAny should be true")
@@ -138,25 +132,5 @@ func TestMergeSystemPrompt_KeepsBaseWhenNoPersona(t *testing.T) {
 	}
 	if !strings.Contains(got, "规则A") {
 		t.Errorf("rules missing: %s", got)
-	}
-}
-
-// buildTools 注册 script_<name> 工具，跳过 name/command 为空者。
-func TestBuildTools_RegistersScriptTools(t *testing.T) {
-	scripts := []scriptDef{
-		{"test", "go test ./...", "跑测试"},
-		{"", "echo x", "空 name 跳过"},
-		{"lint", "", "空 command 跳过"},
-	}
-	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, scripts, miniagent.Limits{})
-	names := map[string]bool{}
-	for _, tl := range tools {
-		names[tl.Name] = true
-	}
-	if !names["script_test"] {
-		t.Error("script_test should be registered")
-	}
-	if names["script_lint"] {
-		t.Error("script with empty command should be skipped")
 	}
 }

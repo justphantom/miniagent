@@ -138,7 +138,7 @@ func main() {
 	// 主 provider chat/stream +（跨 provider 时）摘要 compChat；key 缺失或端点非法时 os.Exit。
 	chat, stream, compChat := buildRuntimeClients(resolved, apiKey, logger)
 
-	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), pr.scripts, limits)
+	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits)
 	baseCfg := loopCfg(resolved, f, history, tools)
 	// §P1-A：工具输出落盘目录——config 显式优先；否则 -save-session/-session 激活时按 session 目录
 	// 派生 <sessionDir>/<id>.tool-output/（无 session 且 config 未配则禁用）。

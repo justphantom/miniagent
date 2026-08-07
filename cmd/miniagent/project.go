@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,27 +9,18 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// scriptDef 是 .miniagent/scripts.json 的一条脚本声明（P1：注册为 script_<name> 工具）。
-type scriptDef struct {
-	Name        string `json:"name"`
-	Command     string `json:"command"`
-	Description string `json:"description"`
-}
-
-// projectRules 是 loadProjectRules 的返回：persona/rules 文本与 scripts 列表。
-// *_Set 标记表示对应文件在目录中显式存在（即使内容为空），用于 workdir 覆盖 home 时区分“未提供”与“提供空值”。
+// projectRules 是 loadProjectRules 的返回：persona/rules 文本。
+// *_Set 标记表示对应文件在目录中显式存在（即使内容为空），用于 workdir 覆盖 home 时区分"未提供"与"提供空值"。
 type projectRules struct {
 	persona    string
 	personaSet bool
 	rules      string
 	rulesSet   bool
-	scripts    []scriptDef
-	scriptsSet bool
 }
 
-// hasAny 报告是否加载到任意项目规则/脚本（决定是否在 system prompt 末尾告知 LLM）。
+// hasAny 报告是否加载到任意项目规则（决定是否在 system prompt 末尾告知 LLM）。
 func (p projectRules) hasAny() bool {
-	return p.persona != "" || p.rules != "" || len(p.scripts) > 0
+	return p.persona != "" || p.rules != ""
 }
 
 // loadProjectRules 读 <workdir>/.miniagent/ 和 ~/.miniagent/ 的项目规则。
@@ -47,7 +37,7 @@ func loadProjectRules(workdir string, logger *slog.Logger) projectRules {
 	return pr
 }
 
-// loadProjectRulesFromDir 从指定目录读 persona/rules/scripts。
+// loadProjectRulesFromDir 从指定目录读 persona/rules。
 // dir="" 是特殊哨兵，表示从 ~/.miniagent/ 读取（由函数内部解析 home 目录）。
 func loadProjectRulesFromDir(dir string, logger *slog.Logger) projectRules {
 	var pr projectRules
@@ -67,27 +57,6 @@ func loadProjectRulesFromDir(dir string, logger *slog.Logger) projectRules {
 		pr.rulesSet = true
 		pr.rules = readTrimmedFile(filepath.Join(dir, "rules.md"))
 	}
-	scriptsPath := filepath.Join(dir, "scripts.json")
-	if _, err := os.Stat(scriptsPath); err == nil {
-		pr.scriptsSet = true
-		data, rerr := miniagent.ReadFileLimited(scriptsPath, maxProjectFileBytes)
-		if rerr != nil {
-			if logger != nil {
-				logger.Warn("读取 scripts.json 失败，跳过项目脚本", "path", scriptsPath, "error", rerr)
-			}
-		} else {
-			var s struct {
-				Scripts []scriptDef `json:"scripts"`
-			}
-			if jerr := json.Unmarshal(data, &s); jerr != nil {
-				if logger != nil {
-					logger.Warn("scripts.json 解析失败，跳过项目脚本", "path", scriptsPath, "error", jerr)
-				}
-			} else {
-				pr.scripts = s.Scripts
-			}
-		}
-	}
 	return pr
 }
 
@@ -99,13 +68,10 @@ func mergeProjectRules(workdir, home projectRules) projectRules {
 	if workdir.rulesSet {
 		home.rules = workdir.rules
 	}
-	if workdir.scriptsSet {
-		home.scripts = workdir.scripts
-	}
 	return home
 }
 
-// maxProjectFileBytes 是 persona.md/rules.md/scripts.json 等规则文件的字节上限。
+// maxProjectFileBytes 是 persona.md/rules.md 等规则文件的字节上限。
 const maxProjectFileBytes = 1 << 20 // 1 MiB
 
 func readTrimmedFile(path string) string {
@@ -118,7 +84,7 @@ func readTrimmedFile(path string) string {
 
 // mergeSystemPrompt 按优先级 persona.md > rules.md > defaults.system_prompt 合并 system prompt
 // （persona 存在则取代 base 作身份基线，否则沿用 base=defaults.system_prompt 工作流约束），
-// 追加 rules 段，并在加载了任意项目规则/脚本时显式告知 LLM（P0）。
+// 追加 rules 段，并在加载了任意项目规则时显式告知 LLM（P0）。
 func mergeSystemPrompt(base, persona, rules string, hasAny bool) string {
 	if persona != "" {
 		base = persona
@@ -128,7 +94,7 @@ func mergeSystemPrompt(base, persona, rules string, hasAny bool) string {
 		parts = append(parts, "## 项目规则\n"+rules)
 	}
 	if hasAny {
-		parts = append(parts, "（已加载 .miniagent/ 项目规则或脚本）")
+		parts = append(parts, "（已加载 .miniagent/ 项目规则）")
 	}
 	return strings.Join(parts, "\n\n")
 }

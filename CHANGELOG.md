@@ -15,6 +15,9 @@
 - **摘要前对 middle 全压 strip**：`compactWithSummary` 原把原始中段（含 reasoning / tool 结果 / write-edit args）直接喂给摘要 LLM，现摘要前对其全压 strip（`keepN=0`）——省摘要 input token（实测 ~56%，主为清中段历史 reasoning）+ 防 `middle + summaryMaxTokens` 超摘要模型 CW 致摘要失败回落。权衡：摘要 LLM 不再见中段历史 reasoning（要点仍在正文 / tool_calls，与 context 侧 `stripStaleReasoning` 同取舍）。注：dedup/fold（P6/P11/P8'/P9b）经 `windowStartOf(keepN=0)=0` 在 middle 全压时不生效（全窗口内），故当前主要省 reasoning；中段 tool 结果去重留待后续（需调整 windowStartOf 语义）。
 - **Commit 语义改：非压缩步不替换 transcript，压缩 tail 保留原文**：`before` 原每步 `Commit=true` 把 strip 写回 transcript，致压缩轮 `RewriteMessages` 落盘 strip 版本（reasoning/args 滚动丢失），与 `stripStaleReasoning` 注释「持久化留原文」矛盾。现 `FitHistory` 加 `committed` 返回值：非压缩步 `committed=false`（strip 仅本轮 View，transcript 保留原文）；仅压缩步 `committed=true` 替换为 `[head,summary,tail]` 且 tail 不再 strip（原文 reasoning/args 保留）。LLM 所见不变（每轮 strip View），消除压缩轮持久化不对称（落盘完整近期上下文）。代价：transcript 内存略增（原文 vs strip，≈ newMsgs 量级）。`fallback`（摘要失败）仍 strip+committed=true 防循环。
 
+### Removed
+- **项目级脚本工具（`.miniagent/scripts.json` → `script_<name>`）**：移除该功能（删 `internal/miniagent/tool_script.go` + 测试、`cmd/miniagent/project.go` 的 `scriptDef`/scripts 加载/merge、`buildTools` 的 `scripts` 参数与注册块）。**Breaking**：已用 `scripts.json` 声明的项目失效，需改用 `shell` 工具直接跑命令（失去「固定命令 + 限制参数」语义，shell 为自由命令）。收益：工具装配收窄为 7 内置工具、`buildTools` 签名简化、收窄 flag 注入面（`shellQuote` + 拒 `-` 开头防护随之移除）。`runShellCommand` 保留（shell 工具专用）。
+
 ## [4.2.0] - 2026-08-06
 
 > 核心策略彻底外挂：用量估算+预算判定、LLM 失败恢复、工具结果成型+落盘从 `Run` 内联移到默认钩子工厂，`Run` 真正零策略（仅做工具注册 / 上下文拼接 / 调 LLM / 执行工具 / 无 tool_calls 退出五件事）。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 minor。

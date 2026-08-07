@@ -6,16 +6,16 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// buildTools 注册 7 个内置工具 + N 个项目脚本工具（P1：.miniagent/scripts.json），按 mode 调整约束：
+// buildTools 注册 7 个内置工具，按 mode 调整约束：
 //   - default：写工具（write/edit）经 confineWrap 限定在 workdir 子树；
-//     shell/script 以 mode=default 注册（拒 sudo/su）。workdir 必填（main 入口校验）。
-//   - auto：无任何约束（shell/script mode=auto，写工具不包装）。
+//     shell 以 mode=default 注册（拒 sudo/su）。workdir 必填（main 入口校验）。
+//   - auto：无任何约束（shell mode=auto，写工具不包装）。
 //
 // workdir 为空时文件工具走 resolveToolPath、shell 的 cmd.Dir 留空。shellTimeout<=0 用默认 60s。
 // fileOpTimeout<=0 用默认 30s；writeTimeout<=0 用默认 30s。
 // fileResultLimit>0 时覆盖 read/edit 的 Tool.ResultLimit（S4：config run.max_file_result_chars），
-// <=0 保留构造器内置默认（maxFileResultInHistory）。scripts 中 name/command 为空者跳过。
-func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, scripts []scriptDef, limits miniagent.Limits) []miniagent.Tool {
+// <=0 保留构造器内置默认（maxFileResultInHistory）。
+func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, limits miniagent.Limits) []miniagent.Tool {
 	shellMode := mode
 	if shellMode == "" {
 		shellMode = miniagent.ModeDefault
@@ -41,7 +41,7 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		glob = confineWrap(glob, workdir)
 		codemap = confineWrap(codemap, workdir)
 	}
-	tools := []miniagent.Tool{
+	return []miniagent.Tool{
 		read,
 		write,
 		edit,
@@ -50,12 +50,4 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		codemap,
 		miniagent.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
 	}
-	// P1：项目脚本注册为 script_<name> 工具，复用 shell 的安全策略（runShellCommand）。
-	for _, s := range scripts {
-		if s.Name == "" || s.Command == "" {
-			continue
-		}
-		tools = append(tools, miniagent.ScriptTool(s.Name, s.Description, s.Command, workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes))
-	}
-	return tools
 }

@@ -9,14 +9,14 @@ import (
 )
 
 func TestBuildTools_AlwaysRegisters7(t *testing.T) {
-	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, nil, miniagent.Limits{})
+	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{})
 	if len(tools) != 7 {
 		t.Fatalf("got %d tools, want 7", len(tools))
 	}
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
-	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, nil, miniagent.Limits{})
+	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{})
 	if len(tools) != 7 {
 		t.Fatalf("got %d tools, want 7", len(tools))
 	}
@@ -26,7 +26,7 @@ func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	dir := t.TempDir()
 	byName := map[string]int{}
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, nil, miniagent.Limits{}) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, miniagent.Limits{}) {
 		byName[tl.Name] = tl.ResultLimit
 	}
 	for _, name := range []string{"read", "edit"} {
@@ -35,7 +35,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 		}
 	}
 	// <=0：保留内置 maxFileResultInHistory（8000）。
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, nil, miniagent.Limits{}) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}) {
 		if tl.Name == "read" && tl.ResultLimit != 8000 {
 			t.Errorf("read ResultLimit = %d, want builtin 8000 when limit<=0", tl.ResultLimit)
 		}
@@ -45,7 +45,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 // buildTools(default) 后写工具对越界 path 返回 IsError（含「default 模式」）。
 func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
-	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, nil, miniagent.Limits{})
+	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{})
 	byName := map[string]miniagent.Tool{}
 	for _, tk := range tools {
 		byName[tk.Name] = tk
