@@ -114,6 +114,27 @@ func TestLoadConfig_DefaultsModelUnknownProvider(t *testing.T) {
 	}
 }
 
+// L3-12：defaults.thinking 用「只在另一 provider 声明的自定义键」须在 config 校验阶段就拒
+// （与 Resolve 的 per-provider 校验一致），而非聚合所有 provider 放行、留到 resolve 才失败。
+func TestLoadConfig_ThinkingKeyScopedToDefaultProvider(t *testing.T) {
+	body := `{
+  "providers":[
+    {"name":"a","chat_url":"https://a/v1/chat/completions","models":["m"]},
+    {"name":"b","chat_url":"https://b/v1/chat/completions","models":["m"],"thinking":{"field":"x-effort","map":{"fast":"low"}}}
+  ],
+  "defaults":{"provider":"a","model":"m","thinking":"fast"}
+}`
+	// a 未声明 fast：config 阶段就应报错（旧聚合逻辑会放行，留到 resolve 才失败）。
+	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
+		t.Error("defaults.thinking 用 a 未声明的自定义键 fast 应在 config 阶段报错（per-provider 校验）")
+	}
+	// 反例：defaults 指向声明了 fast 的 b 则合法。
+	bodyOK := strings.Replace(body, `"provider":"a","model":"m","thinking":"fast"`, `"provider":"b","model":"m","thinking":"fast"`, 1)
+	if _, err := LoadConfig(writeTmpConfig(t, bodyOK)); err != nil {
+		t.Errorf("defaults 指向声明了 fast 的 b 应合法: %v", err)
+	}
+}
+
 // 成对规则：defaults 对必填；compaction 只设一个字段即报错。
 func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	providers := `"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}]`

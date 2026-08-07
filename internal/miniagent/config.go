@@ -190,20 +190,6 @@ var standardThinkingLevels = map[string]bool{
 	"max":       true,
 }
 
-// thinkingCustomKeys 聚合所有 provider 的 thinking.map 自定义 key，供 validateConfig 校验。
-func thinkingCustomKeys(cfg *Config) map[string]bool {
-	custom := map[string]bool{}
-	for _, p := range cfg.Providers {
-		if p.Thinking == nil {
-			continue
-		}
-		for k := range p.Thinking.Map {
-			custom[k] = true
-		}
-	}
-	return custom
-}
-
 // validateThinking 校验 thinking 取值：标准级别、customKeys 中的自定义 key，或空串/off 均合法。
 func validateThinking(thinking string, customKeys map[string]bool) error {
 	if thinking == "" || thinking == ThinkingOff {
@@ -257,7 +243,15 @@ func validateConfig(cfg *Config) error {
 	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != "default" && cfg.Defaults.Mode != "auto" {
 		return fmt.Errorf("defaults.mode %q 非法（default|auto）", cfg.Defaults.Mode)
 	}
-	if err := validateThinking(cfg.Defaults.Thinking, thinkingCustomKeys(cfg)); err != nil {
+	// 用 defaults 所指 provider（defProv）的自定义 thinking 键校验，与 Resolve 的 per-provider 校验一致；
+	// 聚合所有 provider 会让「只在 provider B 声明的自定义键」通过 config 却在 resolve（provider A）失败。
+	defCustomKeys := map[string]bool{}
+	if defProv.Thinking != nil {
+		for k := range defProv.Thinking.Map {
+			defCustomKeys[k] = true
+		}
+	}
+	if err := validateThinking(cfg.Defaults.Thinking, defCustomKeys); err != nil {
 		return fmt.Errorf("defaults.thinking: %w", err)
 	}
 	if _, _, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel); err != nil {
