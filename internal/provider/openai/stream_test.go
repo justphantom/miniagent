@@ -210,3 +210,27 @@ func TestParseSSE_LongLine(t *testing.T) {
 // http.Client.Timeout 覆盖 body 读取会砍断长流）；缓存同一实例；注入时沿用注入。
 // 注入契约（buildLLM 注入带 120s Timeout 的 client）：streamClient 须把注入 client 的
 // 总 Timeout 清零（P1-A：流式 body 不被砍），但保留其 Transport（代理/连接配置，#2）。
+
+// DoStream 非 200 错误不回显响应体：防恶意/调试代理在错误体回显 Authorization 致 key 经 error
+// 进 NDJSON stdout / session jsonl。与非流式 client.go 威胁模型对齐。
+// 回归：此前三处用 text.Truncate(raw,500,…) 把 body 灌进 error。
+func TestDoStream_ErrorOmitsBody(t *testing.T) {
+	const secret = "Bearer sk-leak-credential"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest) // 非 context-length/thinking 特征 → 走通用 status-only 分支
+		fmt.Fprint(w, `{"echoed":"`+secret+`"}`)
+	}))
+	defer srv.Close()
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
+	_, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("错误不得回显响应体（防凭证泄漏进 session）: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("错误应含状态码 400 便于排错: %q", err.Error())
+	}
+}

@@ -331,3 +331,43 @@ func TestRun_ShapeToolResultErrorStopsKeepsPairing(t *testing.T) {
 		}
 	}
 }
+
+// OnToolUse 返回非 ErrToolDenied error 时，assistant.tool_calls 的每个 id 仍须有配对 tool 消息（占位）。
+// 与 OnToolResult 错误路径对齐（P2-1）。回归：此前该路径直接 return 不补占位，破坏配对不变量。
+func TestRun_OnToolUseErrorKeepsPairing(t *testing.T) {
+	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(
+			ToolCall{ID: "c0", Name: "q", Args: "{}"},
+			ToolCall{ID: "c1", Name: "q", Args: "{}"},
+		),
+		textResponse("done"),
+	}}
+	llm := testClients(tr)
+	stop := errors.New("downstream closed")
+	hooks := LoopHooks{OnToolUse: func(name, input string) error { return stop }}
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
+	if !errors.Is(err, stop) {
+		t.Fatalf("err = %v, want %v", err, stop)
+	}
+	var wantIDs []string
+	gotIDs := make(map[string]bool)
+	for _, m := range res.Messages {
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				wantIDs = append(wantIDs, tc.ID)
+			}
+		}
+		if m.Role == RoleTool {
+			gotIDs[m.ToolCallID] = true
+		}
+	}
+	if len(wantIDs) == 0 {
+		t.Fatalf("no assistant tool_calls found; msgs=%+v", res.Messages)
+	}
+	for _, id := range wantIDs {
+		if !gotIDs[id] {
+			t.Errorf("OnToolUse error 路径 tool_call %q 缺配对 tool 消息（应补占位）", id)
+		}
+	}
+}

@@ -62,6 +62,10 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 					denied[tc.ID] = true
 					continue
 				}
+				// 配对补全：assistant 消息（含全部 tool_calls）已在 :52 append，此时 runToolsParallel
+				// 尚未执行，须为全部 calls 补占位 tool 消息保配对——与 OnToolResult(:89)/ShapeToolResult(:103)
+				// 错误路径一致（彼处 i.. 或 i+1.. 视已执行范围），防续跑被端点 400。
+				fillPlaceholderTail(&msgs, newMsgs, calls, 0)
 				return msgs, err
 			}
 		}

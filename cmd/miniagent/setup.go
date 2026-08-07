@@ -103,8 +103,10 @@ func resolveFinalKey(providerKey string) string {
 }
 
 func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
-	if *f.stream && *f.resultOnly {
-		fmt.Fprintln(os.Stderr, "miniagent: -stream 与 -result-only 互斥")
+	// 互斥查「解析后」的 stream（cli>config）：config run.stream=true + CLI -result-only 也须触发，
+	// 否则 loopCfg.Stream 解析为 true 而 buildHooks 返回空事件钩子，SSE 被拉取却丢弃、违反文档互斥语义。
+	if intoBool(resolved.Run.Stream, *f.stream) && *f.resultOnly {
+		fmt.Fprintln(os.Stderr, "miniagent: -stream（或 config run.stream）与 -result-only 互斥")
 		os.Exit(1)
 	}
 	if *f.saveSession && *f.session != "" {

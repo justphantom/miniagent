@@ -61,7 +61,7 @@ internal/provider/openai/  OpenAI 兼容 provider 实现（核心经 LLM 接口�
   models.go           ListAllModels：models 列表（动态 GET + 静态回落）
   retry.go            重试退避策略
 
-internal/event/       NDJSON 事件编码子包（session/tool_use/tool_result/result/error/delta/model）
+internal/miniagent/event/  NDJSON 事件编码子包（session/tool_use/tool_result/result/error/delta/model）
 internal/text/        纯文本工具（NowMs / Truncate / TruncateTail）
 ```
 
@@ -195,7 +195,7 @@ return finishMaxIterations
 
 其他硬化：请求/响应体大小上限防 OOM/烧钱；HTTP 重定向依赖标准库默认 `CheckRedirect`（跨域剥离 Authorization）；insecure URL 警告；session 文件 flock/NOFOLLOW/权限。
 
-## 11. 事件协议（NDJSON，`internal/event/event.go`）
+## 11. 事件协议（NDJSON，`internal/miniagent/event/event.go`）
 
 stdout 输出 NDJSON 流（`-result-only` 时为 subagent fork 的纯文本模式，不发事件）：
 

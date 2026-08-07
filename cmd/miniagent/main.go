@@ -183,7 +183,7 @@ func main() {
 		defer cancel()
 	}
 
-	prompt := mustReadPrompt(os.Stdin)
+	prompt := mustReadPrompt(ctx, os.Stdin)
 	llm := &openai.Provider{Chat: chat, Stream: stream}
 	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
 	if err != nil {

@@ -96,6 +96,45 @@ func TestSelectTailByTokens_AllFit(t *testing.T) {
 	}
 }
 
+// selectTailByTokens 不变量：最近轮单独超 tokenBudget 时仍强制并入 tail，不被压进 middle 摘要掉。
+// 回归：此前若最近轮 bulk 在 assistant.tool_call.Args（如 write 大文件，shrinkRoundToolContents 压不到），
+// boundary split/shrink 双失败 → tail 为空 → compactWithSummary 把最近轮并入 middle 摘要，丢失精确近期上下文。
+func TestSelectTailByTokens_RecentRoundExceedsBudget(t *testing.T) {
+	bigArgs := strings.Repeat("x", 20000) // 在 tool_call.Args，shrinkRoundToolContents 不触及 → 无法贴合预算
+	rounds := [][]miniagent.Message{
+		{{Role: miniagent.RoleUser, Content: "old"}},
+		{ // 最近轮：bulk 在 assistant.tool_call.Args，shrink 无效
+			{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "write", Args: bigArgs}}},
+			{Role: miniagent.RoleTool, ToolCallID: "c1", Content: "ok"},
+		},
+	}
+	tail, middle := selectTailByTokens(rounds, 4, 50)
+	if len(tail) == 0 {
+		t.Fatalf("tail 不可为空：最近轮即使单独超预算也须并入 tail")
+	}
+	// 最近轮（含 c1）应在 tail，不在 middle
+	hasC1 := false
+	for _, m := range tail {
+		if m.ToolCallID == "c1" {
+			hasC1 = true
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "c1" {
+				hasC1 = true
+			}
+		}
+	}
+	if !hasC1 {
+		t.Errorf("最近轮（c1）应留在 tail 不被摘要: tail=%+v", tail)
+	}
+	if !msgsContainContent(middle, "old") {
+		t.Errorf("older 轮应进 middle: %+v", middle)
+	}
+	if err := miniagent.ValidateToolPairing(tail); err != nil {
+		t.Errorf("tail 配对应自洽: %v", err)
+	}
+}
+
 // §P1-E splitRoundByTokens 配对安全：tool-call 轮返回 nil（不可安全切）；多消息文本轮切在消息边界。
 func TestSplitRoundByTokens_PairingSafe(t *testing.T) {
 	// tool-call 轮：[A(tc=[c1,c2]), T(c1), T(c2)] → 不可切（切点后缀不能以 tool 开头）。

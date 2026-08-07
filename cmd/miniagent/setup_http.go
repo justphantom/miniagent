@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -88,6 +89,10 @@ func runListModels(ctx context.Context, cfg *miniagent.Config, providerFilter st
 		}
 	}
 	if err != nil {
+		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不报错——与主 Run 路径（main.go）一致。
+		if errors.Is(err, context.Canceled) {
+			os.Exit(130)
+		}
 		fmt.Fprintf(os.Stderr, "miniagent: list models: %v\n", err)
 		os.Exit(1)
 	}

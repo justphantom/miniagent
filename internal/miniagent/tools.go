@@ -48,7 +48,16 @@ func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	done := make(chan ToolResult, 1)
-	go func() { done <- fn(runCtx) }()
+	// goroutine 内自保 recover：fn 在此 goroutine 运行，调用方 safeCall 的 recover 捕获不到——
+	// 与 safeCall（loop_tools.go）/callLLMOnce 对称，文件工具内部 panic 转 IsError 结果而非崩进程。
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: label + "内部错误"}
+			}
+		}()
+		done <- fn(runCtx)
+	}()
 	select {
 	case r := <-done:
 		return r

@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -90,5 +92,48 @@ func TestEdit_EditsAndSingleStringMutuallyExclusive(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != "hello" {
 		t.Errorf("file should be unchanged on ambiguity error: %q", got)
+	}
+}
+
+// pathLocks 同路径 acquire 互斥串行：并发 acquire 同一路径时，任一时刻至多一个持锁。
+func TestPathLocks_SamePathSerializes(t *testing.T) {
+	var l pathLocks
+	var inUse, maxInUse atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			defer l.acquire("/same")()
+			cur := inUse.Add(1)
+			for {
+				old := maxInUse.Load()
+				if cur <= old || maxInUse.CompareAndSwap(old, cur) {
+					break
+				}
+			}
+			inUse.Add(-1)
+		})
+	}
+	wg.Wait()
+	if maxInUse.Load() > 1 {
+		t.Fatalf("同路径 acquire 应串行，最大并发 = %d（want <=1）", maxInUse.Load())
+	}
+}
+
+// 并行同文件 edit（不同 old_string）不应丢更新：持锁串行化使两处替换都落盘。
+// 回归：此前 A/B 各 read 旧内容→各自写，后写覆盖先写，丢一处。
+func TestEdit_ParallelSameFileNoLostUpdate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("A\nB\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := EditFileTool(dir, 0)
+	var wg sync.WaitGroup
+	wg.Go(func() { tool.Call(context.Background(), `{"path":"f.txt","old_string":"A","new_string":"X"}`) })
+	wg.Go(func() { tool.Call(context.Background(), `{"path":"f.txt","old_string":"B","new_string":"Y"}`) })
+	wg.Wait()
+	got, _ := os.ReadFile(path)
+	if string(got) != "X\nY\n" {
+		t.Errorf("并行同文件 edit 应两处都落盘（不丢更新）: %q", string(got))
 	}
 }

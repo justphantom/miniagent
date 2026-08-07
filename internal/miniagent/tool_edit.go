@@ -8,10 +8,36 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 const maxEditFileBytes = 10 << 20
+
+// pathLocks 序列化同进程内对同一路径的 edit 读-改-写，防 runToolsParallel 并行同文件 edit 丢更新
+// （A、B 各 read 旧内容→各自写，后写覆盖先写）。write 是原子覆盖（writeFileAtomic）无需锁；
+// 跨进程文件竞态不在本工具职责内（同 session 多写者本就应避免）。非 package-level：每个
+// EditFileTool 实例自持一份，由其唯一 Call 闭包在该工具的并行调用间共享，符合「无包级可变状态」约定。
+type pathLocks struct {
+	mu sync.Mutex
+	m  map[string]*sync.Mutex
+}
+
+// acquire 取（必要时创建）path 对应的互斥量并锁定，返回解锁函数。
+func (p *pathLocks) acquire(path string) func() {
+	p.mu.Lock()
+	pm, ok := p.m[path]
+	if !ok {
+		pm = &sync.Mutex{}
+		if p.m == nil {
+			p.m = make(map[string]*sync.Mutex)
+		}
+		p.m[path] = pm
+	}
+	p.mu.Unlock()
+	pm.Lock()
+	return pm.Unlock
+}
 
 type editFileArgs struct {
 	Path       string `json:"path"`
@@ -37,6 +63,7 @@ func EditFileTool(workspaceRoot string, timeout time.Duration) Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
 	}
+	locks := &pathLocks{} // 该 edit 工具唯一闭包自持，并行调用间共享，序列化同路径读-改-写
 	return Tool{
 		Name:        "edit",
 		Description: "精确替换文件中的一段或多段文本。单段：old_string+new_string（缺省要求唯一，replace_all=true 替换全部）。多段事务：edits 数组按序应用、全部成功才写盘、任一失败不改。old_string 须与文件精确匹配（含缩进和换行）。拒绝符号链接与非普通文件。先 read 查看内容再编辑。",
@@ -61,12 +88,12 @@ func EditFileTool(workspaceRoot string, timeout time.Duration) Tool {
 		}, "path"),
 		ResultLimit: maxFileResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
-			return runWithTimeout(ctx, timeout, "编辑", func(_ context.Context) ToolResult { return runEditFile(workspaceRoot, args) })
+			return runWithTimeout(ctx, timeout, "编辑", func(_ context.Context) ToolResult { return runEditFile(workspaceRoot, args, locks) })
 		},
 	}
 }
 
-func runEditFile(workspaceRoot, args string) ToolResult {
+func runEditFile(workspaceRoot, args string, locks *pathLocks) ToolResult {
 	a, err := parseEditArgs(args)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
@@ -84,6 +111,9 @@ func runEditFile(workspaceRoot, args string) ToolResult {
 	if info.Size() > maxEditFileBytes {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("文件 %q 超过最大编辑限制 %d 字节", a.Path, maxEditFileBytes)}
 	}
+	// 持锁覆盖整个 read-modify-write：防并行同文件 edit 后写覆盖先写（丢更新）。
+	// defer 在 applyEdit/applyEdits 返回（含错误）后释放。
+	defer locks.acquire(full)()
 	if len(a.Edits) > 0 {
 		return applyEdits(full, info, a.Path, a.Edits)
 	}

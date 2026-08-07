@@ -72,7 +72,16 @@ func (s *toolOutputStore) bound(step int, callID, output, preview string, trunca
 		s.warnf("tool-output write failed: %v", err)
 		return preview
 	}
+	// Sync 兑现下方 marker「完整输出已保存」的语义：崩溃后模型 read 回读得完整数据而非空/残文件。
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		s.warnf("tool-output sync failed: %v", err)
+		return preview
+	}
 	if err := f.Close(); err != nil {
+		// 对齐写失败语义：close 失败则删孤儿文件、返回 preview 不带 marker，避免模型据 marker 回读到残文件。
+		_ = os.Remove(path)
 		s.warnf("tool-output close failed: %v", err)
 		return preview
 	}

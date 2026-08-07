@@ -8,7 +8,7 @@
 
 **可正确集成的三个前提**（开发者必须先理解）：
 
-1. **钩子无 panic 兜底**：`recover()` 只覆盖 LLM 调用（`loop_extra.go:53 callLLMOnce`）与工具调用（`loop_tools.go:19 safeCall`）。8 个 `LoopHooks` 字段与 `CompactingHook` 的调用点（`loop.go:127 OnLLMError / :147 AfterLLM / :187 BeforeLLM`、`loop_extra.go callLLMOnce 内 OnDelta`、`loop_tools.go:59 OnToolUse / :86 OnToolResult / :98 ShapeToolResult`、`compaction/assemble.go:applyCompactingHook`）全是裸 error 检查、无 defer recover。**钩子 panic 会崩进程**——这是与 tool/LLM 调用最显著的不对称。
+1. **钩子无 panic 兜底**：`recover()` 只覆盖 LLM 调用（`loop_extra.go:53 callLLMOnce`）与工具调用（`loop_tools.go:19 safeCall`）。8 个 `LoopHooks` 字段与 `CompactingHook` 的调用点（`loop.go:127 OnLLMError / :147 AfterLLM / :187 BeforeLLM`、`loop_extra.go callLLMOnce 内 OnDelta`、`loop_tools.go:59 OnToolUse / :86 OnToolResult / :98 ShapeToolResult`、`compaction/assemble.go:applyCompactingHook`）全是裸 error 检查、无 defer recover。**钩子 panic 会崩进程**——这是与 tool/LLM 调用最显著的不对称。（取舍：核心自带的默认钩子 `NewCompaction`/`NewDefault*` 经审查 panic-free，故核心装配下无实际风险；第三方钩子的 recover 责任在实现者，见 §6.1 红线 1。核心若统一包 `safeInvoke` 兜底会静默吞掉钩子 bug，与「错误尽早暴露」相悖，故未加——这是刻意的对称性取舍，非遗漏。）
 2. **钩子不直接改 transcript**：意图经返回值（`StepOutput`/content/`CompactingOutput`）表达，由核心折叠副作用。直接改入参 `msgs` 不会生效（核心用返回值）。
 3. **`NewCompaction` 无共享可变状态**：`before` 闭包捕获的 `budget`（`compaction/assemble.go:177`）初始化后只读；每步 `Force` 推断到局部变量、拷贝传入 `FitHistory`，闭包不写共享状态——多 `Run` 并发复用同一对钩子实例亦无 race。（旧版 `overflowPending` 跨步状态已在 4.2.0 移除：溢出判定改为 `before` 从 `in.Msgs` 的真实 usage 推断，`after=nil`。）
 

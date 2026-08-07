@@ -47,8 +47,13 @@ func ScriptTool(name, description, command, workdir string, timeout time.Duratio
 				}
 			}
 			full := command
-			if strings.TrimSpace(a.Args) != "" {
-				full = command + " " + shellQuote(a.Args)
+			if trimmed := strings.TrimSpace(a.Args); trimmed != "" {
+				// 拒 `-` 开头：shellQuote 只防 shell 注入，挡不住 argv 层 flag 注入到固定命令
+				//（如 script_git（git push）+ args --force → git push --force）。scripts.json 本意约束固定命令。
+				if trimmed[0] == '-' {
+					return ToolResult{IsError: true, Output: "脚本工具参数不能以 - 开头（防向固定命令注入 flag）"}
+				}
+				full = command + " " + shellQuote(trimmed)
 			}
 			return runShellCommand(ctx, workdir, mode, full, timeout, maxOutputChars, streamWindow)
 		},

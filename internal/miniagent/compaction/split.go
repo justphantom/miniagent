@@ -48,7 +48,9 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 			break
 		}
 		size := estimateRoundTokens(rounds[i])
-		if total+size > tokenBudget {
+		// 最近轮（i==n-1）即使单独超 tokenBudget 也强制并入 tail：最近上下文不可丢，把它压进 middle
+		// 会被摘要掉，致模型丢失精确近期上下文。故仅 i<n-1 时才在超预算处取边界轮。
+		if i < n-1 && total+size > tokenBudget {
 			boundary = i
 			tailStart = i + 1
 			break
@@ -65,6 +67,13 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 			middle = flatten(rounds[:boundary]) // boundary 轮已并入 tail，从 middle 移除
 		}
 		// split/shrink 失败 → 边界轮整轮留 middle（rounds[:tailStart]=rounds[:boundary+1] 已含），符合预期。
+	}
+	// 不变量：tail 至少含最近 1 轮。兜底覆盖两类曾致空 tail 的退化路径——最近轮单独超 tokenBudget
+	// 且 boundary split/shrink 失败（被上面 i<n-1 守卫挡掉，此处双保险），或 maxTurns<=0 在 i==n-1
+	// 命中 maxTurns 截断。最近轮进 middle 被摘要永远是语义错误，宁可 tail 略超预算。
+	if len(tail) == 0 && n > 0 {
+		tail = flatten(rounds[n-1:])
+		middle = flatten(rounds[:n-1])
 	}
 	return tail, middle
 }

@@ -54,8 +54,14 @@ func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 func lockSession(f *os.File) error {
 	deadline := time.Now().Add(lockSessionTotal)
 	for time.Now().Before(deadline) {
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
 			return nil
+		}
+		// 仅 EWOULDBLOCK（LOCK_NB 抢锁失败，即真竞争）才重试；EBADF/ENOSYS/EFAULT 等永久错误
+		// 立即返回——避免在无 flock 支持的文件系统/容器（ENOSYS）上空轮询 5s（与 windows 版区分永久错误对齐）。
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("lock session: %w", err)
 		}
 		time.Sleep(lockSessionInterval)
 	}

@@ -31,7 +31,12 @@ type outputAccum struct {
 }
 
 // newOutputAccum 构造累积器。keep<=0 不限；headSpillBytes<=0 关闭落盘（phase-1 默认）。
+// headSpillBytes 须 <= keep（否则滑窗在落盘阈值触发前就剔除头部，头部彻底丢失，与「头部落盘」承诺相悖）；
+// keep<=0（不限窗，无剔除）时 headSpillBytes 任意正值都安全。违例自动夹紧到 keep（当前唯一调用点传 0）。
 func newOutputAccum(keep, headSpillBytes int, spillDir, spillPrefix string) *outputAccum {
+	if keep > 0 && headSpillBytes > keep {
+		headSpillBytes = keep
+	}
 	return &outputAccum{keep: keep, headSpillBytes: headSpillBytes, spillDir: spillDir, spillPrefix: spillPrefix}
 }
 

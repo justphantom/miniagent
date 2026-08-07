@@ -41,3 +41,15 @@ func TestScriptTool_DefaultModeBlocksSudo(t *testing.T) {
 		t.Error("default mode script with sudo should be blocked")
 	}
 }
+
+// 拒 `-` 开头 args：shellQuote 只防 shell 注入，挡不住 argv 层 flag 注入到固定命令
+// （如 script_push + --force）。回归：此前 args=--force 会被原样追加。
+func TestScriptTool_RejectsFlagArgs(t *testing.T) {
+	tl := ScriptTool("git", "推送", "git push", t.TempDir(), 0, ModeAuto, 0, 0)
+	for _, args := range []string{`{"args":"--force"}`, `{"args":"  -v"}`} {
+		r := tl.Call(context.Background(), args)
+		if !r.IsError || !strings.Contains(r.Output, "-") {
+			t.Errorf("args %s 应被拒（防 flag 注入）: %+v", args, r)
+		}
+	}
+}

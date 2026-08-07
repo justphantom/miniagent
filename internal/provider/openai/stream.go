@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/text"
 )
 
 // StreamClient 调 OpenAI 兼容 chat completions 端点（流式 SSE）。
@@ -94,8 +93,12 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 		httpReq.Header.Set("Content-Type", "application/json")
-		// 注入 provider 自定义头；Authorization / Content-Type 不在此覆盖。
+		// 注入 provider 自定义头；跳过 Authorization/Content-Type 防覆盖鉴权与内容类型
+		//（与 client.go / models.go 同名循环对齐——此前本循环漏了跳过，与字段注释承诺相悖）。
 		for k, v := range c.Headers {
+			if ck := http.CanonicalHeaderKey(k); ck == "Authorization" || ck == "Content-Type" {
+				continue
+			}
 			httpReq.Header.Set(k, v)
 		}
 		resp, err := client.Do(httpReq)
@@ -122,13 +125,15 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 				prefix = fmt.Sprintf("after %d retries: ", attempt)
 			}
 			if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && miniagent.IsContextLengthError(raw) {
-				return miniagent.Response{}, fmt.Errorf("%s%w: %s", prefix, miniagent.ErrContextLength, text.Truncate(string(raw), 500, "…"))
+				// raw 仅用于特征识别，不回显进 error——与非流式 client.go 对齐：恶意/调试代理可能在
+				// 错误体回显 Authorization，error 经 emitRunError 进 NDJSON stdout 与 session jsonl 会泄漏 key。
+				return miniagent.Response{}, fmt.Errorf("%s%w（状态 %d）", prefix, miniagent.ErrContextLength, resp.StatusCode)
 			}
 			if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
-				return miniagent.Response{}, fmt.Errorf("%s%w: %s", prefix, miniagent.ErrThinkingUnsupported, text.Truncate(string(raw), 500, "…"))
+				return miniagent.Response{}, fmt.Errorf("%s%w（状态 %d）", prefix, miniagent.ErrThinkingUnsupported, resp.StatusCode)
 			}
 			if !shouldRetryStatus(resp.StatusCode) || attempt == maxRetries {
-				return miniagent.Response{}, errors.New(prefix + fmt.Sprintf("llm returned %d: %s", resp.StatusCode, text.Truncate(string(raw), 500, "…")))
+				return miniagent.Response{}, errors.New(prefix + fmt.Sprintf("llm returned %d", resp.StatusCode))
 			}
 			if c.Logger != nil {
 				c.Logger.Warn("llm stream non-200, retrying", "status", resp.StatusCode, "failed_attempt", attempt+1)
