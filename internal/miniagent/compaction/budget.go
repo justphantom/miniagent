@@ -115,6 +115,9 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	// P1/P4/P6/P7/P8'/P9b/P11 主动裁剪（语义见 applyContextStrips；放在 window 检查前——清理后 token 估计更低，
 	// 更可能免于触发 trimRecentRounds/终止报错。中段已并入 summary 不经此处）。
 	out = applyContextStrips(ctx, out, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
+	// 压缩后判定用本地 EstimateTokens（而非门控的 estimateThreshold）：压缩后真实 usage 已陈旧——
+	// 压缩成功时新 summary 重定义前缀（lastApplicableUsageIndex 失效回落本地）/ fallback 时保留尾 usage
+	// 反映压缩前（高估），故本地估算压缩后实际 out 更准。门控用 estimateThreshold（反映压缩前前缀，精确判需压）。
 	if miniagent.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
