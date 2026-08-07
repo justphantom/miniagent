@@ -56,12 +56,14 @@ func GrepTool(workspaceRoot string, timeout time.Duration, maxMatches, maxOutput
 		ResultLimit:   maxToolResultInHistory,
 		SplitTruncate: true, // 命中上限/无匹配等汇总在尾部，前截断会丢失
 		Call: func(ctx context.Context, args string) ToolResult {
-			return runWithTimeout(ctx, timeout, "搜索", func() ToolResult { return runGrep(workspaceRoot, args, maxMatches, maxOutputChars) })
+			return runWithTimeout(ctx, timeout, "搜索", func(rctx context.Context) ToolResult {
+				return runGrep(rctx, workspaceRoot, args, maxMatches, maxOutputChars)
+			})
 		},
 	}
 }
 
-func runGrep(workspaceRoot, args string, maxMatches, maxOutputChars int) ToolResult {
+func runGrep(ctx context.Context, workspaceRoot, args string, maxMatches, maxOutputChars int) ToolResult {
 	a, err := parseGrepArgs(args)
 	if err != nil {
 		return ToolResult{IsError: true, Output: err.Error()}
@@ -81,7 +83,7 @@ func runGrep(workspaceRoot, args string, maxMatches, maxOutputChars int) ToolRes
 			return ok
 		}
 	}
-	matches, truncated, err := grepWalk(root, re, globFn, maxMatches)
+	matches, truncated, err := grepWalk(ctx, root, re, globFn, maxMatches)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("搜索 %q 失败：%v", a.Path, err)}
 	}
@@ -141,10 +143,13 @@ type grepMatch struct {
 
 // grepWalk 遍历 root，对每个文本文件逐行匹配。不可访问的子树/文件跳过而非整体
 // 失败（部分可读仍有益）。跳过 .git、符号链接（防递归误入）。
-func grepWalk(root string, re *regexp.Regexp, globFn func(string) bool, maxMatches int) ([]grepMatch, bool, error) {
+func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(string) bool, maxMatches int) ([]grepMatch, bool, error) {
 	var matches []grepMatch
 	truncated := false
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return nil //nolint:nilerr // 不可访问的子树跳过，保留可访问部分的结果
 		}

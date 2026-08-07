@@ -56,7 +56,7 @@ func ReadFileTool(workspaceRoot string, timeout time.Duration, maxBytes int) Too
 		}, "path"),
 		ResultLimit: maxFileResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
-			return runWithTimeout(ctx, timeout, "读取", func() ToolResult { return runReadFile(workspaceRoot, args, maxBytes) })
+			return runWithTimeout(ctx, timeout, "读取", func(_ context.Context) ToolResult { return runReadFile(workspaceRoot, args, maxBytes) })
 		},
 	}
 }

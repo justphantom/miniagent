@@ -61,7 +61,7 @@ func EditFileTool(workspaceRoot string, timeout time.Duration) Tool {
 		}, "path"),
 		ResultLimit: maxFileResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
-			return runWithTimeout(ctx, timeout, "编辑", func() ToolResult { return runEditFile(workspaceRoot, args) })
+			return runWithTimeout(ctx, timeout, "编辑", func(_ context.Context) ToolResult { return runEditFile(workspaceRoot, args) })
 		},
 	}
 }

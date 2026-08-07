@@ -37,8 +37,10 @@ func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	if res.Text != "" {
 		t.Errorf("Text = %q, want empty (truncated)", res.Text)
 	}
-	if res.Usage.InputTokens == 0 {
-		t.Error("expected non-zero usage accounting")
+	// 每步 toolResponse 的 prompt_tokens=1；maxIterations 步主循环 + 总结步 → InputTokens 至少 maxIterations。
+	// 弱断言只查非零会放过部分步骤漏记（如回归只记 1 token 仍绿），故查累加下界。
+	if res.Usage.InputTokens < maxIterations {
+		t.Errorf("usage 累加漏记: InputTokens=%d, want >= %d", res.Usage.InputTokens, maxIterations)
 	}
 }
 

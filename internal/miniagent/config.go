@@ -124,9 +124,10 @@ type CompactionConfig struct {
 // maxConfigFileBytes 是配置/规则文件的字节上限，防止多 GB 文件导致 OOM。
 const maxConfigFileBytes = 4 << 20 // 4 MiB
 
-// ReadFileLimited 读取 path 并限制大小；超过 maxBytes 返回错误。
+// ReadFileLimited 读取 path 并限制大小；超过 maxBytes 返回错误。经 openNoFollow 打开，拒最终分量
+// 符号链接（与 session 文件一致硬化），防 config 路径（含 API key）被 symlink 劫持到敏感文件。
 func ReadFileLimited(path string, maxBytes int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}

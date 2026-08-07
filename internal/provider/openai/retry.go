@@ -32,16 +32,17 @@ func shouldRetryStatus(code int) bool {
 // 24 正则 + 3 排除（§P1-C）。本包经 miniagent.IsContextLengthError 调用，避免分叉。
 
 // isThinkingError 启发式识别 thinking 参数（reasoning_effort 等）不被支持的 400：跨供应商
-// 措辞不一（"reasoning_effort"/"unknown parameter"/"unrecognized"）。宽松识别——误判只会触发
-// 一次无 thinking 重试，无害（审查 v2 #7）。
+// 措辞不一（"reasoning_effort"/"unknown parameter"/"unrecognized"）。强信号（字段名）直接命中；
+// 弱信号需同时含 thinking/reasoning 语义 + 参数未识别措辞——防「unrecognized tool name」「unknown model」
+// 等无关 400 被误判为 thinking 不支持（错误归因 + 烧 2 次请求）。误判只会触发一次无 thinking 重试（审查 v2 #7）。
 func isThinkingError(raw []byte) bool {
 	lower := strings.ToLower(string(raw))
-	for _, marker := range []string{"reasoning_effort", "reasoning_effort_level", "unknown parameter", "unrecognized", "unexpected argument"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
+	if strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning_effort_level") {
+		return true
 	}
-	return false
+	hasThinking := strings.Contains(lower, "reasoning") || strings.Contains(lower, "thinking")
+	hasUnknown := strings.Contains(lower, "unknown parameter") || strings.Contains(lower, "unrecognized") || strings.Contains(lower, "unexpected argument")
+	return hasThinking && hasUnknown
 }
 
 // parseRetryAfter 解析 Retry-After 头：秒数（RFC 7231 §7.1.3）或 HTTP-date。

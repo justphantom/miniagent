@@ -42,12 +42,12 @@ func CodemapTool(workspaceRoot string, timeout time.Duration) Tool {
 		ResultLimit:   maxToolResultInHistory,
 		SplitTruncate: true, // 条目上限提示在尾部，前截断会丢失
 		Call: func(ctx context.Context, args string) ToolResult {
-			return runWithTimeout(ctx, timeout, "遍历", func() ToolResult { return runCodemap(workspaceRoot, args) })
+			return runWithTimeout(ctx, timeout, "遍历", func(rctx context.Context) ToolResult { return runCodemap(rctx, workspaceRoot, args) })
 		},
 	}
 }
 
-func runCodemap(workspaceRoot, args string) ToolResult {
+func runCodemap(ctx context.Context, workspaceRoot, args string) ToolResult {
 	var a codemapArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
@@ -62,7 +62,7 @@ func runCodemap(workspaceRoot, args string) ToolResult {
 		}
 		return ToolResult{IsError: true, Output: fmt.Sprintf("遍历 %q 失败：%v", a.Path, err)}
 	}
-	lines, truncated, err := codemapWalk(root, a.Depth)
+	lines, truncated, err := codemapWalk(ctx, root, a.Depth)
 	if err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("遍历 %q 失败：%v", a.Path, err)}
 	}
@@ -79,10 +79,13 @@ func runCodemap(workspaceRoot, args string) ToolResult {
 // codemapWalk 遍历 root 生成树形行。目录名带 "/" 后缀并标注直接子条目数
 // （.git/符号链接不计入）；超 depth 的目录只列名不进子树，其计数标注为 "?"。
 // 条目数（含目录本身）达 maxCodemapEntries 即 SkipAll。
-func codemapWalk(root string, maxDepth int) ([]string, bool, error) {
+func codemapWalk(ctx context.Context, root string, maxDepth int) ([]string, bool, error) {
 	var lines []string
 	truncated := false
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return nil //nolint:nilerr // 不可访问的子树跳过，保留可访问部分（与 grep 一致）
 		}

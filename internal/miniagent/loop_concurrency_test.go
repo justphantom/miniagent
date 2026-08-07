@@ -2,6 +2,7 @@ package miniagent
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -80,12 +81,90 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 }
 
 // 已取消的 context 必须立即中止 Run，避免继续烧 token。
+// 已取消的 context 必须立即中止 Run，避免继续烧 token。
 func TestRun_CancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	llm := testClients(&fakeTransport{responses: []string{textResponse("x")}})
+	tr := &fakeTransport{responses: []string{textResponse("x")}}
+	llm := testClients(tr)
 	_, err := Run(ctx, llm, LoopConfig{}, "hi", LoopHooks{}, nil)
-	if err == nil {
-		t.Fatal("expected error")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if tr.calls != 0 {
+		t.Errorf("calls = %d, want 0（ctx 已取消不应调 LLM）", tr.calls)
+	}
+}
+
+// T3：一步内多 tool_call 并发执行，其中一个 panic——safeCall 须 recover 回填错误结果，
+// 其余工具正常完成，且 assistant.tool_calls 与 tool 消息配对完整（核心不变量）。此前仅测单工具 panic。
+func TestRun_ConcurrentToolPanicRecovers(t *testing.T) {
+	tools := []Tool{
+		{Name: "a", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "A"} }},
+		{Name: "boom", Call: func(context.Context, string) ToolResult { panic("boom") }},
+		{Name: "c", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "C"} }},
+	}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(
+			ToolCall{ID: "1", Name: "a", Args: "{}"},
+			ToolCall{ID: "2", Name: "boom", Args: "{}"},
+			ToolCall{ID: "3", Name: "c", Args: "{}"},
+		),
+		textResponse("done"),
+	}}
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v（panic 应被 recover 不应崩进程）", err)
+	}
+	if res.Text != "done" {
+		t.Errorf("Text = %q, want done", res.Text)
+	}
+	var toolMsgs int
+	for _, m := range res.Messages {
+		if m.Role == RoleTool {
+			toolMsgs++
+		}
+	}
+	if toolMsgs != 3 {
+		t.Errorf("tool 消息数 = %d, want 3（panic 工具经 safeCall 回填、配对完整）", toolMsgs)
+	}
+}
+
+// T4：工具执行中 ctx 取消，Run 须及时返回——runToolsParallel 信号量联动 ctx.Done + 工具响应 ctx，
+// 否则 wg.Wait 挂死、Run 不响应 SIGINT。此契约（loop_api.go:23）此前零测试。
+func TestRun_CtxCancelledDuringToolReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	tool := Tool{
+		Name: "block",
+		Call: func(c context.Context, _ string) ToolResult {
+			close(started)
+			<-c.Done()
+			return ToolResult{IsError: true, Output: "已取消"}
+		},
+	}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "1", Name: "block", Args: "{}"}),
+	}}
+	llm := testClients(tr)
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("工具未启动")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run 未在 ctx 取消后及时返回（wg.Wait 挂死？）")
 	}
 }

@@ -153,6 +153,11 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(miniagent.Delta
 	}
 	for _, tc := range c.Delta.ToolCalls {
 		acc, ok := a.calls[tc.Index]
+		if ok && acc.id != "" && tc.ID != "" && tc.ID != acc.id {
+			// 同 index 已归并了不同 id 的 tool_call：provider 漏发 index 致多个 tool_call 错误合并。
+			// 缺 index 时无法可靠路由后续分片，明确报错而非静默合并（OpenAI 原生必带 index，兼容端点才漏）。
+			return fmt.Errorf("流式 tool_call 缺失 index：%q 与 %q 归并到 index %d", acc.id, tc.ID, tc.Index)
+		}
 		if !ok {
 			acc = &streamToolCall{}
 			a.calls[tc.Index] = acc

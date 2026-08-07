@@ -37,16 +37,18 @@ func object(props map[string]any, required ...string) map[string]any {
 
 // runWithTimeout 把「ctx 取消检查 + WithTimeout + goroutine + select 兜底」封装为单一 helper，
 // 供 read/write/edit/grep/glob/codemap 等文件类工具复用（原 6 处逐字重复样板）。label 入超时/取消
-// 文案（如「读取」「搜索」）。fn 在独立 goroutine 跑——核心不内置超时（Go 无法强制终止 goroutine），
-// fn 须自尊重 ctx 及时返回，否则 runToolsParallel 的 wg.Wait 会挂死、Run 不响应 SIGINT。
-func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn func() ToolResult) ToolResult {
+// 文案（如「读取」「搜索」）。fn 接收 runCtx（含超时），可在长操作/遍历中查 runCtx 提前返回——
+// 但 Go 无法强制终止 goroutine：单文件 syscall（read/write/edit）陷 D-state 时不可中断（OS 层限制），
+// 仅 grep/glob/codemap 的 WalkDir 遍历经 runCtx 可及时终止。fn 须及时返回，否则 select 兜底后
+// goroutine 仍跑到 fn 自然结束（done buffered=1 保证发送不阻塞，但不保证 fn 可中断）。
+func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn func(ctx context.Context) ToolResult) ToolResult {
 	if err := ctx.Err(); err != nil {
 		return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	done := make(chan ToolResult, 1)
-	go func() { done <- fn() }()
+	go func() { done <- fn(runCtx) }()
 	select {
 	case r := <-done:
 		return r

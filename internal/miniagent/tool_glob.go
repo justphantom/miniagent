@@ -39,12 +39,12 @@ func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) T
 		}, "pattern"),
 		ResultLimit: maxToolResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
-			return runWithTimeout(ctx, timeout, "列举", func() ToolResult { return runGlob(workspaceRoot, args, maxOutputChars) })
+			return runWithTimeout(ctx, timeout, "列举", func(rctx context.Context) ToolResult { return runGlob(rctx, workspaceRoot, args, maxOutputChars) })
 		},
 	}
 }
 
-func runGlob(workspaceRoot, args string, maxOutputChars int) ToolResult {
+func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int) ToolResult {
 	var a globArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
@@ -59,6 +59,9 @@ func runGlob(workspaceRoot, args string, maxOutputChars int) ToolResult {
 	var paths []string
 	truncated := false
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		if err != nil {
 			return err
 		}

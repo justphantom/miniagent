@@ -33,7 +33,7 @@ func WriteFileTool(workspaceRoot string, timeout time.Duration) Tool {
 			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},
 		}, "path", "content"),
 		Call: func(ctx context.Context, args string) ToolResult {
-			return runWithTimeout(ctx, timeout, "写入", func() ToolResult { return runWriteFile(workspaceRoot, args) })
+			return runWithTimeout(ctx, timeout, "写入", func(_ context.Context) ToolResult { return runWriteFile(workspaceRoot, args) })
 		},
 	}
 }

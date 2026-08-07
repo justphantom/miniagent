@@ -225,14 +225,15 @@ func testShouldRetryStatus(code int) bool {
 	return false
 }
 
+// testIsThinkingError 复刻 openai.isThinkingError（收紧版：强信号字段名 + 弱信号 thinking&unknown 组合）。
 func testIsThinkingError(raw []byte) bool {
 	lower := strings.ToLower(string(raw))
-	for _, marker := range []string{"reasoning_effort", "reasoning_effort_level", "unknown parameter", "unrecognized", "unexpected argument"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
+	if strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning_effort_level") {
+		return true
 	}
-	return false
+	hasThinking := strings.Contains(lower, "reasoning") || strings.Contains(lower, "thinking")
+	hasUnknown := strings.Contains(lower, "unknown parameter") || strings.Contains(lower, "unrecognized") || strings.Contains(lower, "unexpected argument")
+	return hasThinking && hasUnknown
 }
 
 func testParseRetryAfter(h http.Header) time.Duration {

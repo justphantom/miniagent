@@ -123,6 +123,16 @@ func TestRun_SilentUsageOverflowTriggersCompaction(t *testing.T) {
 	if !res.Compacted {
 		t.Error("静默溢出应在下一步触发压缩（result.Compacted=true）")
 	}
+	// 不只查 bool：验证 summary 真持久化进 NewMessages（mergePersisted 路径），且多次压缩只留 1 条。
+	var summaryCount int
+	for _, m := range res.NewMessages {
+		if m.Kind == miniagent.KindSummary {
+			summaryCount++
+		}
+	}
+	if summaryCount != 1 {
+		t.Errorf("NewMessages 应含恰好 1 条 summary（mergePersisted 去重），got %d", summaryCount)
+	}
 }
 
 // §P1-B 对照：CompactionAuto=false → 不触发静默溢出压缩（result.Compacted=false），行为同改动前。
