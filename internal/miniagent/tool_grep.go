@@ -201,6 +201,11 @@ func grepFile(path, display string, re *regexp.Regexp, maxMatches int) ([]grepMa
 	if err != nil {
 		return nil, err
 	}
+	// 复检 IsRegular：os.Stat 跟随 symlink，拦截 walk 层 d.Type() 快照后的 swap-race（path 被换 FIFO/设备/socket），
+	// 与 read/edit 在 open 层的守卫对齐（M3-3 残口 R4-5）。
+	if !fi.Mode().IsRegular() {
+		return nil, errors.New("not regular, skipped")
+	}
 	if fi.Size() > maxGrepFileBytes {
 		return nil, errors.New("file too large, skipped")
 	}

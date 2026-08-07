@@ -151,6 +151,12 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64
 		if err != nil {
 			return err
 		}
+		// 已超 mb 的文件不 heal：ensureTrailingNewline 慢路径 LimitReader(mb+1) 在 size>mb 时只读前
+		// mb+1 字节、LastIndexByte 在不完整窗口错位，会截断丢弃合法行且无回滚（R4-1）。与 LoadSession
+		// 一致——>mb 直接报错、零修改文件。
+		if info.Size() > mb {
+			return fmt.Errorf("session 文件 %q 已达 %d 字节超上限 %d（请压缩历史或新建会话）", path, info.Size(), mb)
+		}
 		// 截断崩溃半写残留的尾部不完整行：否则 O_APPEND 盲写把新消息拼到无换行结尾的残行上，
 		// 使原本被 LoadSession 末行容忍的残行在后续保存反噬为中段损坏（永久丢会话）。
 		size, err := ensureTrailingNewline(f, info.Size(), mb)

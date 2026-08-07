@@ -120,7 +120,7 @@ func TestRun_ZeroUsageWarns(t *testing.T) {
 	if res.Text != "hi" {
 		t.Errorf("Text = %q, want hi", res.Text)
 	}
-	if !strings.Contains(buf.String(), "llm returned no usage") {
+	if !strings.Contains(buf.String(), "partial/zero usage") {
 		t.Errorf("expected warn about missing usage, got logs: %s", buf.String())
 	}
 }

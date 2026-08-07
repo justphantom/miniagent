@@ -49,7 +49,9 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 		}
 	}
 	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。§P0-B：附真实 usage 供后续防陈旧估算。
-	appendMsg(&msgs, newMsgs, Message{Role: RoleAssistant, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
+	// Content: resp.Text —— 模型常在 tool_call 前附说明文本（Claude 经 OpenAI 代理、部分开源模型），
+	// 入历史保多轮连贯；最终文本(loop.go:166)/总结(:102)路径均设 Content，此处对齐（R4-2，原被丢弃）。
+	appendMsg(&msgs, newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
 
 	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
 	// OnToolUse 返回 ErrToolDenied 表示拒绝该工具（如危险命令未确认）：记录后继续

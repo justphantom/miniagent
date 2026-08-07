@@ -160,20 +160,20 @@ make test       # go test -race ./...
 ```jsonl
 {"type":"tool_use","name":"read","input":"{\"path\":\"a.go\"}"}
 {"type":"tool_use","name":"shell","input":"{\"command\":\"go test ./...\"}"}
-{"type":"result","text":"测试全部通过。","model":"gpt-4o","input_tokens":320,"output_tokens":48,"steps":3}
+{"type":"result","text":"测试全部通过。","model":"gpt-4o","input_tokens":320,"output_tokens":48,"steps":3,"finish":"stop"}
 ```
 
 纯文本无工具：
 
 ```jsonl
-{"type":"result","text":"goroutine 是 Go 运行时管理的轻量级线程。","model":"gpt-4o","input_tokens":24,"output_tokens":18,"steps":1}
+{"type":"result","text":"goroutine 是 Go 运行时管理的轻量级线程。","model":"gpt-4o","input_tokens":24,"output_tokens":18,"steps":1,"finish":"stop"}
 ```
 
 达到 maxIterations 上限（无最终文本，仍输出累计 usage）：
 
 ```jsonl
 {"type":"tool_use","name":"shell","input":"{\"command\":\"...\"}"}
-{"type":"result","text":"","model":"gpt-4o","input_tokens":8200,"output_tokens":1500,"steps":20}
+{"type":"result","text":"","model":"gpt-4o","input_tokens":8200,"output_tokens":1500,"steps":20,"finish":"max_iterations"}
 ```
 
 新建会话（`-save-session`，首条为 `session` 事件）：
@@ -181,7 +181,7 @@ make test       # go test -race ./...
 ```jsonl
 {"type":"session","id":"20240105-120000-a1b2c3d4e5f6a7b8","model":"openai/gpt-4o","workdir":"/repo","provider":"openai","created":"2024-01-05T12:00:00Z"}
 {"type":"tool_use","name":"read","input":"{\"path\":\"a.go\"}"}
-{"type":"result","text":"...","model":"gpt-4o","input_tokens":100,"output_tokens":20,"steps":2}
+{"type":"result","text":"...","model":"gpt-4o","input_tokens":100,"output_tokens":20,"steps":2,"finish":"stop"}
 ```
 
 ## 工具清单
@@ -198,7 +198,7 @@ make test       # go test -race ./...
 | `offset` | int | 否 | 起始行（1-based），默认 1 |
 | `limit` | int | 否 | 最多返回行数，默认全部，上限 10000 |
 
-约束：单文件最大 1 MiB（超出部分丢弃），输出超过 262144 字符截断。拒绝读取符号链接、目录、非 regular 文件（FIFO/设备/socket）、二进制内容（含 NUL 字节）。`offset` 超出文件行数返回 IsError。
+约束：单文件最大 1 MiB（超出部分丢弃），输出超过 262144 字符截断。拒绝读取目录、非 regular 文件（FIFO/设备/socket）、二进制内容（含 NUL 字节），并拒最终分量符号链接（中间目录 symlink 仍跟随）。`offset` 超出文件行数返回 IsError。
 
 ### `write`
 
@@ -288,7 +288,7 @@ make test       # go test -race ./...
 - Run 出错（LLM 失败/取消/超 window 终止）不追加——失败轮不固化，但工具副作用可能已发生且无记录。
 - **并发**：同一 session 文件同一时刻仅单写者。append 经 `flock`（Windows 用字节区间锁）跨进程互斥，但 rename 换 inode 场景（机会性 rewrite）下跨进程并发不保证；多进程同写同一 session 应避免。
 - **信号保护**：`AppendMessages`/`RewriteMessages` 执行期间临时忽略 `SIGINT`/`SIGTERM`，写完后恢复，避免 session 文件在半写状态被截断。
-- **摘要压缩**（config `run.context_window > 0`）：Run 入口先用 `applyCompactionBarrier` 屏障掉最新 `kind=summary` 之前的旧历史（仍留 session 文件）；loop 每步前用 `FitHistory` 估算超 window 80% 时，把中段摘要为单条 `kind=summary` 消息（既进 context 又 append 落盘）。摘要失败/无中段回落有损 `compactHistory`，仍超则裁到最近轮，再超则报错终止（避免循环烧请求）。
+- **摘要压缩**（config `run.context_window > 0`）：before 钩子每步先用 `applyCompactionBarrier` 屏障掉最新 `kind=summary` 之前的旧历史（仍留 session 文件），再用 `FitHistory` 估算超 window 80% 时把中段摘要为单条 `kind=summary` 消息（既进 context 又 append 落盘）。摘要失败/无中段回落有损 `compactHistory`，仍超则裁到最近轮，再超则报错终止（避免循环烧请求）。
 - 文件损坏（非法 JSON 行、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 50 MiB 上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
 - **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
 - 思考内容（reasoning）：wire 解析响应里的 `reasoning_content` / `reasoning`（双兼容），随 assistant 消息进入上下文并以 `reasoning_content` 回灌；**随 session 落盘**（与 content 同级）。
@@ -326,11 +326,12 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `contextTrimToolChars` | 2000 | `run.context_trim_tool_chars` | context 超限降级时把 tool 结果压到的字符数 |
 | `contextKeepRecent` | 4 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
 | `summaryMaxChars` | 5000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
-| `maxGrepMatches` / `maxGlobEntries` | 500 / 500 | grep 命中行 / glob 命中条数上限 |
-| `maxReadFileBytes` / `maxReadFileChars` | 1MiB / 262144 | 读文件字节 / 输出字符上限 |
-| `maxLineLimit` | 10000 | `read` 的 `limit` 上限 |
-| `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | 写 / 编辑文件字节上限 |
-| `maxShellOutputChars` | 100000 | shell 输出字符上限 |
+| `maxGrepMatches` / `maxGlobEntries` | 500 / 500 | `run.grep_max_matches`（仅 grep；glob 无独立键） | grep 命中行 / glob 命中条数上限 |
+| `maxReadFileBytes` / `maxReadFileChars` | 1 MiB / 262144 | `run.max_read_file_bytes`（chars = bytes/4） | 读文件字节 / 输出字符上限 |
+| `maxLineLimit` | 10000 | — | `read` 的 `limit` 上限 |
+| `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | — | 写 / 编辑文件字节上限 |
+| `maxShellOutputChars` | 100000 | `run.max_shell_output_chars` | shell 输出字符上限 |
+| `maxSessionBytes` | 50 MiB | `run.max_session_bytes` | session 文件字节上限 |
 | `shellTimeout` | 120s | `run.shell_timeout` | shell/script 命令超时（默认值，可被 config 覆盖） |
 | `fileOpTimeout` | 30s | `run.file_op_timeout` | read/edit/grep/glob 文件操作超时（默认值，可被 config 覆盖） |
 | `writeOpTimeout` | 30s | `run.write_timeout` | write 原子写入超时（默认值，可被 config 覆盖） |

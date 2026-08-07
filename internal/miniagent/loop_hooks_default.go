@@ -33,12 +33,20 @@ func NewDefaultOnLLMError(logger *slog.Logger, contextTrim int) func(context.Con
 // 再按 maxTotalTokens 判定熔断。maxTotalTokens<=0 不判定。
 func NewDefaultOnBudget(maxTotalTokens int, logger *slog.Logger) func(context.Context, int, BudgetInput, *Usage) error {
 	return func(_ context.Context, step int, in BudgetInput, total *Usage) error {
-		if in.Resp.Usage.InputTokens == 0 && in.Resp.Usage.OutputTokens == 0 {
+		// 零 usage fallback：逐侧估算缺失的 token（R4-7）。原 && 仅在全零时估，半零 usage（如只回 prompt_tokens）
+		// 的缺失侧按 0 累计致预算系统性低估；现按侧独立估算。
+		inZero := in.Resp.Usage.InputTokens == 0
+		outZero := in.Resp.Usage.OutputTokens == 0
+		if inZero || outZero {
 			if logger != nil {
-				logger.Warn("llm returned no usage; using local token estimate for budget enforcement", "step", step)
+				logger.Warn("llm returned partial/zero usage; estimating missing side(s) locally", "step", step)
 			}
-			total.InputTokens += EstimateTokens(in.ToSend, in.System, in.Tools)
-			total.OutputTokens += estimateResponseTokens(in.Resp)
+			if inZero {
+				total.InputTokens += EstimateTokens(in.ToSend, in.System, in.Tools)
+			}
+			if outZero {
+				total.OutputTokens += estimateResponseTokens(in.Resp)
+			}
 		}
 		if maxTotalTokens > 0 && total.InputTokens+total.OutputTokens > maxTotalTokens {
 			return ErrBudgetExceeded

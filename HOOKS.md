@@ -111,7 +111,7 @@ handleToolCalls ──                                                    [loop_
 - **返回** `CompactingOutput`：`Context []string`（以一条 user 消息 append 到 middle 末尾进摘要输入）、`Prompt string`（替换本次 prompt）。
 - **error**：实现 A 契约——返回 error **中止本次压缩**（`compaction/assemble.go`），`FitHistory` 回落有损压缩。不可 cancel。
 - **nil**：零开销短路。
-- **配对安全**：仅追加无 tool_calls 的 user 消息，不破坏配对（触发前已过 `validateToolPairing`）。
+- **配对安全**：仅追加无 tool_calls 的 user 消息，不破坏配对（触发前已过 `ValidateToolPairing`）。
 
 ## 3. `StepOutput` 契约详解（BeforeLLM 回参）
 

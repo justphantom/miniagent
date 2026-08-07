@@ -188,3 +188,29 @@ func TestAppendMessages_HealsPartialTrailingLine(t *testing.T) {
 		t.Errorf("heal 后消息 = %+v，want [ok, after]（残行截断、新消息保留）", msgs)
 	}
 }
+
+// R4-1：已超 maxBytes 的文件（含崩溃半行）须直接拒绝且零修改——ensureTrailingNewline 慢路径
+// LimitReader(mb+1) 在 size>mb 时不完整读取会错位截断丢合法行，故前置 size>mb 守卫（与 LoadSession 一致）。
+func TestAppendMessages_OversizedFileRejectedUntouched(t *testing.T) {
+	const mb = int64(1024)
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	line := "{\"type\":\"message\",\"role\":\"user\",\"content\":\"ok\"}\n"
+	content := "{\"type\":\"session\",\"id\":\"s\"}\n" + strings.Repeat(line, 40) + "{half"
+	if int64(len(content)) <= mb {
+		t.Fatalf("fixture too small: %d bytes, need > %d", len(content), mb)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "after"}}, mb); err == nil {
+		t.Fatal("超 mb 的文件应被拒绝")
+	}
+	// 关键：文件未被截断（R4-1 回归点——旧实现会静默截断丢合法行）。
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Errorf("超 mb 文件被修改（应零副作用）：orig=%d 字节 got=%d 字节", len(content), len(got))
+	}
+}

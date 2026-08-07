@@ -35,7 +35,7 @@ func validateSessionMessage(m Message) error {
 	}
 }
 
-// validateToolPairing 校验 assistant.tool_calls 与 tool 消息一一配对；断裂会被端点 400，提前拦截指明位置。
+// ValidateToolPairing 校验 assistant.tool_calls 与 tool 消息一一配对；断裂会被端点 400，提前拦截指明位置。
 func ValidateToolPairing(msgs []Message) error {
 	pending := map[string]bool{}
 	for i, m := range msgs {

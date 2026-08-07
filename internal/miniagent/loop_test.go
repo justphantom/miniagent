@@ -59,6 +59,32 @@ func toolResponse(calls ...ToolCall) string {
 	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[%s]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, strings.Join(tcs, ","))
 }
 
+// R4-2：LLM 返回「文本 + tool_call」时，assistant 消息须保留 Content（resp.Text），否则附随说明文本
+// 丢失、后续轮次看不到（Claude 经 OpenAI 代理、部分开源模型常如此）。toolResponse 的 content 恒空、
+// 不覆盖此路径，故用内联响应。
+func TestRun_AssistantTextPreservedWithToolCalls(t *testing.T) {
+	resp := `{"choices":[{"message":{"role":"assistant","content":"先查一下","tool_calls":[{"id":"1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	tr := &fakeTransport{responses: []string{resp, textResponse("done")}}
+	llm := testClients(tr)
+	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{{Name: "read", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "ok"} }}}}, "x", LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var asst string
+	found := false
+	for _, m := range res.Messages {
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			found, asst = true, m.Content
+		}
+	}
+	if !found {
+		t.Fatal("未找到带 tool_calls 的 assistant 消息")
+	}
+	if asst != "先查一下" {
+		t.Errorf("assistant 含 tool_calls 时 Content = %q, want %q（resp.Text 不应丢失，R4-2）", asst, "先查一下")
+	}
+}
+
 func TestRun_TextOnlyReturnsImmediately(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("hello world")}}
 	llm := testClients(tr)

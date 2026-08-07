@@ -37,8 +37,9 @@ internal/miniagent/   核心库（零外部依赖，纯标准库）
   provider_api.go     LLM / Doer / Provider 接口（provider 实现可替换）
   resolve.go          Resolve：cli>config>builtin 裁决产出 Resolved
   config.go           Config 结构、LoadConfig、validateConfig
-  session.go          jsonl 会话持久化（load/append/rewrite/validate）
-  overflow.go         context 超限识别（24 正则+排除）、静默溢出判定
+  session.go          jsonl 会话持久化（load/append/rewrite、写前截断崩溃半行 ensureTrailingNewline）
+  session_validate.go 会话校验：ValidateSessionID / ValidateToolPairing / validateSessionMessage
+  overflow.go         context 超限识别（24 正则+排除，IsContextLengthError）
   output_accum.go     shell 输出字节滑窗累积器（保尾部、可选头部落盘）
   platform*.go        平台原语：flock / O_NOFOLLOW / 进程组 kill（windows 分文件）
   tools.go            路径解析、截断工具（truncate/truncateHeadTail）、schema 构造
@@ -136,7 +137,7 @@ return finishMaxIterations
 
 **主动裁剪**（`applyContextStrips`，两分支复用，仅改 context 侧拷贝）：`P1` 清旧 reasoning、`P7` 截长 reasoning、`P4` 压旧 tool_call args、`P6` 去重 read 结果、`P11` 折叠旧 read、`P8'` 折叠旧 write/edit args、`P9b` 去重 shell 命令。debug 级日志记录各阶段节省 token。
 
-**静默溢出检测**（`overflow.go`）：provider 200 成功但实际已超窗的两类——Case2（`finishStop` 但 input > window）、Case3（`finishLength` 且 output=0 且 input ≥ 99% window）。`before` 钩子下一步从已入史的 assistant.Usage 据此置 `Force`，撞 provider 400 前先压。
+**静默溢出检测**（`compaction/compaction_split.go:isUsageOverflow`）：provider 200 成功但实际已撞窗时——判据 `usageFootprint(input+output) >= usableTokens(ContextWindow - reserve)`，reserve 默认 `min(20000, max_tokens)` 且 clamp 到 CW/5（防小窗时阈值低于 FitHistory 的 CW*4/5 门控、Force 过早主导）；仅 `ContextWindow>0 && auto` 启用。`before` 钩子每步从已入史最新 assistant.Usage 据此置 `Force`，下一步跳过估算门控直接压缩，撞 provider 400 前先压。
 
 **context 超限识别**：`isContextLengthError` 用 24 条正则 + 4 条排除（防 throttling/rate-limit 误命中），状态门从仅 400 放宽到 `400||413`。
 
@@ -147,7 +148,7 @@ return finishMaxIterations
 **并行执行**（`loop_tools.go:runToolsParallel`）：同一步内 LLM 一次发起的多个 tool_call 相互独立，并行执行（信号量限并发，默认 `maxParallelTools=8`），结果按原 index 回填保证与 `assistant.tool_calls` 一一对应（OpenAI 要求顺序匹配）。信号量获取联动 ctx，取消后排队调用立即放弃。每个工具 panic 由 `safeCall` 兜底，未知/被拒工具短路回填错误结果。
 
 **工具结果成型**（`defaultShapeResult`）：`trimForHistory` 截断 + 可选落盘。
-- `SplitTruncate`：shell/grep/script 走**头 1/4 + 尾 3/4**分段截断（错误结论常在尾部）；read/edit 等**带行号代码类**走 head-only（前截断符合分段读大文件语义）。
+- `SplitTruncate`：shell/grep/script/codemap 走**头 1/4 + 尾 3/4**分段截断（错误结论常在尾部）；read/edit 等**带行号代码类**走 head-only（前截断符合分段读大文件语义）。
 - **工具输出落盘**（`cfg.ToolOutputDir`，默认按 session 目录派生 `<id>.tool-output/`）：超 limit 的全文写盘，历史 Content 改为 preview + 绝对路径提示；启动时机会性清理过期文件（默认保留 7d）。
 
 **配对不变量**：assistant.tool_calls 与 tool 消息一一对应是核心保证的不变量。下游管道关闭时，核心为剩余 calls 补占位 tool 消息保配对完整，防续跑被端点 400。
@@ -166,9 +167,9 @@ return finishMaxIterations
 
 格式：jsonl，首行 `type=session` metadata（id/model/workdir/provider/created），余 `type=message` 行嵌入 `Message`。
 
-- **append-only**（`AppendMessages`）：正常轮追加 `result.NewMessages`。`flock` 跨进程锁防行边界交织非法 JSON；预序列化按 `info.Size()+待写` 超限拒绝，避免"写成功延后失败"。单行缓冲对齐 `sessionBytes()` 防 append-only 崩溃污染致整会话不可读。
+- **append-only**（`AppendMessages`）：正常轮追加 `result.NewMessages`。`flock` 跨进程锁防行边界交织非法 JSON；`info.Size()>maxSessionBytes` 前置拒绝 + 预序列化按 `size+待写` 超限拒绝，避免「写成功延后失败」；`ensureTrailingNewline` 写前截断崩溃半写残留的尾行（H3-1）——否则 O_APPEND 盲写把新消息拼到无换行结尾的残行上、下次 Load 反噬为中段损坏（永久丢会话）。
 - **rewrite**（`RewriteMessages`）：仅 `result.Compacted` 时全量重写（临时文件 → `os.Rename` 原子替换）。append-only 落盘的 newMsgs 含被屏障的旧 summary 与被压中段，长会话需 rewrite 真正丢弃。
-- **LoadSession 容错**：尾行半写（append-only 崩溃残行）容忍丢弃，中间损坏严格报错；`validateToolPairing` 守配对完整。
+- **LoadSession 容错**：尾行半写（append-only 崩溃残行）容忍丢弃，中间损坏严格报错；`ValidateToolPairing` 守配对完整。
 
 **平台硬化**（`platform.go`）：`O_NOFOLLOW` 拒最终分量 symlink；`flock` 非阻塞 + 5s 轮询（持锁进程挂死不永久阻塞）；目录 `0o700`、文件 `0o600`；`setPGID`+`killProcessGroup` 让 shell 超时能杀整个进程树。
 

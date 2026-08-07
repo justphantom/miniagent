@@ -178,9 +178,6 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 	if rerr != nil {
 		return miniagent.Response{}, true, -1, fmt.Errorf("read response: %w", rerr)
 	}
-	if int64(len(raw)) > maxChatBodyBytes {
-		return miniagent.Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
-	}
 	if resp.StatusCode != http.StatusOK {
 		// context 超限（400/413 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
 		// §P1-C：状态门从仅 400 放宽到 400||413（Anthropic request_too_large 走 413）。
@@ -198,6 +195,10 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 			return miniagent.Response{}, true, parseRetryAfter(resp.Header), errors.New(msg)
 		}
 		return miniagent.Response{}, false, 0, errors.New(msg)
+	}
+	// 200 路径超大才硬失败：非 200 的超大错误体不抑制重试（按状态走 shouldRetryStatus，与 stream.go/models.go 一致）。
+	if int64(len(raw)) > maxChatBodyBytes {
+		return miniagent.Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
 	}
 	out, perr := parseChatResponse(raw)
 	if perr != nil {

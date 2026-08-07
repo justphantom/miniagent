@@ -127,6 +127,8 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		captureDowngrade(downgraded)
 		// 开放缝 OnLLMError：LLM 失败恢复（典型 ErrContextLength 收紧重试）。nil=error 直接上抛。
 		// 核心不做任何错误恢复策略；默认实现 NewDefaultOnLLMError 承载原 trimHistoryForContext。
+		// 传 msgs（持久 transcript）而非 toSend（BeforeLLM 的瞬时 View，Commit=false 时不进 transcript）：
+		// 恢复须作用于持久化的 transcript，重试也基于 trim 后的 msgs 重发（注入可弃恰是 context 恢复方向）。
 		if err != nil && hooks.OnLLMError != nil {
 			recovered, retry, rerr := hooks.OnLLMError(ctx, step, msgs, err)
 			if rerr != nil {
