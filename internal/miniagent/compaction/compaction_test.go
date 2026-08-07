@@ -75,6 +75,49 @@ func TestFitHistory_JointBudgetSavesMidWindow(t *testing.T) {
 	}
 }
 
+// deriveSummaryMaxChars（方向 A）：configured>0 覆盖；cw<=0 回落 5000；否则 min(5000, cw/5)。
+func TestDeriveSummaryMaxChars(t *testing.T) {
+	cases := []struct {
+		cw, configured, want int
+	}{
+		{4096, 0, 819},     // 小窗口缩放
+		{2048, 0, 409},     // 更小窗口
+		{24999, 0, 4999},   // 刚 below 内置上限
+		{25000, 0, 5000},   // 边界 cw/5=5000 不<5000 → 内置
+		{40000, 0, 5000},   // 大窗口 clamp 内置
+		{0, 0, 5000},       // 无窗口回落内置
+		{4096, 3000, 3000}, // 用户显式覆盖
+	}
+	for _, c := range cases {
+		if got := deriveSummaryMaxChars(c.cw, c.configured); got != c.want {
+			t.Errorf("deriveSummaryMaxChars(%d, %d) = %d, want %d", c.cw, c.configured, got, c.want)
+		}
+	}
+}
+
+// NewCompaction：不设 SummaryMaxChars 时，maxChars 随 ContextWindow 缩放派生（方向 A），maxSummaryTokens 自动联动。
+// CW=4096 → maxChars=819 → maxSummaryTokens=819/2=409。20 轮 × 600 中文字触发摘要；忽略 before 可能的终止 error，
+// 只验摘要请求携带的派生 max_tokens（A+B 下 CW=4096 实测不终止，但断言不依赖此）。
+func TestNewCompaction_ScalesSummaryMaxCharsByWindow(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	before, _ := NewCompaction(CompactionOptions{
+		Chat:          llm,
+		ContextWindow: 4096, // 不设 SummaryMaxChars → 派生 819 → maxSummaryTokens 409
+	})
+	var msgs []miniagent.Message
+	for range 20 {
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: strings.Repeat("历", 600)})
+	}
+	_, _ = before(context.Background(), miniagent.StepInput{Step: 1, Msgs: msgs})
+	if tr.calls == 0 {
+		t.Fatal("期望触发摘要 LLM 调用")
+	}
+	if !strings.Contains(tr.lastBody, `"max_tokens":409`) {
+		t.Errorf("期望 max_tokens=819/2=409（summaryMaxChars 随 CW 缩放派生），实际: %s", tr.lastBody)
+	}
+}
+
 // applyCompactionBarrier：有 summary → 返回最新 summary 及之后；无 → 原样。
 func TestApplyCompactionBarrier(t *testing.T) {
 	msgs := []miniagent.Message{

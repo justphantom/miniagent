@@ -11,8 +11,13 @@ import (
 )
 
 const (
-	// summaryMaxChars 是摘要的字符上限（初值，按实测调，设计 §15.4）。
+	// summaryMaxChars 是摘要字符上限的内置上界（初值，按实测调，设计 §15.4）。默认经 deriveSummaryMaxChars
+	// 按 min(summaryMaxChars, ContextWindow/summaryCharsPerWindowRatio) 随窗口缩放（方向 A）——大窗口取此值，
+	// 小窗口自适应，避免 summary 本身 > CW×4/5 致压缩后终止（B 的边界）。用户显式 summary_max_chars 覆盖。
 	summaryMaxChars = 5000
+	// summaryCharsPerWindowRatio：默认 summaryMaxChars = ContextWindow/此值（summary token 占 CW ~10%）。
+	// 对标 tailBudgetFraction 内置比例风格；用户显式 summary_max_chars 覆盖派生。
+	summaryCharsPerWindowRatio = 5
 	// summaryMaxTokens 是摘要输出 token 上限的兜底常量，从 summaryMaxChars 派生（/2）。
 	// 口径与 EstimateTokens 的 CJK≈1token/2chars 同源：chars/2 恰是「纯 CJK 摘要填满 chars 上限」
 	// 所需的 token 上界——纯中文刚好填满（边界），任何更稀疏内容（英文路径/符号）由 chars 先截，

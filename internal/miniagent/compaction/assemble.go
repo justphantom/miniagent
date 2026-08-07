@@ -111,6 +111,23 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 	return text.TruncateHeadTail(strings.TrimSpace(resp.Text), maxChars, "…[摘要已截断]"), resp.Usage, nil
 }
 
+// deriveSummaryMaxChars 解析摘要字符上限（方向 A）：configured>0 用用户显式值（覆盖）；cw<=0 回落内置
+// summaryMaxChars（无窗口兼容）；否则 min(summaryMaxChars, cw/summaryCharsPerWindowRatio)——小窗口自适应，
+// 避免 summary 本身 > CW×4/5 致压缩后终止（B 的边界），大窗口 clamp 内置上限。纯函数、易测；NewCompaction
+// 装配时调用，maxSummaryTokens 派生与 jointTailBudget 估算自动联动。
+func deriveSummaryMaxChars(cw, configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	if cw <= 0 {
+		return summaryMaxChars
+	}
+	if c := cw / summaryCharsPerWindowRatio; c < summaryMaxChars {
+		return c
+	}
+	return summaryMaxChars
+}
+
 // deriveSummaryMaxTokens 解析摘要输出 token 上限：configured>0 用用户显式值（覆盖，向后兼容自定义）；
 // 否则从 maxChars 派生 maxChars/2（CJK 最密口径，与 EstimateTokens 同源）——chars/2 恰是「纯 CJK 摘要
 // 填满 chars 上限」所需 token 上界，保证中文摘要不被 MaxTokens 先于 chars 截断（原固定 1024 偏紧）。
@@ -189,12 +206,11 @@ func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, mo
 // 真实 usage 推断 Force）。after 自 4.2.0 起恒为 nil（溢出判定已并入 before，无跨步状态）——调用方挂
 // AfterLLM 前须判 nil。opts.Chat 必须非 nil（摘要 LLM 调用需 client）。
 func NewCompaction(opts CompactionOptions) (before func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error), after func(context.Context, int, miniagent.Response) error) {
-	maxChars := opts.SummaryMaxChars
-	if maxChars <= 0 {
-		maxChars = summaryMaxChars
-	}
-	// summary_max_tokens 默认从 maxChars 派生（chars/2，CJK 最密口径）：仅配 summary_max_chars 时
-	// token 自动跟随，保证中文摘要不被 MaxTokens 先于 chars 截断；显式 >0 覆盖。
+	// summary_max_chars 默认随 ContextWindow 缩放（方向 A，deriveSummaryMaxChars）：min(5000, CW/5)，
+	// 小窗口自适应避免 summary 本身 > CW×4/5 致压缩后终止；显式 >0 覆盖。
+	maxChars := deriveSummaryMaxChars(opts.ContextWindow, opts.SummaryMaxChars)
+	// summary_max_tokens 默认从 maxChars 派生（chars/2，CJK 最密口径）：token 自动跟随 maxChars（含 A 缩放），
+	// 保证中文摘要不被 MaxTokens 先于 chars 截断；显式 >0 覆盖。
 	maxSummaryTokens := deriveSummaryMaxTokens(maxChars, opts.SummaryMaxTokens)
 	budget := ContextBudget{
 		ContextWindow:        opts.ContextWindow,
