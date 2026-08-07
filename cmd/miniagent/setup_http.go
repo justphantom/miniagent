@@ -153,6 +153,8 @@ func newHTTPTransport() *http.Transport {
 		DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 		// 曾为 30s：慢端点（如 agnes）常在此砍断请求，致 compaction 摘要等长输入场景失败。
 		// 放宽到 300s；副作用是任意 provider 的慢请求都会挂更久（与 http.Client.Timeout 共同生效）。
+		// 注：300s 实际只对 stream 路径生效（stream 无 Client.Timeout）；chat/compaction 的响应头
+		// 等待受各自 Client.Timeout(120s) 上限约束，300s 对它们是冗余上界（仅放宽了旧 30s 的砍断）。
 		ResponseHeaderTimeout: 300 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,

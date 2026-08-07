@@ -53,7 +53,7 @@ func parseFlags() *cliFlags {
 	f.provider = flag.String("provider", "", "LLM provider 名（与 -model 成对覆盖 defaults 对；-list-models 时单独用于筛选）")
 	f.model = flag.String("model", "", "LLM model id（与 -provider 成对覆盖 defaults 对）")
 	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
-	f.maxTokens = flag.Int("max-tokens", 4096, "max output tokens per LLM call")
+	f.maxTokens = flag.Int("max-tokens", 4096, "单次 LLM 调用输出 token 上限（保守默认，平衡多数回复与防单次烧 token；长生成场景经 config run.max_tokens 调高）")
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
 	f.session = flag.String("session", "", "接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错）")
 	f.saveSession = flag.Bool("save-session", false, "新建会话并落盘（id 内部生成；与 -session 互斥）")

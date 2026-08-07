@@ -11,7 +11,7 @@ import (
 //     shell 以 mode=default 注册（拒 sudo/su）。workdir 必填（main 入口校验）。
 //   - auto：无任何约束（shell mode=auto，写工具不包装）。
 //
-// workdir 为空时文件工具走 resolveToolPath、shell 的 cmd.Dir 留空。shellTimeout<=0 用默认 60s。
+// workdir 为空时文件工具走 resolveToolPath、shell 的 cmd.Dir 留空。shellTimeout<=0 用默认 120s。
 // fileOpTimeout<=0 用默认 30s；writeTimeout<=0 用默认 30s。
 // fileResultLimit>0 时覆盖 read/edit 的 Tool.ResultLimit（S4：config run.max_file_result_chars），
 // <=0 保留构造器内置默认（maxFileResultInHistory）。

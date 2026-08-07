@@ -10,7 +10,7 @@ type Limits struct {
 	MaxReadFileBytes int
 	// MaxShellOutputChars 是 shell/glob/grep 共享的工具输出字符上限（默认 maxShellOutputChars=100KB）。
 	MaxShellOutputChars int
-	// ShellStreamWindowBytes 是 shell 输出滑窗字节上限（默认 2*MaxShellOutputChars*4）。
+	// ShellStreamWindowBytes 是 shell 输出滑窗字节上限（默认 MaxShellOutputChars*8）。
 	ShellStreamWindowBytes int
 	// MaxGrepMatches 是 grep 命中行上限（默认 maxGrepMatches=500）。
 	MaxGrepMatches int

@@ -81,7 +81,7 @@ type RunConfig struct {
 	HTTPTimeout         *string `json:"http_timeout,omitempty"`
 	MaxReadFileBytes    *int    `json:"max_read_file_bytes,omitempty"`
 	MaxShellOutputChars *int    `json:"max_shell_output_chars,omitempty"`
-	// ShellStreamWindowBytes 是 shell/script 输出滑窗字节上限（保尾部，§P1-D）；缺省/<=0 用默认 2*max_shell_output_chars*4。
+	// ShellStreamWindowBytes 是 shell/script 输出滑窗字节上限（保尾部，§P1-D）；缺省/<=0 用默认 max_shell_output_chars*8。
 	ShellStreamWindowBytes *int `json:"shell_stream_window_bytes,omitempty"`
 	MaxSessionBytes        *int `json:"max_session_bytes,omitempty"`
 	SummaryMaxTokens       *int `json:"summary_max_tokens,omitempty"`
