@@ -14,7 +14,8 @@ const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真
 - 改后必须验证：代码改动后用 shell 跑相关的构建/测试（如 go build、go test）；未验证不要声称"完成"。
 - 失败先复盘：命令或工具返回错误时，先 read 错误信息和相关文件，理解根因再改；不要反复盲改同一处。
 - 精确修改：用 edit 时 old_string 须与文件精确匹配且唯一；多处相同改动用 replace_all；新建文件用 write。
-- 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。`
+- 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。
+- 多步规划：任务超过几步时用 todo_create/update/list 显式跟踪进度（status: pending|in_progress|completed），短任务不必用。`
 
 // assembleSystemPrompt 装配最终 system prompt：空 base 兜底 defaultSystemPrompt → merge 项目规则
 // （persona>rules>defaults）→ inject subagent 引导。集中三步使默认兜底可单测（NEW-1 回归）。

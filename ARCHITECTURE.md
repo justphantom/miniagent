@@ -143,7 +143,7 @@ return finishMaxIterations
 
 ## 6. 工具系统
 
-**内置工具**（7 个，`buildTools` 注册）：`read` / `write` / `edit` / `grep` / `glob` / `codemap` / `shell`。
+**内置工具**（10 个，`buildTools` 注册）：`read` / `write` / `edit` / `grep` / `glob` / `codemap` / `shell` + `todo_create` / `todo_update` / `todo_list`（单 Run 内存任务跟踪，闭包 `*TodoList` 共享、与 transcript/压缩解耦）。
 
 **并行执行**（`loop_tools.go:runToolsParallel`）：同一步内 LLM 一次发起的多个 tool_call 相互独立，并行执行（信号量限并发，默认 `maxParallelTools=8`），结果按原 index 回填保证与 `assistant.tool_calls` 一一对应（OpenAI 要求顺序匹配）。信号量获取联动 ctx，取消后排队调用立即放弃。每个工具 panic 由 `safeCall` 兜底，未知/被拒工具短路回填错误结果。
 

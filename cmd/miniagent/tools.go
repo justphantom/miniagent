@@ -41,7 +41,7 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		glob = confineWrap(glob, workdir)
 		codemap = confineWrap(codemap, workdir)
 	}
-	return []miniagent.Tool{
+	tools := []miniagent.Tool{
 		read,
 		write,
 		edit,
@@ -50,4 +50,6 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		codemap,
 		miniagent.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
 	}
+	// todo 工具（单 Run 内存）：每轮 buildTools 新建 *TodoList，跨 step 共享、跨 Run 重置。
+	return append(tools, miniagent.TodoTools(&miniagent.TodoList{})...)
 }
