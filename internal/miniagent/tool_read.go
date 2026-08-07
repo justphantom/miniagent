@@ -56,19 +56,7 @@ func ReadFileTool(workspaceRoot string, timeout time.Duration, maxBytes int) Too
 		}, "path"),
 		ResultLimit: maxFileResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
-			if err := ctx.Err(); err != nil {
-				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
-			}
-			runCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			done := make(chan ToolResult, 1)
-			go func() { done <- runReadFile(workspaceRoot, args, maxBytes) }()
-			select {
-			case r := <-done:
-				return r
-			case <-runCtx.Done():
-				return ToolResult{IsError: true, Output: "读取超时或已取消：" + runCtx.Err().Error()}
-			}
+			return runWithTimeout(ctx, timeout, "读取", func() ToolResult { return runReadFile(workspaceRoot, args, maxBytes) })
 		},
 	}
 }

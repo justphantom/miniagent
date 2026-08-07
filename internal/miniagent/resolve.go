@@ -15,23 +15,14 @@ type CLIOverrides struct {
 	Stream, ResultOnly                               *bool
 }
 
-// ResolvedRun 是 Resolve 输出的运行参数（duration 已解析）；nil 表示未设置，main 回落 flag 默认。
+// ResolvedRun 是 Resolve 输出的运行参数——仅含需裁决或解析的字段（cli>config 三态裁决 + duration 解析）。
+// 纯透传字段（仅 config 来源、无 CLI 覆盖、无解析）不经此间接层，消费方直读 Resolved.RunConfig（= cfg.Run）。
 type ResolvedRun struct {
-	Workdir                                                                                      *string
-	MaxTokens, MaxIterations, MaxTotalTokens, ContextWindow                                      *int
-	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout, HTTPTimeout                          *time.Duration
-	Stream                                                                                       *bool
-	MaxToolResultChars, MaxFileResultChars, MaxParallelTools, ContextKeepRecent, SummaryMaxChars *int
-	MaxReadFileBytes, MaxShellOutputChars, MaxSessionBytes                                       *int
-	ShellStreamWindowBytes                                                                       *int
-	SummaryMaxTokens, GrepMaxMatches, ContextTrimToolChars                                       *int
-	ContextKeepReasoning                                                                         *int
-	ContextKeepToolArgs                                                                          *int
-	ContextKeepReasoningChars                                                                    *int
-	ContextUseRealUsage                                                                          *bool
-	PreserveRecentTokens                                                                         *int
-	ToolOutputDir                                                                                *string
-	ToolOutputRetention                                                                          *time.Duration
+	Workdir                                                             *string
+	MaxTokens, MaxIterations                                            *int
+	Stream                                                              *bool
+	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout, HTTPTimeout *time.Duration
+	ToolOutputRetention                                                 *time.Duration
 }
 
 type Resolved struct {
@@ -48,6 +39,7 @@ type Resolved struct {
 	SummarizerPrompt   string
 	Session            SessionConfig
 	Run                ResolvedRun
+	RunConfig          RunConfig // 原始 cfg.Run：纯透传字段源，消费方直读，不经 ResolvedRun 间接层
 }
 
 // Resolve 按 cli>config>builtin 裁决产出 Resolved。cfg 必须非 nil（S1 删裸模式后始终有 config）。
@@ -56,7 +48,7 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	if cfg == nil {
 		return nil, errors.New("Resolve: cfg 为 nil（S1 后 config 必须存在）")
 	}
-	r := &Resolved{Session: cfg.Session}
+	r := &Resolved{Session: cfg.Session, RunConfig: cfg.Run}
 
 	// 成对规则：CLI -provider/-model 须同传（只传其一报错）；不传则以 config defaults 对为准。
 	cliProv := o.Provider != nil && *o.Provider != ""
@@ -187,6 +179,7 @@ func FindProvider(cfg *Config, name string) (ProviderConfig, error) {
 
 func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	var r ResolvedRun
+	// 三态裁决（cli>config）：Workdir/MaxTokens/MaxIterations/Stream 可被 CLI 覆盖；nil=未配置。
 	if o.Workdir != nil && *o.Workdir != "" {
 		r.Workdir = o.Workdir
 	} else {
@@ -194,20 +187,12 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	}
 	r.MaxTokens = pickInt(o.MaxTokens, cfg.Run.MaxTokens)
 	r.MaxIterations = pickInt(o.MaxIterations, cfg.Run.MaxIterations)
-	// 以下均为仅 config 来源（P2 移出 CLI）：直接读 cfg.Run（无需 CLI 覆盖）。
-	r.MaxTotalTokens = cfg.Run.MaxTotalTokens
-	r.ContextWindow = cfg.Run.ContextWindow
-	// S4 策略化常量：仅 config 来源。
-	r.MaxToolResultChars = cfg.Run.MaxToolResultChars
-	r.MaxFileResultChars = cfg.Run.MaxFileResultChars
-	r.MaxParallelTools = cfg.Run.MaxParallelTools
-	r.ContextKeepRecent = cfg.Run.ContextKeepRecent
-	r.SummaryMaxChars = cfg.Run.SummaryMaxChars
 	if o.Stream != nil {
 		r.Stream = o.Stream
 	} else {
 		r.Stream = cfg.Run.Stream
 	}
+	// durations：*string → *time.Duration。纯透传字段不经此（消费方读 Resolved.RunConfig）。
 	var err error
 	r.MaxDuration, err = parseDur(cfg.Run.MaxDuration, "run.max_duration")
 	if err != nil {
@@ -229,23 +214,6 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	if err != nil {
 		return r, err
 	}
-	r.MaxReadFileBytes = cfg.Run.MaxReadFileBytes
-	r.MaxShellOutputChars = cfg.Run.MaxShellOutputChars
-	r.ShellStreamWindowBytes = cfg.Run.ShellStreamWindowBytes
-	r.MaxSessionBytes = cfg.Run.MaxSessionBytes
-	// S4 策略化常量（接续上文，仅 config 来源）：须一并装配，否则 config 值不入 ResolvedRun、
-	// main 据此构造 Limits/CompactionOptions 时收到 0 当作未设置而回落内置默认。
-	r.SummaryMaxTokens = cfg.Run.SummaryMaxTokens
-	r.GrepMaxMatches = cfg.Run.GrepMaxMatches
-	r.ContextTrimToolChars = cfg.Run.ContextTrimToolChars
-	r.ContextKeepReasoning = cfg.Run.ContextKeepReasoning
-	r.ContextKeepToolArgs = cfg.Run.ContextKeepToolArgs
-	r.ContextKeepReasoningChars = cfg.Run.ContextKeepReasoningChars
-	r.PreserveRecentTokens = cfg.Run.PreserveRecentTokens
-	// ContextUseRealUsage 仅 config 来源（§P0-B kill-switch）；nil=默认启用。
-	r.ContextUseRealUsage = cfg.Run.ContextUseRealUsage
-	// §P1-A：工具输出落盘目录（config-only，nil=main.go 按 session 目录派生）。
-	r.ToolOutputDir = cfg.Run.ToolOutputDir
 	r.ToolOutputRetention, err = parseDur(cfg.Run.ToolOutputRetention, "run.tool_output_retention")
 	if err != nil {
 		return r, err

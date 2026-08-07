@@ -61,19 +61,7 @@ func EditFileTool(workspaceRoot string, timeout time.Duration) Tool {
 		}, "path"),
 		ResultLimit: maxFileResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
-			if err := ctx.Err(); err != nil {
-				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
-			}
-			runCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			done := make(chan ToolResult, 1)
-			go func() { done <- runEditFile(workspaceRoot, args) }()
-			select {
-			case r := <-done:
-				return r
-			case <-runCtx.Done():
-				return ToolResult{IsError: true, Output: "编辑超时或已取消：" + runCtx.Err().Error()}
-			}
+			return runWithTimeout(ctx, timeout, "编辑", func() ToolResult { return runEditFile(workspaceRoot, args) })
 		},
 	}
 }

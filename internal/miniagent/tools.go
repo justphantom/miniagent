@@ -1,7 +1,9 @@
 package miniagent
 
 import (
+	"context"
 	"path/filepath"
+	"time"
 )
 
 // resolveToolPath 解析工具路径：workspaceRoot 为空或 p 已是绝对路径时原样返回；
@@ -31,4 +33,24 @@ func object(props map[string]any, required ...string) map[string]any {
 		out["required"] = required
 	}
 	return out
+}
+
+// runWithTimeout 把「ctx 取消检查 + WithTimeout + goroutine + select 兜底」封装为单一 helper，
+// 供 read/write/edit/grep/glob/codemap 等文件类工具复用（原 6 处逐字重复样板）。label 入超时/取消
+// 文案（如「读取」「搜索」）。fn 在独立 goroutine 跑——核心不内置超时（Go 无法强制终止 goroutine），
+// fn 须自尊重 ctx 及时返回，否则 runToolsParallel 的 wg.Wait 会挂死、Run 不响应 SIGINT。
+func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn func() ToolResult) ToolResult {
+	if err := ctx.Err(); err != nil {
+		return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	done := make(chan ToolResult, 1)
+	go func() { done <- fn() }()
+	select {
+	case r := <-done:
+		return r
+	case <-runCtx.Done():
+		return ToolResult{IsError: true, Output: label + "超时或已取消：" + runCtx.Err().Error()}
+	}
 }

@@ -198,13 +198,16 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 	}
 	before = func(ctx context.Context, in miniagent.StepInput) (miniagent.StepOutput, error) {
 		barrier := applyCompactionBarrier(in.Msgs)
-		// §P1-B：从上一步已入史的 assistant.Usage 判静默溢出（撞 provider 前先压）。经 in.Msgs 推断
-		// Force，而非跨步闭包状态——支持多 Run 复用同一对 before/after（多实例安全、无 race）。
-		budget.Force = false
+		// §P1-B：从上一步已入史的 assistant.Usage 判静默溢出（撞 provider 前先压）。每步从 in.Msgs
+		// 推断 Force 到局部变量，再拷贝 budget 传入 FitHistory——闭包不写共享状态，多 Run 并发复用
+		// 同一钩子亦无 race（ContextBudget 是值类型，b 与 budget 共享只读的 Summarize/Tools 等引用）。
+		force := false
 		if idx := lastApplicableUsageIndex(in.Msgs); idx >= 0 {
-			budget.Force = isUsageOverflow(*in.Msgs[idx].Usage, opts.ContextWindow, opts.MaxTokens, opts.Reserved, opts.Auto)
+			force = isUsageOverflow(*in.Msgs[idx].Usage, opts.ContextWindow, opts.MaxTokens, opts.Reserved, opts.Auto)
 		}
-		fitted, summary, summarized, sumUsage, err := FitHistory(ctx, barrier, budget, opts.Logger)
+		b := budget
+		b.Force = force
+		fitted, summary, summarized, sumUsage, err := FitHistory(ctx, barrier, b, opts.Logger)
 		if err != nil {
 			return miniagent.StepOutput{}, err
 		}

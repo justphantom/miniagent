@@ -127,10 +127,10 @@ func main() {
 	limits := miniagent.Limits{
 		MaxReadFileBytes:       maxReadFileBytesOf(resolved),
 		MaxShellOutputChars:    maxShellOutputCharsOf(resolved),
-		ShellStreamWindowBytes: into(resolved.Run.ShellStreamWindowBytes, 0),
-		MaxGrepMatches:         into(resolved.Run.GrepMaxMatches, 0),
+		ShellStreamWindowBytes: into(resolved.RunConfig.ShellStreamWindowBytes, 0),
+		MaxGrepMatches:         into(resolved.RunConfig.GrepMaxMatches, 0),
 		MaxSessionBytes:        maxSessionBytesOf(resolved),
-		ContextTrimToolChars:   into(resolved.Run.ContextTrimToolChars, 0),
+		ContextTrimToolChars:   into(resolved.RunConfig.ContextTrimToolChars, 0),
 	}
 
 	chat, stream := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
@@ -152,12 +152,12 @@ func main() {
 		compChat, _ = secondaryClient("compaction", resolved.CompactionProvider)
 	}
 
-	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.Run.MaxFileResultChars, 0), pr.scripts, limits)
+	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), pr.scripts, limits)
 	baseCfg := loopCfg(resolved, f, history, tools)
 	// §P1-A：工具输出落盘目录——config 显式优先；否则 -save-session/-session 激活时按 session 目录
 	// 派生 <sessionDir>/<id>.tool-output/（无 session 且 config 未配则禁用）。
-	if resolved.Run.ToolOutputDir != nil && *resolved.Run.ToolOutputDir != "" {
-		baseCfg.ToolOutputDir = *resolved.Run.ToolOutputDir
+	if resolved.RunConfig.ToolOutputDir != nil && *resolved.RunConfig.ToolOutputDir != "" {
+		baseCfg.ToolOutputDir = *resolved.RunConfig.ToolOutputDir
 	} else if sessPath != "" {
 		baseCfg.ToolOutputDir = filepath.Join(filepath.Dir(sessPath), strings.TrimSuffix(filepath.Base(sessPath), ".jsonl")+".tool-output")
 	}
@@ -228,12 +228,12 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 		Tools:              tools,
 		History:            history,
 		MaxIterations:      into(resolved.Run.MaxIterations, *f.maxIterations),
-		MaxTotalTokens:     into(resolved.Run.MaxTotalTokens, 0),
+		MaxTotalTokens:     into(resolved.RunConfig.MaxTotalTokens, 0),
 		Stream:             intoBool(resolved.Run.Stream, *f.stream),
 		ThinkingLevel:      resolved.Thinking,
 		Thinking:           resolved.Provider.Thinking,
-		MaxToolResultChars: into(resolved.Run.MaxToolResultChars, 0),
-		MaxParallelTools:   into(resolved.Run.MaxParallelTools, 0),
+		MaxToolResultChars: into(resolved.RunConfig.MaxToolResultChars, 0),
+		MaxParallelTools:   into(resolved.RunConfig.MaxParallelTools, 0),
 	}
 }
 
@@ -247,20 +247,20 @@ func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent
 	return compaction.CompactionOptions{
 		Chat:                 compClient,
 		MaxTokens:            into(resolved.Run.MaxTokens, *f.maxTokens),
-		ContextWindow:        into(resolved.Run.ContextWindow, 0),
+		ContextWindow:        into(resolved.RunConfig.ContextWindow, 0),
 		Model:                resolved.ModelID,
 		CompactionModel:      resolved.CompactionModelID,
 		System:               system,
 		Tools:                tools,
-		KeepRecent:           into(resolved.Run.ContextKeepRecent, 0),
-		KeepReasoning:        into(resolved.Run.ContextKeepReasoning, 0),
-		KeepToolArgs:         into(resolved.Run.ContextKeepToolArgs, 0),
-		KeepReasoningChars:   into(resolved.Run.ContextKeepReasoningChars, 0),
+		KeepRecent:           into(resolved.RunConfig.ContextKeepRecent, 0),
+		KeepReasoning:        into(resolved.RunConfig.ContextKeepReasoning, 0),
+		KeepToolArgs:         into(resolved.RunConfig.ContextKeepToolArgs, 0),
+		KeepReasoningChars:   into(resolved.RunConfig.ContextKeepReasoningChars, 0),
 		SummarizerPrompt:     resolved.SummarizerPrompt,
-		SummaryMaxChars:      into(resolved.Run.SummaryMaxChars, 0),
-		SummaryMaxTokens:     into(resolved.Run.SummaryMaxTokens, 0),
-		PreserveRecentTokens: into(resolved.Run.PreserveRecentTokens, 0),
-		UseRealUsage:         intoBool(resolved.Run.ContextUseRealUsage, true),
+		SummaryMaxChars:      into(resolved.RunConfig.SummaryMaxChars, 0),
+		SummaryMaxTokens:     into(resolved.RunConfig.SummaryMaxTokens, 0),
+		PreserveRecentTokens: into(resolved.RunConfig.PreserveRecentTokens, 0),
+		UseRealUsage:         intoBool(resolved.RunConfig.ContextUseRealUsage, true),
 		Auto:                 resolved.CompactionAuto,
 		Reserved:             resolved.CompactionReserved,
 		SessionID:            meta.ID,

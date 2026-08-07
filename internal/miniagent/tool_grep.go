@@ -56,19 +56,7 @@ func GrepTool(workspaceRoot string, timeout time.Duration, maxMatches, maxOutput
 		ResultLimit:   maxToolResultInHistory,
 		SplitTruncate: true, // 命中上限/无匹配等汇总在尾部，前截断会丢失
 		Call: func(ctx context.Context, args string) ToolResult {
-			if err := ctx.Err(); err != nil {
-				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
-			}
-			runCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			done := make(chan ToolResult, 1)
-			go func() { done <- runGrep(workspaceRoot, args, maxMatches, maxOutputChars) }()
-			select {
-			case r := <-done:
-				return r
-			case <-runCtx.Done():
-				return ToolResult{IsError: true, Output: "搜索超时或已取消：" + runCtx.Err().Error()}
-			}
+			return runWithTimeout(ctx, timeout, "搜索", func() ToolResult { return runGrep(workspaceRoot, args, maxMatches, maxOutputChars) })
 		},
 	}
 }

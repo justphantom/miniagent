@@ -97,8 +97,10 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 		if hooks.ShapeToolResult != nil {
 			c, serr := hooks.ShapeToolResult(tc.Name, tc.ID, step, tres)
 			if serr != nil {
-				// 配对补全：成型钩子抛错时为剩余 calls（含当前 i）补占位 tool 消息，保 Messages 配对完整。
-				fillPlaceholderTail(&msgs, newMsgs, calls, i)
+				// 成型钩子抛错：当前 i 已执行（OnToolResult 已成功通知真实结果），用原始 Output 入历史
+				// 保与消费方所见一致；剩余 calls 补占位保配对（区别于 OnToolResult 抛错：彼处消费方未确认，i 亦占位）。
+				appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: tc.ID, Content: tres.Output, IsError: tres.IsError})
+				fillPlaceholderTail(&msgs, newMsgs, calls, i+1)
 				return msgs, serr
 			}
 			if c != "" {

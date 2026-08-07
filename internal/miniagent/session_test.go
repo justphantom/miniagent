@@ -99,12 +99,12 @@ func TestLoadSession_ToolMissingCallIDFails(t *testing.T) {
 }
 
 func TestLoadSession_OversizedFails(t *testing.T) {
-	const max = int64(1 << 20)
+	const maxSz = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "big.jsonl")
-	if err := os.WriteFile(path, make([]byte, max+1), 0o600); err != nil {
+	if err := os.WriteFile(path, make([]byte, maxSz+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadSession(path, max); err == nil {
+	if _, _, err := LoadSession(path, maxSz); err == nil {
 		t.Fatal("expected error for oversized session file")
 	}
 }
@@ -150,13 +150,13 @@ func TestLoadSession_KindSummaryRecognized(t *testing.T) {
 // P2-7：单条大消息（>1MiB 旧行上限、<maxSessionBytes 总上限）可正常 load，
 // 不再因 scanner ErrTooLong 致整会话不可读、append-only 无法修复。
 func TestLoadSession_LargeSingleLineOK(t *testing.T) {
-	const max = int64(1 << 20)
+	const maxSz = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	big := strings.Repeat("x", int(max/2))
-	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}, max); err != nil {
+	big := strings.Repeat("x", int(maxSz/2))
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}, maxSz); err != nil {
 		t.Fatalf("AppendMessages: %v", err)
 	}
-	_, msgs, err := LoadSession(path, max)
+	_, msgs, err := LoadSession(path, maxSz)
 	if err != nil {
 		t.Fatalf("P2-7：大单行 load 失败（scanner 单行上限不足）: %v", err)
 	}

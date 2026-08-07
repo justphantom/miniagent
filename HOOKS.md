@@ -10,7 +10,7 @@
 
 1. **钩子无 panic 兜底**：`recover()` 只覆盖 LLM 调用（`loop_extra.go:53 callLLMOnce`）与工具调用（`loop_tools.go:19 safeCall`）。8 个 `LoopHooks` 字段与 `CompactingHook` 的调用点（`loop.go:127 OnLLMError / :147 AfterLLM / :187 BeforeLLM`、`loop_extra.go callLLMOnce 内 OnDelta`、`loop_tools.go:59 OnToolUse / :86 OnToolResult / :98 ShapeToolResult`、`compaction/assemble.go:applyCompactingHook`）全是裸 error 检查、无 defer recover。**钩子 panic 会崩进程**——这是与 tool/LLM 调用最显著的不对称。
 2. **钩子不直接改 transcript**：意图经返回值（`StepOutput`/content/`CompactingOutput`）表达，由核心折叠副作用。直接改入参 `msgs` 不会生效（核心用返回值）。
-3. **`NewCompaction` 闭包共享 `ContextBudget`**：`before` 闭包捕获的 `budget`（`compaction/assemble.go:177`）是引用，每步重写 `budget.Force`（`:203`）。单 `Run` 内 step 串行调用无 race；但**跨 `Run` 并发复用同一对钩子实例**会因 `budget.Force` 的非原子读写触发 data race——每 `Run` 须 `NewCompaction` 新建实例。（旧版 `overflowPending` 跨步状态已在 4.2.0 移除：溢出判定改为 `before` 从 `in.Msgs` 的真实 usage 推断，`after=nil`。）
+3. **`NewCompaction` 无共享可变状态**：`before` 闭包捕获的 `budget`（`compaction/assemble.go:177`）初始化后只读；每步 `Force` 推断到局部变量、拷贝传入 `FitHistory`，闭包不写共享状态——多 `Run` 并发复用同一对钩子实例亦无 race。（旧版 `overflowPending` 跨步状态已在 4.2.0 移除：溢出判定改为 `before` 从 `in.Msgs` 的真实 usage 推断，`after=nil`。）
 
 **主要风险点**：钩子实现者若忽略上述 1、3，会在长会话/并发/畸形数据下崩进程或 `-race` 失败。
 
@@ -149,7 +149,7 @@ handleToolCalls ──                                                    [loop_
 ## 5. 并发与生命周期
 
 - **单 Run 内顺序**：钩子按 §1 时序顺序调用，**非并发**。同一步内 `OnToolUse` 全部先通知、`runToolsParallel` 后执行；`OnToolResult`/`ShapeToolResult` 在结果回填循环内顺序处理。
-- **闭包共享状态**：`NewCompaction` 的 `before` 闭包捕获 `ContextBudget`（`compaction/assemble.go:177`），每步重写 `budget.Force`。单 `Run` 内 step 串行调用无 race；但**每 `Run` 须 `NewCompaction` 新建实例**——跨 `Run` 并发复用同一闭包会因 `budget.Force` 非原子读写触发 `-race`。旧版 `overflowPending` 跨步状态已移除（4.2.0）。
+- **闭包状态**：`NewCompaction` 的 `before` 闭包捕获 `ContextBudget`（`compaction/assemble.go:177`），但初始化后只读——`Force` 每步推断到局部变量、拷贝传入 `FitHistory`，无共享可变状态，多 `Run` 并发复用安全。旧版 `overflowPending` 跨步状态已移除（4.2.0）。
 - **ctx 联动**：`OnDelta`/工具执行遵守 `ctx`（`runToolsParallel` 信号量获取联动 `ctx.Done`）；钩子内长操作应尊重传入 `ctx`。
 - **资源生命周期**：工具输出 store（`toolOutputStore`）由核心在 `Run` 内创建/清理（`loop_hooks_default.go`）；钩子不应持有需跨 `Run` 释放的资源，除非自管。
 
@@ -177,7 +177,7 @@ handleToolCalls ──                                                    [loop_
 
 - **必须有标准库测试**，覆盖：error 契约（终止/哨兵/补占位）、`StepOutput` 各字段组合、幂等性。
 - **注入测试替身**：`Summarize` 回调注入假摘要（`ContextBudget.Summarize`）测压缩分支，无需真实 LLM；`BeforeLLM`/`ShapeToolResult` 用假 `StepInput`/`ToolResult` 单测。
-- **`-race` 必跑**：闭包共享状态（如 `ContextBudget.Force`、`toolOutputStore`）经 `go test -race` 验证单 Run 内顺序安全；跨 Run 复用须新建实例。
+- **`-race` 必跑**：闭包捕获的状态（如 `toolOutputStore`）经 `go test -race` 验证单 Run 内顺序安全；`NewCompaction` 已无共享可变状态（`Force` 局部化），多 Run 并发复用安全。
 - 钩子 panic 自保逻辑应有专门用例（注入会 panic 的输入验证钩子不崩进程）。
 
 ## 9. 新增钩子集成 checklist

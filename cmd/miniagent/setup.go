@@ -164,22 +164,22 @@ func httpTimeoutOf(resolved *miniagent.Resolved) time.Duration {
 }
 
 func maxReadFileBytesOf(resolved *miniagent.Resolved) int {
-	if resolved.Run.MaxReadFileBytes != nil {
-		return *resolved.Run.MaxReadFileBytes
+	if resolved.RunConfig.MaxReadFileBytes != nil {
+		return *resolved.RunConfig.MaxReadFileBytes
 	}
 	return 0
 }
 
 func maxShellOutputCharsOf(resolved *miniagent.Resolved) int {
-	if resolved.Run.MaxShellOutputChars != nil {
-		return *resolved.Run.MaxShellOutputChars
+	if resolved.RunConfig.MaxShellOutputChars != nil {
+		return *resolved.RunConfig.MaxShellOutputChars
 	}
 	return 0
 }
 
 func maxSessionBytesOf(resolved *miniagent.Resolved) int {
-	if resolved.Run.MaxSessionBytes != nil {
-		return *resolved.Run.MaxSessionBytes
+	if resolved.RunConfig.MaxSessionBytes != nil {
+		return *resolved.RunConfig.MaxSessionBytes
 	}
 	return 0
 }

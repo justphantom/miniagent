@@ -109,12 +109,12 @@ func TestResolve_StrategyConstants(t *testing.T) {
 		got  *int
 		want int
 	}{
-		{"MaxToolResultChars", r.Run.MaxToolResultChars, 1234},
-		{"MaxFileResultChars", r.Run.MaxFileResultChars, 9999},
-		{"MaxParallelTools", r.Run.MaxParallelTools, 3},
-		{"ContextKeepRecent", r.Run.ContextKeepRecent, 8},
-		{"SummaryMaxChars", r.Run.SummaryMaxChars, 1500},
-		{"ContextKeepReasoning", r.Run.ContextKeepReasoning, 2},
+		{"MaxToolResultChars", r.RunConfig.MaxToolResultChars, 1234},
+		{"MaxFileResultChars", r.RunConfig.MaxFileResultChars, 9999},
+		{"MaxParallelTools", r.RunConfig.MaxParallelTools, 3},
+		{"ContextKeepRecent", r.RunConfig.ContextKeepRecent, 8},
+		{"SummaryMaxChars", r.RunConfig.SummaryMaxChars, 1500},
+		{"ContextKeepReasoning", r.RunConfig.ContextKeepReasoning, 2},
 	}
 	for _, c := range checks {
 		if c.got == nil || *c.got != c.want {
@@ -159,9 +159,9 @@ func TestResolve_StrategyConstantsLateWired(t *testing.T) {
 		got  *int
 		want int
 	}{
-		{"SummaryMaxTokens", r.Run.SummaryMaxTokens, 512},
-		{"GrepMaxMatches", r.Run.GrepMaxMatches, 500},
-		{"ContextTrimToolChars", r.Run.ContextTrimToolChars, 1234},
+		{"SummaryMaxTokens", r.RunConfig.SummaryMaxTokens, 512},
+		{"GrepMaxMatches", r.RunConfig.GrepMaxMatches, 500},
+		{"ContextTrimToolChars", r.RunConfig.ContextTrimToolChars, 1234},
 	} {
 		if c.got == nil || *c.got != c.want {
 			t.Errorf("%s = %v, want %d", c.name, c.got, c.want)

@@ -33,19 +33,7 @@ func WriteFileTool(workspaceRoot string, timeout time.Duration) Tool {
 			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},
 		}, "path", "content"),
 		Call: func(ctx context.Context, args string) ToolResult {
-			if err := ctx.Err(); err != nil {
-				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
-			}
-			runCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			done := make(chan ToolResult, 1)
-			go func() { done <- runWriteFile(workspaceRoot, args) }()
-			select {
-			case r := <-done:
-				return r
-			case <-runCtx.Done():
-				return ToolResult{IsError: true, Output: "写入超时或已取消：" + runCtx.Err().Error()}
-			}
+			return runWithTimeout(ctx, timeout, "写入", func() ToolResult { return runWriteFile(workspaceRoot, args) })
 		},
 	}
 }

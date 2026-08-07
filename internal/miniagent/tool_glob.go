@@ -39,19 +39,7 @@ func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) T
 		}, "pattern"),
 		ResultLimit: maxToolResultInHistory,
 		Call: func(ctx context.Context, args string) ToolResult {
-			if err := ctx.Err(); err != nil {
-				return ToolResult{IsError: true, Output: "已取消：" + err.Error()}
-			}
-			runCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			done := make(chan ToolResult, 1)
-			go func() { done <- runGlob(workspaceRoot, args, maxOutputChars) }()
-			select {
-			case r := <-done:
-				return r
-			case <-runCtx.Done():
-				return ToolResult{IsError: true, Output: "列举超时或已取消：" + runCtx.Err().Error()}
-			}
+			return runWithTimeout(ctx, timeout, "列举", func() ToolResult { return runGlob(workspaceRoot, args, maxOutputChars) })
 		},
 	}
 }

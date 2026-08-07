@@ -70,7 +70,7 @@ type ContextBudget struct {
 //   - usage：摘要调用的 token 用量（Run 累加进 total，MaxTotalTokens 预算含摘要调用）；
 //   - err：即使有损裁剪后仍超 window 时返回，Run 应终止避免循环烧请求。
 //
-// 不触碰 newMsgs——持久化层的 summary 插入/去重由 Run 用返回的 summary 完成（见 insertSummaryIntoNewMsgs）。
+// 不触碰 newMsgs——持久化层的 summary 插入/去重由 Run 经 mergePersisted 完成（loop.go:216）。
 func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBudget, logger *slog.Logger) (out []miniagent.Message, summary miniagent.Message, summarized bool, usage miniagent.Usage, err error) {
 	keepReasoning := budget.KeepReasoning
 	if keepReasoning <= 0 {
@@ -192,10 +192,9 @@ func estimateRoundTokens(round []miniagent.Message) int {
 	return miniagent.EstimateTokens(round, "", nil) - miniagent.SystemOverheadTokens
 }
 
-// insertSummaryIntoNewMsgs 剔除 newMsgs 中已有的 miniagent.KindSummary（单轮多次压缩去重——上一次写进
-// newMsgs 的旧 summary 其对应中段已被本次新 summary 覆盖），再把 summary 前插使其排在
-// user_prompt 之前（跨轮 barrier 命中最新 summary，否则本轮 user_prompt 会被一并屏障，使
-// 「保留最近 N 轮」跨轮失效，审查 P1-1/P2）。
+// insertSummaryIntoNewMsgs 剔除 newMsgs 中已有的 miniagent.KindSummary（单轮多次压缩去重），再把 summary
+// 前插使其排在 user_prompt 之前（跨轮 barrier 命中最新 summary）。生产路径用更通用的 mergePersisted
+// （loop.go，处理任意带 Kind 的持久化条目）；此函数是单 KindSummary 特化，留供 compaction 端到端测试构造 newMsgs。
 func insertSummaryIntoNewMsgs(newMsgs *[]miniagent.Message, summary miniagent.Message) {
 	filtered := make([]miniagent.Message, 0, len(*newMsgs)+1)
 	for _, m := range *newMsgs {

@@ -89,10 +89,11 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			return Result{}, false, nil
 		}
 		if len(resp2.ToolCalls) != 0 {
-			// 回落：模型仍要调工具，但已撞上限不再执行。这次调用 token 仍消耗，记账与主路径对齐
-			// （主路径 tool_calls 也累加 usage），但不执行工具、回落 finishMaxIterations。
-			total.InputTokens += resp2.Usage.InputTokens
-			total.OutputTokens += resp2.Usage.OutputTokens
+			// 回落：模型仍要调工具，但已撞上限不再执行。这次调用 token 仍消耗——经 recordStepUsage
+			// 累加并过 OnBudget 熔断（与主路径对齐），避免退化路径绕过预算判定静默越 MaxTotalTokens。
+			if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
+				return Result{Steps: s + 1}, true, berr
+			}
 			return Result{}, false, nil
 		}
 		appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
@@ -189,12 +190,13 @@ func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsg
 		return nil, err
 	}
 	toSend := out.View
-	if toSend == nil {
+	if len(toSend) == 0 {
+		// nil 或空切片都回落 *msgs：Commit=true 时空 View（含 []Message{}）会静默清空 transcript，
+		// 核心不强制 View 必填，故在此兜底（合法压缩至少留最近轮 + user prompt，空 View 必为误用）。
 		toSend = *msgs
 	}
 	if out.Commit {
-		// 压缩场景：收缩后的 View 即新的运行 transcript。用 toSend（已 nil 补救）而非裸 View——
-		// 防 StepOutput{Commit:true, View:nil} 误用静默清空 transcript（View 文档必填，但核心不强制）。
+		// 压缩场景：收缩后的 View 即新的运行 transcript（已 len 补救，不会清空）。
 		*msgs = toSend
 	}
 	if len(out.Persist) > 0 {
