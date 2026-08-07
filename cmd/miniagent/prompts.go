@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 )
 
 // defaultSystemPrompt 是面向工程代码开发的默认系统提示词：约束 ReAct 工作流
@@ -44,8 +45,14 @@ func injectSubagentGuidance(system, configAbsPath, mode string) string {
 
 // subagentGuidance 构造 fork 命令模板与递归约束文案。mode 透传父会话权限模式
 // （审查 v3 P3）：默认 default，父 auto 时 subagent 命令用 -mode auto。
+// shellSingleQuote 单引号包裹 s 并转义内部单引号，使含空格/元字符的 config 路径（如 macOS
+// /Users/First Last/.miniagent/miniagent.json）安全作为 subagent 引导命令的参数。
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func subagentGuidance(configAbsPath, mode string) string {
 	return fmt.Sprintf(`- 子任务委派：可并行的子任务用 shell 再调一次 miniagent（仅在必要时 fork，建议嵌套≤2 层）：
   echo "<子任务>" | miniagent -config %s -workdir . -mode %s -result-only
-  subagent 为无状态单次调用（不落盘会话）；stdout 纯文本即结果。`, configAbsPath, mode)
+  subagent 为无状态单次调用（不落盘会话）；stdout 纯文本即结果。`, shellSingleQuote(configAbsPath), mode)
 }

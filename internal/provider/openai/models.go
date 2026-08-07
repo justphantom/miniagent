@@ -74,10 +74,12 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		// 排空 body 供连接 keepalive 复用（重试可能复用同一连接）；不回显响应体——恶意/调试代理可能在
-		// 错误体回显 URL/Authorization，error 经 -list-models stdout 泄漏 key（与 doOnce 一致，仅回显状态码）。
+		// 排空 body 供连接 keepalive 复用（重试可能复用同一连接）；封顶 maxModelsBodyBytes 防
+		// 恶意/异常端点慢 trickle 把每次重试拖到 client timeout（与 200 路径的 LimitReader 对齐）。
+		// 不回显响应体——恶意/调试代理可能在错误体回显 URL/Authorization，error 经 -list-models stdout 泄漏 key
+		//（与 doOnce 一致，仅回显状态码）。
 		retryAfter := parseRetryAfter(resp.Header)
-		if _, readErr := io.Copy(io.Discard, resp.Body); readErr != nil {
+		if _, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, maxModelsBodyBytes+1)); readErr != nil {
 			return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d: read body: %w", resp.StatusCode, readErr)
 		}
 		return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d", resp.StatusCode)

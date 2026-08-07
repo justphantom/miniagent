@@ -5,7 +5,23 @@ import (
 	"testing"
 )
 
-// defaultSystemPrompt 须覆盖代码向工作流的关键约束，防回归误删。
+// shellSingleQuote 须把含空格的路径单引号包裹（防 shell 词法拆断 subagent fork 命令），并转义内嵌单引号。
+func TestShellSingleQuote(t *testing.T) {
+	cases := map[string]string{
+		"/abs/miniagent.json":      `'/abs/miniagent.json'`,
+		"/Users/First Last/x.json": `'/Users/First Last/x.json'`,
+		`/a/b's/c.json`:            `'/a/b'\''s/c.json'`,
+	}
+	for in, want := range cases {
+		if got := shellSingleQuote(in); got != want {
+			t.Errorf("shellSingleQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// 含空格的路径经 subagentGuidance 后须被引号包裹（L3-3）。
+	if got := subagentGuidance("/Users/First Last/x.json", "default"); !strings.Contains(got, "-config '/Users/First Last/x.json'") {
+		t.Errorf("含空格的 config 路径未被引用: %s", got)
+	}
+}
 func TestDefaultSystemPrompt_CoversWorkflow(t *testing.T) {
 	for _, want := range []string{"read", "grep", "shell", "edit", "replace_all", "验证", "测试"} {
 		if !strings.Contains(defaultSystemPrompt, want) {

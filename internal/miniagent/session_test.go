@@ -164,3 +164,27 @@ func TestLoadSession_LargeSingleLineOK(t *testing.T) {
 		t.Errorf("大单行 round-trip 不一致: %+v", msgs)
 	}
 }
+
+// H3-1：崩溃半写残留的尾行（无换行结尾）经 AppendMessages 必须被截断，否则 O_APPEND 盲写把新消息
+// 拼到残行上，下次 LoadSession 把合并后的非法行容忍为尾行而丢失新消息（再下一次即中段损坏永久失败）。
+func TestAppendMessages_HealsPartialTrailingLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// 合法行 + 无换行结尾的半行（模拟崩溃中断的 append，末行无 \n）。
+	content := "{\"type\":\"session\",\"id\":\"s\"}\n" +
+		"{\"type\":\"message\",\"role\":\"user\",\"content\":\"ok\"}\n" +
+		"{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"half"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "after"}}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	_, msgs, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession after heal: %v", err)
+	}
+	// 半行 "half" 被截断；保留 ok + 新 after。未修时残行与 after 合并成非法行被容忍为尾行，msgs 仅 [ok]。
+	if len(msgs) != 2 || msgs[0].Content != "ok" || msgs[1].Content != "after" {
+		t.Errorf("heal 后消息 = %+v，want [ok, after]（残行截断、新消息保留）", msgs)
+	}
+}

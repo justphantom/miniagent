@@ -142,7 +142,8 @@ type grepMatch struct {
 }
 
 // grepWalk 遍历 root，对每个文本文件逐行匹配。不可访问的子树/文件跳过而非整体
-// 失败（部分可读仍有益）。跳过 .git、符号链接（防递归误入）。
+// 失败（部分可读仍有益）。跳过 .git、符号链接（防递归误入）、非 regular 文件（FIFO/设备/socket：
+// os.Open 会阻塞，与 read/edit 的 IsRegular 守卫一致）。
 func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(string) bool, maxMatches int) ([]grepMatch, bool, error) {
 	var matches []grepMatch
 	truncated := false
@@ -160,6 +161,11 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 			return nil
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		// FIFO/设备/socket：os.Open 会阻塞（无写者 FIFO 永久卡至 fileOpTimeout 且泄漏 OS 线程），与
+		// read/edit 的 IsRegular 守卫一致跳过。
+		if !d.Type().IsRegular() {
 			return nil
 		}
 		if globFn != nil && !globFn(d.Name()) {

@@ -48,9 +48,10 @@ func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 // lockSession 对 session 文件加排他 advisory 锁。LOCK_EX|LOCK_NB 非阻塞 + 短轮询：
 // 持锁进程挂死时不会让本进程永久阻塞（审查 P2 flock 阻塞），5s 内 100ms 一次容忍跨进程
 // 瞬时竞争，超时返回明确 error 让 AppendMessages/RewriteMessages 处理。用 deadline 判定
-// （非固定 retry 次数）避免 time.Sleep 粒度累积致实际远超 5s。flock 是 inode 级 advisory
-// lock，跨进程互斥；同进程内不互斥（POSIX 语义，单进程多 goroutine 并发写仍靠 O_APPEND
-// 单次 write 原子性兜底，不依赖此锁）。
+// （非固定 retry 次数）避免 time.Sleep 粒度累积致实际远超 5s。flock 是 inode 级 advisory lock，
+// 绑定 open file description 而非进程：跨进程互斥，同进程内两个独立 open() 的 fd 也互斥
+// （区别于 POSIX fcntl 的进程级语义）。CLI 的 session 落盘是顺序单写者、无同进程并发，故此
+// 互斥性不影响正常路径；Windows 用 LockFileEx 字节区间锁、同进程内不互斥（见 platform_windows.go）。
 func lockSession(f *os.File) error {
 	deadline := time.Now().Add(lockSessionTotal)
 	for time.Now().Before(deadline) {

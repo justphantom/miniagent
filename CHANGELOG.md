@@ -61,7 +61,7 @@
 - **`-session` 重构为仅接续已有会话**：改为纯 id 校验（仅允许字母/数字/`-`，禁路径与扩展名注入），文件须已存在、不存在则报错退出；新增 **`-save-session`** 新建会话并落盘（id 内部生成，stderr 打印供接续），二者互斥。移除 `-session` 的路径双语义与「文件不存在则新建」行为；`CLIOverrides` 去掉 Session 透传；subagent fork 改无状态（不再落盘会话、不再注入父 session id）（`4cdc55e`）。
 
 ### Added
-- **`codemap` 工具**：递归输出带缩进层级的目录树概览（目录标注子条目数），填补 glob 扁平列举与 read 单文件之间的结构感知缺口。参数 `path`（默认 workdir）+ `depth`（默认 3，<=0 不限）；条目上限 500，排除 `.git` 与符号链接，default 模式经 confineWrap 限定 workdir 子树。
+- **`codemap` 工具**：递归输出带缩进层级的目录树概览（目录标注子条目数），填补 glob 扁平列举与 read 单文件之间的结构感知缺口。参数 `path`（默认 workdir）+ `depth`（默认 3，0 同义；<0 不限）；条目上限 500，排除 `.git` 与符号链接，default 模式经 confineWrap 限定 workdir 子树。
 - **跨消息去重/折叠（P6/P8'/P9b/P11）**：保留窗口（最近 N 条 assistant）外——同 `(path,offset)` 的 read 结果按时间序最后一次保留、更早压占位（P6）；被更晚同 path 成功 write/edit 取代的 write/edit args 整条折叠为 path+占位（P8'，成功判定依赖 tool 消息新增的 `IsError` 回填，仅用于持久化与判定、不泄漏给 LLM）；规范化同义 shell command 去重（P9b）；同 path 存在更晚成功写入的 stale read 结果折叠（P11，补「edit 后未再 read」盲区）。均仅改 context 侧拷贝，不动 session 持久化与 tool_calls/tool 配对（`825e224`、`9b596b6`）。
 - **主动压缩 stale write/edit args（P4）**：非最近 N 条 assistant 的 write/edit 大 Args（content/old_string/new_string，写成功后已落盘纯占位）在 context 侧压为前缀+省略标记，保留 path（`5b49ea2`）。
 - **主动清理 stale reasoning（P1）+ 保留窗口超长 reasoning 中段截断（P7）**：非最近 N 条 assistant 的 Reasoning 主动清空（思考模型 reasoning 常达正文数倍，每轮原样回灌是隐性 token 大户）；保留窗口内单条超 `run.context_keep_reasoning_chars`（默认 4000 rune，0=默认/负数=关闭）的做头 1/4 + 尾 3/4 分段截断（`a26c88e`、`5ec990c`）。

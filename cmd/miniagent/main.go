@@ -225,7 +225,9 @@ func assembleHooks(
 }
 
 // loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig（循环本体 + 策略载体字段；
-// 压缩策略经 NewCompaction 外挂，其余策略经 NewDefault* 钩子工厂外挂，核心 Run 零策略）。System 空回落默认 prompt。
+// 压缩策略经 NewCompaction 外挂，其余策略经 NewDefault* 钩子工厂外挂，核心 Run 零策略）。
+// 生产路径下 resolved.System 经 assembleSystemPrompt（main.go:126）保证非空，下面的空串兜底仅对
+// 直接构造 loopCfg 的测试有意义（防漏传 System 致空 prompt）。
 func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
 	system := resolved.System
 	if system == "" {

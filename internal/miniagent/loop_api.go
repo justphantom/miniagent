@@ -80,11 +80,11 @@ type LoopHooks struct {
 	// OnToolResult 工具执行后通知，透传 ToolResult（含 ExitCode / IsError）。同一步内多个 tool_call 并行执行，
 	// 本回调在全部完成后按 tool_call 顺序串行通知——非「每工具完成即通知」，实时性受最慢工具制约。
 	OnToolResult func(name, callID string, r ToolResult) error
-	// ShapeToolResult 工具执行后、结果入历史前触发，返回该 tool 消息的 content。返回空串=核心用
-	// 内置默认成型（trimForHistory 截断 + 可选落盘）。返回 error 沿链上抛终止循环（下游管道关闭时），
-	// 核心按 OnToolResult 同款路径为剩余 calls 补占位 tool 消息保配对。仅改 content，不可改 role/
-	// tool_call_id——配对不变量由核心保证。nil=内置默认成型。工具结果成型（截断/落盘/RAG 摘要等）
-	// 经此钩子外挂，核心不内置特定成型策略。
+	// ShapeToolResult 工具执行后、结果入历史前触发，返回该 tool 消息的 content。返回空串=核心透传
+	// 原始 Output（零成型）；返回非空串=核心用其覆盖 content。返回 error 沿链上抛终止循环（下游管道
+	// 关闭时），核心按 OnToolResult 同款路径为剩余 calls 补占位 tool 消息保配对。仅改 content，不可改
+	// role/tool_call_id——配对不变量由核心保证。nil=核心透传原文（极简模式）；默认成型（trimForHistory
+	// 截断 + 可选落盘）由 NewDefaultShapeToolResult 承载、cmd 层组装时挂载，核心不内置特定成型策略。
 	ShapeToolResult func(name, callID string, step int, r ToolResult) (string, error)
 	// OnDelta LLM 流式增量；非流式模式不触发。返回 error 会中止流——经 callLLMOnce 上抛到 Run 终止循环
 	// （非 ErrThinkingUnsupported，不触发降级）。下游管道关闭时用此提前终止，避免继续烧 token。

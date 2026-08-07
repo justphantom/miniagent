@@ -168,3 +168,42 @@ func TestRun_CtxCancelledDuringToolReturns(t *testing.T) {
 		t.Fatal("Run 未在 ctx 取消后及时返回（wg.Wait 挂死？）")
 	}
 }
+
+// M3-4：末轮（step==iterLimit）工具执行期间 ctx 取消——工具返「已取消」（非 error）→ handleToolCalls
+// 返 nil → summarizeAtLimit 用已取消 ctx 失败返 ok=false → 循环退出。循环末尾须有 ctx 守卫，否则取消
+// 被吞为 finishMaxIterations + nil（退出码 0 非 130）。MaxIterations=1 使任一工具期取消都命中末轮。
+func TestRun_CtxCancelledAtIterationLimitReturnsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	tool := Tool{
+		Name: "block",
+		Call: func(c context.Context, _ string) ToolResult {
+			close(started)
+			<-c.Done()
+			return ToolResult{IsError: true, Output: "已取消"}
+		},
+	}
+	tr := &fakeTransport{responses: []string{
+		toolResponse(ToolCall{ID: "1", Name: "block", Args: "{}"}),
+	}}
+	llm := testClients(tr)
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}, "x", LoopHooks{}, nil)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("工具未启动")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled（末轮取消须及时返回，非吞为 max_iterations）", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run 未在 ctx 取消后及时返回")
+	}
+}

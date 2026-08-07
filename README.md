@@ -136,7 +136,7 @@ make test       # go test -race ./...
 | `text_delta` / `reasoning_delta` | 流式模式（`-stream`）下 LLM 输出增量 | `step`, `text` |
 | `tool_use` | 每次 LLM 请求工具调用（工具执行前） | `name`, `input` |
 | `tool_result` | 每次工具执行后 | `name`, `call_id`, `output`(截断), `truncated`, `is_error`, `exit_code`(仅 shell) |
-| `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps` |
+| `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `finish` |
 | `error` | 主流程失败，**终态** | `message` |
 
 工具完整结果经 `trimForHistory` 裁剪后写入历史回灌 LLM；概要（截断到 `maxToolResultEventChars`）经 `tool_result` 事件输出到 stdout 供消费方观察。
@@ -198,7 +198,7 @@ make test       # go test -race ./...
 | `offset` | int | 否 | 起始行（1-based），默认 1 |
 | `limit` | int | 否 | 最多返回行数，默认全部，上限 10000 |
 
-约束：单文件最大 80000 字节（超出部分丢弃），输出超过 20000 字符截断。拒绝读取符号链接、目录、非 regular 文件（FIFO/设备/socket）、二进制内容（含 NUL 字节）。`offset` 超出文件行数返回 IsError。
+约束：单文件最大 1 MiB（超出部分丢弃），输出超过 262144 字符截断。拒绝读取符号链接、目录、非 regular 文件（FIFO/设备/socket）、二进制内容（含 NUL 字节）。`offset` 超出文件行数返回 IsError。
 
 ### `write`
 
@@ -235,7 +235,7 @@ make test       # go test -race ./...
 | `path` | string | 否 | 搜索根目录，默认 `-workdir` |
 | `glob` | string | 否 | 文件名 include 过滤（filepath.Match，如 `*.go`） |
 
-约束：命中行上限 200、输出超 20000 字符截断；操作超时 30s。
+约束：命中行上限 500、输出超 100000 字符截断；操作超时 30s。跳过 `.git`、符号链接、二进制与非 regular 文件（FIFO/设备/socket）。
 
 ### `glob`
 
@@ -255,7 +255,7 @@ make test       # go test -race ./...
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
 | `path` | string | 否 | 根目录，默认 `-workdir` |
-| `depth` | integer | 否 | 最大递归深度，默认 3；<=0 不限 |
+| `depth` | integer | 否 | 最大递归深度，默认 3（缺省/0 同义）；<0 不限 |
 
 约束：条目上限 500 条（超限尾部标注截断提示）；操作超时 30s。
 
@@ -268,8 +268,8 @@ make test       # go test -race ./...
 | `command` | string | 是 | shell 命令 |
 
 约束：
-- 命令超时 60 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
-- 输出超过 20000 字符截断
+- 命令超时 120 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
+- 输出超过 100000 字符截断
 - 退出码：成功 `ExitCode=0`；命令非 0 退出 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；超时/启动失败 `IsError=true` + `ExitCode=-1`（`exitCodeNotSet`）。LLM 据 `ExitCode` 判命令成败
 - 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；另剥离变量名（大写后）含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT）的第三方凭证变量（PAT 排除含 PATH 的路径类变量如 `PATH`/`GITHUB_PATH`）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
@@ -289,7 +289,7 @@ make test       # go test -race ./...
 - **并发**：同一 session 文件同一时刻仅单写者。append 经 `flock`（Windows 用字节区间锁）跨进程互斥，但 rename 换 inode 场景（机会性 rewrite）下跨进程并发不保证；多进程同写同一 session 应避免。
 - **信号保护**：`AppendMessages`/`RewriteMessages` 执行期间临时忽略 `SIGINT`/`SIGTERM`，写完后恢复，避免 session 文件在半写状态被截断。
 - **摘要压缩**（config `run.context_window > 0`）：Run 入口先用 `applyCompactionBarrier` 屏障掉最新 `kind=summary` 之前的旧历史（仍留 session 文件）；loop 每步前用 `FitHistory` 估算超 window 80% 时，把中段摘要为单条 `kind=summary` 消息（既进 context 又 append 落盘）。摘要失败/无中段回落有损 `compactHistory`，仍超则裁到最近轮，再超则报错终止（避免循环烧请求）。
-- 文件损坏（非法 JSON 行、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 4 MiB 上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
+- 文件损坏（非法 JSON 行、未知 role、tool 消息缺 `tool_call_id`、tool_calls/tool 配对断裂、超过 50 MiB 上限）→ stderr 报错 + 退出码 1，不静默丢弃历史。
 - **信任假设**：session 文件内容原样进入 LLM 上下文，属于可信输入（与 system prompt 同级）；能写该文件的进程即可注入指令。
 - 思考内容（reasoning）：wire 解析响应里的 `reasoning_content` / `reasoning`（双兼容），随 assistant 消息进入上下文并以 `reasoning_content` 回灌；**随 session 落盘**（与 content 同级）。
 - 多轮接续：首轮 `-save-session`（从 stdout 首条 `session` 事件的 `id` 字段取生成的 id），后续轮 `-session <id>`；每次调用 stdin 的全部内容作为一个 turn 的完整 prompt。
@@ -315,7 +315,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 ## 内部约束（常量）
 
-下列前 5 项可经 `config` 的 `run.*` 覆盖（S4 策略化，`<=0` 或缺省用内置默认）：
+下列带「config 覆盖键」的项可经 `config` 的 `run.*` 覆盖（策略化，`<=0` 或缺省用内置默认）：
 
 | 常量 | 值 | config 覆盖键 | 含义 |
 |------|----|------|------|
@@ -323,8 +323,8 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `maxParallelTools` | 8 | `run.max_parallel_tools` | 单步内并行工具并发上限 |
 | `maxToolResultInHistory` | 4000 | `run.max_tool_result_chars` | tool 结果进入历史消息的默认字符数（shell/grep/glob） |
 | `maxFileResultInHistory` | 8000 | `run.max_file_result_chars` | read/edit 结果进入历史消息的字符数（代码内容，截断丢准确性） |
-| `contextTrimToolChars` | 1000 | — | context 超限降级时把 tool 结果压到的字符数 |
-| `contextKeepRecent` | 6 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
+| `contextTrimToolChars` | 2000 | `run.context_trim_tool_chars` | context 超限降级时把 tool 结果压到的字符数 |
+| `contextKeepRecent` | 4 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
 | `summaryMaxChars` | 5000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
 | `maxGrepMatches` / `maxGlobEntries` | 500 / 500 | grep 命中行 / glob 命中条数上限 |
 | `maxReadFileBytes` / `maxReadFileChars` | 1MiB / 262144 | 读文件字节 / 输出字符上限 |

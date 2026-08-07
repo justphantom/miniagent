@@ -37,22 +37,6 @@ type sessionLine struct {
 	Message
 }
 
-// ValidateSessionID 白名单校验 id：仅允许拉丁字母、数字、连字符。禁路径分隔符/点/空格等，
-// 使 id 只作文件名主体（.jsonl 扩展名由 ResolveSessionPath 补），杜绝路径穿越与扩展名注入。
-func ValidateSessionID(id string) error {
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '-':
-		default:
-			return fmt.Errorf("session id %q 含非法字符 %q（仅允许拉丁字母、数字、-）", id, r)
-		}
-	}
-	return nil
-}
-
 // ResolveSessionPath 校验 id（白名单）后拼 {dir}/{id}.jsonl。仅解析路径，不判文件存在性——
 // 新建（-save-session）与接续（-session）的存在性语义由调用方裁决（resolveSessionForRun）。
 func ResolveSessionPath(arg, dir string) (string, error) {
@@ -149,49 +133,10 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []Message, error) {
 	return meta, msgs, nil
 }
 
-func validateSessionMessage(m Message) error {
-	switch m.Role {
-	case RoleUser, RoleAssistant:
-		return nil
-	case RoleTool:
-		if m.ToolCallID == "" {
-			return errors.New("tool 消息缺少 tool_call_id")
-		}
-		return nil
-	default:
-		return fmt.Errorf("未知 role %q", m.Role)
-	}
-}
-
-// validateToolPairing 校验 assistant.tool_calls 与 tool 消息一一配对；断裂会被端点 400，提前拦截指明位置。
-func ValidateToolPairing(msgs []Message) error {
-	pending := map[string]bool{}
-	for i, m := range msgs {
-		switch m.Role {
-		case RoleAssistant:
-			for _, tc := range m.ToolCalls {
-				if pending[tc.ID] {
-					return fmt.Errorf("第 %d 条：tool_call id %q 重复", i+1, tc.ID)
-				}
-				pending[tc.ID] = true
-			}
-		case RoleTool:
-			if !pending[m.ToolCallID] {
-				return fmt.Errorf("第 %d 条：tool 消息的 tool_call_id %q 没有对应的 assistant tool_call", i+1, m.ToolCallID)
-			}
-			delete(pending, m.ToolCallID)
-		}
-	}
-	if len(pending) > 0 {
-		return fmt.Errorf("%d 个 assistant tool_call 缺少对应 tool 结果", len(pending))
-	}
-	return nil
-}
-
 // AppendMessages append-only 追加 msgs 到 jsonl（新建/空时先写 metadata 行）。写侧护栏：flock
-// 跨进程锁防行边界交织非法 JSON（P2-13）；预序列化按 info.Size()+待写 超限拒绝，避免写入成功
-// 延后失败到 LoadSession 致永久卡死（P1-4）。withSessionLock 统一 O_NOFOLLOW + MkdirAll 0o700 + flock（P3）。
-// opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
+// 跨进程锁防行边界交织非法 JSON（P2-13）；预序列化按 size+待写 超限拒绝，避免写入成功延后失败到
+// LoadSession 致永久卡死（P1-4）；写前 ensureTrailingNewline 截断崩溃半写残行（H3-1）。withSessionLock
+// 统一 O_NOFOLLOW + MkdirAll 0o700 + flock（P3）。opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落常量）。
 func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64) error {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
@@ -200,14 +145,21 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64
 	if len(msgs) == 0 {
 		return nil
 	}
-	return withSessionLock(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, func(f *os.File) error {
+	// O_RDWR：写前需读末字节检测并截断崩溃半写残留的尾部不完整行（ensureTrailingNewline）。
+	return withSessionLock(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, func(f *os.File) error {
 		info, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		// 截断崩溃半写残留的尾部不完整行：否则 O_APPEND 盲写把新消息拼到无换行结尾的残行上，
+		// 使原本被 LoadSession 末行容忍的残行在后续保存反噬为中段损坏（永久丢会话）。
+		size, err := ensureTrailingNewline(f, info.Size(), mb)
 		if err != nil {
 			return err
 		}
 		// 预序列化待写内容：既精确估算大小做写侧预判，又复用一次 marshal 避免重复劳动。
 		var buf bytes.Buffer
-		if info.Size() == 0 {
+		if size == 0 {
 			if meta.Type == "" {
 				meta.Type = sessionTypeSession
 			}
@@ -227,8 +179,8 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64
 			buf.Write(b)
 			buf.WriteByte('\n')
 		}
-		if info.Size()+int64(buf.Len()) > mb {
-			return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, info.Size()+int64(buf.Len()), mb)
+		if size+int64(buf.Len()) > mb {
+			return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, size+int64(buf.Len()), mb)
 		}
 		w := bufio.NewWriter(f)
 		if _, err := w.Write(buf.Bytes()); err != nil {
@@ -240,6 +192,38 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64
 		// Sync 落盘缩小「已写残行 + 未落盘」崩溃窗口（配合 LoadSession 尾行容忍）。
 		return f.Sync()
 	})
+}
+
+// ensureTrailingNewline 截断崩溃半写残留的尾部不完整行：O_APPEND 盲写会把新消息拼到无换行结尾的
+// 残行上、破坏行边界。快路径只读末字节；仅当文件不以 '\n' 结尾（罕见恢复场景）才回扫到最后一个
+// '\n' 并截断其后字节，返回截断后的文件大小供调用方判断是否需补写 metadata 头行。
+func ensureTrailingNewline(f *os.File, size, mb int64) (int64, error) {
+	if size == 0 {
+		return 0, nil
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], size-1); err != nil {
+		return size, err
+	}
+	if last[0] == '\n' {
+		return size, nil
+	}
+	// 残行无换行结尾：读现有内容（上限 mb）定位最后一个 '\n' 并截断其后字节。
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return size, err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, mb+1))
+	if err != nil {
+		return size, err
+	}
+	cutAt := int64(0)
+	if idx := bytes.LastIndexByte(data, '\n'); idx >= 0 {
+		cutAt = int64(idx) + 1
+	}
+	if err := f.Truncate(cutAt); err != nil {
+		return size, err
+	}
+	return cutAt, nil
 }
 
 // RewriteMessages 全量重写 session 文件（写临时文件 → os.Rename 原子替换）。仅 Run 成功且

@@ -140,6 +140,9 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 				var down2 bool
 				resp, down2, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
 				captureDowngrade(down2)
+				// 重试实际发的是收紧后的 msgs（recovered），刷新 toSend 使下游 recordStepUsage/OnBudget
+				// 的估算口径与实发一致（否则用收紧前 toSend 系统性高估、契约失真）。
+				toSend = msgs
 			}
 		}
 		if err != nil {
@@ -177,6 +180,12 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 				return res, err
 			}
 		}
+	}
+	// ctx 在末轮工具/总结期间被取消也会落到此分支：工具返「已取消」（非 error）→ handleToolCalls 返 nil →
+	// summarizeAtLimit 用已取消 ctx 失败返 ok=false → 循环退出。须显式检查 ctx，否则取消被吞为
+	// finishMaxIterations + nil error（退出码 0 非 130，违反「Run 须及时返回 Canceled」契约）。
+	if err := ctx.Err(); err != nil {
+		return Result{Steps: iterLimit}, err
 	}
 	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。Finish=finishMaxIterations 是终止信号。
 	return Result{Steps: iterLimit, Finish: finishMaxIterations}, nil

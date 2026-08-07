@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 )
 
 // 本文件承载 Run 核心原内置的三项策略的默认外挂实现，供 cmd 层组装 LoopHooks 时复用，
@@ -83,7 +84,7 @@ func NewDefaultShapeToolResult(tools []Tool, dir string, retention time.Duration
 			if effLimit <= 0 {
 				effLimit = maxToolResultInHistory
 			}
-			content = store.bound(step, callID, tres.Output, preview, len([]rune(tres.Output)) > effLimit)
+			content = store.bound(step, callID, tres.Output, preview, utf8.RuneCountInString(tres.Output) > effLimit)
 		}
 		return content, nil
 	}

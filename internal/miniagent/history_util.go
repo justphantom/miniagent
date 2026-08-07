@@ -2,18 +2,11 @@ package miniagent
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
-	"sync"
 	"unicode"
 
 	"github.com/justphantom/miniagent/internal/text"
 )
-
-// schemaTokensCache memoize schemaTokens：tools 在一次 Run 内不变（buildTools 构造一次），但 EstimateTokens
-// 在 applyContextStrips 的每阶段 strip 前后、FitHistory 门控等多处被调，每次重复 marshal 全部 schema。
-// 按 slice 身份（首元素地址+长度）缓存纯函数结果——同 slice 命中、不同 slice 不误共享（Tools 构造后不改）。
-var schemaTokensCache sync.Map
 
 // 以下 4 个 token 估算常量是核心 token 估算（EstimateTokens/schemaTokens）的参数，属核心；
 // 从 context.go 迁出以使压缩子包可整体外迁。SystemOverheadTokens 导出供压缩的 estimateRoundTokens 复用。
@@ -60,18 +53,13 @@ func EstimateTokens(msgs []Message, system string, tools []Tool) int {
 }
 
 // schemaTokens 按 tools 实际 JSON schema 体积估算固定 token 开销；序列化失败回落 flat 估算。
-// 结果按 slice 身份缓存（schemaTokensCache），同一 tools 切片重复调用零 marshal。
+// 不缓存：tools 是固定小集合（内置工具 + 脚本），marshal 开销可忽略；按 slice 指针身份缓存会在跨 Run
+// GC 地址复用时撞键（不同内容、同长度的 slice 复用同一首元素地址）返回陈旧值，得不偿失。
 func schemaTokens(tools []Tool) int {
 	if len(tools) == 0 {
 		return 0
 	}
-	key := fmt.Sprintf("%p:%d", tools, len(tools))
-	if v, ok := schemaTokensCache.Load(key); ok {
-		return v.(int)
-	}
-	val := schemaTokensCompute(tools)
-	schemaTokensCache.Store(key, val)
-	return val
+	return schemaTokensCompute(tools)
 }
 
 // schemaTokensCompute 是 schemaTokens 的未缓存实现。
