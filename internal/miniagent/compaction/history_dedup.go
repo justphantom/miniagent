@@ -15,11 +15,12 @@ import (
 // （最近 N 条 assistant 及其 tool 消息不动），与 stripStaleToolArgs 同窗口语义。
 // 裁剪触发条件统一为「同 key 更晚的出现已取代更早的」——更早的纯占位重发，压成占位零/低损失。
 
-// windowStartOf 返回从后往前第 keepN 条 assistant 的 index（保留窗口起点：该 index 及之后不动）。
-// keepN<=0 视作 0；assistant 不足 keepN 时返回 0（全部在窗口内，无可裁剪）。
+// windowStartOf 返回保留窗口起点 index：i < windowStart 视为窗口外（可 dedup/fold），i >= windowStart 窗口内（保留）。
+// keepN<=0 → len(msgs)（不保留任何 assistant = 全窗口外 = 全压，修正原返回 0 被解读为「全窗口内」的语义矛盾）；
+// keepN 条 assistant 存在 → 第 keepN 条（从后）的 index；assistant 不足 keepN → 0（全窗口内 = 全保留）。
 func windowStartOf(msgs []miniagent.Message, keepN int) int {
 	if keepN <= 0 {
-		return 0
+		return len(msgs)
 	}
 	seen := 0
 	for i := range slices.Backward(msgs) {

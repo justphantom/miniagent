@@ -118,6 +118,82 @@ func TestNewCompaction_ScalesSummaryMaxCharsByWindow(t *testing.T) {
 	}
 }
 
+// compactWithSummary 摘要前对 middle 全压 strip：捕获 Summarize 收到的 middle，断言 reasoning 已清 + read 已 dedup + 配对完整。
+func TestCompactWithSummary_StripsMiddleBeforeSummarize(t *testing.T) {
+	var captured []miniagent.Message
+	budget := ContextBudget{
+		Model: "m",
+		Summarize: func(ctx context.Context, model, sys, prev string, middle []miniagent.Message) (string, miniagent.Usage, error) {
+			captured = middle
+			return "摘要", miniagent.Usage{}, nil
+		},
+	}
+	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "head 首轮"}}
+	for i := range 6 {
+		id := "c" + strconv.Itoa(i)
+		msgs = append(msgs, miniagent.Message{
+			Role:      miniagent.RoleAssistant,
+			Content:   "看文件",
+			Reasoning: strings.Repeat("思", 800),
+			ToolCalls: []miniagent.ToolCall{{ID: id, Name: "read", Args: `{"path":"/f.go","offset":1}`}},
+		})
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleTool, ToolCallID: id, Content: strings.Repeat("x", 800)})
+	}
+	for range 4 {
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "recent"})
+	}
+	out, _, _, err := compactWithSummary(context.Background(), budget, msgs, 4)
+	if err != nil {
+		t.Fatalf("compactWithSummary: %v", err)
+	}
+	for _, m := range captured {
+		if m.Role == miniagent.RoleAssistant && m.Reasoning != "" {
+			t.Errorf("middle 进摘要前 reasoning 应被全压清，仍存 %d 字", len([]rune(m.Reasoning)))
+		}
+	}
+	// dedup（P6）现生效（windowStartOf(0)=len 全窗口外）：6 条同 path/offset read 留时间序最后，前几个占位。
+	deduped := 0
+	for _, m := range captured {
+		if m.Role == miniagent.RoleTool && strings.Contains(m.Content, "已被更新的读取取代") {
+			deduped++
+		}
+	}
+	if deduped == 0 {
+		t.Errorf("期望同 path/offset read 被 dedup 占位，实际 captured tool 无占位")
+	}
+	// reasoning 清（~2400 token）+ read dedup（6→1）后体积应 < 1500。
+	capturedTokens := miniagent.EstimateTokens(captured, "", nil)
+	if capturedTokens > 1500 {
+		t.Errorf("middle strip 后摘要体积应 < 1500（reasoning 清 + read dedup），实际 %d", capturedTokens)
+	}
+	if err := miniagent.ValidateToolPairing(out); err != nil {
+		t.Errorf("strip 后配对断裂: %v", err)
+	}
+}
+
+// windowStartOf：keepN<=0 → len(msgs)（全窗口外=全压）；keepN 条 assistant 存在 → 第 keepN 条（从后）index；不足 → 0。
+func TestWindowStartOf(t *testing.T) {
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleUser},
+		{Role: miniagent.RoleAssistant},
+		{Role: miniagent.RoleUser},
+		{Role: miniagent.RoleAssistant},
+		{Role: miniagent.RoleUser},
+	} // assistant at 1,3；len=5
+	cases := []struct{ keepN, want int }{
+		{0, 5},  // 全窗口外（全压）
+		{-1, 5}, // 同上
+		{1, 3},  // 最近 1 条 assistant=index3
+		{2, 1},  // 最近 2 条=index1
+		{3, 0},  // 不足（仅 2 assistant）→ 0（全窗口内=全保留）
+	}
+	for _, c := range cases {
+		if got := windowStartOf(msgs, c.keepN); got != c.want {
+			t.Errorf("windowStartOf(keepN=%d)=%d, want %d", c.keepN, got, c.want)
+		}
+	}
+}
+
 // applyCompactionBarrier：有 summary → 返回最新 summary 及之后；无 → 原样。
 func TestApplyCompactionBarrier(t *testing.T) {
 	msgs := []miniagent.Message{

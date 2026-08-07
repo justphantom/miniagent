@@ -171,6 +171,12 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	if err := miniagent.ValidateToolPairing(middle); err != nil {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, fmt.Errorf("中段配对断裂，无法安全摘要：%w", err)
 	}
+	// 摘要前对 middle 全压 strip（keepN=0）：middle 全是待有损摘要的非近期对象，清冗余 reasoning / 折叠被取代的
+	// read / 压 write-edit args——省摘要 input token（实测 ~56%）+ 防 middle+summaryMaxTokens 超摘要模型 CW。
+	// applyContextStrips 只改字段不删消息、不动 ToolCallID，配对不变（上面 ValidateToolPairing 已通过）。
+	// logger=nil → dbg=false 直接 strip 零开销。UPDATE 旧 summary 走 prevSummary 不进 middle；override 并入的旧
+	// summary 是纯 user 消息，strip 不影响。
+	middle = applyContextStrips(ctx, middle, 0, 0, 0, nil, budget.System, budget.Tools)
 	compModel := budget.CompactionModel
 	if compModel == "" {
 		compModel = budget.Model
