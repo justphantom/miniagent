@@ -16,7 +16,7 @@
       "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       // models：静态模型列表；models_url 为空时 -list-models 直接返回该列表。
       "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"]
-      // openai 系的默认思考字段即 reasoning_effort（wire.go 自动注入），无需在此声明 thinking
+      // openai 系的默认思考字段即 reasoning_effort（wire 层自动注入），无需在此声明 thinking
       // 映射；显式写 field:"reasoning_effort" 反会被 validateConfig 当作误配拒绝。若需跨供应商
       // 字段映射（如 anthropic 用 thinking 字段），参考下方第二个 provider 的写法。
     },

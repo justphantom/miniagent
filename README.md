@@ -19,11 +19,15 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.
 | 钩子 | 触发点 | 用途 |
 |------|--------|------|
 | `BeforeLLM(StepInput) (StepOutput, error)` | 每步调 LLM 前 | 改写消息视图、压缩、注入记忆/RAG、提交持久化摘要、累加用量 |
-| `AfterLLM(step, resp) error` | 每步 LLM 响应后 | 用量记账、静默溢出判定 |
+| `AfterLLM(ctx, step, resp) error` | 每步 LLM 响应后 | 用量记账、静默溢出判定 |
+| `OnBudget(ctx, step, BudgetInput, *Usage) error` | 每步用量累计后 | 零 usage 本地估算 fallback + 预算熔断（nil=不估算不熔断，见 `NewDefaultOnBudget`） |
+| `OnLLMError(ctx, step, msgs, err) ([]Message, bool, error)` | LLM 调用失败时 | 失败恢复（典型：`ErrContextLength` 收紧历史重试一次；nil=error 直接上抛） |
 | `OnToolUse(name, input) error` | 工具执行前 | 审批/拒绝（返回 `ErrToolDenied` 仅拒该工具，不终止循环） |
 | `OnToolResult(name, callID, ToolResult) error` | 工具执行后 | 结果观察、事件下发 |
+| `ShapeToolResult(name, callID, step, ToolResult) (string, error)` | 结果入历史前 | 覆盖 tool 消息 content（截断/落盘/RAG 摘要；nil=内置默认成型） |
 | `OnDelta(step, kind, text) error` | 流式增量 | 实时输出 |
-| `OnBudget(step, total Usage) error` | 每步用量累计后 | 预算熔断判定（nil 回落内置 `MaxTotalTokens`） |
+
+> 钩子契约、错误语义、不变量、时序的权威描述见 [ARCHITECTURE.md §4–§5](./ARCHITECTURE.md) 与 [HOOKS.md](./HOOKS.md)（每条溯源到 `file:line`）。本表为速查。
 
 `StepOutput.View` 是发给 LLM 的消息；`Commit=true` 则同时替换运行 transcript（压缩语义）；`Persist` 追加到持久化增量；`ExtraUsage` 计入用量；`Compacted=true` 标记压缩（交互层据此 rewrite session）。
 
@@ -36,11 +40,11 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.
 ```go
 import "github.com/justphantom/miniagent/internal/miniagent/compaction"
 
-before, after := compaction.NewCompaction(compaction.CompactionOptions{
+before, _ := compaction.NewCompaction(compaction.CompactionOptions{
     Chat: chat, ContextWindow: 120000, Model: model, Auto: true, MaxTokens: maxTokens,
 })
-hooks := miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}
-result, err := miniagent.Run(ctx, chat, stream, cfg, prompt, hooks, logger)
+hooks := miniagent.LoopHooks{BeforeLLM: before} // 第二返回值 after 自 4.2.0 起=nil（溢出检测已并入 before）
+result, err := miniagent.Run(ctx, chat, cfg, prompt, hooks, logger)
 ```
 
 `compaction.NewCompaction` 封装摘要压缩引擎（超窗摘要中段 + 有损 fallback + 主动裁剪 + 静默溢出检测），是「压缩作为外挂」的默认实现，独立成 `internal/miniagent/compaction` 子包。**不挂它即得无压缩的极简 agent；想换压缩策略，实现自己的 `BeforeLLM` 即可，核心零改动。** CLI 默认装配 `compaction.NewCompaction`，故命令行行为不变。
