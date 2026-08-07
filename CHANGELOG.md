@@ -3,6 +3,11 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Fixed
+- **`summaryMaxTokens` 与 `summaryMaxChars` CJK 不一致修复**：原固定 `summaryMaxTokens=1024` 对 CJK 偏紧（1024 token≈1500 汉字，远低于 `summaryMaxChars=5000`），中文摘要被 `MaxTokens` 隐性截短到设计值约 30%；现默认从 `summaryMaxChars` 派生（`/2`，与 `EstimateTokens` 的 `CJK≈1token/2chars` 同口径），保证纯中文摘要填满字符上限不被 token 先截。新增纯函数 `deriveSummaryMaxTokens` 在 `NewCompaction` 装配时派生——只配 `summary_max_chars` 时 token 自动跟随，显式配 `summary_max_tokens` 仍可覆盖。（对应 `docs/codebase-third-evaluation.md` L3-5）
+
 ## [4.2.0] - 2026-08-06
 
 > 核心策略彻底外挂：用量估算+预算判定、LLM 失败恢复、工具结果成型+落盘从 `Run` 内联移到默认钩子工厂，`Run` 真正零策略（仅做工具注册 / 上下文拼接 / 调 LLM / 执行工具 / 无 tool_calls 退出五件事）。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 minor。

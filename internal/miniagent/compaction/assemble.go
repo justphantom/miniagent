@@ -111,6 +111,21 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 	return text.TruncateHeadTail(strings.TrimSpace(resp.Text), maxChars, "…[摘要已截断]"), resp.Usage, nil
 }
 
+// deriveSummaryMaxTokens 解析摘要输出 token 上限：configured>0 用用户显式值（覆盖，向后兼容自定义）；
+// 否则从 maxChars 派生 maxChars/2（CJK 最密口径，与 EstimateTokens 同源）——chars/2 恰是「纯 CJK 摘要
+// 填满 chars 上限」所需 token 上界，保证中文摘要不被 MaxTokens 先于 chars 截断（原固定 1024 偏紧）。
+// maxChars<2（含 <=0 防御）回落兜底常量 summaryMaxTokens。纯函数、易测；NewCompaction 装配时调用，
+// 使「只配 summary_max_chars」时 token 自动跟随、显式配 summary_max_tokens 仍可覆盖。
+func deriveSummaryMaxTokens(maxChars, configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	if maxChars < 2 {
+		return summaryMaxTokens
+	}
+	return maxChars / 2
+}
+
 // CompactingInput 是摘要现场快照，让外部 hook 决定是否注入/替换（§P2，镜像 opencode experimental.session.compacting）。
 type CompactingInput struct {
 	// SessionID 是本次摘要所属会话 id（经 CompactionOptions.SessionID 注入；cmd 层从 session meta.ID 透传）。空串兼容无 session 模式。
@@ -178,6 +193,9 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 	if maxChars <= 0 {
 		maxChars = summaryMaxChars
 	}
+	// summary_max_tokens 默认从 maxChars 派生（chars/2，CJK 最密口径）：仅配 summary_max_chars 时
+	// token 自动跟随，保证中文摘要不被 MaxTokens 先于 chars 截断；显式 >0 覆盖。
+	maxSummaryTokens := deriveSummaryMaxTokens(maxChars, opts.SummaryMaxTokens)
 	budget := ContextBudget{
 		ContextWindow:        opts.ContextWindow,
 		KeepRecent:           opts.KeepRecent,
@@ -197,7 +215,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 			if opts.Chat == nil {
 				return "", miniagent.Usage{}, errors.New("compaction: Chat 为 nil，无法摘要（须配置 CompactionOptions.Chat）")
 			}
-			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, maxChars, opts.SummaryMaxTokens, middle)
+			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, maxChars, maxSummaryTokens, middle)
 		},
 	}
 	before = func(ctx context.Context, in miniagent.StepInput) (miniagent.StepOutput, error) {

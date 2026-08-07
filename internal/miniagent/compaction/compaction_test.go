@@ -130,15 +130,62 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	}
 }
 
-// P3-1：摘要请求设置 MaxTokens=summaryMaxTokens。
+// P3-1：摘要请求设置 MaxTokens=summaryMaxTokens（默认从 summaryMaxChars 派生 = summaryMaxChars/2）。
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
-	if !strings.Contains(tr.lastBody, `"max_tokens":1024`) {
-		t.Errorf("摘要请求未设置 max_tokens=1024: %s", tr.lastBody)
+	// 引用常量而非魔法数：summaryMaxTokens 现派生自 summaryMaxChars/2，未来 chars 变化自动跟随。
+	if !strings.Contains(tr.lastBody, `"max_tokens":`+strconv.Itoa(summaryMaxTokens)) {
+		t.Errorf("摘要请求未设置 max_tokens=%d: %s", summaryMaxTokens, tr.lastBody)
+	}
+}
+
+// deriveSummaryMaxTokens：configured>0 覆盖；否则从 maxChars 派生（chars/2，CJK 最密口径）；maxChars<2 回落兜底常量。
+func TestDeriveSummaryMaxTokens(t *testing.T) {
+	cases := []struct {
+		maxChars, configured, want int
+	}{
+		{5000, 0, 2500},          // 默认派生（summaryMaxChars/2）
+		{5000, 512, 512},         // 用户显式覆盖
+		{8000, 0, 4000},          // 只配 chars → token 跟随
+		{0, 0, summaryMaxTokens}, // maxChars<=0 防御兜底
+		{1, 0, summaryMaxTokens}, // maxChars<2 兜底
+	}
+	for _, c := range cases {
+		if got := deriveSummaryMaxTokens(c.maxChars, c.configured); got != c.want {
+			t.Errorf("deriveSummaryMaxTokens(%d, %d) = %d, want %d", c.maxChars, c.configured, got, c.want)
+		}
+	}
+}
+
+// NewCompaction：只配 SummaryMaxChars（不配 token）→ 摘要请求 max_tokens 由 chars 派生（chars/2）。
+// 验证「配 chars → token 自动跟随」端到端契约。CW=1 使历史必超 4/5 门控触发摘要；压缩后仍 >0 token
+// 会命中 FitHistory 终止保护（返回 error）——但摘要 LLM 调用已先于终止发生，tr.lastBody 已记录，故忽略该 error。
+func TestNewCompaction_DerivesMaxTokensFromChars(t *testing.T) {
+	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
+	before, after := NewCompaction(CompactionOptions{
+		Chat:            llm,
+		ContextWindow:   1,
+		SummaryMaxChars: 8000, // 不设 SummaryMaxTokens → 应派生 8000/2=4000
+	})
+	if after != nil {
+		t.Fatalf("after 应为 nil（溢出检测已并入 before），实际非 nil")
+	}
+	var msgs []miniagent.Message
+	for i := range 10 {
+		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
+	}
+	// CW=1 触发摘要后命中终止保护：忽略 error，靠 tr.calls/lastBody 验证派生。
+	_, _ = before(context.Background(), miniagent.StepInput{Step: 1, Msgs: msgs})
+	if tr.calls == 0 {
+		t.Fatal("期望触发摘要 LLM 调用")
+	}
+	if !strings.Contains(tr.lastBody, `"max_tokens":4000`) {
+		t.Errorf("期望 max_tokens=8000/2=4000（chars 派生），实际: %s", tr.lastBody)
 	}
 }
 

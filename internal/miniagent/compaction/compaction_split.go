@@ -30,7 +30,8 @@ type CompactionOptions struct {
 	KeepReasoningChars int
 	SummarizerPrompt   string // 非空则全量 override 摘要 system prompt。
 	SummaryMaxChars    int
-	// SummaryMaxTokens 限制摘要请求输出 token 数（默认 summaryMaxTokens=1024）；<=0 用默认。
+	// SummaryMaxTokens 限制摘要请求输出 token 数；<=0（默认）由 NewCompaction 从 SummaryMaxChars
+	// 派生（chars/2，CJK 最密口径），保证中文摘要不被 MaxTokens 先于 chars 截断。显式 >0 覆盖派生。
 	SummaryMaxTokens     int
 	PreserveRecentTokens int
 	UseRealUsage         bool

@@ -13,9 +13,13 @@ import (
 const (
 	// summaryMaxChars 是摘要的字符上限（初值，按实测调，设计 §15.4）。
 	summaryMaxChars = 5000
-	// summaryMaxTokens 限制摘要请求的输出 token 数：端点默认上限远超 summaryMaxChars
-	// 对应的 token 量，不限会先生成超长输出再被字符截断，白烧 token（审查 P3-1）。
-	summaryMaxTokens = 1024
+	// summaryMaxTokens 是摘要输出 token 上限的兜底常量，从 summaryMaxChars 派生（/2）。
+	// 口径与 EstimateTokens 的 CJK≈1token/2chars 同源：chars/2 恰是「纯 CJK 摘要填满 chars 上限」
+	// 所需的 token 上界——纯中文刚好填满（边界），任何更稀疏内容（英文路径/符号）由 chars 先截，
+	// token 不额外截断也不浪费。原固定 1024 对 CJK 偏紧：1024 token≈1500 汉字，远低于
+	// summaryMaxChars=5000，中文摘要被 MaxTokens 隐性截短到设计值约 30%（third-evaluation L3-5）。
+	// 既是 summarizeMiddle(maxSummaryTokens<=0) 的兜底，也由 deriveSummaryMaxTokens 在异常输入时回落。
+	summaryMaxTokens = summaryMaxChars / 2
 )
 
 // ContextBudget 是 FitHistory 的单一参数包：上下文窗口、保留轮数、摘要提示与模型、

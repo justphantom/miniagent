@@ -326,6 +326,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `contextTrimToolChars` | 2000 | `run.context_trim_tool_chars` | context 超限降级时把 tool 结果压到的字符数 |
 | `contextKeepRecent` | 4 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
 | `summaryMaxChars` | 5000 | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限 |
+| `summaryMaxTokens` | 2500（派生自 `summaryMaxChars/2`） | `run.summary_max_tokens` | 摘要请求输出 token 上限；<=0 由 `summaryMaxChars` 派生（CJK 最密口径，防中文摘要被 token 先截） |
 | `maxGrepMatches` / `maxGlobEntries` | 500 / 500 | `run.grep_max_matches`（仅 grep；glob 无独立键） | grep 命中行 / glob 命中条数上限 |
 | `maxReadFileBytes` / `maxReadFileChars` | 1 MiB / 262144 | `run.max_read_file_bytes`（chars = bytes/4） | 读文件字节 / 输出字符上限 |
 | `maxLineLimit` | 10000 | — | `read` 的 `limit` 上限 |
