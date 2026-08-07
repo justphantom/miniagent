@@ -34,7 +34,7 @@ func TestLoadProjectRules_WorkdirOverridesHome(t *testing.T) {
 	t.Setenv("HOME", homeDir)
 	defer os.Setenv("HOME", oldHome)
 
-	pr := loadProjectRules(workdir, nil)
+	pr := loadProjectRules(workdir)
 	if pr.rules != "workdir-rule" {
 		t.Errorf("rules should be from workdir: got %q", pr.rules)
 	}
@@ -50,7 +50,7 @@ func TestLoadProjectRules_UsesHomeWhenNoWorkdir(t *testing.T) {
 	t.Setenv("HOME", homeDir)
 	defer os.Setenv("HOME", oldHome)
 
-	pr := loadProjectRules("", nil)
+	pr := loadProjectRules("")
 	if pr.rules != "home-rule" {
 		t.Errorf("rules should be from home when workdir empty: got %q", pr.rules)
 	}
@@ -62,7 +62,7 @@ func TestLoadProjectRules_EmptyWorkdirNoHome(t *testing.T) {
 	t.Setenv("HOME", homeDir)
 	defer os.Setenv("HOME", oldHome)
 
-	pr := loadProjectRules("/nonexistent", nil)
+	pr := loadProjectRules("/nonexistent")
 	if pr.hasAny() {
 		t.Error("should have no rules when workdir doesn't exist")
 	}
@@ -79,7 +79,7 @@ func TestLoadProjectRules_AllWorkdirSources(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	defer os.Setenv("HOME", oldHome)
 
-	pr := loadProjectRules(workdir, nil)
+	pr := loadProjectRules(workdir)
 	if pr.persona != "你是本项目专属 agent。" {
 		t.Errorf("persona = %q", pr.persona)
 	}

@@ -122,7 +122,7 @@ func main() {
 		}
 	}
 	// P0：发现 .miniagent/ 项目规则，合并进 system prompt（persona>rules>defaults + 默认兜底，见 assembleSystemPrompt）。
-	pr := loadProjectRules(workdir, logger)
+	pr := loadProjectRules(workdir)
 	resolved.System = assembleSystemPrompt(resolved.System, pr, absConfigPath(*f.configPath), resolved.Mode)
 
 	// 应用运行时配置覆盖（优先级：config>builtin）。

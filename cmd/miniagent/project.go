@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,20 +25,20 @@ func (p projectRules) hasAny() bool {
 // loadProjectRules 读 <workdir>/.miniagent/ 和 ~/.miniagent/ 的项目规则。
 // 优先级：workdir/.miniagent/ > ~/.miniagent/ > 空。各文件单独覆盖（非合并）。
 // workdir 为空时仅从 home 目录读取。
-func loadProjectRules(workdir string, logger *slog.Logger) projectRules {
+func loadProjectRules(workdir string) projectRules {
 	var pr projectRules
 	// 从 home 目录读基线（若存在）
-	pr = loadProjectRulesFromDir("", logger)
+	pr = loadProjectRulesFromDir("")
 	// workdir 覆盖基线
 	if workdir != "" {
-		pr = mergeProjectRules(loadProjectRulesFromDir(filepath.Join(workdir, ".miniagent"), logger), pr)
+		pr = mergeProjectRules(loadProjectRulesFromDir(filepath.Join(workdir, ".miniagent")), pr)
 	}
 	return pr
 }
 
 // loadProjectRulesFromDir 从指定目录读 persona/rules。
 // dir="" 是特殊哨兵，表示从 ~/.miniagent/ 读取（由函数内部解析 home 目录）。
-func loadProjectRulesFromDir(dir string, logger *slog.Logger) projectRules {
+func loadProjectRulesFromDir(dir string) projectRules {
 	var pr projectRules
 	if dir == "" {
 		home, err := os.UserHomeDir()
