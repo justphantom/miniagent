@@ -10,9 +10,9 @@ import (
 // 按 cli>config>builtin 优先级裁决。指针为 nil 表示未传入。P2 后仅保留 CLI 核心参数；
 // 策略参数（summary/duration/window 等）只在 config，故此处不含。
 type CLIOverrides struct {
-	Provider, Model, Thinking, Mode, System, Workdir *string
-	MaxIterations                                    *int
-	Stream, ResultOnly                               *bool
+	Provider, Model, Thinking, Mode, Workdir *string
+	MaxIterations                            *int
+	Stream, ResultOnly                       *bool
 }
 
 // ResolvedRun 是 Resolve 输出的运行参数——仅含需裁决或解析的字段（cli>config 三态裁决 + duration 解析）。
@@ -134,12 +134,7 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	if r.Mode != ModeDefault && r.Mode != ModeAuto {
 		return nil, fmt.Errorf("mode %q 非法（%s|%s）", r.Mode, ModeDefault, ModeAuto)
 	}
-	switch {
-	case o.System != nil && *o.System != "":
-		r.System = *o.System
-	case cfg.Defaults.SystemPrompt != "":
-		r.System = cfg.Defaults.SystemPrompt
-	}
+	r.System = cfg.Defaults.SystemPrompt
 	// summary_request / summarizer_prompt 仅 config 来源（P2 移出 CLI）。
 	if cfg.Defaults.SummaryRequest != "" {
 		r.SummaryRequest = cfg.Defaults.SummaryRequest

@@ -92,7 +92,6 @@ make test       # go test -race ./...
 -save-session            新建会话并落盘（id 内部生成，stdout NDJSON 首条 `session` 事件输出；与 -session、-result-only 互斥）
 -session string          接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错；仅允许字母/数字/-）
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
--system string           系统提示词（默认为面向工程代码开发的代码向 prompt）
 -thinking string         思考级别（默认 off；启用时 provider 必声明 thinking{field,map}，wire 必经映射，见 config.example.json）
 -version                 显示版本号并退出
 -workdir string          工作目录（default 模式写工具边界 + shell 的 cwd；也是 .miniagent/ 规则发现根）
@@ -341,7 +340,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 在 `workdir` 下放 `.miniagent/` 目录，agent 启动时自动发现并把项目专属行为注入——核心引擎本身不感知任何具体项目，只「知道如何发现项目规则」：
 
-项目规则文件（`persona.md`/`rules.md`）采用双层查找：优先从 `workdir/.miniagent/` 读，不存在则回退到 `~/.miniagent/`。优先级：workdir > home > 空。
+项目规则文件（`persona.md`/`rules.md`）单层查找：仅从 `workdir/.miniagent/` 读（不再回退 `~/.miniagent/`）。全局 system 定制改用 config `defaults.system_prompt`。
 
 | 文件 | 作用 |
 |------|------|
@@ -349,6 +348,8 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `.miniagent/rules.md` | 项目专属约束（编码规范、禁止事项、审查清单），追加到 system prompt 的「## 项目规则」段 |
 
 任一文件存在即触发 system prompt 末尾追加「（已加载 .miniagent/ 项目规则）」。该目录通常应加入 `.gitignore` 或按团队约定纳入版本控制。
+
+> **破坏性变更**：`-system` CLI 与全局 `~/.miniagent/persona.md`/`rules.md` 已移除。system prompt 现仅来自 config `defaults.system_prompt`（未配则内置默认）+ 项目级 `workdir/.miniagent/`。原全局 persona/rules 迁移到 `defaults.system_prompt`（persona「取代默认」的语义与 config system_prompt 等价；rules 为追加语义，需物进 `system_prompt` 文本）。
 
 ```bash
 # 项目仓库结构示例

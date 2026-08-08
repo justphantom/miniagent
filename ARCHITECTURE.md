@@ -20,7 +20,7 @@ cmd/miniagent/        CLI 入口层：flag 解析 → 组装 → 调 Run → 落
   setup_http.go       buildLLM / buildChatClient（HTTP client 注入）
   tools.go            buildTools：注册内置工具 + 脚本工具，按 mode 调约束
   session.go          session 解析（-save-session/-session 互斥、load/write）
-  project.go          .miniagent/ 项目规则（persona/rules/scripts）发现与合并
+  project.go          .miniagent/ 项目规则（persona/rules/scripts）发现（单层 workdir，取消全局层）
   sandbox.go          confineWrap：default 模式写工具路径越界拒绝
   prompts.go          默认 system prompt、subagent 引导注入
   stdin.go            读 prompt（空 stdin 交互引导）

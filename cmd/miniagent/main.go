@@ -27,7 +27,6 @@ var version string
 type cliFlags struct {
 	provider      *string
 	model         *string
-	system        *string
 	workdir       *string
 	session       *string
 	saveSession   *bool
@@ -51,7 +50,6 @@ func parseFlags() *cliFlags {
 	f.resultOnly = flag.Bool("result-only", false, "仅输出 result.text（subagent fork 用）；与 -stream 互斥")
 	f.provider = flag.String("provider", "", "LLM provider 名（与 -model 成对覆盖 defaults 对；-list-models 时单独用于筛选）")
 	f.model = flag.String("model", "", "LLM model id（与 -provider 成对覆盖 defaults 对）")
-	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
 	f.session = flag.String("session", "", "接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错）")
 	f.saveSession = flag.Bool("save-session", false, "新建会话并落盘（id 内部生成；与 -session 互斥）")

@@ -8,13 +8,10 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// projectRules 是 loadProjectRules 的返回：persona/rules 文本。
-// *_Set 标记表示对应文件在目录中显式存在（即使内容为空），用于 workdir 覆盖 home 时区分"未提供"与"提供空值"。
+// projectRules 是 loadProjectRules 的返回：workdir/.miniagent/ 下的 persona/rules 文本。
 type projectRules struct {
-	persona    string
-	personaSet bool
-	rules      string
-	rulesSet   bool
+	persona string
+	rules   string
 }
 
 // hasAny 报告是否加载到任意项目规则（决定是否在 system prompt 末尾告知 LLM）。
@@ -22,52 +19,22 @@ func (p projectRules) hasAny() bool {
 	return p.persona != "" || p.rules != ""
 }
 
-// loadProjectRules 读 <workdir>/.miniagent/ 和 ~/.miniagent/ 的项目规则。
-// 优先级：workdir/.miniagent/ > ~/.miniagent/ > 空。各文件单独覆盖（非合并）。
-// workdir 为空时仅从 home 目录读取。
+// loadProjectRules 读 <workdir>/.miniagent/ 的项目规则（persona.md/rules.md）。
+// workdir 为空或目录/文件不存在时返回零值（不报错）。仅项目级单层查找——全局 system
+// 定制改用 config defaults.system_prompt（取消 ~/.miniagent/ 全局规则层）。
 func loadProjectRules(workdir string) projectRules {
 	var pr projectRules
-	// 从 home 目录读基线（若存在）
-	pr = loadProjectRulesFromDir("")
-	// workdir 覆盖基线
-	if workdir != "" {
-		pr = mergeProjectRules(loadProjectRulesFromDir(filepath.Join(workdir, ".miniagent")), pr)
+	if workdir == "" {
+		return pr
 	}
-	return pr
-}
-
-// loadProjectRulesFromDir 从指定目录读 persona/rules。
-// dir="" 是特殊哨兵，表示从 ~/.miniagent/ 读取（由函数内部解析 home 目录）。
-func loadProjectRulesFromDir(dir string) projectRules {
-	var pr projectRules
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			dir = filepath.Join(home, ".miniagent")
-		} else {
-			return pr
-		}
-	}
+	dir := filepath.Join(workdir, ".miniagent")
 	if _, err := os.Stat(filepath.Join(dir, "persona.md")); err == nil {
-		pr.personaSet = true
 		pr.persona = readTrimmedFile(filepath.Join(dir, "persona.md"))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "rules.md")); err == nil {
-		pr.rulesSet = true
 		pr.rules = readTrimmedFile(filepath.Join(dir, "rules.md"))
 	}
 	return pr
-}
-
-// mergeProjectRules 用 workdir 的规则覆盖 home 规则（非合并，workdir 文件存在即覆盖，空文件也覆盖）。
-func mergeProjectRules(workdir, home projectRules) projectRules {
-	if workdir.personaSet {
-		home.persona = workdir.persona
-	}
-	if workdir.rulesSet {
-		home.rules = workdir.rules
-	}
-	return home
 }
 
 // maxProjectFileBytes 是 persona.md/rules.md 等规则文件的字节上限。

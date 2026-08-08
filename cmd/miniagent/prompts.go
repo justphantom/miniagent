@@ -7,7 +7,7 @@ import (
 
 // defaultSystemPrompt 是面向工程代码开发的默认系统提示词：约束 ReAct 工作流
 // （先观察 → 后修改 → 改后验证 → 失败复盘），降低模型盲改/臆测的概率。用户可用
-// -system 覆盖。prompt 只写"为什么/怎么做"的约束，工具语法在各工具描述里。
+// config defaults.system_prompt 覆盖（或项目 .miniagent/persona.md 取代）。prompt 只写"为什么/怎么做"的约束，工具语法在各工具描述里。
 const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真实代码仓库里工作。遵守以下工作方式：
 
 - 先观察后动手：改任何文件前，先用 read/grep/glob 确认当前内容与结构；路径或符号不确定就先定位，不要猜。
@@ -20,7 +20,7 @@ const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真
 // assembleSystemPrompt 装配最终 system prompt：空 base 兜底 defaultSystemPrompt → merge 项目规则
 // （persona>rules>defaults）→ inject subagent 引导。集中三步使默认兜底可单测（NEW-1 回归）。
 //
-// 默认配置（无 -system / config 无 system_prompt / 无 .miniagent/persona）下 resolved.System 为空：
+// 默认配置（config 无 system_prompt / 无 .miniagent/persona）下 resolved.System 为空：
 // 须兜底 defaultSystemPrompt。否则 injectSubagentGuidance 向空串追加 subagent 引导使其非空，
 // loopCfg 的 `if system == ""` fallback 永不触发（死代码），agent 静默丢失全部 ReAct 约束。
 func assembleSystemPrompt(base string, pr projectRules, configAbsPath, mode string) string {

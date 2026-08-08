@@ -73,9 +73,6 @@ func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	if set["mode"] {
 		o.Mode = f.mode
 	}
-	if set["system"] {
-		o.System = f.system
-	}
 	if set["workdir"] {
 		o.Workdir = f.workdir
 	}
