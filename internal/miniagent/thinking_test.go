@@ -48,7 +48,7 @@ func TestCallLLM_Thinking400Downgrade(t *testing.T) {
 		{status: http.StatusOK, body: textResponse("ok")},
 	}}
 	llm := testClients(tr)
-	resp, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	resp, _, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("callLLMWithDowngrade: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestCallLLM_Plain400NoDowngrade(t *testing.T) {
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
 	}}
 	llm := testClients(tr)
-	_, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	_, _, _, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m"}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error for plain 400")
 	}

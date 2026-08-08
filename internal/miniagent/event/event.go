@@ -31,6 +31,7 @@ type resultEvent struct {
 	InputTokens  int    `json:"input_tokens"`
 	OutputTokens int    `json:"output_tokens"`
 	Steps        int    `json:"steps"`
+	LLMRequests  int    `json:"llm_requests"`
 	Finish       string `json:"finish"`
 }
 
@@ -62,6 +63,7 @@ func EmitResult(w io.Writer, result miniagent.Result, model string) error {
 		InputTokens:  result.Usage.InputTokens,
 		OutputTokens: result.Usage.OutputTokens,
 		Steps:        result.Steps,
+		LLMRequests:  result.LLMRequests,
 		Finish:       result.Finish,
 	})
 }

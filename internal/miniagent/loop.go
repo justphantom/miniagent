@@ -29,6 +29,8 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	}
 	// thinkingDowngraded/compacted 跨循环累积（defer 在 total/msgs/newMsgs 声明后统一写入命名返回 result）。
 	var thinkingDowngraded, compacted bool
+	// llmReqs 计本轮实际发给 LLM 端点的请求次数（含降级/错误重试/总结步），经 defer 写入 result.LLMRequests。
+	var llmReqs int
 	toolByName := buildToolIndex(cfg.Tools, logger)
 
 	// 复制 History：接续对话时调用方可能复用同一 slice，原地 append 会越界写其数据。
@@ -48,6 +50,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		result.NewMessages = newMsgs
 		result.ThinkingDowngraded = thinkingDowngraded
 		result.Compacted = compacted
+		result.LLMRequests = llmReqs
 	}()
 
 	iterLimit := cfg.MaxIterations
@@ -79,9 +82,10 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		reqMsgs := make([]Message, 0, len(msgs)+1)
 		reqMsgs = append(reqMsgs, msgs...)
 		reqMsgs = append(reqMsgs, Message{Role: RoleSystem, Content: summaryReq})
-		resp2, down2, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
+		resp2, down2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
 		// 捕获总结步 downgraded（经 captureDowngrade 统一固化）。
 		captureDowngrade(down2)
+		llmReqs++ // 总结步实际调用计入 LLMRequests（与 provider 层重试无关）
 		if err2 != nil {
 			if logger != nil {
 				logger.Warn("summary LLM call failed", "step", s+1, "error", err2)
@@ -123,8 +127,9 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			return Result{Steps: step - 1}, perr
 		}
 
-		resp, downgraded, err := callLLMWithDowngrade(ctx, llm, cfg, step, toSend, hooks, logger)
+		resp, downgraded, _, err := callLLMWithDowngrade(ctx, llm, cfg, step, toSend, hooks, logger)
 		captureDowngrade(downgraded)
+		llmReqs++ // 主路径调用（含 callLLMOnce 内的降级重试经 requests 返回）
 		// 开放缝 OnLLMError：LLM 失败恢复（典型 ErrContextLength 收紧重试）。nil=error 直接上抛。
 		// 核心不做任何错误恢复策略；默认实现 NewDefaultOnLLMError 承载原 trimHistoryForContext。
 		// 传 msgs（持久 transcript）而非 toSend（BeforeLLM 的瞬时 View，Commit=false 时不进 transcript）：
@@ -140,8 +145,9 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 				}
 				// 捕获重试路径的 downgraded（经 captureDowngrade 统一固化）。
 				var down2 bool
-				resp, down2, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+				resp, down2, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
 				captureDowngrade(down2)
+				llmReqs++ // OnLLMError 重试调用
 				// 重试实际发的是收紧后的 msgs（recovered），刷新 toSend 使下游 recordStepUsage/OnBudget
 				// 的估算口径与实发一致（否则用收紧前 toSend 系统性高估、契约失真）。
 				toSend = msgs

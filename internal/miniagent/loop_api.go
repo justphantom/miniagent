@@ -134,6 +134,10 @@ type Result struct {
 	// Steps 是本轮已记账 usage 的 LLM 调用数（usage 在 recordStepUsage 累加：未记的失败路径计
 	// step-1、已记的计 step；总结额外调用计 step+1）。出错/取消路径同此语义。仅观察用，非逻辑依赖。
 	Steps int
+	// LLMRequests 是本轮实际发给 LLM 端点的请求次数（含 thinking 降级重试、OnLLMError 收紧重试、
+	// 总结步），不含 provider 层透明重试（503 退避）与压缩步的独立 LLM 调用。与 Steps 不同：
+	// Steps 只数 usage 已记账的步，LLMRequests 数实际 HTTP 请求（降级/重试使两者常不等）。
+	LLMRequests int
 	// Finish 是终止原因：FinishStop（模型给出最终文本）或
 	// FinishMaxIterations（撞迭代上限，Text 为空）。出错返回时为空串。
 	Finish string

@@ -194,11 +194,11 @@ func main() {
 			return nil
 		}
 		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
-		if result.Compacted {
-			saveErr = session.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
-		} else {
-			saveErr = session.AppendMessages(sessPath, meta, result.NewMessages, int64(limits.MaxSessionBytes))
-		}
+		// 跨轮累加累计 LLM 请求次数到 session 元数据首行。
+		// 始终用 RewriteMessages：需更新首行 meta（LLMRequests），append-only 无法改首行。
+		// session 文件有 MaxSessionBytes 上限且 saveSession 单次调用不在热路径，全量重写开销可忽略。
+		meta.LLMRequests += result.LLMRequests
+		saveErr = session.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
 		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		return saveErr
 	}

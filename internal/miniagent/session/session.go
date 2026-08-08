@@ -23,13 +23,15 @@ const (
 )
 
 // SessionMeta 是 jsonl 首行 metadata（type=session），便于会话列举与多 provider 溯源。
+// LLMRequests 记录该会话累计 LLM 请求次数（跨多轮 Run 累加），用于用量追踪。
 type SessionMeta struct {
-	Type     string `json:"type"`
-	ID       string `json:"id"`
-	Model    string `json:"model"`
-	Workdir  string `json:"workdir"`
-	Provider string `json:"provider"`
-	Created  string `json:"created"`
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	Model       string `json:"model"`
+	Workdir     string `json:"workdir"`
+	Provider    string `json:"provider"`
+	Created     string `json:"created"`
+	LLMRequests int    `json:"llm_requests,omitempty"`
 }
 
 // sessionLine 是 message 行的写入包装：嵌入 miniagent.Message 提升 role/content/kind 等字段，

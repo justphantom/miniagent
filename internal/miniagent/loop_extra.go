@@ -10,12 +10,12 @@ import (
 
 // callLLMWithDowngrade：callLLMOnce 之上做单步 thinking 降级重试，回传 downgraded 供 Run
 // 跨步固化 cfg；其余（重试一次、日志、截断告警）原样保留。
-func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (Response, bool, error) {
+func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (resp Response, downgraded bool, requests int, err error) {
 	if logger != nil {
 		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream, "thinking", cfg.ThinkingLevel)
 	}
-	resp, err := callLLMOnce(ctx, llm, cfg, step, msgs, hooks)
-	downgraded := false
+	resp, err = callLLMOnce(ctx, llm, cfg, step, msgs, hooks)
+	requests = 1
 	// thinking 不被支持：去字段重试一次（仅当确实发了 thinking，避免无谓重试，审查 v2 #7）。
 	if errors.Is(err, ErrThinkingUnsupported) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
 		if logger != nil {
@@ -26,12 +26,13 @@ func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int
 		down.Thinking = nil
 		resp, err = callLLMOnce(ctx, llm, down, step, msgs, hooks)
 		downgraded = true
+		requests = 2
 	}
 	if err != nil {
 		if logger != nil {
 			logger.Warn("llm call failed", "step", step, "error", err)
 		}
-		return Response{}, downgraded, fmt.Errorf("llm call %d: %w", step, err)
+		return Response{}, downgraded, requests, fmt.Errorf("llm call %d: %w", step, err)
 	}
 	if logger != nil {
 		logger.Info("llm call done", "step", step, "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
@@ -41,7 +42,7 @@ func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int
 	if logger != nil && resp.FinishReason != "" && resp.FinishReason != "stop" && resp.FinishReason != "tool_calls" {
 		logger.Warn("llm response truncated", "step", step, "finish_reason", resp.FinishReason)
 	}
-	return resp, downgraded, nil
+	return resp, downgraded, requests, nil
 }
 
 // callLLMOnce 构造 Request（含 thinking）并单次调用 llm.Do / llm.DoStream，不含降级/重试逻辑。
