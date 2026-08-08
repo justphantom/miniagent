@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
 // defaultSessionDir 是未配 session.dir 时的回落目录（Phase C 由 config 覆盖）。
@@ -19,20 +20,20 @@ const defaultSessionDir = ".miniagent/sessions"
 //   - saveNew=true：新建会话，generateSessionID 生成 id，构造 meta（id 的 stdout NDJSON 输出由 main 的 EmitSession 负责），history=nil。
 //   - sessionArg!=""：接续，校验 id 后 LoadSession；文件不存在（meta.Type==""）报错防 typo 建垃圾会话。
 //   - 两者皆空：无状态，返回空 path（main 据此跳过落盘）。
-func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (string, miniagent.SessionMeta, []miniagent.Message) {
+func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (string, session.SessionMeta, []miniagent.Message) {
 	if !saveNew && sessionArg == "" {
-		return "", miniagent.SessionMeta{}, nil
+		return "", session.SessionMeta{}, nil
 	}
 	id := sessionArg
 	if saveNew {
 		id = generateSessionID()
 	}
-	sessPath, err := miniagent.ResolveSessionPath(id, sessionDir)
+	sessPath, err := session.ResolveSessionPath(id, sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: session: %v\n", err)
 		os.Exit(1)
 	}
-	meta, history, err := miniagent.LoadSession(sessPath, maxSessionBytes)
+	meta, history, err := session.LoadSession(sessPath, maxSessionBytes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
 		os.Exit(1)
@@ -41,7 +42,7 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provi
 		if saveNew {
 			// 新会话：构造 metadata（Type 由 AppendMessages 补 session）。Provider 独立于
 			// modelSpec（"provider/id"）单列，供会话列举/多 provider 溯源免解析字符串。
-			meta = miniagent.SessionMeta{
+			meta = session.SessionMeta{
 				ID:       id,
 				Model:    modelSpec,
 				Provider: provider,
@@ -86,7 +87,7 @@ func absWorkdir(workdir string) string {
 	return abs
 }
 
-func warnSessionMismatch(meta miniagent.SessionMeta, modelSpec, workdir string) {
+func warnSessionMismatch(meta session.SessionMeta, modelSpec, workdir string) {
 	if modelSpec != "" && meta.Model != "" && meta.Model != modelSpec {
 		fmt.Fprintf(os.Stderr, "miniagent: warning: session model %q 与本次 %q 不一致\n", meta.Model, modelSpec)
 	}

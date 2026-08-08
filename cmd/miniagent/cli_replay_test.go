@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
 // parseNDJSON 把 combined output 按行解析为事件列表，跳过空行与非 JSON（如 slog 日志行）。
@@ -51,7 +52,7 @@ func equalSlice(a, b []string) bool {
 //   - 终态 assistant 纯文本（step2：text_delta）；
 //   - 多步用量累加、result 汇总（steps/text/finish/model/usage）。
 func TestReplaySession(t *testing.T) {
-	meta := miniagent.SessionMeta{
+	meta := session.SessionMeta{
 		Type: "session", ID: "s1", Model: "p/m", Provider: "p", Workdir: "/wd", Created: "2026-01-01T00:00:00Z",
 	}
 	msgs := []miniagent.Message{
@@ -98,7 +99,7 @@ func TestReplaySession_OrphanTool(t *testing.T) {
 		{Role: miniagent.RoleTool, ToolCallID: "ghost", Content: "残"},
 	}
 	var buf bytes.Buffer
-	if err := replaySession(&buf, miniagent.SessionMeta{Type: "session", ID: "s", Model: "m"}, msgs); err != nil {
+	if err := replaySession(&buf, session.SessionMeta{Type: "session", ID: "s", Model: "m"}, msgs); err != nil {
 		t.Fatalf("replaySession: %v", err)
 	}
 	ev := parseNDJSON(t, buf.String())

@@ -3,101 +3,20 @@
 package miniagent
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"syscall"
-	"time"
-	"unsafe"
 )
 
-// openNoFollow 在 Windows 上回退为 Lstat+OpenFile 并拒绝最终分量为符号链接。
+// OpenNoFollow 在 Windows 上回退为 Lstat+OpenFile 并拒绝最终分量为符号链接。
 // 注意：Windows 无 O_NOFOLLOW 等价 syscall，Lstat→OpenFile 间存在理论 TOCTOU（攻击者此时把 path
 // 替换为 symlink）。主平台 Linux/macOS 用 O_NOFOLLOW 单次 syscall 无此问题；Windows 是次要 fallback
 // 平台（见 .golangci.yml 平台范围），此处接受该限制。彻底修复需 FILE_FLAG_OPEN_REPARSE_POINT +
 // reparse point 检查（成本高、场景窄，未实现）。
-func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
+// 留核心：session 子包（withSessionLock）与 config 子包（ReadFileLimited）共用。
+func OpenNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 	fi, err := os.Lstat(path)
 	if err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%q is a symlink", path)
 	}
 	return os.OpenFile(path, flag, perm)
-}
-
-var (
-	kernel32         = syscall.NewLazyDLL("kernel32.dll")
-	procLockFileEx   = kernel32.NewProc("LockFileEx")
-	procUnlockFileEx = kernel32.NewProc("UnlockFileEx")
-)
-
-const (
-	lockfileExclusiveLock   = 0x00000002
-	lockfileFailImmediately = 0x00000001
-)
-
-// lockSession 在 Windows 上对 session 文件加排他字节区间锁。
-func lockSession(f *os.File) error {
-	h := syscall.Handle(f.Fd())
-	var ov syscall.Overlapped
-	deadline := time.Now().Add(lockSessionTotal)
-	for time.Now().Before(deadline) {
-		r1, _, err := procLockFileEx.Call(
-			uintptr(h),
-			uintptr(lockfileExclusiveLock|lockfileFailImmediately),
-			0,
-			1,
-			0,
-			uintptr(unsafe.Pointer(&ov)),
-		)
-		if r1 != 0 {
-			return nil
-		}
-		if err != syscall.Errno(33) && err != syscall.ERROR_IO_PENDING {
-			return err
-		}
-		time.Sleep(lockSessionInterval)
-	}
-	return errors.New("session 锁繁忙：另一进程持有且 5s 内未释放")
-}
-
-const (
-	lockSessionTotal    = 5 * time.Second
-	lockSessionInterval = 100 * time.Millisecond
-)
-
-// unlockSession 释放 lockSession 持有的锁。
-func unlockSession(f *os.File) error {
-	h := syscall.Handle(f.Fd())
-	var ov syscall.Overlapped
-	r1, _, err := procUnlockFileEx.Call(
-		uintptr(h),
-		0,
-		1,
-		0,
-		uintptr(unsafe.Pointer(&ov)),
-	)
-	if r1 != 0 {
-		return nil
-	}
-	return err
-}
-
-// withSessionLock 打开 path 并加锁，执行 fn 后解锁关闭。
-func withSessionLock(path string, flag int, fn func(*os.File) error) error {
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("创建 session 目录：%w", err)
-		}
-	}
-	f, err := openNoFollow(path, flag, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	if err := lockSession(f); err != nil {
-		return fmt.Errorf("lock session %q: %w", path, err)
-	}
-	defer func() { _ = unlockSession(f) }()
-	return fn(f)
 }

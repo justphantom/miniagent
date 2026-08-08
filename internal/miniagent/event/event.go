@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 	"github.com/justphantom/miniagent/internal/text"
 )
 
@@ -73,7 +74,7 @@ func EmitError(w io.Writer, msg string) error {
 // EmitSession 写一条 session 事件（NDJSON 流首条，type=session）。-save-session 新建会话时
 // 在 Run 之前 emit，结构同 session jsonl 首行 metadata（id/model/workdir/provider/created），
 // 供消费方从 stdout 第一行程序化捕获会话元数据接续下轮。
-func EmitSession(w io.Writer, meta miniagent.SessionMeta) error {
+func EmitSession(w io.Writer, meta session.SessionMeta) error {
 	if meta.Type == "" {
 		meta.Type = sessionEventType
 	}

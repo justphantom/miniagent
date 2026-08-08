@@ -1,4 +1,4 @@
-package miniagent
+package session
 
 import (
 	"context"
@@ -8,7 +8,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/looptest"
 )
+
+// maxIterations 对齐 core 默认迭代上限（miniagent.maxIterations 未导出），供本文件撞上限断言。
+const maxIterations = 20
 
 func TestResolveSessionPath(t *testing.T) {
 	// 合法 id → {dir}/{id}.jsonl
@@ -38,19 +44,19 @@ func TestResolveSessionPath(t *testing.T) {
 
 // NewMessages 仅含本轮新增（不含 History），Messages 含 History 前缀。
 func TestRun_NewMessagesExcludesHistory(t *testing.T) {
-	tool := Tool{Name: "echo", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "echoed"} }}
-	tr := &fakeTransport{responses: []string{
-		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
-		textResponse("done"),
+	tool := miniagent.Tool{Name: "echo", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "echoed"} }}
+	tr := &looptest.FakeTransport{Responses: []string{
+		looptest.ToolResponse(miniagent.ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
+		looptest.TextResponse("done"),
 	}}
-	llm := testClients(tr)
-	history := []Message{
+	llm := looptest.NewFakeLLM(tr)
+	history := []miniagent.Message{
 		{Role: "user", Content: "old"},
 		{Role: "assistant", Content: "oldans"},
 	}
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, History: history}, "newq", LoopHooks{}, nil)
+	res, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "newq", miniagent.LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("miniagent.Run: %v", err)
 	}
 	wantRoles := []string{"user", "assistant", "tool", "assistant"}
 	if len(res.NewMessages) != len(wantRoles) {
@@ -66,28 +72,28 @@ func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 	}
 }
 
-// History 作为前缀拼在新 prompt 之前发给 LLM；Run 不修改调用方的 History。
+// History 作为前缀拼在新 prompt 之前发给 LLM；miniagent.Run 不修改调用方的 History。
 func TestRun_HistoryPrefixSent(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("a2")}}
-	llm := testClients(tr)
-	history := []Message{
+	tr := &looptest.FakeTransport{Responses: []string{looptest.TextResponse("a2")}}
+	llm := looptest.NewFakeLLM(tr)
+	history := []miniagent.Message{
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
 	}
-	res, err := Run(context.Background(), llm, LoopConfig{History: history}, "q2", LoopHooks{}, nil)
+	res, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{History: history}, "q2", miniagent.LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("miniagent.Run: %v", err)
 	}
-	i1 := strings.Index(tr.lastBody, "q1")
-	i2 := strings.Index(tr.lastBody, "a1")
-	i3 := strings.Index(tr.lastBody, "q2")
+	i1 := strings.Index(tr.LastBody, "q1")
+	i2 := strings.Index(tr.LastBody, "a1")
+	i3 := strings.Index(tr.LastBody, "q2")
 	if i1 < 0 || i2 < 0 || i3 < 0 || i1 >= i2 || i2 >= i3 {
-		t.Errorf("history not sent in order q1<a1<q2: %s", tr.lastBody)
+		t.Errorf("history not sent in order q1<a1<q2: %s", tr.LastBody)
 	}
 	if len(history) != 2 {
 		t.Errorf("caller history mutated: len = %d", len(history))
 	}
-	want := []Message{
+	want := []miniagent.Message{
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
 		{Role: "user", Content: "q2"},
@@ -96,8 +102,8 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 	if len(res.Messages) != len(want) {
 		t.Fatalf("Messages len = %d, want %d: %+v", len(res.Messages), len(want), res.Messages)
 	}
-	// §P0-B 后新产生的 assistant 带 Usage/Ts、新 user 带 Ts（非确定性），故只校验 Role+Content，
-	// 不再整体 reflect.DeepEqual（history q1/a1 仍无 Usage/Ts，深比会因新字段失稳）。
+	// §P0-B 后新产生的 assistant 带 miniagent.Usage/Ts、新 user 带 Ts（非确定性），故只校验 Role+Content，
+	// 不再整体 reflect.DeepEqual（history q1/a1 仍无 miniagent.Usage/Ts，深比会因新字段失稳）。
 	for i, w := range want {
 		if res.Messages[i].Role != w.Role || res.Messages[i].Content != w.Content {
 			t.Errorf("Messages[%d] = {Role:%q Content:%q}, want {Role:%q Content:%q}",
@@ -108,11 +114,11 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 
 // 最终 assistant 文本必须进入 Messages（接续对话依赖上一轮的回答）。
 func TestRun_FinalTextAppendedToMessages(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("final answer")}}
-	llm := testClients(tr)
-	res, err := Run(context.Background(), llm, LoopConfig{}, "q", LoopHooks{}, nil)
+	tr := &looptest.FakeTransport{Responses: []string{looptest.TextResponse("final answer")}}
+	llm := looptest.NewFakeLLM(tr)
+	res, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{}, "q", miniagent.LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("miniagent.Run: %v", err)
 	}
 	last := res.Messages[len(res.Messages)-1]
 	if last.Role != "assistant" || last.Content != "final answer" {
@@ -122,27 +128,29 @@ func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 
 // 两轮接续：第一轮的完整 transcript 作为 History 传入第二轮，请求体按序含全部 4 类消息。
 func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
-	tool := Tool{Name: "echo", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "echoed"} }}
-	tr := &fakeTransport{responses: []string{
-		toolResponse(ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
-		textResponse("第一轮回答"),
+	tool := miniagent.Tool{Name: "echo", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "echoed"} }}
+	tr := &looptest.FakeTransport{Responses: []string{
+		looptest.ToolResponse(miniagent.ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
+		looptest.TextResponse("第一轮回答"),
 	}}
-	llm := testClients(tr)
-	r1, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "第一轮", LoopHooks{}, nil)
+	llm := looptest.NewFakeLLM(tr)
+	r1, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}}, "第一轮", miniagent.LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("Run turn1: %v", err)
+		t.Fatalf("miniagent.Run turn1: %v", err)
 	}
 
-	tr2 := &fakeTransport{responses: []string{textResponse("第二轮回答")}}
-	llm = testClients(tr2)
-	_, err = Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, History: r1.Messages}, "第二轮", LoopHooks{}, nil)
+	tr2 := &looptest.FakeTransport{Responses: []string{looptest.TextResponse("第二轮回答")}}
+	llm = looptest.NewFakeLLM(tr2)
+	_, err = miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: r1.Messages}, "第二轮", miniagent.LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("Run turn2: %v", err)
+		t.Fatalf("miniagent.Run turn2: %v", err)
 	}
 	var body struct {
-		Messages []testChatMessage `json:"messages"`
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
 	}
-	if err := json.Unmarshal([]byte(tr2.lastBody), &body); err != nil {
+	if err := json.Unmarshal([]byte(tr2.LastBody), &body); err != nil {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 	var roles []string
@@ -153,20 +161,20 @@ func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 	if !reflect.DeepEqual(roles, want) {
 		t.Errorf("turn2 request roles = %v, want %v", roles, want)
 	}
-	if !strings.Contains(tr2.lastBody, "第一轮回答") {
-		t.Errorf("turn2 request missing turn1 final text: %s", tr2.lastBody)
+	if !strings.Contains(tr2.LastBody, "第一轮回答") {
+		t.Errorf("turn2 request missing turn1 final text: %s", tr2.LastBody)
 	}
 }
 
 // LLM 报错：Result.Messages 仍带回已累积历史（含本轮 user prompt）。
 func TestRun_ErrorStillReturnsMessages(t *testing.T) {
-	tr := &fakeTransport{statuses: []int{
+	tr := &looptest.FakeTransport{Statuses: []int{
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
 	}}
-	llm := testClients(tr)
-	res, err := Run(context.Background(), llm, LoopConfig{}, "hi", LoopHooks{}, nil)
+	llm := looptest.NewFakeLLM(tr)
+	res, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{}, "hi", miniagent.LoopHooks{}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -178,23 +186,23 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 // 撞 maxIterations：Messages 含全部累积的 tool 往返 + 末尾注入的 summary request。
 // Option B：在 iterLimit 步工具调用后注入 summaryRequestPrompt，故多一条 system 消息。
 func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
-	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
+	tool := miniagent.Tool{Name: "loop", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "x"} }}
 	responses := make([]string, maxIterations+2)
 	for i := range responses {
-		responses[i] = toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"})
+		responses[i] = looptest.ToolResponse(miniagent.ToolCall{ID: "c", Name: "loop", Args: "{}"})
 	}
-	tr := &fakeTransport{responses: responses}
-	llm := testClients(tr)
-	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{}, nil)
+	tr := &looptest.FakeTransport{Responses: responses}
+	llm := looptest.NewFakeLLM(tr)
+	res, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}}, "x", miniagent.LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("miniagent.Run: %v", err)
 	}
 	// 1 (user) + 2*maxIterations (assistant+tool 各 maxIterations 轮)；summary 引导消息不进 transcript。
 	if want := 1 + 2*maxIterations; len(res.Messages) != want {
 		t.Errorf("Messages len = %d, want %d", len(res.Messages), want)
 	}
 	// 最后一条应是最近一次工具结果（summary 经临时 reqMsgs 发送，不污染 Messages）。
-	if res.Messages[len(res.Messages)-1].Role != RoleTool {
-		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, RoleTool)
+	if res.Messages[len(res.Messages)-1].Role != miniagent.RoleTool {
+		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, miniagent.RoleTool)
 	}
 }

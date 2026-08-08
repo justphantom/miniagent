@@ -49,6 +49,14 @@ type LLM interface {
 // 其余级别（minimal/low/medium/high/xhigh/max）由 CLI/config 校验取值，wire 透传。
 const ThinkingOff = "off"
 
+// ThinkingMapping 让 provider 显式声明思考字段的 wire 名（如 openai 的 reasoning_effort）
+// 与级别取值映射（跨供应商兼容）。钉死：启用思考时 provider 必声明 {field,map}，wire 必经映射。
+// 属核心 wire 契约（Request.Thinking / LoopConfig.Thinking 引用），故留 core，不随 config 子包外迁。
+type ThinkingMapping struct {
+	Field string            `json:"field"`
+	Map   map[string]string `json:"map,omitempty"`
+}
+
 // Delta 是推给消费方的流式增量（LLM.DoStream 的 onDelta 回调参数）。
 // 属核心流式契约（LLM 接口引用），故留 core；SSE 解析在 internal/provider/openai。
 type Delta struct {

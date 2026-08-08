@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
@@ -41,8 +42,8 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	}
 }
 
-// P1-1 端到端：compactWithSummary + summary 前插合并（生产为 mergePersisted）→ miniagent.AppendMessages 落盘
-// → miniagent.LoadSession 读取 → applyCompactionBarrier：本轮 user_prompt 必须仍在结果中。
+// P1-1 端到端：compactWithSummary + summary 前插合并（生产为 mergePersisted）→ session.AppendMessages 落盘
+// → session.LoadSession 读取 → applyCompactionBarrier：本轮 user_prompt 必须仍在结果中。
 func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("既往对话摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -61,12 +62,12 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	newMsgs = append(newMsgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "上一轮回答"})
 
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	if err := miniagent.AppendMessages(path, miniagent.SessionMeta{ID: "s"}, newMsgs); err != nil {
-		t.Fatalf("miniagent.AppendMessages: %v", err)
+	if err := session.AppendMessages(path, session.SessionMeta{ID: "s"}, newMsgs); err != nil {
+		t.Fatalf("session.AppendMessages: %v", err)
 	}
-	_, loaded, err := miniagent.LoadSession(path)
+	_, loaded, err := session.LoadSession(path)
 	if err != nil {
-		t.Fatalf("miniagent.LoadSession: %v", err)
+		t.Fatalf("session.LoadSession: %v", err)
 	}
 	barrier := applyCompactionBarrier(loaded)
 	var hasPrompt, hasAnswer bool
@@ -148,7 +149,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	}
 }
 
-// P2-1 跨轮继承：上轮 miniagent.LoadSession 带入的旧 miniagent.KindSummary 经 applyCompactionBarrier 落在 msgs 头，
+// P2-1 跨轮继承：上轮 session.LoadSession 带入的旧 miniagent.KindSummary 经 applyCompactionBarrier 落在 msgs 头，
 // splitRounds 使其单独成 rounds[0]；compactWithSummary 检测到后（§P0-A 默认路径）抽作
 // previousSummary 经 UPDATE 模式下传，旧摘要文本仍出现在 LLM 请求体（system 的
 // <previous-summary> 块）中，真正继承而非断链。

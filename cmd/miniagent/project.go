@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
 // projectRules 是 loadProjectRules 的返回：workdir/.miniagent/ 下的 persona/rules 文本。
@@ -41,7 +41,7 @@ func loadProjectRules(workdir string) projectRules {
 const maxProjectFileBytes = 1 << 20 // 1 MiB
 
 func readTrimmedFile(path string) string {
-	b, err := miniagent.ReadFileLimited(path, maxProjectFileBytes)
+	b, err := config.ReadFileLimited(path, maxProjectFileBytes)
 	if err != nil {
 		return ""
 	}

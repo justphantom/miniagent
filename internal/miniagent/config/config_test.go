@@ -1,4 +1,4 @@
-package miniagent
+package config
 
 import (
 	"os"
@@ -220,7 +220,7 @@ func TestLoadConfig_StrategyConstants(t *testing.T) {
 // config.example.json 是发版旗舰示例：strip // 注释后必须可被 LoadConfig 加载
 // （钉死后 openai provider 显式声明 thinking{field:reasoning_effort,map:identity}；defaults.thinking=off 不强制）。
 func TestLoadConfig_ExampleFile(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.json")
+	data, err := os.ReadFile("../../../config.example.json")
 	if err != nil {
 		t.Fatalf("read example: %v", err)
 	}

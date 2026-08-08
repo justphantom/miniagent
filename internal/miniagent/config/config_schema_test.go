@@ -1,11 +1,13 @@
-package miniagent
+package config
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// validateConfig 拒绝 ThinkingMapping.Field 指向保留 payload key：testBuildChatBody 用
+// validateConfig 拒绝 miniagent.ThinkingMapping.Field 指向保留 payload key：testBuildChatBody 用
 // payload[field]=val 写思考级别（wire.go），命中保留 key（如 max_tokens）会 clobber
 // 标准字段（审查 v3 P3）。
 func TestValidateConfig_ThinkingFieldBlacklisted(t *testing.T) {
@@ -14,7 +16,7 @@ func TestValidateConfig_ThinkingFieldBlacklisted(t *testing.T) {
 			Providers: []ProviderConfig{{
 				Name:     "main",
 				ChatURL:  "https://api/v1/chat/completions",
-				Thinking: &ThinkingMapping{Field: bad},
+				Thinking: &miniagent.ThinkingMapping{Field: bad},
 			}},
 		}
 		err := validateConfig(cfg)
@@ -34,7 +36,7 @@ func TestValidateConfig_ThinkingFieldValid(t *testing.T) {
 		cfg := mkFullConfig("main", "m", ProviderConfig{
 			Name:     "main",
 			ChatURL:  "https://api/v1/chat/completions",
-			Thinking: &ThinkingMapping{Field: ok},
+			Thinking: &miniagent.ThinkingMapping{Field: ok},
 		})
 		if err := validateConfig(cfg); err != nil {
 			t.Errorf("field %q should pass, got: %v", ok, err)

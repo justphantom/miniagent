@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
 // generateSessionID 输出仅含拉丁字母/数字/-（过 ValidateSessionID），且含时间戳前缀。
 func TestGenerateSessionID_Format(t *testing.T) {
 	id := generateSessionID()
-	if err := miniagent.ValidateSessionID(id); err != nil {
+	if err := session.ValidateSessionID(id); err != nil {
 		t.Errorf("id %q 不合法: %v", id, err)
 	}
 	ts := time.Now().Format("20060102-150405")
@@ -39,7 +39,7 @@ func TestResolveSessionForRun_Stateless(t *testing.T) {
 	if path != "" {
 		t.Errorf("path = %q, 想空（无状态不落盘）", path)
 	}
-	if meta != (miniagent.SessionMeta{}) {
+	if meta != (session.SessionMeta{}) {
 		t.Errorf("meta = %+v, 想零值", meta)
 	}
 	if history != nil {
@@ -71,7 +71,7 @@ func TestResolveSessionForRun_NewSession_FillsProvider(t *testing.T) {
 	if meta.ID == "" {
 		t.Error("ID 为空")
 	}
-	if err := miniagent.ValidateSessionID(meta.ID); err != nil {
+	if err := session.ValidateSessionID(meta.ID); err != nil {
 		t.Errorf("meta.ID %q 不合法: %v", meta.ID, err)
 	}
 	if _, err := time.Parse(time.RFC3339, meta.Created); err != nil {

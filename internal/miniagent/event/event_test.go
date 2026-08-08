@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
 // 每次调用写一条 tool_use 事件，且不含 output 字段。
@@ -80,7 +81,7 @@ func TestEmitError(t *testing.T) {
 // Type 空时补 "session"，且全字段（id/model/workdir/provider/created）输出——与 jsonl 首行 metadata 同构。
 func TestEmitSession(t *testing.T) {
 	var buf bytes.Buffer
-	meta := miniagent.SessionMeta{
+	meta := session.SessionMeta{
 		ID:       "20240105-120000-aabbccddeeff0011",
 		Model:    "openai/gpt-4o",
 		Workdir:  "/repo",

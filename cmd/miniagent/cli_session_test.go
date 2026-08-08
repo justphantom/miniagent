@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
 // writeSessionConfig 写一份指向 srvURL 的临时 config，session.dir=sessionDir，mode=auto（免 workdir）。
@@ -270,7 +270,7 @@ func TestCLI_ErrorRunSavesPartialSession(t *testing.T) {
 		}
 	}
 	// 落盘的 session 须配对完整、可被 LoadSession 重载——否则下次 resume 直接报错，等于没救。
-	if _, _, err := miniagent.LoadSession(matches[0]); err != nil {
+	if _, _, err := session.LoadSession(matches[0]); err != nil {
 		t.Errorf("出错落盘的 session 无法被 LoadSession 重载（配对断裂？）: %v\n%s", err, s)
 	}
 }

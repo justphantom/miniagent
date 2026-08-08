@@ -1,13 +1,15 @@
 package compaction
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/provider/openai"
@@ -98,7 +100,7 @@ func TestEstimateThreshold_Fallback(t *testing.T) {
 	}
 }
 
-// §P0-B session 往返：带 miniagent.Usage+Ts 的 assistant 行写 jsonl 再 miniagent.LoadSession 字段完整还原；
+// §P0-B session 往返：带 miniagent.Usage+Ts 的 assistant 行写 jsonl 再 session.LoadSession 字段完整还原；
 // 缺字段的旧 fixture 仍能加载且 miniagent.Usage==nil。
 func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
@@ -106,12 +108,12 @@ func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 		{Role: miniagent.RoleUser, Content: "q"},
 		{Role: miniagent.RoleAssistant, Content: "a", Usage: uPtr(123, 45), Ts: 999},
 	}
-	if err := miniagent.AppendMessages(path, miniagent.SessionMeta{ID: "s"}, msgs); err != nil {
-		t.Fatalf("miniagent.AppendMessages: %v", err)
+	if err := session.AppendMessages(path, session.SessionMeta{ID: "s"}, msgs); err != nil {
+		t.Fatalf("session.AppendMessages: %v", err)
 	}
-	_, loaded, err := miniagent.LoadSession(path)
+	_, loaded, err := session.LoadSession(path)
 	if err != nil {
-		t.Fatalf("miniagent.LoadSession: %v", err)
+		t.Fatalf("session.LoadSession: %v", err)
 	}
 	if len(loaded) != 2 {
 		t.Fatalf("loaded len=%d, want 2", len(loaded))
@@ -131,9 +133,9 @@ func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 	if err := os.WriteFile(path2, []byte(old), 0o600); err != nil {
 		t.Fatalf("write old fixture: %v", err)
 	}
-	_, loaded2, err := miniagent.LoadSession(path2)
+	_, loaded2, err := session.LoadSession(path2)
 	if err != nil {
-		t.Fatalf("旧 fixture miniagent.LoadSession: %v", err)
+		t.Fatalf("旧 fixture session.LoadSession: %v", err)
 	}
 	for i, m := range loaded2 {
 		if m.Usage != nil {

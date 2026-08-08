@@ -1,4 +1,4 @@
-package miniagent
+package session
 
 import (
 	"bufio"
@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // maxSessionBytes 是 session 文件默认大小上限：50MB 覆盖长会话，同时防止无限增长。
@@ -30,11 +32,11 @@ type SessionMeta struct {
 	Created  string `json:"created"`
 }
 
-// sessionLine 是 message 行的写入包装：嵌入 Message 提升 role/content/kind 等字段，
-// 并补 type=message 判别（读侧按 type 分流到 SessionMeta 或 Message）。
+// sessionLine 是 message 行的写入包装：嵌入 miniagent.Message 提升 role/content/kind 等字段，
+// 并补 type=message 判别（读侧按 type 分流到 SessionMeta 或 miniagent.Message）。
 type sessionLine struct {
 	Type string `json:"type"`
-	Message
+	miniagent.Message
 }
 
 // ResolveSessionPath 校验 id（白名单）后拼 {dir}/{id}.jsonl。仅解析路径，不判文件存在性——
@@ -56,12 +58,12 @@ func ResolveSessionPath(arg, dir string) (string, error) {
 // 文件不存在返回 (零 meta, nil, nil) 等同新会话。损坏（非法 JSON 行、role 未知、tool 消息
 // 缺 tool_call_id、配对断裂、超大小上限）返回 error，调用方应报错退出而非静默丢历史。
 // opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
-func LoadSession(path string, opts ...int64) (SessionMeta, []Message, error) {
+func LoadSession(path string, opts ...int64) (SessionMeta, []miniagent.Message, error) {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
 		mb = opts[0]
 	}
-	f, err := openNoFollow(path, os.O_RDONLY, 0)
+	f, err := miniagent.OpenNoFollow(path, os.O_RDONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return SessionMeta{}, nil, nil
 	}
@@ -78,7 +80,7 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []Message, error) {
 		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, mb)
 	}
 	var meta SessionMeta
-	var msgs []Message
+	var msgs []miniagent.Message
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	// 单行上限对齐 mb：避免单条大消息触发 ErrTooLong 致整会话不可读、append-only 无法修复（P2-7）。
 	sc.Buffer(make([]byte, 64*1024), int(mb+1))
@@ -111,9 +113,9 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []Message, error) {
 			}
 			continue
 		}
-		// message 行（type=message 或历史无 type）：反序列化进 Message，未知字段忽略。
-		var m Message
-		//nolint:musttag // Message 已有 json tag；sessionLine 嵌入 Message 是 session 文件格式约定（非 wire）
+		// message 行（type=message 或历史无 type）：反序列化进 miniagent.Message，未知字段忽略。
+		var m miniagent.Message
+		//nolint:musttag // miniagent.Message 已有 json tag；sessionLine 嵌入 miniagent.Message 是 session 文件格式约定（非 wire）
 		if err := json.Unmarshal(line, &m); err != nil {
 			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行解析失败：%w", path, i+1, err)
 		}
@@ -137,7 +139,7 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []Message, error) {
 // 跨进程锁防行边界交织非法 JSON（P2-13）；预序列化按 size+待写 超限拒绝，避免写入成功延后失败到
 // LoadSession 致永久卡死（P1-4）；写前 ensureTrailingNewline 截断崩溃半写残行（H3-1）。withSessionLock
 // 统一 O_NOFOLLOW + MkdirAll 0o700 + flock（P3）。opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落常量）。
-func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64) error {
+func AppendMessages(path string, meta SessionMeta, msgs []miniagent.Message, opts ...int64) error {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
 		mb = opts[0]
@@ -177,7 +179,7 @@ func AppendMessages(path string, meta SessionMeta, msgs []Message, opts ...int64
 			buf.WriteByte('\n')
 		}
 		for _, m := range msgs {
-			//nolint:musttag // sessionLine 嵌入 Message 是 session 文件格式约定（非 wire）
+			//nolint:musttag // sessionLine 嵌入 miniagent.Message 是 session 文件格式约定（非 wire）
 			b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 			if err != nil {
 				return err
@@ -237,7 +239,7 @@ func ensureTrailingNewline(f *os.File, size, mb int64) (int64, error) {
 // 需 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。msgs 是全量 transcript；锁与临时文件策略
 // 见 withSessionLock；write/rename 失败都清理临时文件。rename 后下轮 LoadSession 读精简文件。
 // opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
-func RewriteMessages(path string, meta SessionMeta, msgs []Message, opts ...int64) error {
+func RewriteMessages(path string, meta SessionMeta, msgs []miniagent.Message, opts ...int64) error {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
 		mb = opts[0]
@@ -253,7 +255,7 @@ func RewriteMessages(path string, meta SessionMeta, msgs []Message, opts ...int6
 	buf.Write(b)
 	buf.WriteByte('\n')
 	for _, m := range msgs {
-		//nolint:musttag // sessionLine 嵌入 Message 是 session 文件格式约定（非 wire）
+		//nolint:musttag // sessionLine 嵌入 miniagent.Message 是 session 文件格式约定（非 wire）
 		b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 		if err != nil {
 			return err

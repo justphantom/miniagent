@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
 const maxChatBodyBytes = 4 << 20 // 4 MiB；恰好达到不截断，多 1 字节即报错
@@ -38,13 +39,13 @@ type ChatClient struct {
 // NewChatClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
 // （ListAllModels 静态回落时不 GET）。headers 为 provider 自定义请求头，可为 nil。
 func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*ChatClient, error) {
-	chat, err := miniagent.ValidateURL(chatURL)
+	chat, err := config.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
 	c := &ChatClient{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: chat, HTTP: httpClient, Logger: logger, Headers: headers}
 	if modelsURL != "" {
-		m, err := miniagent.ValidateURL(modelsURL)
+		m, err := config.ValidateURL(modelsURL)
 		if err != nil {
 			return nil, err
 		}
@@ -59,7 +60,7 @@ func cacheEndpoint(dst **url.URL, errp *error, raw string) {
 	if *dst != nil {
 		return
 	}
-	u, err := miniagent.ValidateURL(raw)
+	u, err := config.ValidateURL(raw)
 	if err != nil {
 		*errp = err
 		return

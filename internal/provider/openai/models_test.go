@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
 func TestListModels_NonOKErrors(t *testing.T) {
@@ -38,22 +38,22 @@ func TestListModels_EmptyData(t *testing.T) {
 	}
 }
 
-func keyForTest(_ miniagent.ProviderConfig) string { return "sk-test" }
+func keyForTest(_ config.ProviderConfig) string { return "sk-test" }
 
 func TestListAllModels_StaticNoGET(t *testing.T) {
 	// ModelsURL 空 + 静态 Models → 直接返回，绝不发 HTTP（无需 server 即证明不 GET）。
-	providers := []miniagent.ProviderConfig{{Name: "p", Models: []miniagent.ModelConfig{{Name: "a"}, {Name: "b"}}}}
+	providers := []config.ProviderConfig{{Name: "p", Models: []config.ModelConfig{{Name: "a"}, {Name: "b"}}}}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err != nil {
 		t.Fatalf("static list: %v", err)
 	}
-	if len(ids) != 2 || ids[0] != (miniagent.ModelRef{Provider: "p", Model: "a"}) {
+	if len(ids) != 2 || ids[0] != (config.ModelRef{Provider: "p", Model: "a"}) {
 		t.Errorf("ids = %v", ids)
 	}
 }
 
 func TestListAllModels_StaticEmptyErrors(t *testing.T) {
-	providers := []miniagent.ProviderConfig{{Name: "p"}}
+	providers := []config.ProviderConfig{{Name: "p"}}
 	if _, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil); err == nil {
 		t.Error("empty static models should error")
 	}
@@ -69,7 +69,7 @@ func TestListAllModels_MultiProvider(t *testing.T) {
 	}))
 	defer srv2.Close()
 
-	providers := []miniagent.ProviderConfig{
+	providers := []config.ProviderConfig{
 		{Name: "openai", ChatURL: srv1.URL, ModelsURL: srv1.URL + "/v1/models"},
 		{Name: "deepseek", ChatURL: srv2.URL, ModelsURL: srv2.URL + "/v1/models"},
 	}
@@ -77,7 +77,7 @@ func TestListAllModels_MultiProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := map[miniagent.ModelRef]bool{
+	want := map[config.ModelRef]bool{
 		{Provider: "openai", Model: "gpt-4o"}:           true,
 		{Provider: "openai", Model: "gpt-3.5"}:          true,
 		{Provider: "deepseek", Model: "deepseek-chat"}:  true,
@@ -99,15 +99,15 @@ func TestListAllModels_MixedStaticAndDynamic(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	providers := []miniagent.ProviderConfig{
-		{Name: "static", Models: []miniagent.ModelConfig{{Name: "static-1"}, {Name: "static-2"}}},
+	providers := []config.ProviderConfig{
+		{Name: "static", Models: []config.ModelConfig{{Name: "static-1"}, {Name: "static-2"}}},
 		{Name: "dynamic", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 	}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := map[miniagent.ModelRef]bool{
+	want := map[config.ModelRef]bool{
 		{Provider: "static", Model: "static-1"}:       true,
 		{Provider: "static", Model: "static-2"}:       true,
 		{Provider: "dynamic", Model: "dynamic-model"}: true,
@@ -132,7 +132,7 @@ func TestListAllModels_PartialFailure(t *testing.T) {
 	}))
 	defer srv2.Close()
 
-	providers := []miniagent.ProviderConfig{
+	providers := []config.ProviderConfig{
 		{Name: "ok", ChatURL: srv1.URL, ModelsURL: srv1.URL + "/v1/models"},
 		{Name: "fail", ChatURL: srv2.URL, ModelsURL: srv2.URL + "/v1/models"},
 	}
@@ -140,7 +140,7 @@ func TestListAllModels_PartialFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from failed provider")
 	}
-	if len(ids) != 1 || ids[0] != (miniagent.ModelRef{Provider: "ok", Model: "model-a"}) {
+	if len(ids) != 1 || ids[0] != (config.ModelRef{Provider: "ok", Model: "model-a"}) {
 		t.Errorf("want [{ok model-a}], got %v", ids)
 	}
 	if !strings.Contains(err.Error(), "fail") {
@@ -149,7 +149,7 @@ func TestListAllModels_PartialFailure(t *testing.T) {
 }
 
 func TestListAllModels_EmptyProviders(t *testing.T) {
-	ids, err := ListAllModels(context.Background(), []miniagent.ProviderConfig{}, keyForTest, nil, nil)
+	ids, err := ListAllModels(context.Background(), []config.ProviderConfig{}, keyForTest, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,12 +165,12 @@ func TestListAllModels_PerProviderKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	providers := []miniagent.ProviderConfig{
+	providers := []config.ProviderConfig{
 		{Name: "a", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models", Key: "key-a"},
 		{Name: "b", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models", Key: "key-b"},
 	}
 	keys := map[string]string{"a": "shared"}
-	ids, err := ListAllModels(context.Background(), providers, func(p miniagent.ProviderConfig) string {
+	ids, err := ListAllModels(context.Background(), providers, func(p config.ProviderConfig) string {
 		if k, ok := keys[p.Name]; ok {
 			return k
 		}
@@ -190,7 +190,7 @@ func TestListAllModels_DeterministicOrder(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	providers := []miniagent.ProviderConfig{
+	providers := []config.ProviderConfig{
 		{Name: "p1", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 		{Name: "p2", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 		{Name: "p3", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
@@ -199,7 +199,7 @@ func TestListAllModels_DeterministicOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []miniagent.ModelRef{{Provider: "p1", Model: "m"}, {Provider: "p2", Model: "m"}, {Provider: "p3", Model: "m"}}
+	want := []config.ModelRef{{Provider: "p1", Model: "m"}, {Provider: "p2", Model: "m"}, {Provider: "p3", Model: "m"}}
 	if len(ids) != len(want) {
 		t.Fatalf("want %v, got %v", want, ids)
 	}

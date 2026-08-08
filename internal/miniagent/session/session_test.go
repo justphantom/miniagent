@@ -1,4 +1,4 @@
-package miniagent
+package session
 
 import (
 	"os"
@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // TestMain 保留 os.Exit 语义；session 上限改为各测试经 LoadSession/AppendMessages 的 maxBytes 参数注入。
@@ -13,10 +15,10 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func sampleTranscript() []Message {
-	return []Message{
+func sampleTranscript() []miniagent.Message {
+	return []miniagent.Message{
 		{Role: "user", Content: "看下 a.txt"},
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "read", Args: `{"path":"a.txt"}`}}},
+		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "read", Args: `{"path":"a.txt"}`}}},
 		{Role: "tool", ToolCallID: "c1", Content: "1 │ hello"},
 		{Role: "assistant", Content: "a.txt 内容是 hello"},
 	}
@@ -133,8 +135,8 @@ func TestLoadSession_OrphanToolMessageFails(t *testing.T) {
 // kind=summary 结构化标记可读（审查 v3 #2），role=user 合法持久化。
 func TestLoadSession_KindSummaryRecognized(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sum.jsonl")
-	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{
-		{Role: "user", Kind: KindSummary, Content: "[既往对话摘要] xxx"},
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{
+		{Role: "user", Kind: miniagent.KindSummary, Content: "[既往对话摘要] xxx"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func TestLoadSession_KindSummaryRecognized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
-	if len(msgs) != 1 || msgs[0].Kind != KindSummary || msgs[0].Role != "user" {
+	if len(msgs) != 1 || msgs[0].Kind != miniagent.KindSummary || msgs[0].Role != "user" {
 		t.Errorf("summary kind not recognized: %+v", msgs)
 	}
 }
@@ -153,7 +155,7 @@ func TestLoadSession_LargeSingleLineOK(t *testing.T) {
 	const maxSz = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	big := strings.Repeat("x", int(maxSz/2))
-	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}, maxSz); err != nil {
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: big}}, maxSz); err != nil {
 		t.Fatalf("AppendMessages: %v", err)
 	}
 	_, msgs, err := LoadSession(path, maxSz)
@@ -176,7 +178,7 @@ func TestAppendMessages_HealsPartialTrailingLine(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "after"}}); err != nil {
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "after"}}); err != nil {
 		t.Fatalf("AppendMessages: %v", err)
 	}
 	_, msgs, err := LoadSession(path)
@@ -202,7 +204,7 @@ func TestAppendMessages_OversizedFileRejectedUntouched(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "after"}}, mb); err == nil {
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "after"}}, mb); err == nil {
 		t.Fatal("超 mb 的文件应被拒绝")
 	}
 	// 关键：文件未被截断（R4-1 回归点——旧实现会静默截断丢合法行）。

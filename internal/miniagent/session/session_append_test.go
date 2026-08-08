@@ -1,4 +1,4 @@
-package miniagent
+package session
 
 import (
 	"fmt"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // 空 msgs：AppendMessages no-op，不创建文件（main 仅成功轮调用，空 NewMessages 不落盘）。
@@ -40,10 +42,10 @@ func TestAppendMessages_FileMode0600(t *testing.T) {
 func TestAppendMessages_AppendsAcrossCalls(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "acc.jsonl")
 	meta := SessionMeta{ID: "s"}
-	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: "q1"}}); err != nil {
+	if err := AppendMessages(path, meta, []miniagent.Message{{Role: "user", Content: "q1"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendMessages(path, meta, []Message{{Role: "assistant", Content: "a1"}}); err != nil {
+	if err := AppendMessages(path, meta, []miniagent.Message{{Role: "assistant", Content: "a1"}}); err != nil {
 		t.Fatal(err)
 	}
 	_, msgs, err := LoadSession(path)
@@ -62,11 +64,11 @@ func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	meta := SessionMeta{ID: "s"}
 	big := strings.Repeat("x", int(maxSz/2)+100)
-	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}, maxSz); err != nil {
+	if err := AppendMessages(path, meta, []miniagent.Message{{Role: "user", Content: big}}, maxSz); err != nil {
 		t.Fatalf("首次追加应成功: %v", err)
 	}
 	// 再追加同样大小，总和超 maxSz → 写侧预判应返回 error。
-	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: big}}, maxSz); err == nil {
+	if err := AppendMessages(path, meta, []miniagent.Message{{Role: "user", Content: big}}, maxSz); err == nil {
 		t.Fatal("P1-4：追加后超 maxSz 应返回 error")
 	}
 	// 第二次失败不应让文件越过上限（写侧预判在写入前）。
@@ -82,7 +84,7 @@ func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
 func TestAppendMessages_ConcurrentSafe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	meta := SessionMeta{ID: "s"}
-	if err := AppendMessages(path, meta, []Message{{Role: "user", Content: "init"}}); err != nil {
+	if err := AppendMessages(path, meta, []miniagent.Message{{Role: "user", Content: "init"}}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -91,7 +93,7 @@ func TestAppendMessages_ConcurrentSafe(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			for i := range 10 {
-				if err := AppendMessages(path, meta, []Message{
+				if err := AppendMessages(path, meta, []miniagent.Message{
 					{Role: "assistant", Content: fmt.Sprintf("g%d-%d", idx, i)},
 				}); err != nil {
 					t.Errorf("append %d-%d: %v", idx, i, err)
@@ -121,7 +123,7 @@ func TestAppendMessages_RejectsSymlinkTarget(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	if err := AppendMessages(link, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}}); err == nil {
+	if err := AppendMessages(link, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "x"}}); err == nil {
 		t.Error("O_NOFOLLOW 应拒绝 symlink 目标")
 	}
 }
@@ -130,7 +132,7 @@ func TestAppendMessages_RejectsSymlinkTarget(t *testing.T) {
 func TestAppendMessages_MkdirAll0700(t *testing.T) {
 	dir := t.TempDir()
 	nested := filepath.Join(dir, "a", "b", "s.jsonl")
-	if err := AppendMessages(nested, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}}); err != nil {
+	if err := AppendMessages(nested, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "x"}}); err != nil {
 		t.Fatalf("AppendMessages: %v", err)
 	}
 	aDir := filepath.Join(dir, "a")
@@ -146,9 +148,9 @@ func TestAppendMessages_MkdirAll0700(t *testing.T) {
 // P3-10：validateToolPairing 错误消息索引为 1-based（便于按行号定位 session 文件）。
 func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
 	// 第 2 条（0-based 索引 1）出现重复 tool_call id。
-	msgs := []Message{
-		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
-		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
+	msgs := []miniagent.Message{
+		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
+		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
 	}
 	err := ValidateToolPairing(msgs)
 	if err == nil {
@@ -166,15 +168,15 @@ func TestRewriteMessages_AtomicRewrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
 	// 先 append 旧内容（含将被 rewrite 丢弃的旧 summary + 旧中段）。
-	if err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{
-		{Role: "user", Kind: KindSummary, Content: "[既往对话摘要] 旧"},
+	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{
+		{Role: "user", Kind: miniagent.KindSummary, Content: "[既往对话摘要] 旧"},
 		{Role: "user", Content: "被屏障的旧轮"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// Rewrite 为新内容（新 summary + 最近轮）。
-	want := []Message{
-		{Role: "user", Kind: KindSummary, Content: "[既往对话摘要] 新"},
+	want := []miniagent.Message{
+		{Role: "user", Kind: miniagent.KindSummary, Content: "[既往对话摘要] 新"},
 		{Role: "user", Content: "最近轮提问"},
 		{Role: "assistant", Content: "最近轮回答"},
 	}
@@ -232,7 +234,7 @@ func TestRewriteMessages_OversizedFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
 	big := strings.Repeat("x", int(maxSz)+1)
-	if err := RewriteMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: big}}, maxSz); err == nil {
+	if err := RewriteMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: big}}, maxSz); err == nil {
 		t.Fatal("超 maxSz 应报错")
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -251,7 +253,7 @@ func TestRewriteMessages_RejectsSymlinkTarget(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	if err := RewriteMessages(link, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}}); err == nil {
+	if err := RewriteMessages(link, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "x"}}); err == nil {
 		t.Error("O_NOFOLLOW 应拒绝 symlink 目标")
 	}
 }

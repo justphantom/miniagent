@@ -195,7 +195,7 @@ type CompactingHook func(ctx context.Context, in CompactingInput) (CompactingOut
 // 以一条 role=user 消息 append 到 middle 末尾（进摘要输入，不进 system 通道）。
 // 契约：hook==nil 直接返回原 prompt/middle（零开销短路）。hook 返回 error → 上抛中止本次摘要压缩，
 // compactWithSummary 返回该 error、FitHistory 回落有损 compactHistory（HOOKS.md §2.9）。
-// context 注入只追加无 tool_calls 的 user 消息，不破坏 tool 配对（调用前已过 miniagent.ValidateToolPairing）。
+// context 注入只追加无 tool_calls 的 user 消息，不破坏 tool 配对（调用前已过 session.ValidateToolPairing）。
 func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, model, summarizerPrompt string, middle []miniagent.Message) (effPrompt string, effMiddle []miniagent.Message, err error) {
 	if hook == nil {
 		return summarizerPrompt, middle, nil

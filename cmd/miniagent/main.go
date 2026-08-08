@@ -15,9 +15,11 @@ import (
 	"syscall"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"github.com/justphantom/miniagent/internal/miniagent/compaction"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
@@ -90,7 +92,7 @@ func main() {
 		return
 	}
 
-	resolved, err := miniagent.Resolve(cfg, collectOverrides(f))
+	resolved, err := config.Resolve(cfg, collectOverrides(f))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 		os.Exit(1)
@@ -193,9 +195,9 @@ func main() {
 		}
 		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
 		if result.Compacted {
-			saveErr = miniagent.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
+			saveErr = session.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
 		} else {
-			saveErr = miniagent.AppendMessages(sessPath, meta, result.NewMessages, int64(limits.MaxSessionBytes))
+			saveErr = session.AppendMessages(sessPath, meta, result.NewMessages, int64(limits.MaxSessionBytes))
 		}
 		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		return saveErr
@@ -225,7 +227,7 @@ func main() {
 
 // buildRuntimeClients 构造主 provider 的 chat/stream client 与（compaction 跨 provider 时）摘要用 compChat。
 // compChat 与主 provider 同名时留 nil（loop 回落主 chat）。key 缺失或端点非法时 os.Exit（原 secondaryClient 闭包仅 compaction 一处用，内联）。
-func buildRuntimeClients(resolved *miniagent.Resolved, apiKey string, logger *slog.Logger) (chat *openai.ChatClient, stream *openai.StreamClient, compChat *openai.ChatClient) {
+func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.Logger) (chat *openai.ChatClient, stream *openai.StreamClient, compChat *openai.ChatClient) {
 	chat, stream = buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
 		key := resolveFinalKey(resolved.CompactionProvider.Key)
@@ -259,7 +261,7 @@ func assembleHooks(
 // 压缩策略经 NewCompaction 外挂，其余策略经 NewDefault* 钩子工厂外挂，核心 Run 零策略）。
 // 生产路径下 resolved.System 经 assembleSystemPrompt（main.go:126）保证非空，下面的空串兜底仅对
 // 直接构造 loopCfg 的测试有意义（防漏传 System 致空 prompt）。
-func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
+func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
 	system := resolved.System
 	if system == "" {
 		system = defaultSystemPrompt
@@ -283,7 +285,7 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 
 // compactionOptions 把 resolved 的压缩策略装配成 CompactionOptions。chat 是摘要用 client
 // （compChat 非空用之，否则回落主 chat）。
-func compactionOptions(resolved *miniagent.Resolved, meta miniagent.SessionMeta, chat, compChat *openai.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
+func compactionOptions(resolved *config.Resolved, meta session.SessionMeta, chat, compChat *openai.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
 	compClient := compChat
 	if compClient == nil {
 		compClient = chat

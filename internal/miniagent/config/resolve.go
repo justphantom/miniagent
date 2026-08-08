@@ -1,9 +1,11 @@
-package miniagent
+package config
 
 import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // CLIOverrides 收集「显式传入」的 CLI 参数（main 用 flag.Visit 区分未设置），供 Resolve
@@ -135,8 +137,8 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	default:
 		r.Mode = "default"
 	}
-	if r.Mode != ModeDefault && r.Mode != ModeAuto {
-		return nil, fmt.Errorf("mode %q 非法（%s|%s）", r.Mode, ModeDefault, ModeAuto)
+	if r.Mode != miniagent.ModeDefault && r.Mode != miniagent.ModeAuto {
+		return nil, fmt.Errorf("mode %q 非法（%s|%s）", r.Mode, miniagent.ModeDefault, miniagent.ModeAuto)
 	}
 	r.System = cfg.Defaults.SystemPrompt
 	// summary_request / summarizer_prompt 仅 config 来源（P2 移出 CLI）。

@@ -1,8 +1,10 @@
-package miniagent
+package config
 
 import (
 	"testing"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 func iptr(v int) *int       { return &v }
@@ -15,7 +17,7 @@ func layeredCfg() *Config {
 		Providers: []ProviderConfig{{
 			Name:          "p",
 			ChatURL:       "https://a/v1/chat/completions",
-			Thinking:      &ThinkingMapping{Field: "x-effort", Map: map[string]string{"off": "off", "fast": "low", "medium": "mid", "slow": "high"}},
+			Thinking:      &miniagent.ThinkingMapping{Field: "x-effort", Map: map[string]string{"off": "off", "fast": "low", "medium": "mid", "slow": "high"}},
 			ThinkingLevel: sptr("medium"),
 			MaxTokens:     iptr(2000),
 			ContextWindow: iptr(100000),
@@ -25,9 +27,9 @@ func layeredCfg() *Config {
 				{Name: "m2"},
 			},
 		}},
-		Defaults:   DefaultsConfig{Provider: "p", Model: "m1", Thinking: "slow"},
-		Compaction: CompactionConfig{Provider: "p", Model: "m1"},
-		Run:        RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000), HTTPTimeout: sptr("200s")},
+		Defaults:      DefaultsConfig{Provider: "p", Model: "m1", Thinking: "slow"},
+		Compaction:    CompactionConfig{Provider: "p", Model: "m1"},
+		Run: RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000), HTTPTimeout: sptr("200s")},
 	}
 }
 
@@ -59,10 +61,10 @@ func TestResolve_ModelParamsLayered(t *testing.T) {
 // provider/model 均无 → 全局 run。
 func TestResolve_ModelParamsFallthroughGlobal(t *testing.T) {
 	cfg := &Config{
-		Providers:  []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions", Models: []ModelConfig{{Name: "m"}}}},
-		Defaults:   DefaultsConfig{Provider: "p", Model: "m"},
-		Compaction: CompactionConfig{Provider: "p", Model: "m"},
-		Run:        RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000)},
+		Providers:     []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions", Models: []ModelConfig{{Name: "m"}}}},
+		Defaults:      DefaultsConfig{Provider: "p", Model: "m"},
+		Compaction:    CompactionConfig{Provider: "p", Model: "m"},
+		Run: RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000)},
 	}
 	r, err := Resolve(cfg, CLIOverrides{})
 	if err != nil {
@@ -119,7 +121,7 @@ func TestResolve_ThinkingLevelScoped(t *testing.T) {
 		Providers: []ProviderConfig{{
 			Name:          "p",
 			ChatURL:       "https://a/v1/chat/completions",
-			Thinking:      &ThinkingMapping{Field: "x-effort", Map: map[string]string{"fast": "low"}},
+			Thinking:      &miniagent.ThinkingMapping{Field: "x-effort", Map: map[string]string{"fast": "low"}},
 			ThinkingLevel: sptr("bogus"), // 不在 map
 			Models:        []ModelConfig{{Name: "m"}},
 		}},

@@ -1,8 +1,10 @@
-package miniagent
+package session
 
 import (
 	"errors"
 	"fmt"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // ValidateSessionID 白名单校验 id：仅允许拉丁字母、数字、连字符。禁路径分隔符/点/空格等，
@@ -25,11 +27,11 @@ func ValidateSessionID(id string) error {
 	return nil
 }
 
-func validateSessionMessage(m Message) error {
+func validateSessionMessage(m miniagent.Message) error {
 	switch m.Role {
-	case RoleUser, RoleAssistant:
+	case miniagent.RoleUser, miniagent.RoleAssistant:
 		return nil
-	case RoleTool:
+	case miniagent.RoleTool:
 		if m.ToolCallID == "" {
 			return errors.New("tool 消息缺少 tool_call_id")
 		}
@@ -40,18 +42,18 @@ func validateSessionMessage(m Message) error {
 }
 
 // ValidateToolPairing 校验 assistant.tool_calls 与 tool 消息一一配对；断裂会被端点 400，提前拦截指明位置。
-func ValidateToolPairing(msgs []Message) error {
+func ValidateToolPairing(msgs []miniagent.Message) error {
 	pending := map[string]bool{}
 	for i, m := range msgs {
 		switch m.Role {
-		case RoleAssistant:
+		case miniagent.RoleAssistant:
 			for _, tc := range m.ToolCalls {
 				if pending[tc.ID] {
 					return fmt.Errorf("第 %d 条：tool_call id %q 重复", i+1, tc.ID)
 				}
 				pending[tc.ID] = true
 			}
-		case RoleTool:
+		case miniagent.RoleTool:
 			if !pending[m.ToolCallID] {
 				return fmt.Errorf("第 %d 条：tool 消息的 tool_call_id %q 没有对应的 assistant tool_call", i+1, m.ToolCallID)
 			}

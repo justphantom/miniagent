@@ -1,4 +1,4 @@
-package miniagent
+package config
 
 import (
 	"encoding/json"
@@ -7,14 +7,9 @@ import (
 	"io"
 	"os"
 	"strings"
-)
 
-// ThinkingMapping 让 provider 显式声明思考字段的 wire 名（如 openai 的 reasoning_effort）
-// 与级别取值映射（跨供应商兼容）。钉死：启用思考时 provider 必声明 {field,map}，wire 必经映射。
-type ThinkingMapping struct {
-	Field string            `json:"field"`
-	Map   map[string]string `json:"map,omitempty"`
-}
+	"github.com/justphantom/miniagent/internal/miniagent"
+)
 
 // Config 是 ./miniagent.json 的根结构。Defaults=策略（model/thinking/mode/system），
 // Run=运行参数（限额/超时/路径/stream）；指针区分未设置/零值（审查 v2 #12）。
@@ -39,7 +34,7 @@ type ProviderConfig struct {
 	// breaking：原为 []string，现须对象形式 [{"name":...}]。
 	Models []ModelConfig `json:"models,omitempty"`
 	// Thinking 是思考字段的 wire 映射（{field,map}），供应商级——启用思考时 provider 必声明。
-	Thinking *ThinkingMapping `json:"thinking,omitempty"`
+	Thinking *miniagent.ThinkingMapping `json:"thinking,omitempty"`
 	// 供应商级模型参数（覆盖全局 run）：输出上限、上下文窗口、HTTP 超时（传输层，同 provider 共享 endpoint）。
 	MaxTokens     *int    `json:"max_tokens,omitempty"`
 	ContextWindow *int    `json:"context_window,omitempty"`
@@ -152,10 +147,10 @@ type CompactionConfig struct {
 // maxConfigFileBytes 是配置/规则文件的字节上限，防止多 GB 文件导致 OOM。
 const maxConfigFileBytes = 4 << 20 // 4 MiB
 
-// ReadFileLimited 读取 path 并限制大小；超过 maxBytes 返回错误。经 openNoFollow 打开，拒最终分量
+// ReadFileLimited 读取 path 并限制大小；超过 maxBytes 返回错误。经 miniagent.OpenNoFollow 打开，拒最终分量
 // 符号链接（与 session 文件一致硬化），防 config 路径（含 API key）被 symlink 劫持到敏感文件。
 func ReadFileLimited(path string, maxBytes int64) ([]byte, error) {
-	f, err := openNoFollow(path, os.O_RDONLY, 0)
+	f, err := miniagent.OpenNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +182,7 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 // thinkingFieldBlacklist 列出 buildChatBody 写入的标准 payload key（wire.go）。
-// ThinkingMapping.Field 若指向这些 key，payload[field]=val 会 clobber 标准字段
+// miniagent.ThinkingMapping.Field 若指向这些 key，payload[field]=val 会 clobber 标准字段
 // （如 field:"max_tokens" 覆盖 max_tokens 限额、field:"tools" 覆盖工具表）。
 // 注：钉死后 reasoning_effort 不再是「默认冗余 field」，而是 provider 显式声明的合法 field（openai 标准映射），
 // 故已从黑名单移除——provider.thinking.field:"reasoning_effort" 现合法。
@@ -209,7 +204,7 @@ var thinkingFieldBlacklist = map[string]bool{
 // validateThinking 校验 thinking 取值（钉死）：空串/off 合法；非 off 必须在 customKeys（= 主 provider.thinking.map
 // keys）中声明——wire 必经 provider 映射，不再原样接受标准级别。迫使 provider 显式声明枚举映射（level→value）。
 func validateThinking(thinking string, customKeys map[string]bool) error {
-	if thinking == "" || thinking == ThinkingOff {
+	if thinking == "" || thinking == miniagent.ThinkingOff {
 		return nil
 	}
 	if customKeys[thinking] {
@@ -282,11 +277,11 @@ func validateConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != ModeDefault && cfg.Defaults.Mode != ModeAuto {
-		return fmt.Errorf("defaults.mode %q 非法（%s|%s）", cfg.Defaults.Mode, ModeDefault, ModeAuto)
+	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != miniagent.ModeDefault && cfg.Defaults.Mode != miniagent.ModeAuto {
+		return fmt.Errorf("defaults.mode %q 非法（%s|%s）", cfg.Defaults.Mode, miniagent.ModeDefault, miniagent.ModeAuto)
 	}
 	// 钉死：defaults.thinking≠off → 主 provider 必声明 thinking{field≠"", map 非空}，wire 必经 provider 映射。
-	if cfg.Defaults.Thinking != "" && cfg.Defaults.Thinking != ThinkingOff {
+	if cfg.Defaults.Thinking != "" && cfg.Defaults.Thinking != miniagent.ThinkingOff {
 		if defProv.Thinking == nil {
 			return fmt.Errorf("defaults.thinking %q 已启用，但 provider %q 未声明 thinking（钉死：启用思考必须声明 {field,map}）", cfg.Defaults.Thinking, defProv.Name)
 		}

@@ -10,16 +10,17 @@ import (
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
 // runReplay：id → path → load → replay。失败打 stderr + exit 1（错误口径与 resolveSessionForRun 一致）。
 func runReplay(out io.Writer, sessionDir, id string, maxBytes int64) {
-	sessPath, err := miniagent.ResolveSessionPath(id, sessionDir)
+	sessPath, err := session.ResolveSessionPath(id, sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: replay: %v\n", err)
 		os.Exit(1)
 	}
-	meta, msgs, err := miniagent.LoadSession(sessPath, maxBytes)
+	meta, msgs, err := session.LoadSession(sessPath, maxBytes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
 		os.Exit(1)
@@ -47,7 +48,7 @@ func runReplay(out io.Writer, sessionDir, id string, maxBytes int64) {
 // 已知精度边界（用户认可，非缺陷）：text/reasoning 为整串一次发（session 无逐块切分）；
 // tool_result 经双重截断（落盘成型串 + EmitToolResult 的 2000 字符上限）且无 exit_code
 // （session tool 消息未存退出码）；压缩过的 session 回放的是压缩后快照；finish 恒 "stop"。
-func replaySession(w io.Writer, meta miniagent.SessionMeta, msgs []miniagent.Message) error {
+func replaySession(w io.Writer, meta session.SessionMeta, msgs []miniagent.Message) error {
 	if err := event.EmitSession(w, meta); err != nil {
 		return err
 	}

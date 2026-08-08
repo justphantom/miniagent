@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
@@ -130,7 +131,7 @@ func TestSelectTailByTokens_RecentRoundExceedsBudget(t *testing.T) {
 	if !msgsContainContent(middle, "old") {
 		t.Errorf("older 轮应进 middle: %+v", middle)
 	}
-	if err := miniagent.ValidateToolPairing(tail); err != nil {
+	if err := session.ValidateToolPairing(tail); err != nil {
 		t.Errorf("tail 配对应自洽: %v", err)
 	}
 }
@@ -154,7 +155,7 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	if len(shrunk[1].Content) >= 8000 {
 		t.Errorf("tool content 应被压缩: len=%d", len(shrunk[1].Content))
 	}
-	if err := miniagent.ValidateToolPairing(shrunk); err != nil {
+	if err := session.ValidateToolPairing(shrunk); err != nil {
 		t.Errorf("shrink 后配对应自洽: %v", err)
 	}
 }

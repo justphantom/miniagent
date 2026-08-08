@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
 )
 
@@ -24,16 +25,16 @@ func mustParseLogLevel(s string) slog.Level {
 	return level
 }
 
-func requireConfig(configPath string) (*miniagent.Config, error) {
+func requireConfig(configPath string) (*config.Config, error) {
 	if configPath != "" {
-		return miniagent.LoadConfig(configPath)
+		return config.LoadConfig(configPath)
 	}
 	p, err := findDefaultConfigPath()
 	if err != nil {
 		return nil, err
 	}
 	if p != "" {
-		return miniagent.LoadConfig(p)
+		return config.LoadConfig(p)
 	}
 	return nil, errors.New("miniagent config 不存在（-config <path> 或 ~/.miniagent/miniagent.json）")
 }
@@ -57,10 +58,10 @@ func findDefaultConfigPath() (string, error) {
 
 // collectOverrides 用 flag.Visit 收集「显式传入」的 flag（未传入置 nil），供 Resolve 裁决。
 // P2 后仅保留 CLI 核心参数；策略参数（summary/duration/window 等）只在 config，不经 CLI。
-func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
+func collectOverrides(f *cliFlags) config.CLIOverrides {
 	set := map[string]bool{}
 	flag.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
-	o := miniagent.CLIOverrides{}
+	o := config.CLIOverrides{}
 	if set["provider"] {
 		o.Provider = f.provider
 	}
@@ -96,7 +97,7 @@ func resolveFinalKey(providerKey string) string {
 	return os.Getenv("MINIAGENT_API_KEY")
 }
 
-func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
+func validateConversation(resolved *config.Resolved, f *cliFlags) {
 	// 互斥查「解析后」的 stream（cli>config）：config run.stream=true + CLI -result-only 也须触发，
 	// 否则 loopCfg.Stream 解析为 true 而 buildHooks 返回空事件钩子，SSE 被拉取却丢弃、违反文档互斥语义。
 	if intoBool(resolved.Run.Stream, *f.stream) && *f.resultOnly {
@@ -117,63 +118,63 @@ func validateConversation(resolved *miniagent.Resolved, f *cliFlags) {
 	}
 }
 
-func effectiveWorkdir(resolved *miniagent.Resolved, f *cliFlags) string {
+func effectiveWorkdir(resolved *config.Resolved, f *cliFlags) string {
 	if resolved.Run.Workdir != nil && *resolved.Run.Workdir != "" {
 		return *resolved.Run.Workdir
 	}
 	return *f.workdir
 }
 
-func maxDurationOf(resolved *miniagent.Resolved) time.Duration {
+func maxDurationOf(resolved *config.Resolved) time.Duration {
 	if resolved.Run.MaxDuration != nil {
 		return *resolved.Run.MaxDuration
 	}
 	return 0
 }
 
-func shellTimeoutOf(resolved *miniagent.Resolved) time.Duration {
+func shellTimeoutOf(resolved *config.Resolved) time.Duration {
 	if resolved.Run.ShellTimeout != nil {
 		return *resolved.Run.ShellTimeout
 	}
 	return 0
 }
 
-func fileOpTimeoutOf(resolved *miniagent.Resolved) time.Duration {
+func fileOpTimeoutOf(resolved *config.Resolved) time.Duration {
 	if resolved.Run.FileOpTimeout != nil {
 		return *resolved.Run.FileOpTimeout
 	}
 	return 0
 }
 
-func writeTimeoutOf(resolved *miniagent.Resolved) time.Duration {
+func writeTimeoutOf(resolved *config.Resolved) time.Duration {
 	if resolved.Run.WriteTimeout != nil {
 		return *resolved.Run.WriteTimeout
 	}
 	return 0
 }
 
-func httpTimeoutOf(resolved *miniagent.Resolved) time.Duration {
+func httpTimeoutOf(resolved *config.Resolved) time.Duration {
 	if resolved.HTTPTimeout != nil {
 		return *resolved.HTTPTimeout
 	}
 	return 0
 }
 
-func maxReadFileBytesOf(resolved *miniagent.Resolved) int {
+func maxReadFileBytesOf(resolved *config.Resolved) int {
 	if resolved.RunConfig.MaxReadFileBytes != nil {
 		return *resolved.RunConfig.MaxReadFileBytes
 	}
 	return 0
 }
 
-func maxShellOutputCharsOf(resolved *miniagent.Resolved) int {
+func maxShellOutputCharsOf(resolved *config.Resolved) int {
 	if resolved.RunConfig.MaxShellOutputChars != nil {
 		return *resolved.RunConfig.MaxShellOutputChars
 	}
 	return 0
 }
 
-func maxSessionBytesOf(resolved *miniagent.Resolved) int {
+func maxSessionBytesOf(resolved *config.Resolved) int {
 	if resolved.RunConfig.MaxSessionBytes != nil {
 		return *resolved.RunConfig.MaxSessionBytes
 	}

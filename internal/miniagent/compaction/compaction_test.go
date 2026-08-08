@@ -1,12 +1,14 @@
 package compaction
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"context"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/provider/openai"
@@ -225,7 +227,7 @@ func TestCompactWithSummary_StripsMiddleBeforeSummarize(t *testing.T) {
 	if capturedTokens > 1500 {
 		t.Errorf("middle strip 后摘要体积应 < 1500（reasoning 清 + read dedup），实际 %d", capturedTokens)
 	}
-	if err := miniagent.ValidateToolPairing(out); err != nil {
+	if err := session.ValidateToolPairing(out); err != nil {
 		t.Errorf("strip 后配对断裂: %v", err)
 	}
 }
@@ -289,7 +291,7 @@ func TestCompactWithSummary_Success(t *testing.T) {
 	if summary.Kind != miniagent.KindSummary {
 		t.Fatal("expected summary.Kind == miniagent.KindSummary")
 	}
-	if err := miniagent.ValidateToolPairing(out); err != nil {
+	if err := session.ValidateToolPairing(out); err != nil {
 		t.Errorf("result pairing broken: %v", err)
 	}
 	// 最早 1 轮 + summary + 最近 3 轮

@@ -1,4 +1,4 @@
-package miniagent
+package config
 
 import (
 	"testing"

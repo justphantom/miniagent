@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
 // ListModels 调 GET ModelsURL，返回 id 列表。复用 ChatClient.modelsEndpoint/鉴权。
@@ -107,19 +107,19 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	return ids, false, 0, nil
 }
 
-// ListAllModels 聚合多个 provider 的可用模型，以 miniagent.ModelRef 切片返回（provider/model 分离）。
+// ListAllModels 聚合多个 provider 的可用模型，以 config.ModelRef 切片返回（provider/model 分离）。
 // 并发请求各 provider 的 ModelsURL（最多 8 路并发）；静态 models（无 ModelsURL）直接返回配置，不 GET。
 // 单个 provider 失败时记录警告但继续其他，最终返回首个错误（若有）。
 // keyFor 按 provider 返回最终 API key；httpClient 非 nil 时复用其 transport/timeout。
 // 调用方须保证 providers 已校验（名称唯一、URL 合法）。
-func ListAllModels(ctx context.Context, providers []miniagent.ProviderConfig, keyFor func(miniagent.ProviderConfig) string, httpClient *http.Client, logger *slog.Logger) ([]miniagent.ModelRef, error) {
+func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFor func(config.ProviderConfig) string, httpClient *http.Client, logger *slog.Logger) ([]config.ModelRef, error) {
 	var (
 		firstErr error
 		mu       sync.Mutex
 		wg       sync.WaitGroup
 	)
 	// 按 provider 名称收集结果，最后按输入顺序拼接，保证输出稳定。
-	results := make(map[string][]miniagent.ModelRef, len(providers))
+	results := make(map[string][]config.ModelRef, len(providers))
 
 	const maxConcurrent = 8
 	sem := make(chan struct{}, maxConcurrent)
@@ -127,7 +127,7 @@ func ListAllModels(ctx context.Context, providers []miniagent.ProviderConfig, ke
 	for _, p := range providers {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(p miniagent.ProviderConfig) {
+		go func(p config.ProviderConfig) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			var ids []string
@@ -160,9 +160,9 @@ func ListAllModels(ctx context.Context, providers []miniagent.ProviderConfig, ke
 				mu.Unlock()
 				return
 			}
-			paired := make([]miniagent.ModelRef, 0, len(ids))
+			paired := make([]config.ModelRef, 0, len(ids))
 			for _, id := range ids {
-				paired = append(paired, miniagent.ModelRef{Provider: p.Name, Model: id})
+				paired = append(paired, config.ModelRef{Provider: p.Name, Model: id})
 			}
 			mu.Lock()
 			results[p.Name] = paired
@@ -171,7 +171,7 @@ func ListAllModels(ctx context.Context, providers []miniagent.ProviderConfig, ke
 	}
 	wg.Wait()
 
-	all := make([]miniagent.ModelRef, 0)
+	all := make([]config.ModelRef, 0)
 	for _, p := range providers {
 		all = append(all, results[p.Name]...)
 	}

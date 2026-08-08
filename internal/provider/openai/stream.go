@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
 // StreamClient 调 OpenAI 兼容 chat completions 端点（流式 SSE）。
@@ -34,7 +35,7 @@ type StreamClient struct {
 
 // NewStreamClient 构造时 parse 并缓存 chatURL。headers 为 provider 自定义请求头，可为 nil。
 func NewStreamClient(apiKey, chatURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*StreamClient, error) {
-	chat, err := miniagent.ValidateURL(chatURL)
+	chat, err := config.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}

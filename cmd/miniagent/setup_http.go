@@ -13,29 +13,29 @@ import (
 
 	"log/slog"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // warnProviderInsecureURLs 对 provider 使用的 http（非 loopback）URL 发出明文传 key 警告。
-func warnProviderInsecureURLs(p miniagent.ProviderConfig) {
+func warnProviderInsecureURLs(p config.ProviderConfig) {
 	warnInsecureURL(p.ChatURL)
 	if p.ModelsURL != "" {
 		warnInsecureURL(p.ModelsURL)
 	}
 }
 
-func warnProvidersInsecureURLs(providers []miniagent.ProviderConfig) {
+func warnProvidersInsecureURLs(providers []config.ProviderConfig) {
 	for _, p := range providers {
 		warnProviderInsecureURLs(p)
 	}
 }
 
-// httpTimeoutFromConfig 解析 config 中的 run.http_timeout；未配置返回 0。复用 miniagent.ParseDuration
+// httpTimeoutFromConfig 解析 config 中的 run.http_timeout；未配置返回 0。复用 config.ParseDuration
 // 统一 duration 校验语义与错误格式（list-models 路径绕过 Resolve，故此处单独解析）。
-func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
-	d, err := miniagent.ParseDuration(cfg.Run.HTTPTimeout, "run.http_timeout")
+func httpTimeoutFromConfig(cfg *config.Config) (time.Duration, error) {
+	d, err := config.ParseDuration(cfg.Run.HTTPTimeout, "run.http_timeout")
 	if err != nil || d == nil {
 		return 0, err
 	}
@@ -44,8 +44,8 @@ func httpTimeoutFromConfig(cfg *miniagent.Config) (time.Duration, error) {
 
 // listAllModels 按 provider 解析 key（provider.Key > $MINIAGENT_API_KEY）并复用统一
 // transport/timeout，聚合模型列表。
-func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]miniagent.ModelRef, error) {
-	keyFor := func(p miniagent.ProviderConfig) string {
+func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]config.ModelRef, error) {
+	keyFor := func(p config.ProviderConfig) string {
 		if p.Key != "" {
 			return p.Key
 		}
@@ -60,7 +60,7 @@ func listAllModels(ctx context.Context, providers []miniagent.ProviderConfig, ht
 
 // runListModels 实现 -list-models 早退路径：逐行输出 NDJSON model 事件（provider/model
 // 分离字段）。providerFilter 非空时仅列出该 provider。部分失败：成功条目照常输出，退出码 1。
-func runListModels(ctx context.Context, cfg *miniagent.Config, providerFilter string, logger *slog.Logger) {
+func runListModels(ctx context.Context, cfg *config.Config, providerFilter string, logger *slog.Logger) {
 	listHTTPTimeout, err := httpTimeoutFromConfig(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: config: %v\n", err)
@@ -68,12 +68,12 @@ func runListModels(ctx context.Context, cfg *miniagent.Config, providerFilter st
 	}
 	providers := cfg.Providers
 	if providerFilter != "" {
-		p, err := miniagent.FindProvider(cfg, providerFilter)
+		p, err := config.FindProvider(cfg, providerFilter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 			os.Exit(1)
 		}
-		providers = []miniagent.ProviderConfig{p}
+		providers = []config.ProviderConfig{p}
 	}
 	warnProvidersInsecureURLs(providers)
 	models, err := listAllModels(ctx, providers, listHTTPTimeout, logger)
@@ -113,7 +113,7 @@ func warnInsecureURL(rawURL string) {
 // 两者共享同一 *http.Transport（代理/dial/TLS 超时）；chat 的 httpTimeout 兜底防单次调用挂死（#3），
 // stream 无 Timeout 避免 body 读取被砍（P2-5/P1-A，#2）——P4 拆分后由各自 client 持有。
 // httpTimeout<=0 用默认 120s。
-func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) (*openai.ChatClient, *openai.StreamClient) {
+func buildLLM(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) (*openai.ChatClient, *openai.StreamClient) {
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
 	}
@@ -134,7 +134,7 @@ func buildLLM(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, ht
 }
 
 // buildChatClient 为指定 provider 构造非流式 ChatClient（用于 compaction 等仅需 Do 的场景）。
-func buildChatClient(apiKey string, p miniagent.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) *openai.ChatClient {
+func buildChatClient(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) *openai.ChatClient {
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
 	}

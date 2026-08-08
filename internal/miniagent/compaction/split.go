@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/session"
 	"github.com/justphantom/miniagent/internal/text"
 )
 
@@ -168,7 +169,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 		return msgs, miniagent.Message{}, miniagent.Usage{}, nil
 	}
 	// 中段必须自洽配对：否则替换进 summary 会留下孤立的 tool_call/tool，续跑被端点 400。
-	if err := miniagent.ValidateToolPairing(middle); err != nil {
+	if err := session.ValidateToolPairing(middle); err != nil {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, fmt.Errorf("中段配对断裂，无法安全摘要：%w", err)
 	}
 	// 摘要前对 middle 全压 strip（keepN=0）：middle 全是待有损摘要的非近期对象，清冗余 reasoning / 折叠被取代的
@@ -182,7 +183,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 		compModel = budget.Model
 	}
 	// §P2：摘要 LLM 调用前触发 compaction hook（注入 context / 一次性替换 summarizerPrompt）。
-	// 必须排在 miniagent.ValidateToolPairing(middle) 通过之后：context 注入仅追加无 tool_calls 的 user 消息，不破坏配对。
+	// 必须排在 session.ValidateToolPairing(middle) 通过之后：context 注入仅追加无 tool_calls 的 user 消息，不破坏配对。
 	effPrompt, effMiddle, herr := applyCompactingHook(ctx, budget.Compacting, budget.SessionID, compModel, budget.SummarizerPrompt, middle)
 	if herr != nil {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, herr // 实现A：hook 抛错上抛中止压缩

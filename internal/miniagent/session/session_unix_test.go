@@ -1,6 +1,6 @@
 //go:build !windows
 
-package miniagent
+package session
 
 import (
 	"bytes"
@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // lockSession LOCK_NB 非阻塞：跨进程持锁时本进程不永久阻塞，5s 内超时返回 error（审查 P2 flock 阻塞）。
@@ -63,7 +65,7 @@ func TestLockSession_LockNBTimeoutAcrossProcesses(t *testing.T) {
 	}
 	// 父进程 AppendMessages 应在 ~5s（lockSessionTotal + 一次 interval）内返回 error，不永久阻塞。
 	start := time.Now()
-	err := AppendMessages(path, SessionMeta{ID: "s"}, []Message{{Role: "user", Content: "x"}})
+	err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "x"}})
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Skip("同进程/同 inode flock 不互斥，AppendMessages 成功（POSIX 语义，非 bug）")
