@@ -5,32 +5,38 @@
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-08-08
+
 ### Fixed
 - **`summaryMaxTokens` 与 `summaryMaxChars` CJK 不一致修复**：原固定 `summaryMaxTokens=1024` 对 CJK 偏紧（1024 token≈1500 汉字，远低于 `summaryMaxChars=5000`），中文摘要被 `MaxTokens` 隐性截短到设计值约 30%；现默认从 `summaryMaxChars` 派生（`/2`，与 `EstimateTokens` 的 `CJK≈1token/2chars` 同口径），保证纯中文摘要填满字符上限不被 token 先截。新增纯函数 `deriveSummaryMaxTokens` 在 `NewCompaction` 装配时派生——只配 `summary_max_chars` 时 token 自动跟随，显式配 `summary_max_tokens` 仍可覆盖。（对应 `docs/codebase-third-evaluation.md` L3-5）
 - **`compactWithSummary` tail 预算改为联合预算（方向 B）**：原 tail 按 `preserveRecentTokens` 独立选取，不考虑摘要+head 已占空间，中等 ContextWindow（约 5k）下 `head+summary+tail` 超 `CW×4/5` → `trimRecentRounds` 后仍超 → 终止 error（白烧摘要调用）。新增 `jointTailBudget`：tail 预算 = `min(CW×4/5 − 请求开销 − head − 摘要估算, preserveRecentTokens)`，使不可压缩的 summary 优先、tail 让步，从源头消除中等 CW 的压缩后终止（实测 CW=5120 由终止→不终止）。UPDATE 路径下旧 summary 不进 out 时精确不扣 head。**边界**：极小 CW（≤~4k，summary 本身装不下 `CW×4/5`）仍终止，需 `summaryMaxChars` 随窗口缩放（已由下条方向 A 解决）。
 - **`summaryMaxChars` 默认随 ContextWindow 缩放（方向 A）**：原固定 5000 在小 CW（≤~4k）下 summary 本身（~2500 token）> `CW×4/5` 致压缩后终止（B 的边界）。现默认 `min(5000, context_window/5)`（summary token 占 CW ~10%），小窗口自适应避免 summary 装不下；大窗口（CW≥25000）仍取 5000。与 B 联合预算、`summaryMaxTokens` 派生三者联动构成「summary 体积自适应 CW」体系；用户显式 `summary_max_chars` 仍覆盖。实测把「压缩不终止」CW 下界从 ~5120 降到 ~1536。**硬边界**：CW<~1536 仍可能终止（请求级 overhead + head 占比过高，物理极限，非 A 范围）。
 - **`windowStartOf(keepN<=0)` 语义修正**：原 `keepN<=0` 返回 0，被 `dedupReadResults`/`foldStaleReadResults`/`foldStaleWriteEditArgs`/`dedupShellCommands` 解读为「全窗口内=全保留」，与 `keepN=0` 的「不保留=全压」语义矛盾。改为返回 `len(msgs)`（全窗口外=全压）。释放摘要前 middle strip 的 dedup/fold（中段重复 read / 被后续写入取代的旧 read / 同义 shell / 被取代的 write-edit args 现被去重），并修正 `context_keep_tool_args=0` 的语义；生产默认 `context_keep_tool_args=2` 不受影响。
 
-### Changed
+### Changed — 配置体系增强（breaking）
 - **摘要前对 middle 全压 strip**：`compactWithSummary` 原把原始中段（含 reasoning / tool 结果 / write-edit args）直接喂给摘要 LLM，现摘要前对其全压 strip（`keepN=0`）——省摘要 input token（实测 ~56%，主为清中段历史 reasoning）+ 防 `middle + summaryMaxTokens` 超摘要模型 CW 致摘要失败回落。权衡：摘要 LLM 不再见中段历史 reasoning（要点仍在正文 / tool_calls，与 context 侧 `stripStaleReasoning` 同取舍）。注：dedup/fold（P6/P11/P8'/P9b）经 `windowStartOf(keepN=0)=0` 在 middle 全压时不生效（全窗口内），故当前主要省 reasoning；中段 tool 结果去重留待后续（需调整 windowStartOf 语义）。
 - **Commit 语义改：非压缩步不替换 transcript，压缩 tail 保留原文**：`before` 原每步 `Commit=true` 把 strip 写回 transcript，致压缩轮 `RewriteMessages` 落盘 strip 版本（reasoning/args 滚动丢失），与 `stripStaleReasoning` 注释「持久化留原文」矛盾。现 `FitHistory` 加 `committed` 返回值：非压缩步 `committed=false`（strip 仅本轮 View，transcript 保留原文）；仅压缩步 `committed=true` 替换为 `[head,summary,tail]` 且 tail 不再 strip（原文 reasoning/args 保留）。LLM 所见不变（每轮 strip View），消除压缩轮持久化不对称（落盘完整近期上下文）。代价：transcript 内存略增（原文 vs strip，≈ newMsgs 量级）。`fallback`（摘要失败）仍 strip+committed=true 防循环。
 
 - **thinking 字段名+枚举值纯钉死（breaking）**：provider.thinking 从「可选覆盖默认」改为「启用思考时必声明 {field,map}」。`validateThinking` 只查 provider.map keys（去 `standardThinkingLevels` 原样接受标准级别）；`validateConfig` 强制 `defaults.thinking≠off` 时 provider 必声明 `field≠""`+`map` 非空；wire 必经 `req.Thinking.Map[level]`（移除默认 `reasoning_effort` 与「原样传 level」）；`thinkingFieldBlacklist` 移除 `reasoning_effort`（钉死后是合法显式 field）。**迁移**：现有 openai 配置补 `thinking:{field:"reasoning_effort", map:{off→off,minimal→minimal,low→low,medium→medium,high→high,xhigh→xhigh,max→max}}`（见 config.example.json）。收益：枚举前置校验（level∉map 启动期报错而非端点 400→降级）+ 配置即文档（无隐式 reasoning_effort 假设）。降级机制（`isThinkingError`/`callLLMWithDowngrade`/`captureDowngrade`）不变。
+- **模型参数三层覆盖（breaking）**：`max_tokens`/`context_window`/`thinking` level 支持 `model > provider > global` 分层；`http_timeout` 仅 `provider > global`（传输层属性，无 model 级）。`ProviderConfig.Models` 由 `[]string` 改为 `[]ModelConfig`（对象数组）。取消 `-max-tokens` CLI（max_tokens 纯 config 分层，三层全未配则不发 `max_tokens`、回落模型自身默认；原 CLI 默认 4096 移除）。`-thinking` CLI 保留（`cli > model > provider > global`）。**迁移**：config `models:["x"]` → `[{"name":"x"}]`；`-max-tokens N` → config `run.max_tokens` 或 provider/model 级 `max_tokens`。
+- **提示词模板全面 config 化 + 占位符统一（breaking）**：新增 `defaults.subagent_guidance`（占位符 `{config_path}`/`{mode}`）、`summary_create_instruction`/`summary_update_instruction`（`{max_chars}`）、`summary_template`（无变量），空用内置默认。`summarizer_prompt` 占位符由 `%v` 改为 `{max_chars}`（与新增字段统一命名占位符，`strings.NewReplacer` 替换，无 `%%` 转义）。**迁移**：用户自定义 `summarizer_prompt` 含 `%v` 改 `{max_chars}`。
 
-### Removed
+### Added — 配置体系（`-replay`）
+- **`-replay <id>`**：离线回放指定 session——读 jsonl 重显为与运行时同构的 NDJSON 事件流（`session`/`tool_use`/`tool_result`/`text_delta`/`result`），不调 LLM、不需 key、不读 stdin、不落盘。与 `-save-session`/`-session`/`-result-only` 互斥。已知精度边界：`text_delta` 整串一次发（session 无逐块切分）、`tool_result` 双重截断且无 `exit_code`、压缩过的 session 回放压缩后快照、`result.finish` 恒 `stop`。
+
+### Removed — 配置体系（breaking）
 - **项目级脚本工具（`.miniagent/scripts.json` → `script_<name>`）**：移除该功能（删 `internal/miniagent/tool_script.go` + 测试、`cmd/miniagent/project.go` 的 `scriptDef`/scripts 加载/merge、`buildTools` 的 `scripts` 参数与注册块）。**Breaking**：已用 `scripts.json` 声明的项目失效，需改用 `shell` 工具直接跑命令（失去「固定命令 + 限制参数」语义，shell 为自由命令）。收益：工具装配收窄为 7 内置工具、`buildTools` 签名简化、收窄 flag 注入面（`shellQuote` + 拒 `-` 开头防护随之移除）。`runShellCommand` 保留（shell 工具专用）。
+- **`-system` CLI + 全局 `~/.miniagent/` 规则层（breaking）**：`-system` CLI 移除——system prompt 现仅来自 config `defaults.system_prompt`（未配则内置默认）+ 项目级 `workdir/.miniagent/`。全局 `~/.miniagent/persona.md`/`rules.md` 不再读取（取消双层查找的 home 层，`loadProjectRules` 简化为单目录读取，删 `mergeProjectRules`/`personaSet`/`rulesSet`，净减 ~30 行）。**迁移**：全局 persona/rules 物进 config `defaults.system_prompt`（persona「取代默认」语义与 system_prompt 等价；rules 为追加语义，需物进 system_prompt 文本）；`-system` 改 config。
 
-## [4.2.0] - 2026-08-06
+> **核心策略外挂（前期改动，CLI 与 NDJSON 事件契约零变更）**：用量估算+预算判定、LLM 失败恢复、工具结果成型+落盘从 `Run` 内联移到默认钩子工厂，`Run` 真正零策略（仅做工具注册 / 上下文拼接 / 调 LLM / 执行工具 / 无 tool_calls 退出五件事）。
 
-> 核心策略彻底外挂：用量估算+预算判定、LLM 失败恢复、工具结果成型+落盘从 `Run` 内联移到默认钩子工厂，`Run` 真正零策略（仅做工具注册 / 上下文拼接 / 调 LLM / 执行工具 / 无 tool_calls 退出五件事）。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 minor。
-
-### Changed
+### Changed — 核心策略外挂（internal）
 - **核心策略从 `Run` 内联移到默认钩子工厂**：原核心内置的三项策略——零 usage 本地估算 fallback + `MaxTotalTokens` 预算判定、`ErrContextLength` 历史收紧重试、工具结果截断（`trimForHistory`）+ 超限落盘（`toolOutputStore`）——提取为 `NewDefaultOnBudget` / `NewDefaultOnLLMError` / `NewDefaultShapeToolResult` 三个导出工厂。`Run` 不再读取 `LoopConfig` 的策略字段，仅累加真实 usage、不做估算/判定/截断/落盘/错误恢复；`Run` 注释承诺的「核心不做任何上下文管理」至此与实现一致。
 - **`OnBudget` 扩签以承载估算**：签名从 `func(step int, total Usage) error` 改为 `func(ctx, step int, in BudgetInput, total *Usage) error`（新增 `BudgetInput` 携带本轮 `ToSend`/`System`/`Tools`/`Resp`，`total` 改指针可累加估算）。原核心内联估算无法外挂的根因——钩子拿不到请求侧上下文——由此消除。
 - **`ShapeToolResult` nil 时核心透传原文**：此前 nil 走核心内置 `defaultShapeResult`（截断+落盘）；现 nil = 零成型、透传 `ToolResult.Output`，成型完全交钩子。
 - **cmd 层一行装配默认钩子**：`main.go` 用三个 `NewDefault*` 工厂替代原自写的 `OnBudget` 闭包；`store` 连同落盘逻辑整体下沉进 `NewDefaultShapeToolResult`（构造时 `cleanup` 一次，等价原 `Run` 入口行为）。
 
-### Added
+### Added — 核心策略外挂
 - **`OnLLMError` 钩子缝**：LLM 失败路径的唯一开放缝（`BeforeLLM`/`AfterLLM` 均在成功路径）。返回 `recoveredMsgs` + `retry` 时核心替换 transcript 并重试一次；nil = 失败直接上抛。
 - **`NewDefaultOnLLMError` / `NewDefaultOnBudget` / `NewDefaultShapeToolResult`**：承载原核心内置策略的默认钩子工厂，cmd 层组装即复用原行为。
 - **`BudgetInput`**：`OnBudget` 的请求侧上下文类型。

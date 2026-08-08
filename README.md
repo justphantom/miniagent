@@ -108,6 +108,14 @@ make test       # go test -race ./...
 > v3 破坏性变更：删除 `-base-url` / `-approve` / `-confine` 与 `$MINIAGENT_BASE_URL`；
 > `-model` 支持 `provider/id` 前缀；`-session` 改 jsonl append-only + id 解析；session 文件格式不可向后兼容。
 
+> **升级到 4.2.0（4 项 breaking）**：
+> - **模型参数分层**：`models` 改对象数组 `[{"name":"x"}]`（旧 `["x"]` 加载报错）；`max_tokens`/`context_window`/`thinking` level 支持 `model > provider > global`，`http_timeout` 仅 `provider > global`；**取消 `-max-tokens` CLI**（改 config `run.max_tokens` 或 provider/model 级；三层全未配则不发 `max_tokens`、回落模型默认）。
+> - **取消 `-system` CLI 与全局 `~/.miniagent/` 规则**：system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认）+ 项目级 `workdir/.miniagent/`。全局 persona/rules 物进 `defaults.system_prompt`。
+> - **提示词模板 config 化**：新增 `subagent_guidance`（`{config_path}`/`{mode}`）、`summary_create`/`update_instruction`（`{max_chars}`）、`summary_template`；`summarizer_prompt` 占位符 `%v`→`{max_chars}`。
+> - **新增 `-replay <id>`**：离线回放 session 为同构 NDJSON 事件流。
+>
+> 详见 [CHANGELOG](./CHANGELOG.md)。
+
 ### 子命令
 
 - `-version`：打印 `miniagent <version>`，退出码 0。

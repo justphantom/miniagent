@@ -5,7 +5,11 @@
       "chat_url": "https://api.openai.com/v1/chat/completions",
       "models_url": "https://api.openai.com/v1/models",
       "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "models": [{"name":"gpt-4o"},{"name":"gpt-4o-mini"},{"name":"o3-mini"}],
+      "models": [
+        {"name": "gpt-4o"},
+        {"name": "gpt-4o-mini"},
+        {"name": "o3-mini", "max_tokens": 8192, "context_window": 200000, "thinking": "medium"}
+      ],
       "thinking": {
         "field": "reasoning_effort",
         "map": {
