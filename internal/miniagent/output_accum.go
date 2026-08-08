@@ -116,16 +116,6 @@ func (a *outputAccum) finalize(maxChars int) string {
 	return banner + body
 }
 
-// discard 删落盘文件（幂等）。默认不调用（保留供 read 回读）；调用方按需清理。
-func (a *outputAccum) discard() error {
-	if a.file == "" {
-		return nil
-	}
-	err := os.Remove(a.file)
-	a.file = ""
-	return err
-}
-
 // chunkTexts 抽取 chunks 的 text 切片（仅供 finalize join 用）。
 func chunkTexts(chunks []chunkBuf) []string {
 	out := make([]string, len(chunks))

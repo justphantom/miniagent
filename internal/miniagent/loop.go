@@ -228,7 +228,7 @@ func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsg
 
 // mergePersisted 把 persisted 批量并入 newMsgs：带非空 Kind 的条目替换 newMsgs 中同 Kind 旧条目
 // （如多次压缩只留最新 summary），随后把批次前插到 newMsgs 首部——保跨轮 barrier 命中最新 summary 的语义
-// （与原 insertSummaryIntoNewMsgs 行为一致，泛化到任意带 Kind 的持久化条目）。
+// （跨轮 barrier 命中最新 summary 的语义，泛化到任意带 Kind 的持久化条目）。
 func mergePersisted(newMsgs *[]Message, persisted []Message) {
 	kinds := make(map[string]bool, len(persisted))
 	for _, m := range persisted {

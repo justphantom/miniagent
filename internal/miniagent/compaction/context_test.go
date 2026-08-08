@@ -13,7 +13,7 @@ import (
 )
 
 // P1-1 回归：compactWithSummary 后 summary 必须排在 user_prompt 之前。loop.go miniagent.Run 入口
-// 先把本轮 user_prompt 加入 newMsgs，故此时 newMsgs=[user_prompt]；insertSummaryIntoNewMsgs
+// 先把本轮 user_prompt 加入 newMsgs，故此时 newMsgs=[user_prompt]；合并路径（生产为 mergePersisted）
 // 前插 summary，使其排在 user_prompt 之前——否则下一轮 applyCompactionBarrier 会屏障掉本轮 user_prompt。
 func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("历史摘要")}}
@@ -29,7 +29,7 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	if err != nil || summary.Kind != miniagent.KindSummary {
 		t.Fatalf("compactWithSummary: kind=%v err=%v", summary.Kind, err)
 	}
-	insertSummaryIntoNewMsgs(&newMsgs, summary)
+	newMsgs = append([]miniagent.Message{summary}, newMsgs...)
 	if len(newMsgs) != 2 {
 		t.Fatalf("newMsgs len=%d, want 2 (summary+user_prompt): %+v", len(newMsgs), newMsgs)
 	}
@@ -41,8 +41,8 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 	}
 }
 
-// P1-1 端到端：compactWithSummary + insertSummaryIntoNewMsgs → miniagent.AppendMessages 落盘 → miniagent.LoadSession 读取
-// → applyCompactionBarrier：本轮 user_prompt 必须仍在结果中。
+// P1-1 端到端：compactWithSummary + summary 前插合并（生产为 mergePersisted）→ miniagent.AppendMessages 落盘
+// → miniagent.LoadSession 读取 → applyCompactionBarrier：本轮 user_prompt 必须仍在结果中。
 func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("既往对话摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -56,7 +56,7 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
-	insertSummaryIntoNewMsgs(&newMsgs, summary)
+	newMsgs = append([]miniagent.Message{summary}, newMsgs...)
 	// 模拟上一轮 miniagent.Run 末尾把 assistant 最终回答加入 newMsgs（接续对话依赖上一轮答案）。
 	newMsgs = append(newMsgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "上一轮回答"})
 
@@ -86,9 +86,21 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	}
 }
 
+// mergeSummaryIntoNewMsgs 与 loop.go mergePersisted 等价的测试侧合并：剔 newMsgs 中已有
+// KindSummary 后把 summary 前插（跨轮 barrier 命中最新 summary 的语义）。
+func mergeSummaryIntoNewMsgs(newMsgs *[]miniagent.Message, summary miniagent.Message) {
+	filtered := make([]miniagent.Message, 0, len(*newMsgs)+1)
+	for _, m := range *newMsgs {
+		if m.Kind != miniagent.KindSummary {
+			filtered = append(filtered, m)
+		}
+	}
+	*newMsgs = append([]miniagent.Message{summary}, filtered...)
+}
+
 // P2 单轮多次压缩反转：单轮内压缩触发 ≥2 次时，第二次的中段含第一次写入的旧 summary（已被进一步
-// 压进新 summary）。insertSummaryIntoNewMsgs 剔旧再前插后 newMsgs 只有一个 miniagent.KindSummary（最新）、
-// 排在最前，且 applyCompactionBarrier 命中它。
+// 压进新 summary）。合并路径（生产为 mergePersisted，按 Kind 剔旧再前插）后 newMsgs 只有一个
+// miniagent.KindSummary（最新）、排在最前，且 applyCompactionBarrier 命中它。
 func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要1"), textResponse("摘要2")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -104,7 +116,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 		t.Fatalf("1st compactWithSummary: kind=%v err=%v", summary1.Kind, err)
 	}
 	msgs = out
-	insertSummaryIntoNewMsgs(&newMsgs, summary1)
+	mergeSummaryIntoNewMsgs(&newMsgs, summary1)
 	// 模拟步进：追加更多轮使再次超窗触发第二次压缩（miniagent.Run 的 appendMsg 同时写 msgs/newMsgs）。
 	for i := range 10 {
 		m := miniagent.Message{Role: miniagent.RoleUser, Content: "more" + strconv.Itoa(i)}
@@ -116,7 +128,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 		t.Fatalf("2nd compactWithSummary: kind=%v err=%v", summary2.Kind, err)
 	}
 	_ = out2
-	insertSummaryIntoNewMsgs(&newMsgs, summary2)
+	mergeSummaryIntoNewMsgs(&newMsgs, summary2)
 
 	count := 0
 	for _, m := range newMsgs {

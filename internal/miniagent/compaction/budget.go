@@ -241,19 +241,6 @@ func estimateRoundTokens(round []miniagent.Message) int {
 	return miniagent.EstimateTokens(round, "", nil) - miniagent.SystemOverheadTokens
 }
 
-// insertSummaryIntoNewMsgs 剔除 newMsgs 中已有的 miniagent.KindSummary（单轮多次压缩去重），再把 summary
-// 前插使其排在 user_prompt 之前（跨轮 barrier 命中最新 summary）。生产路径用更通用的 mergePersisted
-// （loop.go，处理任意带 Kind 的持久化条目）；此函数是单 KindSummary 特化，留供 compaction 端到端测试构造 newMsgs。
-func insertSummaryIntoNewMsgs(newMsgs *[]miniagent.Message, summary miniagent.Message) {
-	filtered := make([]miniagent.Message, 0, len(*newMsgs)+1)
-	for _, m := range *newMsgs {
-		if m.Kind != miniagent.KindSummary {
-			filtered = append(filtered, m)
-		}
-	}
-	*newMsgs = append([]miniagent.Message{summary}, filtered...)
-}
-
 // contextKeepRecent 是 compactHistory/compactWithSummary 默认保留的最近轮数。
 // P3：从 6 下调到 4——稳态占用降一截，更早的轮次由 summary（已含关键事实）承载；配置钩子
 // cfg.Run.ContextKeepRecent 仍在，长 ReAct 场景可调回更高值。

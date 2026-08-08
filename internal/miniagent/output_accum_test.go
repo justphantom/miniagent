@@ -123,19 +123,9 @@ func TestOutputAccum_SpillOn(t *testing.T) {
 	if len(b) != 30*10*1024 {
 		t.Errorf("落盘文件应含全部 chunk: len=%d, want %d", len(b), 30*10*1024)
 	}
-	// discard 删除文件。
-	if err := a.discard(); err != nil {
-		t.Fatalf("discard: %v", err)
-	}
-	if _, err := os.Stat(a.file); !os.IsNotExist(err) {
-		t.Errorf("discard 后文件应不存在: %v", err)
-	}
-	// closeSink/discard 幂等。
+	// closeSink 幂等。
 	if err := a.closeSink(); err != nil {
 		t.Errorf("幂等 closeSink: %v", err)
-	}
-	if err := a.discard(); err != nil {
-		t.Errorf("幂等 discard: %v", err)
 	}
 }
 

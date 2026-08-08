@@ -272,7 +272,7 @@ func TestApplyCompactionBarrier(t *testing.T) {
 }
 
 // compactWithSummary：中段摘要为 miniagent.KindSummary，结构（最早 1 轮 + summary + 最近 N 轮）正确，
-// 且经 insertSummaryIntoNewMsgs 写入 newMsgs（持久化）。
+// 且 summary 可并入 newMsgs（持久化语义；生产路径为 loop.go mergePersisted）。
 func TestCompactWithSummary_Success(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("压缩摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -298,7 +298,7 @@ func TestCompactWithSummary_Success(t *testing.T) {
 	if out[1].Kind != miniagent.KindSummary || !strings.Contains(out[1].Content, "压缩摘要") {
 		t.Errorf("summary slot wrong: %+v", out[1])
 	}
-	insertSummaryIntoNewMsgs(&newMsgs, summary)
+	newMsgs = append([]miniagent.Message{summary}, newMsgs...)
 	if len(newMsgs) != 1 || newMsgs[0].Kind != miniagent.KindSummary {
 		t.Errorf("summary not persisted to newMsgs: %+v", newMsgs)
 	}

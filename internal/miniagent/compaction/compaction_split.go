@@ -1,6 +1,8 @@
 package compaction
 
 import (
+	"slices"
+
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/text"
 )
@@ -217,7 +219,7 @@ func trimRecentRounds(msgs []miniagent.Message, keepRecent int) []miniagent.Mess
 	// 否则白烧一次摘要 + 模型丢失中段摘要与初始上下文。裁剪结果已含 summary 或无 summary 可保则原样返回。
 	var latestSummary miniagent.Message
 	hasSummary := false
-	for i := len(msgs) - 1; i >= 0; i-- {
+	for i := range slices.Backward(msgs) {
 		if msgs[i].Kind == miniagent.KindSummary {
 			latestSummary = msgs[i]
 			hasSummary = true
