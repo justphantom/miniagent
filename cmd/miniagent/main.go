@@ -28,7 +28,6 @@ type cliFlags struct {
 	provider      *string
 	model         *string
 	system        *string
-	maxTokens     *int
 	workdir       *string
 	session       *string
 	saveSession   *bool
@@ -53,7 +52,6 @@ func parseFlags() *cliFlags {
 	f.provider = flag.String("provider", "", "LLM provider 名（与 -model 成对覆盖 defaults 对；-list-models 时单独用于筛选）")
 	f.model = flag.String("model", "", "LLM model id（与 -provider 成对覆盖 defaults 对）")
 	f.system = flag.String("system", defaultSystemPrompt, "system prompt")
-	f.maxTokens = flag.Int("max-tokens", 4096, "单次 LLM 调用输出 token 上限（保守默认，平衡多数回复与防单次烧 token；长生成场景经 config run.max_tokens 调高）")
 	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
 	f.session = flag.String("session", "", "接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错）")
 	f.saveSession = flag.Bool("save-session", false, "新建会话并落盘（id 内部生成；与 -session 互斥）")
@@ -170,7 +168,7 @@ func main() {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
 	}
 	// 压缩作为外挂：经 NewCompaction 取 before/after；三项默认策略（OnLLMError/OnBudget/ShapeToolResult）经 assembleHooks 外挂。
-	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, f, meta, chat, compChat, baseCfg.System, tools, logger))
+	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, chat, compChat, baseCfg.System, tools, logger))
 	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, baseCfg, tools, limits, logger)
 
 	prompt := mustReadPrompt(ctx, os.Stdin)
@@ -256,7 +254,7 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 		Model:              resolved.ModelID,
 		System:             system,
 		SummaryRequest:     resolved.SummaryRequest,
-		MaxTokens:          into(resolved.Run.MaxTokens, *f.maxTokens),
+		MaxTokens:          into(resolved.MaxTokens, 0),
 		Tools:              tools,
 		History:            history,
 		MaxIterations:      into(resolved.Run.MaxIterations, *f.maxIterations),
@@ -271,15 +269,15 @@ func loopCfg(resolved *miniagent.Resolved, f *cliFlags, history []miniagent.Mess
 
 // compactionOptions 把 resolved 的压缩策略装配成 CompactionOptions。chat 是摘要用 client
 // （compChat 非空用之，否则回落主 chat）。
-func compactionOptions(resolved *miniagent.Resolved, f *cliFlags, meta miniagent.SessionMeta, chat, compChat *openai.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
+func compactionOptions(resolved *miniagent.Resolved, meta miniagent.SessionMeta, chat, compChat *openai.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
 	compClient := compChat
 	if compClient == nil {
 		compClient = chat
 	}
 	return compaction.CompactionOptions{
 		Chat:                 compClient,
-		MaxTokens:            into(resolved.Run.MaxTokens, *f.maxTokens),
-		ContextWindow:        into(resolved.RunConfig.ContextWindow, 0),
+		MaxTokens:            into(resolved.MaxTokens, 0),
+		ContextWindow:        into(resolved.ContextWindow, 0),
 		Model:                resolved.ModelID,
 		CompactionModel:      resolved.CompactionModelID,
 		System:               system,

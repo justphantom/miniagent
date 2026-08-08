@@ -31,14 +31,34 @@ type SessionConfig struct {
 }
 
 type ProviderConfig struct {
-	Name      string           `json:"name"`
-	ChatURL   string           `json:"chat_url"`
-	ModelsURL string           `json:"models_url,omitempty"`
-	Key       string           `json:"key,omitempty"`
-	Models    []string         `json:"models,omitempty"`
-	Thinking  *ThinkingMapping `json:"thinking,omitempty"`
+	Name      string `json:"name"`
+	ChatURL   string `json:"chat_url"`
+	ModelsURL string `json:"models_url,omitempty"`
+	Key       string `json:"key,omitempty"`
+	// Models 是该 provider 支持的模型列表，每项可承载模型级参数覆盖供应商级与全局。
+	// breaking：原为 []string，现须对象形式 [{"name":...}]。
+	Models []ModelConfig `json:"models,omitempty"`
+	// Thinking 是思考字段的 wire 映射（{field,map}），供应商级——启用思考时 provider 必声明。
+	Thinking *ThinkingMapping `json:"thinking,omitempty"`
+	// 供应商级模型参数（覆盖全局 run）：输出上限、上下文窗口、HTTP 超时（传输层，同 provider 共享 endpoint）。
+	MaxTokens     *int    `json:"max_tokens,omitempty"`
+	ContextWindow *int    `json:"context_window,omitempty"`
+	HTTPTimeout   *string `json:"http_timeout,omitempty"`
+	// ThinkingLevel 是供应商级思考级别（level 字符串），覆盖 defaults.thinking。json key 用
+	// thinking_level 避免与 Thinking（wire 映射，key "thinking"）冲突。
+	ThinkingLevel *string `json:"thinking_level,omitempty"`
 	// Headers 是每 provider 的自定义请求头，随请求注入；不覆盖 Authorization / Content-Type。
 	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// ModelConfig 是 provider 下单个模型的配置：Name 必填，其余为模型级参数，覆盖供应商级与全局。
+// max_tokens/context_window 走 model>provider>global；thinking level 走 cli>model>provider>global；
+// http_timeout 不进模型级（传输层属性）。
+type ModelConfig struct {
+	Name          string  `json:"name"`
+	MaxTokens     *int    `json:"max_tokens,omitempty"`
+	ContextWindow *int    `json:"context_window,omitempty"`
+	Thinking      *string `json:"thinking,omitempty"` // 模型级 level（model 无 wire 映射，key "thinking" 即 level）
 }
 
 // ModelRef 是一个可用的 provider/model 组合（ListAllModels 的返回单元）。
@@ -220,6 +240,34 @@ func validateConfig(cfg *Config) error {
 		// 已从黑名单移除），但仍禁指向其他标准字段。
 		if p.Thinking != nil && p.Thinking.Field != "" && thinkingFieldBlacklist[p.Thinking.Field] {
 			return fmt.Errorf("provider %q thinking.field %q 是保留 payload key，会覆盖标准字段", p.Name, p.Thinking.Field)
+		}
+		// 模型级/供应商级 thinking level 须经本 provider.thinking.map 校验（钉死：level 必经映射）。
+		provCustomKeys := map[string]bool{}
+		if p.Thinking != nil {
+			for k := range p.Thinking.Map {
+				provCustomKeys[k] = true
+			}
+		}
+		// Models：Name 非空、provider 内唯一。
+		modelNames := map[string]bool{}
+		for j, mc := range p.Models {
+			if mc.Name == "" {
+				return fmt.Errorf("providers[%d].models[%d].name 为空", i, j)
+			}
+			if modelNames[mc.Name] {
+				return fmt.Errorf("provider %q models 名 %q 重复", p.Name, mc.Name)
+			}
+			modelNames[mc.Name] = true
+			if mc.Thinking != nil {
+				if err := validateThinking(*mc.Thinking, provCustomKeys); err != nil {
+					return fmt.Errorf("provider %q model %q thinking: %w", p.Name, mc.Name, err)
+				}
+			}
+		}
+		if p.ThinkingLevel != nil {
+			if err := validateThinking(*p.ThinkingLevel, provCustomKeys); err != nil {
+				return fmt.Errorf("provider %q thinking_level: %w", p.Name, err)
+			}
 		}
 	}
 	defProv, defModel, err := resolveProviderModel(cfg, "defaults", cfg.Defaults.Provider, cfg.Defaults.Model)

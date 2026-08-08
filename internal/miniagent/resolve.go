@@ -11,18 +11,18 @@ import (
 // 策略参数（summary/duration/window 等）只在 config，故此处不含。
 type CLIOverrides struct {
 	Provider, Model, Thinking, Mode, System, Workdir *string
-	MaxTokens, MaxIterations                         *int
+	MaxIterations                                    *int
 	Stream, ResultOnly                               *bool
 }
 
 // ResolvedRun 是 Resolve 输出的运行参数——仅含需裁决或解析的字段（cli>config 三态裁决 + duration 解析）。
 // 纯透传字段（仅 config 来源、无 CLI 覆盖、无解析）不经此间接层，消费方直读 Resolved.RunConfig（= cfg.Run）。
 type ResolvedRun struct {
-	Workdir                                                             *string
-	MaxTokens, MaxIterations                                            *int
-	Stream                                                              *bool
-	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout, HTTPTimeout *time.Duration
-	ToolOutputRetention                                                 *time.Duration
+	Workdir                                                *string
+	MaxIterations                                          *int
+	Stream                                                 *bool
+	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout *time.Duration
+	ToolOutputRetention                                    *time.Duration
 }
 
 type Resolved struct {
@@ -40,6 +40,11 @@ type Resolved struct {
 	Session            SessionConfig
 	Run                ResolvedRun
 	RunConfig          RunConfig // 原始 cfg.Run：纯透传字段源，消费方直读，不经 ResolvedRun 间接层
+	// 分层模型参数（消费方读这些而非 Run/RunConfig）：
+	// MaxTokens/ContextWindow：model>provider>global（无 cli）；HTTPTimeout：provider>global（无 model）。
+	MaxTokens     *int
+	ContextWindow *int
+	HTTPTimeout   *time.Duration
 }
 
 // Resolve 按 cli>config>builtin 裁决产出 Resolved。cfg 必须非 nil（S1 删裸模式后始终有 config）。
@@ -69,6 +74,19 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		r.Provider, r.ModelID = p, *o.Model
 	}
 
+	// 模型参数分层（model>provider>global；max_tokens/context_window 无 cli）。
+	// 选定 provider 后在其 Models 查找模型级配置，逐层裁决；http_timeout 仅 provider>global（无 model）。
+	mc, _ := findModelConfig(r.Provider, r.ModelID)
+	r.MaxTokens = pickMPG(mc.MaxTokens, r.Provider.MaxTokens, cfg.Run.MaxTokens)
+	r.ContextWindow = pickMPG(mc.ContextWindow, r.Provider.ContextWindow, cfg.Run.ContextWindow)
+	httpTimeoutStr := cfg.Run.HTTPTimeout
+	if r.Provider.HTTPTimeout != nil {
+		httpTimeoutStr = r.Provider.HTTPTimeout
+	}
+	if r.HTTPTimeout, err = ParseDuration(httpTimeoutStr, "http_timeout"); err != nil {
+		return nil, err
+	}
+
 	// compaction：成对可选——同设取自身（可跨 provider），同空整体回落 defaults 对。
 	cp, cm, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel)
 	if err != nil {
@@ -82,11 +100,19 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		r.CompactionReserved = *cfg.Compaction.Reserved
 	}
 
+	// thinking level 四态：cli > model > provider(ThinkingLevel) > defaults。
 	switch {
 	case o.Thinking != nil:
 		r.Thinking = *o.Thinking
-	case cfg.Defaults.Thinking != "":
-		r.Thinking = cfg.Defaults.Thinking
+	default:
+		switch {
+		case mc.Thinking != nil:
+			r.Thinking = *mc.Thinking
+		case r.Provider.ThinkingLevel != nil:
+			r.Thinking = *r.Provider.ThinkingLevel
+		default:
+			r.Thinking = cfg.Defaults.Thinking
+		}
 	}
 	customKeys := map[string]bool{}
 	if r.Provider.Thinking != nil {
@@ -179,13 +205,13 @@ func FindProvider(cfg *Config, name string) (ProviderConfig, error) {
 
 func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	var r ResolvedRun
-	// 三态裁决（cli>config）：Workdir/MaxTokens/MaxIterations/Stream 可被 CLI 覆盖；nil=未配置。
+	// 三态裁决（cli>config）：Workdir/MaxIterations/Stream 可被 CLI 覆盖；nil=未配置。
+	// MaxTokens 不在此（无 cli，分层见 Resolve）；HTTPTimeout 移至 Resolved（provider>global）。
 	if o.Workdir != nil && *o.Workdir != "" {
 		r.Workdir = o.Workdir
 	} else {
 		r.Workdir = cfg.Run.Workdir
 	}
-	r.MaxTokens = pickInt(o.MaxTokens, cfg.Run.MaxTokens)
 	r.MaxIterations = pickInt(o.MaxIterations, cfg.Run.MaxIterations)
 	if o.Stream != nil {
 		r.Stream = o.Stream
@@ -210,10 +236,6 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	if err != nil {
 		return r, err
 	}
-	r.HTTPTimeout, err = ParseDuration(cfg.Run.HTTPTimeout, "run.http_timeout")
-	if err != nil {
-		return r, err
-	}
 	r.ToolOutputRetention, err = ParseDuration(cfg.Run.ToolOutputRetention, "run.tool_output_retention")
 	if err != nil {
 		return r, err
@@ -226,6 +248,27 @@ func pickInt(ov, cv *int) *int {
 		return ov
 	}
 	return cv
+}
+
+// findModelConfig 在 provider.Models 中按 model id 查找模型级配置；未声明返回零值 + false。
+func findModelConfig(p ProviderConfig, modelID string) (ModelConfig, bool) {
+	for _, m := range p.Models {
+		if m.Name == modelID {
+			return m, true
+		}
+	}
+	return ModelConfig{}, false
+}
+
+// pickMPG 三态裁决 model>provider>global（无 cli），用于 max_tokens/context_window。
+func pickMPG(model, provider, global *int) *int {
+	if model != nil {
+		return model
+	}
+	if provider != nil {
+		return provider
+	}
+	return global
 }
 
 // ParseDuration 解析 config 中的 duration 字符串（"30s"）；cv 为 nil 表示未配置，返回 (nil, nil)。

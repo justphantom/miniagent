@@ -18,7 +18,7 @@ func writeTmpConfig(t *testing.T, body string) string {
 
 func validConfigBody() string {
 	return `{
-  "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]}],
+  "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":[{"name":"glm"}]}],
   "defaults":{"provider":"main","model":"glm","mode":"default"}
 }`
 }
@@ -49,8 +49,8 @@ func TestLoadConfig_OK(t *testing.T) {
 // 配置文件中不再支持 ${VAR} 注入；key 按字面量读取。
 func TestLoadConfig_NoVarExpansion(t *testing.T) {
 	body := strings.ReplaceAll(validConfigBody(),
-		`"models":["glm"]`,
-		`"models":["glm"],"key":"${MA_KEY}"`)
+		`"models":[{"name":"glm"}]`,
+		`"models":[{"name":"glm"}],"key":"${MA_KEY}"`)
 	cfg, err := LoadConfig(writeTmpConfig(t, body))
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -63,8 +63,8 @@ func TestLoadConfig_NoVarExpansion(t *testing.T) {
 func TestLoadConfig_CompactionModelCrossProvider(t *testing.T) {
 	body := `{
   "providers":[
-    {"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]},
-    {"name":"comp","chat_url":"https://comp/v1/chat/completions","models":["glm-flash"]}
+    {"name":"main","chat_url":"https://api/v1/chat/completions","models":[{"name":"glm"}]},
+    {"name":"comp","chat_url":"https://comp/v1/chat/completions","models":[{"name":"glm-flash"}]}
   ],
   "defaults":{"provider":"main","model":"glm"},
   "compaction":{"provider":"comp","model":"glm-flash"}
@@ -76,7 +76,7 @@ func TestLoadConfig_CompactionModelCrossProvider(t *testing.T) {
 
 func TestLoadConfig_CompactionModelUnknownProvider(t *testing.T) {
 	body := `{
-  "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":["glm"]}],
+  "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":[{"name":"glm"}]}],
   "defaults":{"provider":"main","model":"glm"},
   "compaction":{"provider":"unknown","model":"glm-flash"}
 }`
@@ -119,8 +119,8 @@ func TestLoadConfig_DefaultsModelUnknownProvider(t *testing.T) {
 func TestLoadConfig_ThinkingKeyScopedToDefaultProvider(t *testing.T) {
 	body := `{
   "providers":[
-    {"name":"a","chat_url":"https://a/v1/chat/completions","models":["m"]},
-    {"name":"b","chat_url":"https://b/v1/chat/completions","models":["m"],"thinking":{"field":"x-effort","map":{"fast":"low"}}}
+    {"name":"a","chat_url":"https://a/v1/chat/completions","models":[{"name":"m"}]},
+    {"name":"b","chat_url":"https://b/v1/chat/completions","models":[{"name":"m"}],"thinking":{"field":"x-effort","map":{"fast":"low"}}}
   ],
   "defaults":{"provider":"a","model":"m","thinking":"fast"}
 }`
@@ -138,7 +138,7 @@ func TestLoadConfig_ThinkingKeyScopedToDefaultProvider(t *testing.T) {
 // 钉死：defaults.thinking≠off 但 provider 完全未声明 thinking → 启动期报错（强制声明 {field,map}）。
 func TestLoadConfig_ThinkingPinRequiresDeclaration(t *testing.T) {
 	body := `{
-  "providers":[{"name":"a","chat_url":"https://a/v1/chat/completions","models":["m"]}],
+  "providers":[{"name":"a","chat_url":"https://a/v1/chat/completions","models":[{"name":"m"}]}],
   "defaults":{"provider":"a","model":"m","thinking":"medium"}
 }`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
@@ -255,5 +255,13 @@ func TestLoadConfig_ProviderHeaders(t *testing.T) {
 	h := cfg.Providers[0].Headers
 	if len(h) != 2 || h["X-Custom"] != "abc" || h["Authorization"] != "Bearer override" {
 		t.Errorf("headers = %+v", h)
+	}
+}
+
+// breaking：models 字段必须是对象形式 [{"name":...}]；旧字符串形式 ["x"] 加载报错。
+func TestLoadConfig_ModelsMustBeObjects(t *testing.T) {
+	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","models":["legacy-string"]}],"defaults":{"provider":"p","model":"m"}}`
+	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
+		t.Error("legacy string-form models should fail to load (breaking schema: models must be objects)")
 	}
 }

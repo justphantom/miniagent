@@ -79,9 +79,6 @@ func collectOverrides(f *cliFlags) miniagent.CLIOverrides {
 	if set["workdir"] {
 		o.Workdir = f.workdir
 	}
-	if set["max-tokens"] {
-		o.MaxTokens = f.maxTokens
-	}
 	if set["max-iterations"] {
 		o.MaxIterations = f.maxIterations
 	}
@@ -159,8 +156,8 @@ func writeTimeoutOf(resolved *miniagent.Resolved) time.Duration {
 }
 
 func httpTimeoutOf(resolved *miniagent.Resolved) time.Duration {
-	if resolved.Run.HTTPTimeout != nil {
-		return *resolved.Run.HTTPTimeout
+	if resolved.HTTPTimeout != nil {
+		return *resolved.HTTPTimeout
 	}
 	return 0
 }

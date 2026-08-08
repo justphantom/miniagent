@@ -209,7 +209,7 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	defer srv.Close()
 
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
-	cfg := `{"providers":[{"name":"main","chat_url":"` + srv.URL + `/v1/chat/completions","models":["glm"]}],"defaults":{"provider":"main","model":"glm","mode":"auto"},"compaction":{"provider":"main","model":"glm"}}`
+	cfg := `{"providers":[{"name":"main","chat_url":"` + srv.URL + `/v1/chat/completions","models":[{"name":"glm"}]}],"defaults":{"provider":"main","model":"glm","mode":"auto"},"compaction":{"provider":"main","model":"glm"}}`
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -177,7 +177,7 @@ return finishMaxIterations
 
 **配置来源**：config 文件（`-config` 显式 > 默认 `~/.miniagent/miniagent.json`，不存在报错——S1 删裸模式后 config 必须存在）。结构 `Config`：`providers[]` / `defaults` / `run` / `session` / `compaction`。
 
-**裁决优先级**（`resolve.go:Resolve`）：`cli > config > builtin`。CLI 用 `flag.Visit` 区分"显式传入"与"默认值"。核心 CLI 参数（provider/model/thinking/mode/system/workdir/max-tokens/max-iterations/stream）可被 CLI 覆盖；策略参数（summary/duration/window/keep\*/context 阈值等）只在 config。
+**裁决优先级**（`resolve.go:Resolve`）：`cli > config > builtin`。CLI 用 `flag.Visit` 区分"显式传入"与"默认值"。核心 CLI 参数（provider/model/thinking/mode/system/workdir/max-iterations/stream）可被 CLI 覆盖；策略参数（summary/duration/window/keep\*/context 阈值等）只在 config。`max_tokens`/`context_window`/`thinking` level/`http_timeout` 改为 config 三层覆盖（`model > provider > global`；http_timeout 仅 `provider > global`，无 model；max_tokens 取消 CLI，纯 config 分层；thinking 仍保留 `-thinking` CLI 为最高优先级）。
 
 **成对规则**：`provider/model` 须成对（`-provider`/`-model` 同传覆盖 defaults 对，同缺以 defaults 为准）；`compaction.provider/model` 可跨 provider，同空回落 defaults。
 

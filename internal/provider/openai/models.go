@@ -136,7 +136,10 @@ func ListAllModels(ctx context.Context, providers []miniagent.ProviderConfig, ke
 				if len(p.Models) == 0 {
 					err = fmt.Errorf("provider %q 无 models_url 且静态 models 为空", p.Name)
 				} else {
-					ids = append([]string(nil), p.Models...)
+					ids = make([]string, 0, len(p.Models))
+					for _, mm := range p.Models {
+						ids = append(ids, mm.Name)
+					}
 				}
 			} else {
 				llm, e := NewChatClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger, p.Headers)

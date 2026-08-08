@@ -84,10 +84,10 @@ make test       # go test -race ./...
 -list-models             列出可用模型后退出，逐行输出 NDJSON 事件 {"type":"model","provider":"...","model":"..."}（静态 models 不发 GET，否则 GET models-url；-provider 可筛选单个 provider）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
--max-tokens int          单次 LLM 调用的最大输出 token 数（默认 4096）
 -mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
 -model string            LLM model id（须与 -provider 成对传入，同传覆盖 defaults 对；只传其一报错）
 -provider string         LLM provider 名（须与 -model 成对传入；-list-models 时单独用于筛选单个 provider）
+-replay string           回放指定会话（读 session 文件重显过程，不调 LLM；与 -save-session/-session/-result-only 互斥）
 -result-only             仅输出 result.text（subagent fork 用）；与 -stream、-save-session 互斥。失败输出 "error: <msg>" + 退出码 1
 -save-session            新建会话并落盘（id 内部生成，stdout NDJSON 首条 `session` 事件输出；与 -session、-result-only 互斥）
 -session string          接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错；仅允许字母/数字/-）

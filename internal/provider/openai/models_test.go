@@ -42,7 +42,7 @@ func keyForTest(_ miniagent.ProviderConfig) string { return "sk-test" }
 
 func TestListAllModels_StaticNoGET(t *testing.T) {
 	// ModelsURL 空 + 静态 Models → 直接返回，绝不发 HTTP（无需 server 即证明不 GET）。
-	providers := []miniagent.ProviderConfig{{Name: "p", Models: []string{"a", "b"}}}
+	providers := []miniagent.ProviderConfig{{Name: "p", Models: []miniagent.ModelConfig{{Name: "a"}, {Name: "b"}}}}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err != nil {
 		t.Fatalf("static list: %v", err)
@@ -100,7 +100,7 @@ func TestListAllModels_MixedStaticAndDynamic(t *testing.T) {
 	defer srv.Close()
 
 	providers := []miniagent.ProviderConfig{
-		{Name: "static", Models: []string{"static-1", "static-2"}},
+		{Name: "static", Models: []miniagent.ModelConfig{{Name: "static-1"}, {Name: "static-2"}}},
 		{Name: "dynamic", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 	}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
