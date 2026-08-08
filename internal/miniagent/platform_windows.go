@@ -6,30 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"syscall"
 	"time"
 	"unsafe"
 )
-
-// setPGID 在 Windows 上把子进程放入新进程组，以便超时 kill 能传递到整个子进程树。
-func setPGID(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CreationFlags = syscall.CREATE_NEW_PROCESS_GROUP
-}
-
-// killProcessGroup 终止子进程及其后代。
-func killProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	pid := cmd.Process.Pid
-	_ = exec.Command("taskkill", "/T", "/F", "/PID", fmt.Sprintf("%d", pid)).Run()
-	_ = cmd.Process.Kill()
-}
 
 // openNoFollow 在 Windows 上回退为 Lstat+OpenFile 并拒绝最终分量为符号链接。
 // 注意：Windows 无 O_NOFOLLOW 等价 syscall，Lstat→OpenFile 间存在理论 TOCTOU（攻击者此时把 path

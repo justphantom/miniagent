@@ -3,65 +3,11 @@ package miniagent
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
 )
 
-// fakeTransport 把预设的非流式 JSON body 按调用顺序回放，便于 loop 测试
-// 不依赖真实端点。lastBody 记录最后一次请求体；bodies 记录全部请求体供多步断言。
-type fakeTransport struct {
-	responses []string
-	statuses  []int
-	calls     int
-	lastBody  string
-	bodies    []string
-}
-
-func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		b, _ := io.ReadAll(req.Body)
-		f.lastBody = string(b)
-		f.bodies = append(f.bodies, string(b))
-		_ = req.Body.Close()
-	}
-	idx := f.calls
-	f.calls++
-	status := http.StatusOK
-	if idx < len(f.statuses) {
-		status = f.statuses[idx]
-	}
-	body := ""
-	if idx < len(f.responses) {
-		body = f.responses[idx]
-	}
-	return &http.Response{
-		StatusCode: status,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-		Request:    req,
-	}, nil
-}
-
-// textResponse 构造非流式 chat completions JSON：单条 choice，纯文本回复。
-func textResponse(text string) string {
-	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
-}
-
-// toolResponse 构造非流式 chat completions JSON：单条 choice 带 tool_calls。
-func toolResponse(calls ...ToolCall) string {
-	tcs := make([]string, 0, len(calls))
-	for _, c := range calls {
-		tcs = append(tcs, fmt.Sprintf(`{"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}`, c.ID, c.Name, c.Args))
-	}
-	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[%s]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, strings.Join(tcs, ","))
-}
-
-// R4-2：LLM 返回「文本 + tool_call」时，assistant 消息须保留 Content（resp.Text），否则附随说明文本
-// 丢失、后续轮次看不到（Claude 经 OpenAI 代理、部分开源模型常如此）。toolResponse 的 content 恒空、
-// 不覆盖此路径，故用内联响应。
 func TestRun_AssistantTextPreservedWithToolCalls(t *testing.T) {
 	resp := `{"choices":[{"message":{"role":"assistant","content":"先查一下","tool_calls":[{"id":"1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 	tr := &fakeTransport{responses: []string{resp, textResponse("done")}}
@@ -303,23 +249,6 @@ func TestRun_OnBudgetExceedsStops(t *testing.T) {
 	_, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
-	}
-}
-
-// NewDefaultOnBudget 在 resp.Usage 全零时补本地估算 fallback（EstimateTokens 计请求侧）。
-// 估算原属核心内置，现外挂到默认钩子；本测试直接覆盖该工厂，保 fallback 行为不丢。
-func TestNewDefaultOnBudget_EstimatesZeroUsage(t *testing.T) {
-	hook := NewDefaultOnBudget(0, nil)
-	total := &Usage{}
-	in := BudgetInput{
-		ToSend: []Message{{Role: RoleUser, Content: "a real prompt"}},
-		Resp:   Response{Usage: Usage{}}, // 全零 → 触发本地估算
-	}
-	if err := hook(context.Background(), 1, in, total); err != nil {
-		t.Fatalf("OnBudget: %v", err)
-	}
-	if total.InputTokens == 0 {
-		t.Errorf("OnBudget did not estimate zero-usage; expected local estimate fallback, got %+v", total)
 	}
 }
 

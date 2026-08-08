@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"slices"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
@@ -72,7 +73,7 @@ func estimateMessageTokensLocal(m miniagent.Message) int {
 		n, c = text.CountCharsLocal(tc.Args)
 		nonCJK, cjk = nonCJK+n, cjk+c
 	}
-	return nonCJK/4 + cjk/2 + miniagent.EnvelopePerMsgTokens + miniagent.EnvelopePerToolCallTokens*len(m.ToolCalls)
+	return nonCJK/4 + cjk/2 + policy.EnvelopePerMsgTokens + policy.EnvelopePerToolCallTokens*len(m.ToolCalls)
 }
 
 // contextTokensFromUsage 把单次响应 usage 折算成「该次请求前缀+输出 token 总量」。
@@ -103,7 +104,7 @@ func lastApplicableUsageIndex(msgs []miniagent.Message) int {
 
 // estimateTokensFromUsage 两段式估算：lastApplicableUsageIndex 找最近未陈旧真实 usage 锚点，
 // tokens = contextTokensFromUsage(usage) + Σ estimateMessageTokensLocal(msgs[idx+1:])。
-// ok=false（无锚点）时调用方回落 miniagent.EstimateTokens。
+// ok=false（无锚点）时调用方回落 policy.EstimateTokens。
 func estimateTokensFromUsage(msgs []miniagent.Message) (tokens int, ok bool) {
 	idx := lastApplicableUsageIndex(msgs)
 	if idx < 0 {
@@ -123,7 +124,7 @@ func estimateThreshold(msgs []miniagent.Message, system string, tools []miniagen
 			return t
 		}
 	}
-	return miniagent.EstimateTokens(msgs, system, tools)
+	return policy.EstimateTokens(msgs, system, tools)
 }
 
 // compactionBuffer 是为模型输出与未来轮次增长预留的 token 缓冲（对标 opencode COMPACTION_BUFFER=20000）。

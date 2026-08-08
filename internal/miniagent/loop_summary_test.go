@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// 阶段 3：迭代上限后注入总结 prompt，LLM 返回文本 → finishStop，steps=maxIterations+1。
+// 阶段 3：迭代上限后注入总结 prompt，LLM 返回文本 → FinishStop，steps=maxIterations+1。
 func TestRun_SummaryInjectionSucceeds(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
@@ -18,8 +18,8 @@ func TestRun_SummaryInjectionSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Finish != finishStop {
-		t.Errorf("Finish = %q, want %q", res.Finish, finishStop)
+	if res.Finish != FinishStop {
+		t.Errorf("Finish = %q, want %q", res.Finish, FinishStop)
 	}
 	if res.Text != "总结完成" {
 		t.Errorf("Text = %q, want '总结完成'", res.Text)
@@ -37,7 +37,7 @@ func TestRun_SummaryInjectionSucceeds(t *testing.T) {
 	}
 }
 
-// 阶段 3：迭代上限后注入总结 prompt，LLM 仍请求工具 → 回落 finishMaxIterations。
+// 阶段 3：迭代上限后注入总结 prompt，LLM 仍请求工具 → 回落 FinishMaxIterations。
 func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
@@ -49,8 +49,8 @@ func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Finish != finishMaxIterations {
-		t.Errorf("Finish = %q, want %q", res.Finish, finishMaxIterations)
+	if res.Finish != FinishMaxIterations {
+		t.Errorf("Finish = %q, want %q", res.Finish, FinishMaxIterations)
 	}
 	if res.Text != "" {
 		t.Errorf("Text = %q, want empty", res.Text)
@@ -101,7 +101,7 @@ func TestRun_SummaryRequestPromptConfigurable(t *testing.T) {
 	}
 }
 
-// 总结步 LLM 调用失败（err2，如坏响应）时回落 finishMaxIterations——不上抛、不污染 transcript
+// 总结步 LLM 调用失败（err2，如坏响应）时回落 FinishMaxIterations——不上抛、不污染 transcript
 // （summaryReq 经临时 reqMsgs，失败也不进 Messages）。覆盖 summarizeAtLimit 的 err2 退出路径。
 func TestRun_SummaryLLMFailureFallsBack(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
@@ -115,8 +115,8 @@ func TestRun_SummaryLLMFailureFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("总结 LLM 失败应回落而非上抛, got: %v", err)
 	}
-	if res.Finish != finishMaxIterations {
-		t.Errorf("Finish = %q, want %q（总结失败回落）", res.Finish, finishMaxIterations)
+	if res.Finish != FinishMaxIterations {
+		t.Errorf("Finish = %q, want %q（总结失败回落）", res.Finish, FinishMaxIterations)
 	}
 	if res.Steps != 1 {
 		t.Errorf("Steps = %d, want 1（=iterLimit）", res.Steps)

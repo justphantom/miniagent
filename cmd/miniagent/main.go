@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"github.com/justphantom/miniagent/internal/miniagent/compaction"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
 	"github.com/justphantom/miniagent/internal/provider/openai"
@@ -180,30 +181,45 @@ func main() {
 	}
 	llm := &openai.Provider{Chat: chat, Stream: stream}
 	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
-	if err != nil {
-		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。
-		if errors.Is(err, context.Canceled) {
-			os.Exit(130)
+
+	// saveSession 救回本轮已执行的部分供 resume：Run 经 defer 保证 result.Messages/NewMessages 在
+	// 出错/取消路径亦带回，且 tool_call↔tool_result 配对由 fillPlaceholderTail 补全完整——故不只
+	// 成功路径落盘，出错/取消亦调用，消除「工具已执行、jsonl 未追加」的孤儿不一致（如 tool-output
+	// 残留而 jsonl 停在上一轮）。保存期间忽略 SIGINT/SIGTERM：避免截断 session 文件或残留临时文件。
+	// 返回 saveErr 由调用方裁决 exit code：成功路径失败仍 exit 1（原语义）；出错/取消路径仅 warn 不改码。
+	saveSession := func() (saveErr error) {
+		if sessPath == "" || len(result.NewMessages) == 0 {
+			return nil
 		}
-		emitRunError(err, *f.resultOnly, logger)
-		os.Exit(1)
-	}
-	emitRunResult(result, resolved.ModelID, *f.resultOnly, logger)
-	if sessPath != "" {
-		// 保存期间忽略 SIGINT/SIGTERM：避免截断 session 文件或残留临时文件。
-		// 保存完成后进程即退出，signal.Reset 在之后恢复默认行为。
 		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
-		var saveErr error
 		if result.Compacted {
 			saveErr = miniagent.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
 		} else {
 			saveErr = miniagent.AppendMessages(sessPath, meta, result.NewMessages, int64(limits.MaxSessionBytes))
 		}
 		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
-		if saveErr != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", saveErr)
-			os.Exit(1)
+		return saveErr
+	}
+
+	if err != nil {
+		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。
+		// 取消亦落盘：配对完整，救回已执行部分供下次续聊。
+		if errors.Is(err, context.Canceled) {
+			if se := saveSession(); se != nil {
+				fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", se)
+			}
+			os.Exit(130)
 		}
+		emitRunError(err, *f.resultOnly, logger)
+		if se := saveSession(); se != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", se)
+		}
+		os.Exit(1)
+	}
+	emitRunResult(result, resolved.ModelID, *f.resultOnly, logger)
+	if se := saveSession(); se != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", se)
+		os.Exit(1)
 	}
 }
 
@@ -233,9 +249,9 @@ func assembleHooks(
 	hooks := buildHooks(resultOnly)
 	hooks.BeforeLLM = compBefore
 	hooks.AfterLLM = compAfter
-	hooks.OnLLMError = miniagent.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
-	hooks.OnBudget = miniagent.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
-	hooks.ShapeToolResult = miniagent.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
+	hooks.OnLLMError = policy.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
+	hooks.OnBudget = policy.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
+	hooks.ShapeToolResult = policy.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
 	return hooks
 }
 

@@ -4,9 +4,7 @@ package miniagent
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 	"testing"
 )
 
@@ -59,17 +57,5 @@ func TestWithSessionLock_Windows_WritesAndLocks(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatalf("second lock/write: %v", err)
-	}
-}
-
-// setPGID 应在 Windows 上设置 CREATE_NEW_PROCESS_GROUP。
-func TestSetPGID_Windows_SetsProcessGroup(t *testing.T) {
-	cmd := exec.Command("cmd", "/c", "exit 0")
-	setPGID(cmd)
-	if cmd.SysProcAttr == nil {
-		t.Fatal("SysProcAttr is nil")
-	}
-	if cmd.SysProcAttr.CreationFlags&syscall.CREATE_NEW_PROCESS_GROUP == 0 {
-		t.Errorf("CREATE_NEW_PROCESS_GROUP not set, flags=%d", cmd.SysProcAttr.CreationFlags)
 	}
 }

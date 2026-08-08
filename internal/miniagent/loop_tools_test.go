@@ -1,16 +1,14 @@
 package miniagent
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 )
 
-// safeCall 捕获工具 panic 时 ToolResult.ExitCode 应为 exitCodeNotSet——与 denied/未知工具一致，
+// safeCall 捕获工具 panic 时 ToolResult.ExitCode 应为 ExitCodeNotSet——与 denied/未知工具一致，
 // 防 shell 工具 panic 被事件层以 exit_code=0 误读为命令成功（P3-4 同型）。
 func TestSafeCall_PanicExitCodeNotSet(t *testing.T) {
 	tool := Tool{Name: "shell", Call: func(context.Context, string) ToolResult { panic("boom") }}
@@ -18,8 +16,8 @@ func TestSafeCall_PanicExitCodeNotSet(t *testing.T) {
 	if !res.IsError {
 		t.Error("panic 应 IsError=true")
 	}
-	if res.ExitCode != exitCodeNotSet {
-		t.Errorf("panic ExitCode = %d, want %d（未执行完，防事件层误读 0 为成功）", res.ExitCode, exitCodeNotSet)
+	if res.ExitCode != ExitCodeNotSet {
+		t.Errorf("panic ExitCode = %d, want %d（未执行完，防事件层误读 0 为成功）", res.ExitCode, ExitCodeNotSet)
 	}
 }
 
@@ -104,39 +102,6 @@ func TestRun_ToolDeniedSkipped(t *testing.T) {
 	}
 }
 
-// P1-5：usage 全零（端点不返回 usage）时 Run 用本地估算 fallback 并继续运行，同时 warn 暴露。
-func TestRun_ZeroUsageWarns(t *testing.T) {
-	// 响应不含 usage 字段 → testParseChatResponse 得零值 Usage（流式端点常见的现实情形）。
-	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
-	tr := &fakeTransport{responses: []string{noUsage}}
-	llm := testClients(tr)
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	cfg := LoopConfig{Model: "m", MaxTotalTokens: 10000}
-	res, err := Run(context.Background(), llm, cfg, "q", defaultHooks(cfg, logger), logger)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.Text != "hi" {
-		t.Errorf("Text = %q, want hi", res.Text)
-	}
-	if !strings.Contains(buf.String(), "partial/zero usage") {
-		t.Errorf("expected warn about missing usage, got logs: %s", buf.String())
-	}
-}
-
-// P1-5-b：usage 全零时本地估算仍触发 MaxTotalTokens 预算熔断。
-func TestRun_ZeroUsageBudgetEnforced(t *testing.T) {
-	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
-	tr := &fakeTransport{responses: []string{noUsage}}
-	llm := testClients(tr)
-	cfg := LoopConfig{Model: "m", MaxTotalTokens: 100}
-	_, err := Run(context.Background(), llm, cfg, "q", defaultHooks(cfg, nil), nil)
-	if !errors.Is(err, ErrBudgetExceeded) {
-		t.Fatalf("expected ErrBudgetExceeded, got %v", err)
-	}
-}
-
 // P2-1：OnToolResult 中途 error 时，assistant.tool_calls 的每个 id 都应有对应 tool 消息，
 // 保证 Messages 配对完整可续跑（端点不会因孤立 tool_call 返回 400）。
 func TestRun_OnToolResultErrorKeepsPairing(t *testing.T) {
@@ -184,7 +149,7 @@ func TestRun_OnToolResultErrorKeepsPairing(t *testing.T) {
 	}
 }
 
-// P3-4：未知工具的 ToolResult.ExitCode 应为 exitCodeNotSet（与被拒工具一致），
+// P3-4：未知工具的 ToolResult.ExitCode 应为 ExitCodeNotSet（与被拒工具一致），
 // 零值 0 会被事件层误读为"成功退出"。
 func TestRun_UnknownToolExitCodeNotSet(t *testing.T) {
 	tr := &fakeTransport{responses: []string{
@@ -206,8 +171,8 @@ func TestRun_UnknownToolExitCodeNotSet(t *testing.T) {
 	if got == nil {
 		t.Fatal("OnToolResult not fired for missing tool")
 	}
-	if *got != exitCodeNotSet {
-		t.Errorf("unknown tool ExitCode = %d, want %d (exitCodeNotSet)", *got, exitCodeNotSet)
+	if *got != ExitCodeNotSet {
+		t.Errorf("unknown tool ExitCode = %d, want %d (ExitCodeNotSet)", *got, ExitCodeNotSet)
 	}
 }
 

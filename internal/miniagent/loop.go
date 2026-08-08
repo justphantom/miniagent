@@ -67,7 +67,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	// summarizeAtLimit 撞迭代上限时注入 RoleSystem 总结请求并额外调一次 LLM 求最终文本。逻辑外提为闭包，
 	// 使主循环 for 体聚焦五件事；捕获 Run 全部局部状态，仅 step 作参数（闭包定义先于 for，循环变量不可直接捕获）。
 	// 总结请求经临时 reqMsgs 发送——不污染 transcript（内部引导消息不进 Result.Messages / newMsgs）。
-	// ok=true 表示已得出终止 Result（res+err），调用方直接 return；ok=false 表示总结未成，回落 finishMaxIterations。
+	// ok=true 表示已得出终止 Result（res+err），调用方直接 return；ok=false 表示总结未成，回落 FinishMaxIterations。
 	summarizeAtLimit := func(s int) (Result, bool, error) {
 		summaryReq := cfg.SummaryRequest
 		if summaryReq == "" {
@@ -110,7 +110,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
 			return Result{Steps: s + 1}, true, berr // 预算错误：Finish 留空（出错返回不变量），与 :107 及主循环对齐
 		}
-		return Result{Text: resp2.Text, Steps: s + 1, Finish: finishStop}, true, nil
+		return Result{Text: resp2.Text, Steps: s + 1, Finish: FinishStop}, true, nil
 	}
 
 	for step := 1; step <= iterLimit; step++ {
@@ -168,7 +168,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		if len(resp.ToolCalls) == 0 {
 			// 最终文本入历史：接续对话需要看到上一轮的回答。附真实 usage 供外挂策略防陈旧估算。
 			appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, Usage: &resp.Usage})
-			return Result{Text: resp.Text, Steps: step, Finish: finishStop}, nil
+			return Result{Text: resp.Text, Steps: step, Finish: FinishStop}, nil
 		}
 
 		msgs, err = handleToolCalls(ctx, cfg, step, resp, toolByName, msgs, &newMsgs, hooks, logger)
@@ -176,7 +176,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			return Result{Steps: step}, err
 		}
 		// 撞迭代上限且刚执行完工具：注入总结请求让 LLM 输出最终文本（允许一次额外调用）；
-		// 未成则回落 finishMaxIterations（总结逻辑外提为 summarizeAtLimit，主循环保持简洁）。
+		// 未成则回落 FinishMaxIterations（总结逻辑外提为 summarizeAtLimit，主循环保持简洁）。
 		if step == iterLimit {
 			if res, ok, err := summarizeAtLimit(step); ok {
 				return res, err
@@ -185,12 +185,12 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	}
 	// ctx 在末轮工具/总结期间被取消也会落到此分支：工具返「已取消」（非 error）→ handleToolCalls 返 nil →
 	// summarizeAtLimit 用已取消 ctx 失败返 ok=false → 循环退出。须显式检查 ctx，否则取消被吞为
-	// finishMaxIterations + nil error（退出码 0 非 130，违反「Run 须及时返回 Canceled」契约）。
+	// FinishMaxIterations + nil error（退出码 0 非 130，违反「Run 须及时返回 Canceled」契约）。
 	if err := ctx.Err(); err != nil {
 		return Result{Steps: iterLimit}, err
 	}
-	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。Finish=finishMaxIterations 是终止信号。
-	return Result{Steps: iterLimit, Finish: finishMaxIterations}, nil
+	// 达到迭代上限：返回 nil error，让上层仍能消费已累积的 Usage。Finish=FinishMaxIterations 是终止信号。
+	return Result{Steps: iterLimit, Finish: FinishMaxIterations}, nil
 }
 
 // applyBeforeLLM 调 hooks.BeforeLLM（nil=透传，极简模式）并把它对 transcript / 持久化 / 用量 / 压缩标记的

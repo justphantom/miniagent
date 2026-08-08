@@ -171,7 +171,7 @@ func TestRun_CtxCancelledDuringToolReturns(t *testing.T) {
 
 // M3-4：末轮（step==iterLimit）工具执行期间 ctx 取消——工具返「已取消」（非 error）→ handleToolCalls
 // 返 nil → summarizeAtLimit 用已取消 ctx 失败返 ok=false → 循环退出。循环末尾须有 ctx 守卫，否则取消
-// 被吞为 finishMaxIterations + nil（退出码 0 非 130）。MaxIterations=1 使任一工具期取消都命中末轮。
+// 被吞为 FinishMaxIterations + nil（退出码 0 非 130）。MaxIterations=1 使任一工具期取消都命中末轮。
 func TestRun_CtxCancelledAtIterationLimitReturnsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})

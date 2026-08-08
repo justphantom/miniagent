@@ -7,11 +7,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/justphantom/miniagent/internal/text"
 )
-
-// maxToolResultInHistory：单条 tool 结果入历史字符上限，平衡可读性与上下文预算。
-const maxToolResultInHistory = 4000
 
 // maxParallelTools：同一步并行工具上限，防耗尽 FD/连接或触发目标限流。
 const maxParallelTools = 8
@@ -22,7 +18,7 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 			if logger != nil {
 				logger.Error("tool panic recovered", "tool", name, "panic", r)
 			}
-			res = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: fmt.Sprintf("工具 %q 内部错误", name)}
+			res = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: fmt.Sprintf("工具 %q 内部错误", name)}
 		}
 	}()
 	return tool.Call(ctx, args)
@@ -149,13 +145,13 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 	sem := make(chan struct{}, parallel)
 	for i, tc := range calls {
 		if denied[tc.ID] {
-			results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: "用户拒绝执行"}
+			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "用户拒绝执行"}
 			continue
 		}
 		tool, ok := toolByName[tc.Name]
 		if !ok {
-			// ExitCode=exitCodeNotSet 与 denied 一致：未知工具从未真正执行，零值 0 会被事件层误读为成功（P3-4）。
-			results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
+			// ExitCode=ExitCodeNotSet 与 denied 一致：未知工具从未真正执行，零值 0 会被事件层误读为成功（P3-4）。
+			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
 			continue
 		}
 		wg.Add(1)
@@ -166,7 +162,7 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[i] = ToolResult{IsError: true, ExitCode: exitCodeNotSet, Output: "已取消"}
+				results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "已取消"}
 				return
 			}
 			defer func() { <-sem }()
@@ -175,18 +171,4 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 	}
 	wg.Wait()
 	return results
-}
-
-// trimForHistory 把工具结果裁到 limit 字符后入历史；limit<=0 用默认上限。
-// split=true（shell/grep/script 等尾部关键的工具）走头尾分段截断，保留尾部错误结论；
-// 否则 head-only（read/edit 等带行号的代码类工具，前截断符合分段读大文件语义）。
-// C-2 的 context 降级复用同一裁剪语义（对更早的 tool content 用更小 limit 再裁）。
-func trimForHistory(s string, limit int, split bool) string {
-	if limit <= 0 {
-		limit = maxToolResultInHistory
-	}
-	if split {
-		return text.TruncateHeadTail(s, limit, "…[省略中间段]")
-	}
-	return text.Truncate(s, limit, "…[tool_result 已截断]")
 }

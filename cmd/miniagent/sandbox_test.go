@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/justphantom/miniagent/internal/miniagent/tools"
 	"context"
 	"fmt"
 	"os"
@@ -8,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // 相对路径落在 workdir 子树内，应通过。
@@ -81,7 +81,7 @@ func TestConfineWrap_BlocksSymlinkPath(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 
-	tool := miniagent.WriteFileTool(root, 0)
+	tool := tools.WriteFileTool(root, 0)
 	wrapped := confineWrap(tool, root)
 	r := wrapped.Call(context.Background(), `{"path":"linkdir/pwned.txt","content":"x"}`)
 	if !r.IsError || !strings.Contains(r.Output, "符号链接") {
@@ -96,7 +96,7 @@ func TestConfineWrap_BlocksSymlinkPath(t *testing.T) {
 // confineWrap 正常路径仍允许写入。
 func TestConfineWrap_AllowsRegularPath(t *testing.T) {
 	root := t.TempDir()
-	tool := miniagent.WriteFileTool(root, 0)
+	tool := tools.WriteFileTool(root, 0)
 	wrapped := confineWrap(tool, root)
 	r := wrapped.Call(context.Background(), `{"path":"sub/ok.txt","content":"hello"}`)
 	if r.IsError {
@@ -112,7 +112,7 @@ func TestConfineWrap_AllowsRegularPath(t *testing.T) {
 // 不会产生未约束的成功写入。回归守卫：此前对空 path 一律拒绝曾误伤 grep/glob。
 func TestConfineWrap_EmptyPathFallsThroughToOrig(t *testing.T) {
 	root := t.TempDir()
-	wrapped := confineWrap(miniagent.WriteFileTool(root, 0), root)
+	wrapped := confineWrap(tools.WriteFileTool(root, 0), root)
 	// 非 JSON / 缺 path / 空 path：均应由 orig(write) 报错，不得成功写入。
 	for _, args := range []string{`not-json`, `{"content":"x"}`, `{"path":""}`} {
 		r := wrapped.Call(context.Background(), args)
@@ -132,7 +132,7 @@ func TestConfineWrap_GrepWithoutPathWorks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello foo bar"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	grep := confineWrap(miniagent.GrepTool(root, 0, 0, 0), root)
+	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root)
 	r := grep.Call(context.Background(), `{"pattern":"foo"}`)
 	if r.IsError {
 		t.Fatalf("grep without path should work (default workdir), got error: %+v", r)
@@ -147,13 +147,13 @@ func TestConfineWrap_ConfinesEscapePath(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	// write 带 .. 越界
-	wrapped := confineWrap(miniagent.WriteFileTool(root, 0), root)
+	wrapped := confineWrap(tools.WriteFileTool(root, 0), root)
 	r := wrapped.Call(context.Background(), `{"path":"../escape.txt","content":"x"}`)
 	if !r.IsError || !strings.Contains(r.Output, "越出 workdir") {
 		t.Errorf("write escaping workdir should be rejected: %+v", r)
 	}
 	// grep 带绝对路径越界（grep 用 workspaceRoot 仍需 confine 防绝对路径逃逸）
-	grep := confineWrap(miniagent.GrepTool(root, 0, 0, 0), root)
+	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root)
 	r = grep.Call(context.Background(), fmt.Sprintf(`{"pattern":"x","path":%q}`, outside))
 	if !r.IsError || !strings.Contains(r.Output, "越出 workdir") {
 		t.Errorf("grep escaping workdir should be rejected: %+v", r)

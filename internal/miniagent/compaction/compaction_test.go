@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"context"
 	"net/http"
 	"strconv"
@@ -220,7 +221,7 @@ func TestCompactWithSummary_StripsMiddleBeforeSummarize(t *testing.T) {
 		t.Errorf("期望同 path/offset read 被 dedup 占位，实际 captured tool 无占位")
 	}
 	// reasoning 清（~2400 token）+ read dedup（6→1）后体积应 < 1500。
-	capturedTokens := miniagent.EstimateTokens(captured, "", nil)
+	capturedTokens := policy.EstimateTokens(captured, "", nil)
 	if capturedTokens > 1500 {
 		t.Errorf("middle strip 后摘要体积应 < 1500（reasoning 清 + read dedup），实际 %d", capturedTokens)
 	}

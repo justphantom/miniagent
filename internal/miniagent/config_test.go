@@ -6,11 +6,15 @@ import (
 	"testing"
 )
 
+func writeFileAtomicTest(path string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(path, data, perm)
+}
+
 func writeTmpConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := dir + "/miniagent.json"
-	if err := writeFileAtomic(path, []byte(body), 0o600); err != nil {
+	if err := writeFileAtomicTest(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	return path

@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"context"
 	"net/http"
 	"os"
@@ -79,18 +80,18 @@ func TestEstimateTokensFromUsage(t *testing.T) {
 	}
 }
 
-// §P0-B estimateThreshold：无 usage 或 kill-switch=false 回落 miniagent.EstimateTokens；有 usage 且开关开用真实值。
+// §P0-B estimateThreshold：无 usage 或 kill-switch=false 回落 policy.EstimateTokens；有 usage 且开关开用真实值。
 func TestEstimateThreshold_Fallback(t *testing.T) {
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "hello world"}}
-	want := miniagent.EstimateTokens(msgs, "sys", nil)
+	want := policy.EstimateTokens(msgs, "sys", nil)
 	if got := estimateThreshold(msgs, "sys", nil, true); got != want {
-		t.Errorf("无 usage 回落: estimateThreshold=%d, want miniagent.EstimateTokens=%d", got, want)
+		t.Errorf("无 usage 回落: estimateThreshold=%d, want policy.EstimateTokens=%d", got, want)
 	}
-	// kill-switch=false 也回落 miniagent.EstimateTokens（即使有 usage）。
+	// kill-switch=false 也回落 policy.EstimateTokens（即使有 usage）。
 	msgs2 := []miniagent.Message{{Role: miniagent.RoleAssistant, Ts: 1, Usage: uPtr(100, 50)}}
-	want2 := miniagent.EstimateTokens(msgs2, "sys", nil)
+	want2 := policy.EstimateTokens(msgs2, "sys", nil)
 	if got := estimateThreshold(msgs2, "sys", nil, false); got != want2 {
-		t.Errorf("kill-switch=false: estimateThreshold=%d, want miniagent.EstimateTokens=%d", got, want2)
+		t.Errorf("kill-switch=false: estimateThreshold=%d, want policy.EstimateTokens=%d", got, want2)
 	}
 	if got := estimateThreshold(msgs2, "sys", nil, true); got != 150 {
 		t.Errorf("kill-switch=true 有 usage: estimateThreshold=%d, want 150 (100+50)", got)
@@ -142,11 +143,11 @@ func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 }
 
 // §P0-B 集成：本地估算超窗但末尾 assistant 真实 usage 未超窗时，FitHistory（UseRealUsage=true）
-// 不触发摘要压缩（Summarize 不被调），applyContextStrips 早返——补 miniagent.EstimateTokens 对缓存零感知盲区。
+// 不触发摘要压缩（Summarize 不被调），applyContextStrips 早返——补 policy.EstimateTokens 对缓存零感知盲区。
 func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("不应被调")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	// user 巨大内容使本地 miniagent.EstimateTokens 远超窗；末尾 assistant 真实 usage 仅 150（未超窗）。
+	// user 巨大内容使本地 policy.EstimateTokens 远超窗；末尾 assistant 真实 usage 仅 150（未超窗）。
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Content: strings.Repeat("x", 8000)}, // ~2000 token 本地估算
 		{Role: miniagent.RoleAssistant, Ts: 1, Usage: uPtr(100, 50), Content: "a"},

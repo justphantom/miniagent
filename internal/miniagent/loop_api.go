@@ -26,9 +26,9 @@ type Tool struct {
 	Call func(ctx context.Context, args string) ToolResult `json:"-"`
 }
 
-// exitCodeNotSet 标记 shell 命令未产生有效退出码（超时或启动失败），与正常退出的
+// ExitCodeNotSet 标记 shell 命令未产生有效退出码（超时或启动失败），与正常退出的
 // 0（成功）/N（命令退出码）区分，供消费方识别「命令没真正跑完」。
-const exitCodeNotSet = -1
+const ExitCodeNotSet = -1
 
 type ToolResult struct {
 	Output  string
@@ -134,14 +134,17 @@ type Result struct {
 	// Steps 是本轮已记账 usage 的 LLM 调用数（usage 在 recordStepUsage 累加：未记的失败路径计
 	// step-1、已记的计 step；总结额外调用计 step+1）。出错/取消路径同此语义。仅观察用，非逻辑依赖。
 	Steps int
-	// Finish 是终止原因：finishStop（模型给出最终文本）或
-	// finishMaxIterations（撞迭代上限，Text 为空）。出错返回时为空串。
+	// Finish 是终止原因：FinishStop（模型给出最终文本）或
+	// FinishMaxIterations（撞迭代上限，Text 为空）。出错返回时为空串。
 	Finish string
 	// Messages 是截至返回时的全量 transcript（History + 本轮新增），
 	// 所有 return 路径（含出错、撞 maxIterations）都带回，供会话持久化。
 	Messages []Message
 	// NewMessages 是本轮 Run 新增的消息（不含 History）：main 据此 append-only
-	// 追加到 session jsonl，避免每次重写全量。出错轮可能为空/不完整，main 不落盘。
+	// 追加到 session jsonl，避免每次重写全量。Run 经 defer 保证出错/取消路径也带回 NewMessages，
+	// 且 tool_call↔tool_result 配对由 handleToolCalls 的 fillPlaceholderTail 补全完整——main 在
+	// 出错/取消路径亦调用 saveSession 落盘，救回失败前已执行的部分供 resume（仅失败那一步 LLM 本就
+	// 无产出，天然不在此列）。
 	NewMessages []Message
 	// Compacted 标记本轮是否触发过摘要压缩（BeforeLLM 钩子置 StepOutput.Compacted，核心据此回填）。交互/入口层据此
 	// 决定是否 rewrite session 文件——append-only 落盘的 newMsgs 含被屏障的旧 summary 与
@@ -153,8 +156,8 @@ type Result struct {
 }
 
 const (
-	finishStop          = "stop"
-	finishMaxIterations = "max_iterations"
+	FinishStop          = "stop"
+	FinishMaxIterations = "max_iterations"
 )
 
 // LoopConfig 是 Run 的配置。字段分两类：循环本体字段（Model/System/Tools/History/MaxIterations/

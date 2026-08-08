@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/miniagent/tools"
 )
 
 // buildTools 注册 7 个内置工具，按 mode 调整约束：
@@ -20,9 +21,9 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	if shellMode == "" {
 		shellMode = miniagent.ModeDefault
 	}
-	read := miniagent.ReadFileTool(workdir, fileOpTimeout, limits.MaxReadFileBytes)
-	write := miniagent.WriteFileTool(workdir, writeTimeout)
-	edit := miniagent.EditFileTool(workdir, fileOpTimeout)
+	read := tools.ReadFileTool(workdir, fileOpTimeout, limits.MaxReadFileBytes)
+	write := tools.WriteFileTool(workdir, writeTimeout)
+	edit := tools.EditFileTool(workdir, fileOpTimeout)
 	if fileResultLimit > 0 {
 		// ResultLimit 是导出字段；confineWrap 保留它（仅替换 Call），故先设再包装。
 		read.ResultLimit = fileResultLimit
@@ -33,23 +34,23 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		write = confineWrap(write, workdir)
 		edit = confineWrap(edit, workdir)
 	}
-	grep := miniagent.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
-	glob := miniagent.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
-	codemap := miniagent.CodemapTool(workdir, fileOpTimeout)
+	grep := tools.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
+	glob := tools.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
+	codemap := tools.CodemapTool(workdir, fileOpTimeout)
 	if mode == miniagent.ModeDefault && workdir != "" {
 		grep = confineWrap(grep, workdir)
 		glob = confineWrap(glob, workdir)
 		codemap = confineWrap(codemap, workdir)
 	}
-	tools := []miniagent.Tool{
+	built := []miniagent.Tool{
 		read,
 		write,
 		edit,
 		grep,
 		glob,
 		codemap,
-		miniagent.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
+		tools.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
 	}
 	// todo 工具（单 Run 内存）：每轮 buildTools 新建 *TodoList，跨 step 共享、跨 Run 重置。
-	return append(tools, miniagent.TodoTools(&miniagent.TodoList{})...)
+	return append(built, tools.TodoTools(&tools.TodoList{})...)
 }

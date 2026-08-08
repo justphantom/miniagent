@@ -82,7 +82,7 @@ func TestUsageFootprint(t *testing.T) {
 	}
 }
 
-// §P1-B Force=true 时，即使 miniagent.EstimateTokens 远低于 4/5 阈值，FitHistory 也走 compactWithSummary。
+// §P1-B Force=true 时，即使 policy.EstimateTokens 远低于 4/5 阈值，FitHistory 也走 compactWithSummary。
 func TestFitHistory_ForceCompactsRegardlessOfEstimate(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("forced summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -91,7 +91,7 @@ func TestFitHistory_ForceCompactsRegardlessOfEstimate(t *testing.T) {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	budget := ContextBudget{
-		ContextWindow: 1000000, // 4/5=800000：miniagent.EstimateTokens(~小) << 阈值 → 通常不压
+		ContextWindow: 1000000, // 4/5=800000：policy.EstimateTokens(~小) << 阈值 → 通常不压
 		KeepRecent:    3,
 		Force:         true,
 		Summarize:     testBudget(llm).Summarize,

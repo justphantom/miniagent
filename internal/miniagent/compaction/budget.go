@@ -3,6 +3,7 @@
 package compaction
 
 import (
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"context"
 	"fmt"
 	"log/slog"
@@ -32,7 +33,7 @@ const (
 
 // ContextBudget 是 FitHistory 的单一参数包：上下文窗口、保留轮数、摘要提示与模型、
 // 以及把中段压成摘要的可注入回调（解耦 context.go 与 HTTPClient，便于测试注入假摘要）。
-// System/Tools 用于 miniagent.EstimateTokens 估算（计入 system prompt 与工具 schema 的固定开销）。
+// System/Tools 用于 policy.EstimateTokens 估算（计入 system prompt 与工具 schema 的固定开销）。
 type ContextBudget struct {
 	ContextWindow int // 0 = 不主动压缩
 	KeepRecent    int // <=0 回落 contextKeepRecent
@@ -52,9 +53,9 @@ type ContextBudget struct {
 	System             string
 	Tools              []miniagent.Tool
 	// UseRealUsage 控制 estimateThreshold 是否优先采纳真实 usage（§P0-B）。false（kill-switch）
-	// 直接用本地 miniagent.EstimateTokens，回落旧行为；true 时无可用真实 usage 亦自动回落本地估算。
+	// 直接用本地 policy.EstimateTokens，回落旧行为；true 时无可用真实 usage 亦自动回落本地估算。
 	UseRealUsage bool
-	// Force 为 true 时 FitHistory 跳过 miniagent.EstimateTokens 4/5 门控，直接进入 compactWithSummary+有损 fallback
+	// Force 为 true 时 FitHistory 跳过 policy.EstimateTokens 4/5 门控，直接进入 compactWithSummary+有损 fallback
 	// 分支（§P1-B）。由 Run 在上一步真实 usage 命中 isUsageOverflow 时置位，让压缩基于「已证实的真实占用」触发。
 	Force bool
 	// PreserveRecentTokens 是 retainedTail 的 token 预算上界（§P1-E，移植 opencode preserve_recent_tokens）。
@@ -104,7 +105,7 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	}
 	// keepReasoningChars < 0 → truncateKeptReasoning 内部 threshold<=0 原样返回（关闭）。
 	// 门控基于 strip View（=LLM 所见），非原文 msgs：非压缩步 Commit=false 后 transcript 保留原文，每轮从原文重算 strip。
-	// §P0-B：estimateThreshold 优先真实 usage、回落本地估算，补 miniagent.EstimateTokens 对缓存内容零感知的盲区。
+	// §P0-B：estimateThreshold 优先真实 usage、回落本地估算，补 policy.EstimateTokens 对缓存内容零感知的盲区。
 	// §P1-B：Force=true（上一步真实 usage 命中 isUsageOverflow）时跳过门控，直接进压缩分支（Force 仅 CW>0 置位）。
 	if !budget.Force {
 		stripped := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
@@ -134,14 +135,14 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	}
 	// summarized：out=fitted 不 strip——tail 原文 reasoning/args 保留，体积由 jointTailBudget 控制（≤ CW×4/5）。
 	// 压缩后判定用本地 EstimateTokens（门控用 estimateThreshold 反映压缩前前缀；压缩后真实 usage 陈旧，本地更准）。
-	if miniagent.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
+	if policy.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
 			logger.Warn("仍超 window，裁到最近轮", "msgs", len(out))
 		}
 	}
 	// 缓存 post-trim out 的 token 估算：下方判定与错误消息复用同一值（原三次 EstimateTokens 之一在此消除）。
-	est := miniagent.EstimateTokens(out, budget.System, budget.Tools)
+	est := policy.EstimateTokens(out, budget.System, budget.Tools)
 	if est > budget.ContextWindow*4/5 {
 		return out, sm, summarized, true, sumUsage, fmt.Errorf("history 超 context window（约 %d tokens）即使有损裁剪后仍超——终止以避免循环烧请求", est)
 	}
@@ -150,7 +151,7 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 
 // applyContextStrips 跑全部主动裁剪（P1/P4/P6/P7/P8'/P9b/P11），仅改 context 侧拷贝，供 FitHistory
 // 未超窗/超窗两分支复用（原两处内联序列一致，抽此避免重复 + 统一可观测）。logger 为 Debug level
-// （CLI -log-level debug）时，记录各阶段节省的 token（miniagent.EstimateTokens 差值）与 fit 前后总量，供 v11 §6
+// （CLI -log-level debug）时，记录各阶段节省的 token（policy.EstimateTokens 差值）与 fit 前后总量，供 v11 §6
 // 的「确实省了」运行时确认；Info level（默认）不算差值、零开销。各阶段语义见各 strip 函数 doc。
 func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReasoning, keepReasoningChars, keepToolArgs int, logger *slog.Logger, sys string, tools []miniagent.Tool) []miniagent.Message {
 	dbg := logger != nil && logger.Enabled(ctx, slog.LevelDebug)
@@ -158,9 +159,9 @@ func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReaso
 		if !dbg {
 			return fn(in)
 		}
-		before := miniagent.EstimateTokens(in, sys, tools)
+		before := policy.EstimateTokens(in, sys, tools)
 		o := fn(in)
-		if after := miniagent.EstimateTokens(o, sys, tools); before > after {
+		if after := policy.EstimateTokens(o, sys, tools); before > after {
 			logger.Debug("context budget: strip saved",
 				"stage", stage, "saved_tokens", before-after, "before_msgs", len(in), "after_msgs", len(o))
 		}
@@ -177,7 +178,7 @@ func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReaso
 	out = strip("P9b_dedupShell", func(m []miniagent.Message) []miniagent.Message { return dedupShellCommands(m, keepToolArgs) }, out)
 	if dbg {
 		logger.Debug("context budget: fit done",
-			"before_tokens", miniagent.EstimateTokens(msgs, sys, tools), "after_tokens", miniagent.EstimateTokens(out, sys, tools), "msgs", len(out))
+			"before_tokens", policy.EstimateTokens(msgs, sys, tools), "after_tokens", policy.EstimateTokens(out, sys, tools), "msgs", len(out))
 	}
 	return out
 }
@@ -220,7 +221,7 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 		return preserveRecentTokens(budget)
 	}
 	target := budget.ContextWindow * 4 / 5
-	reqOverhead := miniagent.EstimateTokens(nil, budget.System, budget.Tools)
+	reqOverhead := policy.EstimateTokens(nil, budget.System, budget.Tools)
 	headAdj := 0
 	if len(headRounds) != 1 || headRounds[0].Kind != miniagent.KindSummary || budget.SummarizerPrompt != "" {
 		headAdj = estimateRoundTokens(headRounds)
@@ -229,7 +230,7 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 	if maxChars <= 0 {
 		maxChars = summaryMaxChars
 	}
-	summaryEstimate := maxChars/2 + miniagent.EnvelopePerMsgTokens
+	summaryEstimate := maxChars/2 + policy.EnvelopePerMsgTokens
 	avail := target - reqOverhead - headAdj - summaryEstimate
 	return min(max(avail, 0), preserveRecentTokens(budget))
 }
@@ -238,7 +239,7 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 // ——这两项是请求级常量，在 tail 总量里只计一次，故逐轮累加时必须用边际估算（否则每轮重复计 400+schema，
 // 系统性高估、tail 恒不达标）。供 selectTailByTokens 累加。
 func estimateRoundTokens(round []miniagent.Message) int {
-	return miniagent.EstimateTokens(round, "", nil) - miniagent.SystemOverheadTokens
+	return policy.EstimateTokens(round, "", nil) - policy.SystemOverheadTokens
 }
 
 // contextKeepRecent 是 compactHistory/compactWithSummary 默认保留的最近轮数。
