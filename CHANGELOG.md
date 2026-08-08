@@ -5,6 +5,23 @@
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-08-08
+
+> 内部架构重构（续 4.1.0/4.2.0）：core 包进一步子包化——工具实现、策略钩子、配置、会话各成独立子包。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 patch。
+
+### Changed — 内部包重组
+- **`internal/miniagent` 拆出 `tools` 子包**：`tool_read`/`edit`/`write`/`grep`/`glob`/`codemap`/`shell`/`todo` + `output_accum`/`tool_helpers` 从 core 迁入 `internal/miniagent/tools`，消除 core 对具体工具实现的耦合。
+- **`internal/miniagent` 拆出 `policy` 子包**：`NewDefaultOnLLMError`/`NewDefaultOnBudget`/`NewDefaultShapeToolResult`（原 `loop_hooks_default`）、`EstimateTokens`/`trimHistoryForContext`（原 `history_util`）、`toolOutputStore`、`TrimForHistory` 从 core 迁入 `internal/miniagent/policy`，延续 4.2.0 的「核心策略外挂」——core 零策略，仅做工具注册 / 上下文拼接 / 调 LLM / 执行工具 / 无 tool_calls 退出。
+- **`internal/miniagent` 拆出 `config` 子包**：`config.go`/`url.go`/`resolve.go`（含分层 / 二级源 resolve）从 core 迁入 `internal/miniagent/config`。
+- **`internal/miniagent` 拆出 `session` 子包**：`session.go`/`validate.go` 从 core 迁入 `internal/miniagent/session`。
+- **新增 `looptest` 子包**：导出版 LLM 测试桩（`FakeTransport`/`RecordingTransport`/`FakeLLM` + `TextResponse`/`ToolResponse`），供 `miniagent` 与 `policy` 外部测试包共享，破除 core → openai 测试环。core 内部保留白盒测试桩（`loop_helpers_test.go`）避免成环。
+
+### Added — session 文件锁
+- **跨进程 session 文件锁**：`session/lock_unix.go`（flock `LOCK_EX|LOCK_NB` + 5s 短轮询）与 `session/lock_windows.go`（`LockFileEx` 字节区间锁），防跨进程并发写同一 session 文件竞争。
+
+### Notes
+- 与 4.1.0/4.2.0 一脉相承的渐进式解耦。真正库化（移出 `internal/`）仍计划于 5.0.0。
+
 ## [4.2.0] - 2026-08-08
 
 ### Fixed
