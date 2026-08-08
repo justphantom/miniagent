@@ -17,7 +17,7 @@ func testBudget(llm *openai.ChatClient) ContextBudget {
 	return ContextBudget{
 		Model: "m",
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
-			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, 0, middle)
+			return summarizeMiddle(ctx, llm, model, sys, prevSummary, "", "", "", summaryMaxChars, 0, middle)
 		},
 	}
 }
@@ -341,7 +341,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err == nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err == nil {
 		t.Error("expected LLM error to propagate")
 	}
 }
@@ -351,7 +351,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
+	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
 	if err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	// 引用常量而非魔法数：summaryMaxTokens 现派生自 summaryMaxChars/2，未来 chars 变化自动跟随。
@@ -428,7 +428,7 @@ func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 		CompactionModel: "compaction-model",
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotModel = model
-			return summarizeMiddle(ctx, llm, model, sys, prevSummary, summaryMaxChars, 0, middle)
+			return summarizeMiddle(ctx, llm, model, sys, prevSummary, "", "", "", summaryMaxChars, 0, middle)
 		},
 	}
 	var msgs []miniagent.Message
@@ -445,7 +445,7 @@ func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 
 // §P0-A：buildSummarizerSystem 三模式。CREATE：含模板 6 段、不含 <previous-summary>。
 func TestBuildSummarizerSystem_CreateMode(t *testing.T) {
-	got := buildSummarizerSystem("", "", 5000)
+	got := buildSummarizerSystem("", "", "", "", "", 5000)
 	for _, want := range []string{"## 目标", "## 关键细节", "## 进展状态", "## 下一步", "## 相关文件"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("CREATE 模式应含模板段 %q：\n%s", want, got)
@@ -458,7 +458,7 @@ func TestBuildSummarizerSystem_CreateMode(t *testing.T) {
 
 // §P0-A：UPDATE：含 <previous-summary> 块包裹旧摘要 + update 指令 + 模板 6 段。
 func TestBuildSummarizerSystem_UpdateMode(t *testing.T) {
-	got := buildSummarizerSystem("", "旧锚点", 5000)
+	got := buildSummarizerSystem("", "旧锚点", "", "", "", 5000)
 	for _, want := range []string{"<previous-summary>\n旧锚点\n</previous-summary>", "更新已有的锚定摘要", "## 目标", "## 相关文件"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("UPDATE 模式应含 %q：\n%s", want, got)
@@ -466,9 +466,9 @@ func TestBuildSummarizerSystem_UpdateMode(t *testing.T) {
 	}
 }
 
-// §P0-A：override：summarizerPrompt 非空 → 全量接管，Sprintf 注入 maxChars，不含模板/previous-summary。
+// §P0-A：override：summarizerPrompt 非空 → 全量接管，{max_chars} 占位符替换，不含模板/previous-summary。
 func TestBuildSummarizerSystem_Override(t *testing.T) {
-	got := buildSummarizerSystem("自定义%d", "旧", 5000)
+	got := buildSummarizerSystem("自定义{max_chars}", "旧", "", "", "", 5000)
 	if got != "自定义5000" {
 		t.Errorf("override = %q, want 自定义5000", got)
 	}
@@ -541,7 +541,7 @@ func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 	var gotMiddle []miniagent.Message
 	budget := ContextBudget{
 		Model:            "m",
-		SummarizerPrompt: "自定义%d",
+		SummarizerPrompt: "自定义{max_chars}",
 		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotPrev = prevSummary
 			gotMiddle = middle
@@ -572,7 +572,7 @@ func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("更新摘要")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
 	// lastBody 是 JSON-marshaled 请求体，< > 被转义成 < >；断言用未转义的标签名 + 旧锚点文本。

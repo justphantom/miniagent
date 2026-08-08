@@ -5,7 +5,7 @@ package compaction
 import (
 	"context"
 	"errors"
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
@@ -18,13 +18,13 @@ import (
 // 前缀仅展示层，不参与识别。
 const summaryPrefix = "[既往对话摘要]\n"
 
-// summaryCreateInstruction 是 CREATE 模式角色指令；%d 由 fmt.Sprintf 注入 maxChars，
-// 与旧 summarizerSystem 的 %d 契约一致（用户 override 仍按此契约）。
-const summaryCreateInstruction = "你是会话压缩器。把以下对话历史压缩为不超过 %d 字符的锚定摘要，严格按下方模板结构输出。"
+// summaryCreateInstruction 是 CREATE 模式角色指令；{max_chars} 占位符由 buildSummarizerSystem 替换。
+// 用户可经 config defaults.summary_create_instruction 覆盖（占位符 {max_chars}）。
+const summaryCreateInstruction = "你是会话压缩器。把以下对话历史压缩为不超过 {max_chars} 字符的锚定摘要，严格按下方模板结构输出。"
 
 // summaryUpdateInstruction 是 UPDATE 模式角色指令（移植 opencode buildPrompt compaction.ts:164
 // 的 preserve/remove/merge）。后面由 buildSummarizerSystem 追加 <previous-summary> 块 + 模板。
-const summaryUpdateInstruction = "你是会话压缩器。基于以下对话历史更新已有的锚定摘要，输出不超过 %d 字符。保留仍成立的事实，删除已过时的细节，合并新增的事实。把旧摘要作为锚点更新："
+const summaryUpdateInstruction = "你是会话压缩器。基于以下对话历史更新已有的锚定摘要，输出不超过 {max_chars} 字符。保留仍成立的事实，删除已过时的细节，合并新增的事实。把旧摘要作为锚点更新："
 
 // summaryTemplate 是固定 6 段 Markdown 模板（移植 opencode SUMMARY_TEMPLATE compaction.ts(core):16-46，
 // 中文化匹配现有 prompt 风格）。CREATE/UPDATE 两模式都追加在指令之后。
@@ -67,16 +67,28 @@ const summaryTemplate = `严格按以下 Markdown 结构输出，保持段落顺
 //     块包裹旧摘要 + summaryTemplate）：旧摘要不再作为 history 重读重写，省一半 token、显式
 //     preserve 指令降低丢细节概率。
 //   - 默认路径 + previousSummary 为空 → CREATE（summaryCreateInstruction + summaryTemplate）。
-func buildSummarizerSystem(summarizerPrompt, previousSummary string, maxChars int) string {
+func buildSummarizerSystem(summarizerPrompt, previousSummary, createInstr, updateInstr, template string, maxChars int) string {
+	render := func(s string) string {
+		return strings.NewReplacer("{max_chars}", strconv.Itoa(maxChars)).Replace(s)
+	}
 	if summarizerPrompt != "" {
-		return fmt.Sprintf(summarizerPrompt, maxChars)
+		return render(summarizerPrompt)
+	}
+	if createInstr == "" {
+		createInstr = summaryCreateInstruction
+	}
+	if updateInstr == "" {
+		updateInstr = summaryUpdateInstruction
+	}
+	if template == "" {
+		template = summaryTemplate
 	}
 	if previousSummary != "" {
-		return fmt.Sprintf(summaryUpdateInstruction, maxChars) +
+		return render(updateInstr) +
 			"\n<previous-summary>\n" + previousSummary + "\n</previous-summary>\n\n" +
-			summaryTemplate
+			template
 	}
-	return fmt.Sprintf(summaryCreateInstruction, maxChars) + "\n\n" + summaryTemplate
+	return render(createInstr) + "\n\n" + template
 }
 
 // stripSummaryPrefix 从 miniagent.Message.Content 剥离 summaryPrefix 还原纯摘要文本供 UPDATE 回灌。
@@ -90,14 +102,14 @@ func stripSummaryPrefix(content string) string {
 // summarizeMiddle 调 LLM 把中段 msgs 压成一段摘要文本（不带 tools）。返回经 maxChars 截断的
 // 摘要 + 该次调用的 miniagent.Usage（供上游累加入预算）。复用 miniagent.ChatClient.Do；调用方据 error 回落
 // 有损压缩（审查 v2 #6）。previousSummary 非空时走 UPDATE 模式（buildSummarizerSystem 判定）。
-func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerPrompt, previousSummary string, maxChars, maxSummaryTokens int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
+func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerPrompt, previousSummary, createInstr, updateInstr, template string, maxChars, maxSummaryTokens int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
 	if maxSummaryTokens <= 0 {
 		maxSummaryTokens = summaryMaxTokens
 	}
 	if len(msgs) == 0 {
 		return "", miniagent.Usage{}, errors.New("无中段可摘要")
 	}
-	system := buildSummarizerSystem(summarizerPrompt, previousSummary, maxChars)
+	system := buildSummarizerSystem(summarizerPrompt, previousSummary, createInstr, updateInstr, template, maxChars)
 	resp, err := llm.Do(ctx, miniagent.Request{
 		Model:     model,
 		System:    system,
@@ -237,7 +249,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 			if opts.Chat == nil {
 				return "", miniagent.Usage{}, errors.New("compaction: Chat 为 nil，无法摘要（须配置 CompactionOptions.Chat）")
 			}
-			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, maxChars, maxSummaryTokens, middle)
+			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, opts.SummaryCreateInstruction, opts.SummaryUpdateInstruction, opts.SummaryTemplate, maxChars, maxSummaryTokens, middle)
 		},
 	}
 	before = func(ctx context.Context, in miniagent.StepInput) (miniagent.StepOutput, error) {

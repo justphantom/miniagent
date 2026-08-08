@@ -26,20 +26,24 @@ type ResolvedRun struct {
 }
 
 type Resolved struct {
-	Provider           ProviderConfig
-	ModelID            string
-	CompactionProvider ProviderConfig
-	CompactionModelID  string
-	CompactionAuto     bool
-	CompactionReserved int
-	Thinking           string
-	Mode               string
-	System             string
-	SummaryRequest     string
-	SummarizerPrompt   string
-	Session            SessionConfig
-	Run                ResolvedRun
-	RunConfig          RunConfig // 原始 cfg.Run：纯透传字段源，消费方直读，不经 ResolvedRun 间接层
+	Provider                 ProviderConfig
+	ModelID                  string
+	CompactionProvider       ProviderConfig
+	CompactionModelID        string
+	CompactionAuto           bool
+	CompactionReserved       int
+	Thinking                 string
+	Mode                     string
+	System                   string
+	SummaryRequest           string
+	SummarizerPrompt         string
+	SubagentGuidance         string
+	SummaryCreateInstruction string
+	SummaryUpdateInstruction string
+	SummaryTemplate          string
+	Session                  SessionConfig
+	Run                      ResolvedRun
+	RunConfig                RunConfig // 原始 cfg.Run：纯透传字段源，消费方直读，不经 ResolvedRun 间接层
 	// 分层模型参数（消费方读这些而非 Run/RunConfig）：
 	// MaxTokens/ContextWindow：model>provider>global（无 cli）；HTTPTimeout：provider>global（无 model）。
 	MaxTokens     *int
@@ -142,6 +146,10 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	if cfg.Defaults.SummarizerPrompt != "" {
 		r.SummarizerPrompt = cfg.Defaults.SummarizerPrompt
 	}
+	r.SubagentGuidance = cfg.Defaults.SubagentGuidance
+	r.SummaryCreateInstruction = cfg.Defaults.SummaryCreateInstruction
+	r.SummaryUpdateInstruction = cfg.Defaults.SummaryUpdateInstruction
+	r.SummaryTemplate = cfg.Defaults.SummaryTemplate
 
 	run, rerr := resolveRun(cfg, o)
 	if rerr != nil {

@@ -29,7 +29,12 @@ type CompactionOptions struct {
 	KeepToolArgs       int
 	KeepReasoningChars int
 	SummarizerPrompt   string // 非空则全量 override 摘要 system prompt。
-	SummaryMaxChars    int
+	// SummaryCreateInstruction/SummaryUpdateInstruction 是摘要指令模板（CREATE/UPDATE），占位符 {max_chars}；
+	// SummaryTemplate 是固定摘要结构模板（无变量）。空用内置默认。经 config defaults.* 透传。
+	SummaryCreateInstruction string
+	SummaryUpdateInstruction string
+	SummaryTemplate          string
+	SummaryMaxChars          int
 	// SummaryMaxTokens 限制摘要请求输出 token 数；<=0（默认）由 NewCompaction 从 SummaryMaxChars
 	// 派生（chars/2，CJK 最密口径），保证中文摘要不被 MaxTokens 先于 chars 截断。显式 >0 覆盖派生。
 	SummaryMaxTokens     int

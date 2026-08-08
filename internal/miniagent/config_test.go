@@ -265,3 +265,22 @@ func TestLoadConfig_ModelsMustBeObjects(t *testing.T) {
 		t.Error("legacy string-form models should fail to load (breaking schema: models must be objects)")
 	}
 }
+
+// 提示词字段 round-trip：subagent_guidance/summary_create_instruction/summary_update_instruction/summary_template。
+func TestLoadConfig_PromptFields(t *testing.T) {
+	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","models":[{"name":"m"}]}],"defaults":{"provider":"p","model":"m","subagent_guidance":"G{config_path}","summary_create_instruction":"C{max_chars}","summary_update_instruction":"U{max_chars}","summary_template":"T"},"compaction":{"provider":"p","model":"m"}}`
+	cfg, err := LoadConfig(writeTmpConfig(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, got, want string }{
+		{"SubagentGuidance", cfg.Defaults.SubagentGuidance, "G{config_path}"},
+		{"SummaryCreateInstruction", cfg.Defaults.SummaryCreateInstruction, "C{max_chars}"},
+		{"SummaryUpdateInstruction", cfg.Defaults.SummaryUpdateInstruction, "U{max_chars}"},
+		{"SummaryTemplate", cfg.Defaults.SummaryTemplate, "T"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -23,37 +22,48 @@ const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真
 // 默认配置（config 无 system_prompt / 无 .miniagent/persona）下 resolved.System 为空：
 // 须兜底 defaultSystemPrompt。否则 injectSubagentGuidance 向空串追加 subagent 引导使其非空，
 // loopCfg 的 `if system == ""` fallback 永不触发（死代码），agent 静默丢失全部 ReAct 约束。
-func assembleSystemPrompt(base string, pr projectRules, configAbsPath, mode string) string {
+func assembleSystemPrompt(base string, pr projectRules, guidance, configAbsPath, mode string) string {
 	if base == "" {
 		base = defaultSystemPrompt
 	}
-	return injectSubagentGuidance(mergeSystemPrompt(base, pr.persona, pr.rules, pr.hasAny()), configAbsPath, mode)
+	return injectSubagentGuidance(mergeSystemPrompt(base, pr.persona, pr.rules, pr.hasAny()), guidance, configAbsPath, mode)
 }
 
 // injectSubagentGuidance 把 subagent fork 引导附加到 system prompt：注入 config 绝对路径
 // （审查 v1 #12 + v2 #9 + v3 #6/#8）。configAbsPath 空则不注入。mode 透传父会话权限模式
 // （审查 v3 P3）：不再硬编码 default，auto 父会话 fork 出的 subagent 继承 auto；空值回落 default。
 // subagent 为无状态单次调用（不落盘会话，stdout 即结果），故不再注入父 session id。
-func injectSubagentGuidance(system, configAbsPath, mode string) string {
+func injectSubagentGuidance(system, guidance, configAbsPath, mode string) string {
 	if configAbsPath == "" {
 		return system
 	}
 	if mode == "" {
 		mode = "default"
 	}
-	return system + "\n\n" + subagentGuidance(configAbsPath, mode)
+	return system + "\n\n" + renderSubagentGuidance(guidance, configAbsPath, mode)
 }
 
-// subagentGuidance 构造 fork 命令模板与递归约束文案。mode 透传父会话权限模式
-// （审查 v3 P3）：默认 default，父 auto 时 subagent 命令用 -mode auto。
 // shellSingleQuote 单引号包裹 s 并转义内部单引号，使含空格/元字符的 config 路径（如 macOS
 // /Users/First Last/.miniagent/miniagent.json）安全作为 subagent 引导命令的参数。
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func subagentGuidance(configAbsPath, mode string) string {
-	return fmt.Sprintf(`- 子任务委派：可并行的子任务用 shell 再调一次 miniagent（仅在必要时 fork，建议嵌套≤2 层）：
-  echo "<子任务>" | miniagent -config %s -workdir . -mode %s -result-only
-  subagent 为无状态单次调用（不落盘会话）；stdout 纯文本即结果。`, shellSingleQuote(configAbsPath), mode)
+// defaultSubagentGuidance 是 subagent fork 引导默认模板；占位符 {config_path}/{mode} 由
+// renderSubagentGuidance 替换（config_path 经 shellSingleQuote 包裹；mode 透传父会话权限模式，
+// 父 auto 时 subagent 命令用 -mode auto）。可经 config defaults.subagent_guidance 覆盖。
+const defaultSubagentGuidance = `- 子任务委派：可并行的子任务用 shell 再调一次 miniagent（仅在必要时 fork，建议嵌套≤2 层）：
+  echo "<子任务>" | miniagent -config {config_path} -workdir . -mode {mode} -result-only
+  subagent 为无状态单次调用（不落盘会话）；stdout 纯文本即结果。`
+
+// renderSubagentGuidance 渲染 subagent 引导：guidance 空用默认模板，占位符 {config_path}/{mode}
+// 替换为 shellSingleQuote(configAbsPath)/mode。
+func renderSubagentGuidance(guidance, configAbsPath, mode string) string {
+	if guidance == "" {
+		guidance = defaultSubagentGuidance
+	}
+	return strings.NewReplacer(
+		"{config_path}", shellSingleQuote(configAbsPath),
+		"{mode}", mode,
+	).Replace(guidance)
 }

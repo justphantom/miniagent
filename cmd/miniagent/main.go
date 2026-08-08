@@ -138,7 +138,7 @@ func main() {
 	}
 	// P0：发现 .miniagent/ 项目规则，合并进 system prompt（persona>rules>defaults + 默认兜底，见 assembleSystemPrompt）。
 	pr := loadProjectRules(workdir)
-	resolved.System = assembleSystemPrompt(resolved.System, pr, absConfigPath(*f.configPath), resolved.Mode)
+	resolved.System = assembleSystemPrompt(resolved.System, pr, resolved.SubagentGuidance, absConfigPath(*f.configPath), resolved.Mode)
 
 	// 应用运行时配置覆盖（优先级：config>builtin）。
 	limits := miniagent.Limits{
@@ -273,26 +273,29 @@ func compactionOptions(resolved *miniagent.Resolved, meta miniagent.SessionMeta,
 		compClient = chat
 	}
 	return compaction.CompactionOptions{
-		Chat:                 compClient,
-		MaxTokens:            into(resolved.MaxTokens, 0),
-		ContextWindow:        into(resolved.ContextWindow, 0),
-		Model:                resolved.ModelID,
-		CompactionModel:      resolved.CompactionModelID,
-		System:               system,
-		Tools:                tools,
-		KeepRecent:           into(resolved.RunConfig.ContextKeepRecent, 0),
-		KeepReasoning:        into(resolved.RunConfig.ContextKeepReasoning, 0),
-		KeepToolArgs:         into(resolved.RunConfig.ContextKeepToolArgs, 0),
-		KeepReasoningChars:   into(resolved.RunConfig.ContextKeepReasoningChars, 0),
-		SummarizerPrompt:     resolved.SummarizerPrompt,
-		SummaryMaxChars:      into(resolved.RunConfig.SummaryMaxChars, 0),
-		SummaryMaxTokens:     into(resolved.RunConfig.SummaryMaxTokens, 0),
-		PreserveRecentTokens: into(resolved.RunConfig.PreserveRecentTokens, 0),
-		UseRealUsage:         intoBool(resolved.RunConfig.ContextUseRealUsage, true),
-		Auto:                 resolved.CompactionAuto,
-		Reserved:             resolved.CompactionReserved,
-		SessionID:            meta.ID,
-		Logger:               logger,
+		Chat:                     compClient,
+		MaxTokens:                into(resolved.MaxTokens, 0),
+		ContextWindow:            into(resolved.ContextWindow, 0),
+		Model:                    resolved.ModelID,
+		CompactionModel:          resolved.CompactionModelID,
+		System:                   system,
+		Tools:                    tools,
+		KeepRecent:               into(resolved.RunConfig.ContextKeepRecent, 0),
+		KeepReasoning:            into(resolved.RunConfig.ContextKeepReasoning, 0),
+		KeepToolArgs:             into(resolved.RunConfig.ContextKeepToolArgs, 0),
+		KeepReasoningChars:       into(resolved.RunConfig.ContextKeepReasoningChars, 0),
+		SummarizerPrompt:         resolved.SummarizerPrompt,
+		SummaryCreateInstruction: resolved.SummaryCreateInstruction,
+		SummaryUpdateInstruction: resolved.SummaryUpdateInstruction,
+		SummaryTemplate:          resolved.SummaryTemplate,
+		SummaryMaxChars:          into(resolved.RunConfig.SummaryMaxChars, 0),
+		SummaryMaxTokens:         into(resolved.RunConfig.SummaryMaxTokens, 0),
+		PreserveRecentTokens:     into(resolved.RunConfig.PreserveRecentTokens, 0),
+		UseRealUsage:             intoBool(resolved.RunConfig.ContextUseRealUsage, true),
+		Auto:                     resolved.CompactionAuto,
+		Reserved:                 resolved.CompactionReserved,
+		SessionID:                meta.ID,
+		Logger:                   logger,
 	}
 }
 

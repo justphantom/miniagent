@@ -52,6 +52,12 @@
     "system_prompt": "",
     "summary_request": "请总结已完成的工具和关键结果，不要继续调用工具。",
     "summarizer_prompt": "你是上下文压缩助手，请用精简中文总结对话中段内容。"
+    // 以下提示词模板可选（空用内置默认）；占位符：subagent_guidance={config_path}/{mode}，
+    // summary_create/update_instruction={max_chars}，summary_template 无占位符。
+    // "subagent_guidance": "- 子任务委派：miniagent -config {config_path} -mode {mode} ...",
+    // "summary_create_instruction": "你是会话压缩器。压缩为不超过 {max_chars} 字符的摘要。",
+    // "summary_update_instruction": "更新已有摘要，输出不超过 {max_chars} 字符。",
+    // "summary_template": "## 目标\n## 关键细节\n..."
   },
   "run": {
     "workdir": "./repo",

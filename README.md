@@ -360,6 +360,24 @@ repo/
     rules.md                # 「禁止提交未跑 go test 的改动…」
 ```
 
+### 提示词模板（config `defaults`）
+
+所有面向 LLM 的提示词均可经 config 配置，占位符统一命名风格（`strings.NewReplacer` 替换，无 `%%` 转义）：
+
+| 字段 | 占位符 | 说明 |
+|------|--------|------|
+| `system_prompt` | — | 主 system prompt（未配则内置默认；可被项目 `.miniagent/persona.md` 取代） |
+| `summary_request` | — | 撞迭代上限时注入的总结请求 |
+| `summarizer_prompt` | `{max_chars}` | 摘要 system 全量 override（非空时忽略下列字段） |
+| `summary_create_instruction` | `{max_chars}` | 摘要 CREATE 指令 |
+| `summary_update_instruction` | `{max_chars}` | 摘要 UPDATE 指令 |
+| `summary_template` | — | 摘要固定结构模板 |
+| `subagent_guidance` | `{config_path}`/`{mode}` | subagent fork 引导（注入 system prompt 末尾；`config_path` 经 shell quote） |
+
+空字段用内置默认。
+
+> **破坏性变更**：`summarizer_prompt` 占位符由 `%v` 改为 `{max_chars}`（与其他提示词统一命名占位符）。现有用户自定义 `summarizer_prompt` 含 `%v` 须迁移为 `{max_chars}`。
+
 ### 配置示例（miniagent.json）
 
 ```json

@@ -77,6 +77,14 @@ type DefaultsConfig struct {
 	SystemPrompt     string `json:"system_prompt,omitempty"`
 	SummaryRequest   string `json:"summary_request,omitempty"`
 	SummarizerPrompt string `json:"summarizer_prompt,omitempty"`
+	// SubagentGuidance 是 subagent fork 引导模板，注入 system prompt 末尾；占位符 {config_path}/{mode}
+	//（config_path 经 shellSingleQuote 包裹）。空用内置默认。
+	SubagentGuidance string `json:"subagent_guidance,omitempty"`
+	// SummaryCreateInstruction/SummaryUpdateInstruction 是 compaction 摘要指令模板（CREATE/UPDATE 模式），
+	// 占位符 {max_chars}。空用内置默认。SummaryTemplate 是固定摘要结构模板（无变量），空用内置默认。
+	SummaryCreateInstruction string `json:"summary_create_instruction,omitempty"`
+	SummaryUpdateInstruction string `json:"summary_update_instruction,omitempty"`
+	SummaryTemplate          string `json:"summary_template,omitempty"`
 }
 
 // RunConfig 的 duration 字段用 *string（"30s"），Resolve 解析为 time.Duration，
