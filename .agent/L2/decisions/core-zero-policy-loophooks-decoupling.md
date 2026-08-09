@@ -3,6 +3,7 @@ layer: L2
 type: decision
 tags: [architecture, loophooks, decoupling, library, core, subpackage]
 created: 2026-08-09
+updated: 2026-08-09
 confidence: high
 ---
 
@@ -16,7 +17,7 @@ miniagent 定位为极简、无内置策略的 ReAct agent 核心库。核心循
 
 `StepOutput` 五字段（`View` / `Commit` / `Persist` / `ExtraUsage` / `Compacted`）是策略外挂的关键语义：`Commit=true` 替换运行 transcript；`Persist` 带 `Kind` 条目替换同 `Kind` 旧条目（多次压缩只留最新 summary）。
 
-渐进子包化（4.1.0 → 4.2.x，commits `7ce5c47` / `d641129`）：拆 `compaction` / `event` / `provider` / `tools` / `policy` / `config` / `session` / `looptest` 子包。依赖方向严格单向无环（核心不 import 任一子包），领域类型 `Message/Response/Usage/Request/Delta` 留核心。
+渐进子包化（4.1.0 → 4.3.0，commits `7ce5c47` / `d641129` / `1fa61f8`）：拆 `compaction` / `event` / `provider` / `tools` / `policy` / `config` / `session` / `looptest` / `metrics` 子包。依赖方向严格单向无环（核心不 import 任一子包），领域类型 `Message/Response/Usage/Request/Delta` 留核心。
 
 ## 理由
 - 不挂钩子即极简 agent；挂默认工厂即恢复完整能力。
