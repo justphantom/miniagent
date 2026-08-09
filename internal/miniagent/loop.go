@@ -125,6 +125,19 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	}
 
 	for step := 1; step <= iterLimit; step++ {
+		// OnStep observability seam: fires once at the top of each iteration (before any branching) so it covers every exit path.
+		// Observe-only; built from state already in hand (no extra scans). nil = zero overhead.
+		if hooks.OnStep != nil {
+			hooks.OnStep(ctx, StepSnapshot{
+				Step:          step,
+				TranscriptLen: len(msgs),
+				InputTokens:   total.InputTokens,
+				OutputTokens:  total.OutputTokens,
+				Compacted:     compacted,
+				LLMRequests:   llmReqs,
+				NewMessages:   len(newMsgs),
+			})
+		}
 		if err := ctx.Err(); err != nil {
 			return Result{Steps: step - 1}, err
 		}

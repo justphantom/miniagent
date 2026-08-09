@@ -92,22 +92,29 @@ func contextTokensFromUsage(u miniagent.Usage) int {
 // lastApplicableUsageIndex returns the index of the most recent assistant whose usage "applies to the current
 // prefix", or -1 if none. Anti-staleness check: only miniagent.KindSummary (summary) redefines the prefix; take
 // the last assistant with Ts>=latestSummaryTs and non-zero usage.
+// lastApplicableUsageIndex returns the index of the last assistant message carrying real usage at-or-after the latest
+// KindSummary (§P0-B real-usage estimation anchor). Backward scan with early termination: the latest KindSummary is the
+// last-positioned one (summaries are appended in Ts order, so last-position == max-Ts), found from the end; the last
+// applicable assistant is the first such hit scanning backward from the end — in the common case (recent assistant carries
+// usage, summary recent or absent) both scans terminate in O(1), replacing the previous two full forward O(n) passes that
+// ran every step. Correctness is unchanged: Ts order of summaries guarantees last-position == max Ts.
 func lastApplicableUsageIndex(msgs []miniagent.Message) int {
 	var latestSummaryTs int64
-	for _, m := range msgs {
-		if m.Kind == miniagent.KindSummary && m.Ts > latestSummaryTs {
-			latestSummaryTs = m.Ts
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Kind == miniagent.KindSummary {
+			latestSummaryTs = msgs[i].Ts
+			break
 		}
 	}
-	idx := -1
-	for i, m := range msgs {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
 		if m.Role == miniagent.RoleAssistant && m.Usage != nil &&
 			(m.Usage.InputTokens > 0 || m.Usage.OutputTokens > 0) &&
 			m.Ts >= latestSummaryTs {
-			idx = i
+			return i
 		}
 	}
-	return idx
+	return -1
 }
 
 // estimateTokensFromUsage is a two-stage estimate: lastApplicableUsageIndex finds the most recent non-stale

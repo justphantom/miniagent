@@ -103,6 +103,12 @@ type LoopHooks struct {
 	// callLLMOnce up to Run to terminate the loop (not ErrThinkingUnsupported, so no downgrade is triggered). Use this to terminate early
 	// when the downstream pipe is closed, avoiding burning more tokens.
 	OnDelta func(step int, kind DeltaKind, text string) error
+	// OnStep is the per-step observability seam: it fires once at the top of each loop iteration (BEFORE BeforeLLM/LLM/tools), so it
+	// covers every exit path (success/error/summary/maxIter — it precedes the branching). nil=no notification (minimal mode, zero
+	// overhead). Use it to export long-session metrics (transcript growth, token-spend slope, compaction count) — the snapshot is built
+	// from state already in hand, no extra scans. It is observe-only (no error return): the default emitter is best-effort and never
+	// terminates the loop. The default consumer is metrics.NewStepEmitter (NDJSON to a writer), wired via the cmd layer.
+	OnStep func(ctx context.Context, snap StepSnapshot)
 }
 
 // StepInput is BeforeLLM's input: the current running transcript (read-only intent) + step + request-level System/Tools.
@@ -133,6 +139,19 @@ type StepOutput struct {
 	ExtraUsage *Usage
 	// Compacted=true flags that compaction occurred this round; the core sets Result.Compacted accordingly (the interaction layer rewrites the session based on this).
 	Compacted bool
+}
+
+// StepSnapshot is the per-step observability sample carried by the OnStep hook: a point-in-time view of loop state at the
+// iteration top, BEFORE that step's LLM/tool work. Every field is drawn from state already in hand (no extra scans, no STW
+// memstats by default), so the seam is cheap to fire each step. nil OnStep = zero overhead (minimal mode).
+type StepSnapshot struct {
+	Step          int  // the step about to run (1-based)
+	TranscriptLen int  // len(msgs): running transcript length (history + this turn's additions so far)
+	InputTokens   int  // total.InputTokens accumulated so far this turn
+	OutputTokens  int  // total.OutputTokens accumulated so far this turn
+	Compacted     bool // whether compaction has fired at least once this turn
+	LLMRequests   int  // LLM requests sent so far this turn (downgrade/retry/summary inclusive)
+	NewMessages   int  // len(newMsgs): this turn's persisted additions so far
 }
 
 // BudgetInput is OnBudget's request-side context: the message view sent to the LLM this round + request-level System/Tools + response.

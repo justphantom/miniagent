@@ -18,6 +18,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/compaction"
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
+	"github.com/justphantom/miniagent/internal/miniagent/metrics"
 	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 	"github.com/justphantom/miniagent/internal/provider/openai"
@@ -43,6 +44,7 @@ type cliFlags struct {
 	thinking           *string
 	resultOnly         *bool
 	confirmDestructive *bool
+	metricsStep        *bool
 	replay             *string
 }
 
@@ -53,6 +55,7 @@ func parseFlags() *cliFlags {
 	f.thinking = flag.String("thinking", "", "thinking level off|minimal|low|medium|high|xhigh|max (default off)")
 	f.resultOnly = flag.Bool("result-only", false, "output only result.text (for subagent fork); mutually exclusive with -stream")
 	f.confirmDestructive = flag.Bool("confirm-destructive", false, "opt-in: prompt before write/edit and dangerous shell; in non-interactive/subagent mode destructive tools are denied unless MINIAGENT_AUTO_APPROVE=1")
+	f.metricsStep = flag.Bool("metrics-step", false, "emit per-step metrics NDJSON to stderr (step, transcript len, token spend, compaction, llm requests)")
 	f.provider = flag.String("provider", "", "LLM provider name (pairs with -model to override the defaults pair; standalone for filtering with -list-models)")
 	f.model = flag.String("model", "", "LLM model id (pairs with -provider to override the defaults pair)")
 	f.workdir = flag.String("workdir", "", "working directory (default mode constrains write-tool boundaries + shell cwd)")
@@ -174,6 +177,9 @@ func main() {
 	// Compaction as a plugin: obtain before/after via NewCompaction; the three default policies (OnLLMError/OnBudget/ShapeToolResult) are attached via assembleHooks.
 	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, chat, compChat, baseCfg.System, tools, logger))
 	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, intoBool(resolved.Run.ConfirmDestructive, *f.confirmDestructive), baseCfg, tools, limits, logger)
+	if *f.metricsStep {
+		hooks.OnStep = metrics.NewStepEmitter(os.Stderr).Emit
+	}
 
 	prompt := mustReadPrompt(ctx, os.Stdin)
 	// runCtx carries the -max-duration timeout (if any); constructed after stdin read — mustReadPrompt uses the signal ctx and is unconstrained.
