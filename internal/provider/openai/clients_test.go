@@ -6,15 +6,16 @@ import (
 	"strings"
 )
 
-// testClients 从一个 RoundTripper 构造 ChatClient + StreamClient（ChatURL=http://localhost），
-// 供 Run 测试复用（P4 拆分后 Run 需两个 client：非流式用 chat，流式用 stream）。
+// testClients builds a ChatClient + StreamClient from a single RoundTripper (ChatURL=http://localhost)
+// for Run tests to reuse (after the P4 split Run needs two clients: chat for non-streaming, stream for streaming).
 func testClients(tr http.RoundTripper) (*ChatClient, *StreamClient) {
 	return &ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}},
 		&StreamClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 }
 
-// fakeTransport 把预设的非流式 JSON body 按调用顺序回放（定义从 miniagent 包测试迁入本包：
-// 原定义在 miniagent/loop_test.go 且未导出，跨包 _test.go 不可访问，须在此重声明以编译）。
+// fakeTransport replays preset non-streaming JSON bodies in call order (definition moved into this
+// package from the miniagent package tests: originally defined in miniagent/loop_test.go and
+// unexported, inaccessible to a cross-package _test.go, so it must be redeclared here to compile).
 type fakeTransport struct {
 	responses []string
 	statuses  []int

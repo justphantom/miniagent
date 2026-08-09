@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// write 对 FIFO 必须在 Lstat 阶段拒绝（IsRegular 校验），而非走到 Rename 才
-// 报含糊错误；与 edit 对齐（审查 P3-7）。
+// write must reject a FIFO at the Lstat stage (IsRegular check), rather than reporting an ambiguous
+// error at Rename; aligned with edit (review P3-7).
 func TestWriteFile_RejectsFIFO(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "fifo")
@@ -24,12 +24,12 @@ func TestWriteFile_RejectsFIFO(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected FIFO to be rejected")
 	}
-	if !strings.Contains(res.Output, "普通文件") {
+	if !strings.Contains(res.Output, "regular file") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
 
-// write 对目录目标必须明确拒绝，而非 Rename 时报 EISDIR（审查 P3-7）。
+// write must explicitly reject a directory target, rather than reporting EISDIR at Rename (review P3-7).
 func TestWriteFile_RejectsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o750); err != nil {
@@ -39,12 +39,12 @@ func TestWriteFile_RejectsDirectory(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected directory target to be rejected")
 	}
-	if !strings.Contains(res.Output, "普通文件") {
+	if !strings.Contains(res.Output, "regular file") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
 
-// 字符设备（/dev/null）同样应被 IsRegular 校验拒绝（审查 P3-7）。
+// A character device (/dev/null) should likewise be rejected by the IsRegular check (review P3-7).
 func TestWriteFile_RejectsDevice(t *testing.T) {
 	if _, err := os.Stat("/dev/null"); err != nil {
 		t.Skipf("/dev/null unavailable: %v", err)
@@ -54,12 +54,12 @@ func TestWriteFile_RejectsDevice(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected device file to be rejected")
 	}
-	if !strings.Contains(res.Output, "普通文件") {
+	if !strings.Contains(res.Output, "regular file") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
 
-// IsRegular 校验不应误伤已存在的普通文件覆盖写入。
+// The IsRegular check should not falsely reject an overwrite of an existing regular file.
 func TestWriteFile_OverwritesRegularFile(t *testing.T) {
 	dir := t.TempDir()
 	existing := filepath.Join(dir, "old.txt")

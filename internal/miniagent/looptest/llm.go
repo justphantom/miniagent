@@ -16,8 +16,8 @@ import (
 	"github.com/justphantom/miniagent/internal/text"
 )
 
-// FakeTransport 把预设的非流式 JSON body 按调用顺序回放。LastBody 记录最后一次请求体，
-// Bodies 记录全部供多步断言，Calls 累计调用次数。字段导出以便测试直接断言/构造。
+// FakeTransport replays preset non-streaming JSON bodies in call order. LastBody records the last request body;
+// Bodies records all of them for multi-step assertions; Calls accumulates call count. Fields exported so tests can assert/construct directly.
 type FakeTransport struct {
 	Responses []string
 	Statuses  []int
@@ -51,14 +51,14 @@ func (f *FakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// RecordingTransport 按 Plan 序列回放预设 (Status, Body)，记录每次请求体。
+// RecordingTransport replays preset (Status, Body) entries in Plan order, recording each request body.
 type RecordingTransport struct {
 	Plan   []TransportResp
 	Bodies []string
 	Calls  int
 }
 
-// TransportResp 是 RecordingTransport 单次回放条目。
+// TransportResp is a single playback entry for RecordingTransport.
 type TransportResp struct {
 	Status int
 	Body   string
@@ -84,13 +84,14 @@ func (r *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}, nil
 }
 
-// FakeLLM 是 miniagent.LLM 桩：经 RoundTripper 走 HTTP，自带 OpenAI 兼容 wire 构造/解析/重试
-// （openai 包逻辑的测试副本），使循环测试不依赖 openai 包。实现 miniagent.LLM（Do + DoStream）。
+// FakeLLM is a miniagent.LLM stub: it goes through a RoundTripper over HTTP, with built-in OpenAI-compatible
+// wire construction/parsing/retry (a test copy of the openai package's logic), so loop tests do not depend
+// on the openai package. Implements miniagent.LLM (Do + DoStream).
 type FakeLLM struct {
 	tr http.RoundTripper
 }
 
-// NewFakeLLM 用 tr 构造 FakeLLM（命名沿用历史 testClients）。
+// NewFakeLLM constructs a FakeLLM from tr (naming follows the historical testClients).
 func NewFakeLLM(tr http.RoundTripper) *FakeLLM {
 	return &FakeLLM{tr: tr}
 }
@@ -122,7 +123,8 @@ func (f *FakeLLM) Do(ctx context.Context, req miniagent.Request) (miniagent.Resp
 	return miniagent.Response{}, errors.New("fake llm retry loop exited unexpectedly")
 }
 
-// DoStream：循环测试均非流式（Run Stream:false 只调 Do）；保留接口完整性，fallback 到 Do。
+// DoStream: loop tests are all non-streaming (Run Stream:false only calls Do); kept for interface
+// completeness, falls back to Do.
 func (f *FakeLLM) DoStream(ctx context.Context, req miniagent.Request, _ func(miniagent.Delta) error) (miniagent.Response, error) {
 	req.Stream = false
 	return f.Do(ctx, req)
@@ -159,7 +161,7 @@ func (f *FakeLLM) doOnce(ctx context.Context, body []byte) (miniagent.Response, 
 	return out, false, 0, perr
 }
 
-// ---- openai 包 wire / 重试逻辑的测试用副本（与 openai 包实现保持一致）----
+// ---- Test-side copies of the openai package's wire / retry logic (kept in sync with the openai package implementation)----
 
 const (
 	MaxRetries       = 2
@@ -185,8 +187,8 @@ type chatToolCall struct {
 	} `json:"function"`
 }
 
-// BuildChatBody 复刻 openai.testBuildChatBody：构造 OpenAI 兼容 wire body，使 FakeTransport
-// 记录的 LastBody/Bodies 与真实 ChatClient 一致（含 "role":"system" / reasoning_effort）。
+// BuildChatBody replicates openai.testBuildChatBody: builds an OpenAI-compatible wire body so that the
+// LastBody/Bodies recorded by FakeTransport match the real ChatClient (including "role":"system" / reasoning_effort).
 func BuildChatBody(req miniagent.Request) ([]byte, error) {
 	msgs := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -234,7 +236,7 @@ func BuildChatBody(req miniagent.Request) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
-// ParseChatResponse 复刻 openai.testParseChatResponse。
+// ParseChatResponse replicates openai.testParseChatResponse.
 func ParseChatResponse(raw []byte) (miniagent.Response, error) {
 	var v struct {
 		Choices []struct {
@@ -277,7 +279,7 @@ func ParseChatResponse(raw []byte) (miniagent.Response, error) {
 	return out, nil
 }
 
-// ShouldRetryStatus 复刻 openai.shouldRetryStatus。
+// ShouldRetryStatus replicates openai.shouldRetryStatus.
 func ShouldRetryStatus(code int) bool {
 	switch code {
 	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
@@ -287,7 +289,7 @@ func ShouldRetryStatus(code int) bool {
 	return false
 }
 
-// IsThinkingError 复刻 openai.isThinkingError（收紧版：强信号字段名 + 弱信号 thinking&unknown 组合）。
+// IsThinkingError replicates openai.isThinkingError (tightened version: strong-signal field names + the weak-signal thinking&unknown combination).
 func IsThinkingError(raw []byte) bool {
 	lower := strings.ToLower(string(raw))
 	if strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning_effort_level") {
@@ -298,7 +300,7 @@ func IsThinkingError(raw []byte) bool {
 	return hasThinking && hasUnknown
 }
 
-// ParseRetryAfter 复刻 openai.parseRetryAfter。
+// ParseRetryAfter replicates openai.parseRetryAfter.
 func ParseRetryAfter(h http.Header) time.Duration {
 	v := strings.TrimSpace(h.Get("Retry-After"))
 	if v == "" {
@@ -316,7 +318,7 @@ func ParseRetryAfter(h http.Header) time.Duration {
 	return -1
 }
 
-// CapRetryDelay 复刻 openai.capRetryDelay。
+// CapRetryDelay replicates openai.capRetryDelay.
 func CapRetryDelay(backoff, retryAfter time.Duration) time.Duration {
 	if retryAfter >= 0 {
 		backoff = retryAfter
@@ -327,7 +329,7 @@ func CapRetryDelay(backoff, retryAfter time.Duration) time.Duration {
 	return backoff
 }
 
-// SleepCtx 复刻 openai.sleepCtx（尊重 ctx 取消）。
+// SleepCtx replicates openai.sleepCtx (respects ctx cancellation).
 func SleepCtx(ctx context.Context, delay time.Duration) error {
 	select {
 	case <-time.After(delay):

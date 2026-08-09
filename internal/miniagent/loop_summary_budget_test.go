@@ -6,19 +6,22 @@ import (
 	"testing"
 )
 
-// 总结步（summarizeAtLimit）撞 maxIterations 后的 fallback 调用经 recordStepUsage 过 OnBudget（P1-3 修复）。
-// 此前 fallback 手动累加 usage 绕过 OnBudget，退化路径可静默越 MaxTotalTokens。本测试锁定熔断闭合
-// （回归审查 agent 指出的盲区：守卫代码正确但缺直接测试）。
+// After hitting maxIterations, the summary step (summarizeAtLimit) fallback call goes through recordStepUsage
+// and OnBudget (P1-3 fix). Previously the fallback accumulated usage manually, bypassing OnBudget, so the
+// degraded path could silently exceed MaxTotalTokens. This test pins the circuit-break closure (a blind spot
+// flagged by the regression-review agent: the guard code was correct but lacked a direct test).
 func TestRun_SummarizeAtLimitOnBudgetExceeds(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
-	// 主循环 2 步 + 总结步都返回 tool_calls（总结步 tool_calls != 0 → fallback 走 recordStepUsage）。
+	// 2 main-loop steps + the summary step all return tool_calls (summary-step tool_calls != 0 → the fallback
+	// goes through recordStepUsage).
 	tr := &fakeTransport{responses: []string{
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
-		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}), // 总结步 fallback
+		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}), // summary-step fallback
 	}}
 	llm := testClients(tr)
-	// 每步 toolResponse prompt_tokens=1：主循环 2 步累计 input=2 < 3 通过；总结步累计 3 >= 3 熔断。
+	// Each step's toolResponse has prompt_tokens=1: the 2 main-loop steps accumulate input=2 < 3 (pass); the
+	// summary step accumulates 3 >= 3 → circuit-break.
 	hooks := LoopHooks{OnBudget: func(_ context.Context, _ int, _ BudgetInput, total *Usage) error {
 		if total.InputTokens >= 3 {
 			return ErrBudgetExceeded
@@ -27,6 +30,6 @@ func TestRun_SummarizeAtLimitOnBudgetExceeds(t *testing.T) {
 	}}
 	_, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: 2}, "x", hooks, nil)
 	if !errors.Is(err, ErrBudgetExceeded) {
-		t.Errorf("总结步 fallback 内 OnBudget 应熔断返回 ErrBudgetExceeded，got %v", err)
+		t.Errorf("OnBudget inside the summary-step fallback should circuit-break and return ErrBudgetExceeded, got %v", err)
 	}
 }

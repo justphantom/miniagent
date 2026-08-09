@@ -17,14 +17,19 @@ import (
 	"github.com/justphantom/miniagent/internal/text"
 )
 
-// 本文件集中承载循环核心白盒测试的 LLM 桩与 helper（fakeTransport/recordingTransport/fakeLLM
-// + wire 副本 + 响应构造 + lastToolMessage）。这些符号被核心 _test（package miniagent）多处复用。
+// This file centrally holds the LLM stubs and helpers for the core white-box tests
+// of the loop (fakeTransport/recordingTransport/fakeLLM + wire replicas + response
+// builders + lastToolMessage). These symbols are reused across multiple core _test
+// files (package miniagent).
 //
-// 注意：同类 mock 的导出版本在 internal/miniagent/looptest 子包，供外部测试包（如 policy_test）
-// 复用——但核心白盒测试不能 import looptest（looptest 依赖 miniagent，会成环），故核心自持一份。
+// Note: exported versions of the same mocks live in the internal/miniagent/looptest
+// subpackage for reuse by external test packages (e.g. policy_test) — but core
+// white-box tests cannot import looptest (looptest depends on miniagent, which would
+// form a cycle), so the core keeps its own copy.
 
-// fakeTransport 把预设的非流式 JSON body 按调用顺序回放。lastBody 记录最后一次请求体，
-// bodies 记录全部供多步断言，calls 累计调用次数。
+// fakeTransport replays preset non-streaming JSON bodies in call order. lastBody
+// records the most recent request body, bodies records all of them for multi-step
+// assertions, and calls accumulates the number of invocations.
 type fakeTransport struct {
 	responses []string
 	statuses  []int
@@ -58,7 +63,7 @@ func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// recordingTransport 按序回放预设 (status, body)，记录每次请求体。
+// recordingTransport replays preset (status, body) pairs in order and records each request body.
 type recordingTransport struct {
 	plan   []transportResp
 	bodies []string
@@ -90,14 +95,17 @@ func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}, nil
 }
 
-// fakeLLM 是 core 测试用的 miniagent.LLM 桩：经 fakeTransport 走 HTTP，自带 OpenAI 兼容
-// wire 构造 / 解析 / 重试（复制 openai 包逻辑的测试子集），使 core 循环测试不依赖 openai 包
-// （避免 core_test → openai → core 的测试环）。仅 _test.go 使用，不进生产二进制。
+// fakeLLM is a miniagent.LLM stub for core tests: it goes over HTTP via
+// fakeTransport and carries its own OpenAI-compatible wire construction / parsing /
+// retry (a test subset copied from the openai package logic), so core loop tests do
+// not depend on the openai package (avoiding the core_test -> openai -> core test
+// cycle). Used only by _test.go; never enters the production binary.
 type fakeLLM struct {
 	tr http.RoundTripper
 }
 
-// testClients 构造 fakeLLM（命名沿用历史）。调用方直接把返回的 LLM 传给 Run。
+// testClients builds a fakeLLM (name kept for historical reasons). Callers pass the
+// returned LLM directly to Run.
 func testClients(tr http.RoundTripper) *fakeLLM {
 	return &fakeLLM{tr: tr}
 }
@@ -129,7 +137,8 @@ func (f *fakeLLM) Do(ctx context.Context, req Request) (Response, error) {
 	return Response{}, errors.New("fake llm retry loop exited unexpectedly")
 }
 
-// DoStream：core loop 测试均非流式（Run(Stream:false) 只调 Do）；保留接口完整性，fallback 到 Do。
+// DoStream: core loop tests are all non-streaming (Run(Stream:false) only calls Do);
+// kept for interface completeness, falls back to Do.
 func (f *fakeLLM) DoStream(ctx context.Context, req Request, _ func(Delta) error) (Response, error) {
 	req.Stream = false
 	return f.Do(ctx, req)
@@ -166,7 +175,8 @@ func (f *fakeLLM) doOnce(ctx context.Context, body []byte) (Response, bool, time
 	return out, false, 0, perr
 }
 
-// ---- 以下为 openai 包 wire / 重试逻辑的测试用副本（仅 _test.go，避免 core→openai 测试环）----
+// ---- Below are test-only replicas of the openai package wire / retry logic (_test.go
+// only, to avoid the core -> openai test cycle) ----
 
 const (
 	testMaxRetries       = 2
@@ -192,7 +202,7 @@ type testChatToolCall struct {
 	} `json:"function"`
 }
 
-// testBuildChatBody 复刻 openai.testBuildChatBody：构造 OpenAI 兼容 wire body。
+// testBuildChatBody replicates openai.testBuildChatBody: builds an OpenAI-compatible wire body.
 func testBuildChatBody(req Request) ([]byte, error) {
 	msgs := make([]testChatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -291,7 +301,7 @@ func testShouldRetryStatus(code int) bool {
 	return false
 }
 
-// testIsThinkingError 复刻 openai.isThinkingError（收紧版：强信号字段名 + 弱信号 thinking&unknown 组合）。
+// testIsThinkingError replicates openai.isThinkingError (tightened version: strong-signal field names + weak-signal thinking&unknown combination).
 func testIsThinkingError(raw []byte) bool {
 	lower := strings.ToLower(string(raw))
 	if strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning_effort_level") {
@@ -338,12 +348,12 @@ func testSleepCtx(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// textResponse 构造非流式 chat completions JSON：单条 choice，纯文本回复，固定 usage {1,1}。
+// textResponse builds non-streaming chat completions JSON: a single choice, plain-text reply, fixed usage {1,1}.
 func textResponse(text string) string {
 	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
 }
 
-// toolResponse 构造非流式 chat completions JSON：单条 choice 带 tool_calls（content 恒空）。
+// toolResponse builds non-streaming chat completions JSON: a single choice with tool_calls (content always empty).
 func toolResponse(calls ...ToolCall) string {
 	tcs := make([]string, 0, len(calls))
 	for _, c := range calls {
@@ -352,7 +362,7 @@ func toolResponse(calls ...ToolCall) string {
 	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[%s]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, strings.Join(tcs, ","))
 }
 
-// lastToolMessage 返回 msgs 中最后一条 role=tool 的消息（测试辅助）。
+// lastToolMessage returns the last role=tool message in msgs (test helper).
 func lastToolMessage(t *testing.T, msgs []Message) Message {
 	t.Helper()
 	for idx := range slices.Backward(msgs) {

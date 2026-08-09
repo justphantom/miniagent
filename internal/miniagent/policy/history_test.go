@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// trimHistoryForContext：清 reasoning + 压 tool content，不删消息、不改调用方输入。
+// trimHistoryForContext: clears reasoning + compresses tool content, without deleting messages or mutating caller input.
 func TestTrimHistoryForContext(t *testing.T) {
 	msgs := []miniagent.Message{
 		{Role: "user", Content: "q"},
@@ -24,7 +24,7 @@ func TestTrimHistoryForContext(t *testing.T) {
 	if len(out) != 3 {
 		t.Errorf("messages deleted: got %d, want 3 (pairing must hold)", len(out))
 	}
-	// 调用方输入未被修改。
+	// caller input is not mutated.
 	if msgs[1].Reasoning != "long thought" {
 		t.Errorf("caller reasoning mutated")
 	}

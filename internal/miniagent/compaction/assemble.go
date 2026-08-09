@@ -1,4 +1,4 @@
-// assemble.go：摘要 prompt、compaction hook 与 NewCompaction 装配入口。
+// assemble.go: summary prompts, compaction hook, and the NewCompaction assembly entry point.
 
 package compaction
 
@@ -12,61 +12,61 @@ import (
 	"github.com/justphantom/miniagent/internal/text"
 )
 
-// summaryPrefix 是落盘的 miniagent.KindSummary 消息 Content 的展示层前缀（原硬编码 "[既往对话摘要]\n"）。
-// 注意：识别 miniagent.KindSummary 必须用 miniagent.Message.Kind == miniagent.KindSummary（applyCompactionBarrier context.go:164），
-// 不可用前缀字符串嗅探——历史上有空格变体 "[既往对话摘要] "（非落盘路径）与测试 fixture 不一致。
-// 前缀仅展示层，不参与识别。
-const summaryPrefix = "[既往对话摘要]\n"
+// summaryPrefix is the presentation-layer prefix for the Content of persisted miniagent.KindSummary messages (originally hardcoded as "[Previous Conversation Summary]\n").
+// Note: identifying a miniagent.KindSummary must use miniagent.Message.Kind == miniagent.KindSummary (applyCompactionBarrier context.go:164),
+// not prefix string sniffing — historically there was a space variant "[Previous Conversation Summary] " (non-persist path) inconsistent with test fixtures.
+// The prefix is presentation-only and does not participate in identification.
+const summaryPrefix = "[Previous Conversation Summary]\n"
 
-// summaryCreateInstruction 是 CREATE 模式角色指令；{max_chars} 占位符由 buildSummarizerSystem 替换。
-// 用户可经 config defaults.summary_create_instruction 覆盖（占位符 {max_chars}）。
-const summaryCreateInstruction = "你是会话压缩器。把以下对话历史压缩为不超过 {max_chars} 字符的锚定摘要，严格按下方模板结构输出。"
+// summaryCreateInstruction is the CREATE mode role instruction; the {max_chars} placeholder is replaced by buildSummarizerSystem.
+// Users can override via config defaults.summary_create_instruction (placeholder {max_chars}).
+const summaryCreateInstruction = "You are a conversation compactor. Compress the following conversation history into an anchored summary of no more than {max_chars} characters, strictly following the template structure below."
 
-// summaryUpdateInstruction 是 UPDATE 模式角色指令（移植 opencode buildPrompt compaction.ts:164
-// 的 preserve/remove/merge）。后面由 buildSummarizerSystem 追加 <previous-summary> 块 + 模板。
-const summaryUpdateInstruction = "你是会话压缩器。基于以下对话历史更新已有的锚定摘要，输出不超过 {max_chars} 字符。保留仍成立的事实，删除已过时的细节，合并新增的事实。把旧摘要作为锚点更新："
+// summaryUpdateInstruction is the UPDATE mode role instruction (ported from opencode buildPrompt compaction.ts:164
+// preserve/remove/merge). buildSummarizerSystem appends a <previous-summary> block + template after it.
+const summaryUpdateInstruction = "You are a conversation compactor. Based on the following conversation history, update the existing anchored summary, output no more than {max_chars} characters. Preserve still-valid facts, remove outdated details, merge in new facts. Use the old summary as an anchor to update:"
 
-// summaryTemplate 是固定 6 段 Markdown 模板（移植 opencode SUMMARY_TEMPLATE compaction.ts(core):16-46，
-// 中文化匹配现有 prompt 风格）。CREATE/UPDATE 两模式都追加在指令之后。
-const summaryTemplate = `严格按以下 Markdown 结构输出，保持段落顺序，不要输出 <template> 标签。
+// summaryTemplate is a fixed 6-section Markdown template (ported from opencode SUMMARY_TEMPLATE compaction.ts(core):16-46,
+// localized to match existing prompt style). Appended after the instruction in both CREATE/UPDATE modes.
+const summaryTemplate = `Strictly follow the Markdown structure below, preserving section order. Do not output the <template> tag.
 <template>
-## 目标
-- [用户想完成什么，一两句简述]
+## Goal
+- [What the user wants to accomplish, one or two sentences]
 
-## 关键细节
-- [约束/偏好、决策及理由、重要事实/假设、续跑所需确切上下文，或 "(无)"]
+## Key Details
+- [Constraints/preferences, decisions and rationale, important facts/assumptions, exact context needed to resume, or "(none)"]
 
-## 进展状态
-### 已完成
-- [已完成的工作、已验证的事实、已做的改动，或 "(无)"]
+## Progress
+### Completed
+- [Work done, verified facts, changes made, or "(none)"]
 
-### 进行中
-- [当前工作、未完成的改动、调查中的状态，或 "(无)"]
+### In Progress
+- [Current work, unfinished changes, items under investigation, or "(none)"]
 
-### 受阻
-- [阻碍、失败的命令、未知项，或 "(无)"]
+### Blocked
+- [Blockers, failed commands, unknowns, or "(none)"]
 
-## 下一步
-1. [立即要做的具体动作，或 "(无)"]
-2. [若已知，下一个动作，或 "(无)"]
+## Next Step
+1. [Immediate concrete action to take, or "(none)"]
+2. [If known, the next action, or "(none)"]
 
-## 相关文件
-- [文件或目录路径：为什么重要，或 "(无)"]
+## Relevant Files
+- [File or directory path: why it matters, or "(none)"]
 </template>
 
-规则：
-- 保留每个段落，即使为空也输出 "(无)"。
-- 用简短要点，不要写成段落。
-- 已知的文件路径、符号、命令、错误串、URL、标识符必须原样保留。
-- 不要提及摘要/压缩过程本身。`
+Rules:
+- Preserve every section, outputting "(none)" even when empty.
+- Use concise bullet points, do not write paragraphs.
+- Known file paths, symbols, commands, error strings, URLs, and identifiers must be preserved verbatim.
+- Do not mention the summary/compaction process itself.`
 
-// buildSummarizerSystem 集中构造摘要 system prompt（替代旧内联 system 选择）。规则：
-//   - summarizerPrompt 非空 → 全量 override（fmt.Sprintf(summarizerPrompt, maxChars)），
-//     向后兼容用户自定义，忽略 previousSummary（override 路径维持旧的「旧摘要并入 middle」行为）。
-//   - 默认路径 + previousSummary 非空 → UPDATE（summaryUpdateInstruction + <previous-summary>
-//     块包裹旧摘要 + summaryTemplate）：旧摘要不再作为 history 重读重写，省一半 token、显式
-//     preserve 指令降低丢细节概率。
-//   - 默认路径 + previousSummary 为空 → CREATE（summaryCreateInstruction + summaryTemplate）。
+// buildSummarizerSystem centrally builds the summary system prompt (replacing the old inline system selection). Rules:
+//   - summarizerPrompt non-empty → full override (fmt.Sprintf(summarizerPrompt, maxChars)),
+//     backward compatible with user customization, ignoring previousSummary (override path keeps the old "merge old summary into middle" behavior).
+//   - Default path + previousSummary non-empty → UPDATE (summaryUpdateInstruction + <previous-summary>
+//     block wrapping the old summary + summaryTemplate): the old summary is no longer re-read and re-written as history,
+//     saving half the tokens, and the explicit preserve instruction reduces the chance of losing details.
+//   - Default path + previousSummary empty → CREATE (summaryCreateInstruction + summaryTemplate).
 func buildSummarizerSystem(summarizerPrompt, previousSummary, createInstr, updateInstr, template string, maxChars int) string {
 	render := func(s string) string {
 		return strings.NewReplacer("{max_chars}", strconv.Itoa(maxChars)).Replace(s)
@@ -91,23 +91,25 @@ func buildSummarizerSystem(summarizerPrompt, previousSummary, createInstr, updat
 	return render(createInstr) + "\n\n" + template
 }
 
-// stripSummaryPrefix 从 miniagent.Message.Content 剥离 summaryPrefix 还原纯摘要文本供 UPDATE 回灌。
-// 主识别必须用 Kind==miniagent.KindSummary；此函数仅在有前缀时剥离，无前缀原样返回（防御旧/手写 session）。
-// 注意同级 codepath 有空格变体 "[既往对话摘要] "，此处只剥 production 的 \n 前缀；混合历史下
-// 若前缀不匹配直接返回原文，由 UPDATE 指令自行处理（前缀仅展示层，不参与识别）。
+// stripSummaryPrefix strips summaryPrefix from miniagent.Message.Content to recover the pure summary text for UPDATE feed-back.
+// Primary identification must use Kind==miniagent.KindSummary; this function only strips the prefix when present and returns
+// the content as-is when absent (defensive against old/hand-written sessions). Note there is a space variant "[Previous Conversation Summary] "
+// in the same codepath; here only the production \n prefix is stripped; under mixed history if the prefix does not match the
+// original text is returned directly and the UPDATE instruction handles it (prefix is presentation-only, not used for identification).
 func stripSummaryPrefix(content string) string {
 	return strings.TrimPrefix(content, summaryPrefix)
 }
 
-// summarizeMiddle 调 LLM 把中段 msgs 压成一段摘要文本（不带 tools）。返回经 maxChars 截断的
-// 摘要 + 该次调用的 miniagent.Usage（供上游累加入预算）。复用 miniagent.ChatClient.Do；调用方据 error 回落
-// 有损压缩（审查 v2 #6）。previousSummary 非空时走 UPDATE 模式（buildSummarizerSystem 判定）。
+// summarizeMiddle calls the LLM to compress the middle msgs into a single summary text (without tools). Returns the
+// maxChars-truncated summary + the miniagent.Usage of this call (for upstream budget accumulation). Reuses miniagent.ChatClient.Do;
+// the caller falls back to lossy compaction based on the error (review v2 #6). When previousSummary is non-empty it uses UPDATE mode
+// (decided by buildSummarizerSystem).
 func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerPrompt, previousSummary, createInstr, updateInstr, template string, maxChars, maxSummaryTokens int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
 	if maxSummaryTokens <= 0 {
 		maxSummaryTokens = summaryMaxTokens
 	}
 	if len(msgs) == 0 {
-		return "", miniagent.Usage{}, errors.New("无中段可摘要")
+		return "", miniagent.Usage{}, errors.New("no middle to summarize")
 	}
 	system := buildSummarizerSystem(summarizerPrompt, previousSummary, createInstr, updateInstr, template, maxChars)
 	resp, err := llm.Do(ctx, miniagent.Request{
@@ -119,19 +121,22 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 	if err != nil {
 		return "", miniagent.Usage{}, err
 	}
-	// 头尾分段截断（头 1/4 + 尾 3/4）：摘要的可操作部分（「下一步」「相关文件」）常在末尾，纯头截断会先丢这些。
-	return text.TruncateHeadTail(strings.TrimSpace(resp.Text), maxChars, "…[摘要已截断]"), resp.Usage, nil
+	// Head-tail split truncation (head 1/4 + tail 3/4): the actionable parts of the summary ("Next Step", "Relevant Files") are often at the end;
+	// pure head truncation would drop these first.
+	return text.TruncateHeadTail(strings.TrimSpace(resp.Text), maxChars, "...[summary truncated]"), resp.Usage, nil
 }
 
-// deriveSummaryMaxChars 解析摘要字符上限（方向 A）：configured>0 用用户显式值（覆盖）；cw<=0 回落内置
-// summaryMaxChars（无窗口兼容）；否则 min(summaryMaxChars, cw/summaryCharsPerWindowRatio)——小窗口自适应，
-// 避免 summary 本身 > CW×4/5 致压缩后终止（B 的边界），大窗口（CW≥25000）clamp 内置上限。纯函数、易测；
-// NewCompaction 装配时调用，maxSummaryTokens 派生与 jointTailBudget 估算自动联动。
+// deriveSummaryMaxChars resolves the summary character cap (direction A): configured>0 uses the explicit user value (override);
+// cw<=0 falls back to the built-in summaryMaxChars (no-window compatibility); otherwise min(summaryMaxChars, cw/summaryCharsPerWindowRatio) —
+// small windows adapt automatically, preventing the summary itself from exceeding CW×4/5 and causing termination after compaction
+// (boundary of B); large windows (CW≥25000) clamp to the built-in upper bound. Pure function, easy to test; called during NewCompaction
+// assembly, maxSummaryTokens derivation and jointTailBudget estimation auto-follow.
 //
-// 硬边界：即便 summary 缩到最小，CW<~1536 仍可能终止（FitHistory 末尾 trim/error 兜底）。根因是请求级
-// 开销（SystemOverhead 400 + system prompt + 工具 schema）+ head 在极小 CW 占比过高，与 summary 体积无关——
-// 属物理极限，不应靠进一步压缩 summary 硬撑（摘要将无信息量），应经文档约定「不支持过小 CW」。本函数把
-// 「压缩不终止」CW 下界从 ~5120（仅 B）降到 ~1536，覆盖所有实用小窗口模型。
+// Hard boundary: even if the summary is shrunk to minimum, CW<~1536 may still terminate (FitHistory's trailing trim/error fallback).
+// The root cause is request-level overhead (SystemOverhead 400 + system prompt + tool schema) + head occupying too high a fraction at
+// very small CW, independent of summary size — this is a physical limit, and should not be forced by further shrinking the summary (the
+// summary would carry no information); instead it should be documented that "too-small CW is unsupported". This function lowers the
+// "compaction does not terminate" CW floor from ~5120 (B only) to ~1536, covering all practically useful small-window models.
 func deriveSummaryMaxChars(cw, configured int) int {
 	if configured > 0 {
 		return configured
@@ -145,11 +150,12 @@ func deriveSummaryMaxChars(cw, configured int) int {
 	return summaryMaxChars
 }
 
-// deriveSummaryMaxTokens 解析摘要输出 token 上限：configured>0 用用户显式值（覆盖，向后兼容自定义）；
-// 否则从 maxChars 派生 maxChars/2（CJK 最密口径，与 EstimateTokens 同源）——chars/2 恰是「纯 CJK 摘要
-// 填满 chars 上限」所需 token 上界，保证中文摘要不被 MaxTokens 先于 chars 截断（原固定 1024 偏紧）。
-// maxChars<2（含 <=0 防御）回落兜底常量 summaryMaxTokens。纯函数、易测；NewCompaction 装配时调用，
-// 使「只配 summary_max_chars」时 token 自动跟随、显式配 summary_max_tokens 仍可覆盖。
+// deriveSummaryMaxTokens resolves the summary output token cap: configured>0 uses the explicit user value (override, backward
+// compatible with customization); otherwise derived from maxChars as maxChars/2 (densest CJK calibration, same source as EstimateTokens) —
+// chars/2 is exactly the token upper bound needed for "pure CJK summary filling the chars limit", ensuring Chinese summaries are not
+// truncated by MaxTokens before chars (the original fixed 1024 was too tight). maxChars<2 (including <=0 defensive) falls back to the
+// fallback constant summaryMaxTokens. Pure function, easy to test; called during NewCompaction assembly, so that "only configuring
+// summary_max_chars" makes token auto-follow, while explicitly configuring summary_max_tokens still overrides.
 func deriveSummaryMaxTokens(maxChars, configured int) int {
 	if configured > 0 {
 		return configured
@@ -160,42 +166,43 @@ func deriveSummaryMaxTokens(maxChars, configured int) int {
 	return maxChars / 2
 }
 
-// CompactingInput 是摘要现场快照，让外部 hook 决定是否注入/替换（§P2，镜像 opencode experimental.session.compacting）。
+// CompactingInput is a snapshot of the summarization scene, letting an external hook decide whether to inject/replace (§P2, mirroring opencode experimental.session.compacting).
 type CompactingInput struct {
-	// SessionID 是本次摘要所属会话 id（经 CompactionOptions.SessionID 注入；cmd 层从 session meta.ID 透传）。空串兼容无 session 模式。
+	// SessionID is the session id this summary belongs to (injected via CompactionOptions.SessionID; cmd layer passes through from session meta.ID). Empty string is compatible with no-session mode.
 	SessionID string
-	// Middle 是待摘要的中段（compactWithSummary 切出的 middle，含已并入的旧 miniagent.KindSummary）。
-	// 只读：hook 不应就地改 middle，注入经 CompactingOutput.Context 由 applyCompactingHook 追加。
+	// Middle is the middle segment to be summarized (cut out by compactWithSummary, including any merged-in old miniagent.KindSummary).
+	// Read-only: the hook must not mutate middle in place; injection is done via CompactingOutput.Context appended by applyCompactingHook.
 	Middle []miniagent.Message
-	// Model 是实际用于本次摘要的模型 id（已回落 CompactionModel→Model）。
+	// Model is the model id actually used for this summary (already fallen back CompactionModel→Model).
 	Model string
 }
 
-// CompactingOutput 是 hook 的回参：注入 context 或一次性替换 summarizerPrompt。
+// CompactingOutput is the hook's return value: inject context or one-time replace summarizerPrompt.
 type CompactingOutput struct {
-	// Context 追加到摘要输入的额外文本（领域知识/文件清单/外部记忆等）；空切片=不注入。
-	// applyCompactingHook 以一条 role=user 消息 append 到 middle 末尾，进摘要输入而非 system
-	// （对齐 opencode compaction.ts nextPrompt 进 user 通道的语义）。
+	// Context is extra text appended to the summary input (domain knowledge/file lists/external memory, etc.); empty slice = no injection.
+	// applyCompactingHook appends it as a single role=user message at the end of middle, entering the summary input rather than the system
+	// channel (aligning with opencode compaction.ts nextPrompt entering the user channel semantics).
 	Context []string
-	// Prompt 非空时替换本次 summarizerPrompt（仅本次调用，不持久改 budget.SummarizerPrompt）。
-	// 空串=沿用 budget.SummarizerPrompt。
+	// Prompt, when non-empty, replaces this summary's summarizerPrompt (one-time, does not persistently change budget.SummarizerPrompt).
+	// Empty string = keep budget.SummarizerPrompt.
 	Prompt string
 }
 
-// CompactingHook 在每次摘要前同步触发（compactWithSummary 内、调 budget.Summarize 前）。
-// 镜像 opencode experimental.session.compacting：可注入 context 或替换 prompt，不可 cancel
-// （pi 才支持 cancel；miniagent 现阶段不支持）。
-// 契约（实现 A，与 opencode plugin.trigger 默认语义一致，详见 HOOKS.md §2.9）：hook 抛错上抛
-// 中止**本次摘要**压缩——FitHistory 据此回落有损 compactHistory（非完全放弃压缩，防上下文无界增长）。
-// nil = 无 hook，applyCompactingHook 零开销短路。
+// CompactingHook triggers synchronously before each summary (inside compactWithSummary, before calling budget.Summarize).
+// Mirrors opencode experimental.session.compacting: can inject context or replace the prompt, but cannot cancel
+// (only pi supports cancel; miniagent does not support it at this stage).
+// Contract (implementation A, consistent with opencode plugin.trigger default semantics, see HOOKS.md §2.9): a hook
+// throwing an error aborts **this summary** compaction — FitHistory then falls back to lossy compactHistory (does not
+// give up compaction entirely, preventing unbounded context growth).
+// nil = no hook, applyCompactingHook short-circuits with zero overhead.
 type CompactingHook func(ctx context.Context, in CompactingInput) (CompactingOutput, error)
 
-// applyCompactingHook 在 compactWithSummary 内、调 budget.Summarize 之前触发 hook（§P2），
-// 把 hook 输出折叠回 (effPrompt, effMiddle)：Prompt 非空覆盖本次 summarizerPrompt；Context 非空
-// 以一条 role=user 消息 append 到 middle 末尾（进摘要输入，不进 system 通道）。
-// 契约：hook==nil 直接返回原 prompt/middle（零开销短路）。hook 返回 error → 上抛中止本次摘要压缩，
-// compactWithSummary 返回该 error、FitHistory 回落有损 compactHistory（HOOKS.md §2.9）。
-// context 注入只追加无 tool_calls 的 user 消息，不破坏 tool 配对（调用前已过 session.ValidateToolPairing）。
+// applyCompactingHook triggers the hook inside compactWithSummary, before calling budget.Summarize (§P2),
+// folding the hook output back into (effPrompt, effMiddle): non-empty Prompt overrides this summary's summarizerPrompt; non-empty
+// Context is appended as a single role=user message at the end of middle (enters the summary input, not the system channel).
+// Contract: hook==nil returns the original prompt/middle directly (zero-overhead short-circuit). A hook returning error → propagated
+// up to abort this summary compaction, compactWithSummary returns that error, FitHistory falls back to lossy compactHistory (HOOKS.md §2.9).
+// Context injection only appends user messages without tool_calls, not breaking tool pairing (session.ValidateToolPairing has already passed before the call).
 func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, model, summarizerPrompt string, middle []miniagent.Message) (effPrompt string, effMiddle []miniagent.Message, err error) {
 	if hook == nil {
 		return summarizerPrompt, middle, nil
@@ -216,18 +223,19 @@ func applyCompactingHook(ctx context.Context, hook CompactingHook, sessionID, mo
 	return effPrompt, effMiddle, nil
 }
 
-// NewCompaction 把整套上下文压缩引擎（FitHistory：超窗摘要中段 + 有损 fallback + 主动裁剪；§P1-B 静默溢出
-// 检测）封装为一对可外挂的 LoopHooks 钩子。这是「压缩作为外挂」的默认实现：核心 Run 不含任何压缩，
-// 调用方经 NewCompaction(opts) 取回 (before, after) 挂到 LoopHooks.BeforeLLM/AfterLLM 即恢复完整压缩能力；
-// 不挂则得极简无压缩 agent。before 每步做 applyCompactionBarrier + FitHistory + 静默溢出判定（从 in.Msgs
-// 真实 usage 推断 Force）。after 自 4.2.0 起恒为 nil（溢出判定已并入 before，无跨步状态）——调用方挂
-// AfterLLM 前须判 nil。opts.Chat 必须非 nil（摘要 LLM 调用需 client）。
+// NewCompaction wraps the entire context compaction engine (FitHistory: over-window summarize middle + lossy fallback +
+// proactive trimming; §P1-B silent overflow detection) into a pair of pluggable LoopHooks hooks. This is the default
+// implementation of "compaction as a plugin": the core Run contains no compaction; the caller gets (before, after) via
+// NewCompaction(opts) and attaches them to LoopHooks.BeforeLLM/AfterLLM to restore full compaction capability; if not attached,
+// a minimal no-compaction agent results. before does applyCompactionBarrier + FitHistory + silent overflow detection each step
+// (inferring Force from the real usage in in.Msgs). after is always nil since 4.2.0 (overflow detection merged into before, no
+// cross-step state) — the caller must nil-check before attaching AfterLLM. opts.Chat must be non-nil (the summary LLM call needs a client).
 func NewCompaction(opts CompactionOptions) (before func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error), after func(context.Context, int, miniagent.Response) error) {
-	// summary_max_chars 默认随 ContextWindow 缩放（方向 A，deriveSummaryMaxChars）：min(5000, CW/5)，
-	// 小窗口自适应避免 summary 本身 > CW×4/5 致压缩后终止；显式 >0 覆盖。
+	// summary_max_chars scales with ContextWindow by default (direction A, deriveSummaryMaxChars): min(5000, CW/5),
+	// small windows adapt automatically to prevent the summary itself from exceeding CW×4/5 and causing termination after compaction; explicit >0 overrides.
 	maxChars := deriveSummaryMaxChars(opts.ContextWindow, opts.SummaryMaxChars)
-	// summary_max_tokens 默认从 maxChars 派生（chars/2，CJK 最密口径）：token 自动跟随 maxChars（含 A 缩放），
-	// 保证中文摘要不被 MaxTokens 先于 chars 截断；显式 >0 覆盖。
+	// summary_max_tokens is derived from maxChars by default (chars/2, densest CJK calibration): token auto-follows maxChars
+	// (including A scaling), ensuring Chinese summaries are not truncated by MaxTokens before chars; explicit >0 overrides.
 	maxSummaryTokens := deriveSummaryMaxTokens(maxChars, opts.SummaryMaxTokens)
 	budget := ContextBudget{
 		ContextWindow:        opts.ContextWindow,
@@ -247,16 +255,17 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		SessionID:            opts.SessionID,
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			if opts.Chat == nil {
-				return "", miniagent.Usage{}, errors.New("compaction: Chat 为 nil，无法摘要（须配置 CompactionOptions.Chat）")
+				return "", miniagent.Usage{}, errors.New("compaction: Chat is nil, cannot summarize (must configure CompactionOptions.Chat)")
 			}
 			return summarizeMiddle(ctx, opts.Chat, model, sys, prevSummary, opts.SummaryCreateInstruction, opts.SummaryUpdateInstruction, opts.SummaryTemplate, maxChars, maxSummaryTokens, middle)
 		},
 	}
 	before = func(ctx context.Context, in miniagent.StepInput) (miniagent.StepOutput, error) {
 		barrier := applyCompactionBarrier(in.Msgs)
-		// §P1-B：从上一步已入史的 assistant.Usage 判静默溢出（撞 provider 前先压）。每步从 in.Msgs
-		// 推断 Force 到局部变量，再拷贝 budget 传入 FitHistory——闭包不写共享状态，多 Run 并发复用
-		// 同一钩子亦无 race（ContextBudget 是值类型，b 与 budget 共享只读的 Summarize/Tools 等引用）。
+		// §P1-B: detect silent overflow from the previous step's already-historized assistant.Usage (compact before hitting the provider).
+		// Each step infers Force into a local variable, then copies budget to pass into FitHistory — the closure does not write shared
+		// state, so concurrent reuse of the same hook by multiple Runs is race-free (ContextBudget is a value type; b and budget share
+		// only read-only references like Summarize/Tools).
 		force := false
 		if idx := lastApplicableUsageIndex(in.Msgs); idx >= 0 {
 			force = isUsageOverflow(*in.Msgs[idx].Usage, opts.ContextWindow, opts.MaxTokens, opts.Reserved, opts.Auto)
@@ -267,7 +276,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		if err != nil {
 			return miniagent.StepOutput{}, err
 		}
-		out := miniagent.StepOutput{View: fitted, Commit: committed} // 仅压缩/fallback 替换 transcript；非压缩 strip 仅本轮 View（transcript 保留原文）
+		out := miniagent.StepOutput{View: fitted, Commit: committed} // only compaction/fallback replaces transcript; non-compaction strip is this round's View only (transcript retains original)
 		if summarized {
 			out.Persist = []miniagent.Message{summary}
 			u := sumUsage
@@ -276,7 +285,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		}
 		return out, nil
 	}
-	// after 不再持有跨步状态：溢出检测移到 before 从 in.Msgs 推断。返回 nil 让调用方跳过无意义的 AfterLLM。
+	// after no longer holds cross-step state: overflow detection moved into before, inferred from in.Msgs. Return nil so the caller skips the no-op AfterLLM.
 	after = nil
 	return before, after
 }

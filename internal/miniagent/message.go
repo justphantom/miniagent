@@ -1,6 +1,7 @@
 package miniagent
 
-// 消息 role 常量：loop/session/wire 多处匹配同一组取值，抽常量防拼写漂移。
+// Message role constants: loop/session/wire all match the same set of values; extracting constants
+// guards against spelling drift.
 const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
@@ -8,8 +9,10 @@ const (
 	RoleTool      = "tool"
 )
 
-// KindSummary 标记 summary 消息（Message.Kind）：结构化识别（applyCompactionBarrier / 压缩引擎用），
-// 替代脆弱的内容前缀嗅探。role=user 合法可持久化。属核心概念（压缩与 session 共享），故定义于此。
+// KindSummary marks a summary message (Message.Kind): structured recognition (used by
+// applyCompactionBarrier / the compaction engine), replacing fragile content-prefix sniffing.
+// role=user is legitimate and persistable. It is a core concept (shared by compaction and session), so it
+// is defined here.
 const KindSummary = "summary"
 
 type Message struct {
@@ -18,22 +21,27 @@ type Message struct {
 	Reasoning  string     `json:"reasoning,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
-	// IsError 标记 tool 消息对应工具执行是否失败（ToolResult.IsError）。仅 tool 角色有意义；
-	// wire 的 chatMessage 不含此字段（buildChatBody 不输出，不泄漏给 LLM），仅 session 持久化
-	// 与历史裁剪（P8' 成功判定：同 path 更晚的成功 write/edit 才折叠更早的 args）用。
-	// omitempty 向后兼容旧 session（缺失=零值 false=视为成功）。
+	// IsError marks whether the tool execution corresponding to a tool message failed (ToolResult.IsError).
+	// Only meaningful for the tool role; the wire chatMessage does not carry this field (buildChatBody does
+	// not emit it, so it never leaks to the LLM) — it is used only for session persistence and history
+	// trimming (P8' success check: a later successful write/edit on the same path folds an earlier args).
+	// omitempty keeps backward compatibility with old sessions (absent = zero value false = treated as success).
 	IsError bool `json:"is_error,omitempty"`
-	// Kind 是 session 层标记（如 KindSummary），仅持久化与上下文屏障识别用；
-	// wire 的 chatMessage 不含此字段——buildChatBody 独立构造，绝不泄漏给 LLM。
+	// Kind is a session-layer marker (e.g. KindSummary), used only for persistence and context-barrier
+	// recognition; the wire chatMessage does not carry this field — buildChatBody builds it independently
+	// and never leaks it to the LLM.
 	Kind string `json:"kind,omitempty"`
-	// Usage 是该 assistant 消息对应 LLM 响应的真实计费用量；nil 表示无用量（user/tool 消息或
-	// 未携带用量的响应）。仅 session 持久化与上下文用量估算（estimateTokensFromUsage）用，
-	// wire 的 chatMessage 不含此字段——buildChatBody 独立构造，绝不泄漏给 LLM。
-	// omitempty 向后兼容旧 session（缺失=nil=回落本地估算）。
+	// Usage is the real billed usage of the LLM response corresponding to this assistant message; nil means
+	// no usage (user/tool messages, or a response that carried no usage). It is used only for session
+	// persistence and context usage estimation (estimateTokensFromUsage); the wire chatMessage does not
+	// carry this field — buildChatBody builds it independently and never leaks it to the LLM.
+	// omitempty keeps backward compatibility with old sessions (absent = nil = fall back to local estimation).
 	Usage *Usage `json:"usage,omitempty"`
-	// Ts 是消息产生时的 Unix 毫秒时间戳，供「真实 usage 防陈旧」判定（见 lastApplicableUsageIndex）：
-	// 若某 assistant.usage 之后插入了 Ts 更新的前缀消息（典型：摘要），该 usage 不再描述当前前缀，应失效。
-	// omitempty 向后兼容旧 session；appendMsg 对 Ts==0 自动打戳，故 0 可靠表示「未承载」。
+	// Ts is the Unix-millisecond timestamp when the message was produced, used by the "real usage staleness
+	// guard" (see lastApplicableUsageIndex): if a prefix message with a newer Ts is inserted after some
+	// assistant.usage (typically a summary), that usage no longer describes the current prefix and is stale.
+	// omitempty keeps backward compatibility with old sessions; appendMsg auto-stamps Ts==0, so 0 reliably
+	// means "not carried".
 	Ts int64 `json:"ts,omitempty"`
 }
 

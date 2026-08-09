@@ -10,17 +10,17 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// TestMain 保留 os.Exit 语义；session 上限改为各测试经 LoadSession/AppendMessages 的 maxBytes 参数注入。
+// TestMain preserves os.Exit semantics; the session upper limit is now injected per-test via the LoadSession/AppendMessages maxBytes parameter.
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
 func sampleTranscript() []miniagent.Message {
 	return []miniagent.Message{
-		{Role: "user", Content: "看下 a.txt"},
+		{Role: "user", Content: "look at a.txt"},
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "read", Args: `{"path":"a.txt"}`}}},
 		{Role: "tool", ToolCallID: "c1", Content: "1 │ hello"},
-		{Role: "assistant", Content: "a.txt 内容是 hello"},
+		{Role: "assistant", Content: "a.txt contains hello"},
 	}
 }
 
@@ -31,7 +31,7 @@ func writeLines(t *testing.T, path string, lines ...string) {
 	}
 }
 
-// Append→Load round-trip：消息逐一相等，metadata 复现。
+// Append→Load round-trip: messages are equal one by one, metadata is reproduced.
 func TestSession_RoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	want := sampleTranscript()
@@ -51,15 +51,15 @@ func TestSession_RoundTrip(t *testing.T) {
 	}
 }
 
-// 文件不存在 → (零 meta, nil, nil)，等同新会话。
+// Missing file → (zero meta, nil, nil), equivalent to a new session.
 func TestLoadSession_MissingFileReturnsNil(t *testing.T) {
 	meta, msgs, err := LoadSession(filepath.Join(t.TempDir(), "nope.jsonl"))
 	if err != nil || msgs != nil || meta.Type != "" {
-		t.Errorf("got (%+v, %v, %v), want (零 meta, nil, nil)", meta, msgs, err)
+		t.Errorf("got (%+v, %v, %v), want (zero meta, nil, nil)", meta, msgs, err)
 	}
 }
 
-// 中间损坏的 JSON 行（合法行夹在前后）必须报错。
+// A corrupt JSON line in the middle (valid lines sandwiched before and after) must error.
 func TestLoadSession_CorruptJSONFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.jsonl")
 	writeLines(t, path, `{"type":"session","id":"s"}`, `{not json`, `{"type":"message","role":"user","content":"after"}`)
@@ -68,7 +68,7 @@ func TestLoadSession_CorruptJSONFails(t *testing.T) {
 	}
 }
 
-// append-only 崩溃残留的尾行半写应被容忍：丢弃残行，加载此前合法的历史。
+// A partial trailing line left by an append-only crash should be tolerated: the partial line is discarded and the preceding valid history is loaded.
 func TestLoadSession_ToleratesCorruptTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tail.jsonl")
 	writeLines(t, path,
@@ -111,7 +111,7 @@ func TestLoadSession_OversizedFails(t *testing.T) {
 	}
 }
 
-// tool_calls 与 tool 配对断裂必须拒绝。
+// tool_calls and tool pairing breakage must be rejected.
 func TestLoadSession_DanglingToolCallFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dangling.jsonl")
 	writeLines(t, path,
@@ -132,11 +132,11 @@ func TestLoadSession_OrphanToolMessageFails(t *testing.T) {
 	}
 }
 
-// kind=summary 结构化标记可读（审查 v3 #2），role=user 合法持久化。
+// kind=summary structured marker is readable (review v3 #2); role=user is persisted legally.
 func TestLoadSession_KindSummaryRecognized(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sum.jsonl")
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{
-		{Role: "user", Kind: miniagent.KindSummary, Content: "[既往对话摘要] xxx"},
+		{Role: "user", Kind: miniagent.KindSummary, Content: "[Previous Conversation Summary] xxx"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +149,8 @@ func TestLoadSession_KindSummaryRecognized(t *testing.T) {
 	}
 }
 
-// P2-7：单条大消息（>1MiB 旧行上限、<maxSessionBytes 总上限）可正常 load，
-// 不再因 scanner ErrTooLong 致整会话不可读、append-only 无法修复。
+// P2-7: a single large message (>1MiB old single-line limit, <maxSessionBytes total limit) loads fine,
+// no longer making the whole session unreadable due to scanner ErrTooLong with no append-only way to repair it.
 func TestLoadSession_LargeSingleLineOK(t *testing.T) {
 	const maxSz = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "s.jsonl")
@@ -160,18 +160,19 @@ func TestLoadSession_LargeSingleLineOK(t *testing.T) {
 	}
 	_, msgs, err := LoadSession(path, maxSz)
 	if err != nil {
-		t.Fatalf("P2-7：大单行 load 失败（scanner 单行上限不足）: %v", err)
+		t.Fatalf("P2-7: large single-line load failed (scanner single-line limit insufficient): %v", err)
 	}
 	if len(msgs) != 1 || len(msgs[0].Content) != len(big) {
-		t.Errorf("大单行 round-trip 不一致: %+v", msgs)
+		t.Errorf("large single-line round-trip mismatch: %+v", msgs)
 	}
 }
 
-// H3-1：崩溃半写残留的尾行（无换行结尾）经 AppendMessages 必须被截断，否则 O_APPEND 盲写把新消息
-// 拼到残行上，下次 LoadSession 把合并后的非法行容忍为尾行而丢失新消息（再下一次即中段损坏永久失败）。
+// H3-1: a partial trailing line left by a crash (no trailing newline) must be truncated by AppendMessages; otherwise a blind O_APPEND appends the new
+// message onto the partial line, and the next LoadSession tolerates the merged illegal line as the trailing line and loses the new message (the time after
+// that it becomes mid-file corruption and fails permanently).
 func TestAppendMessages_HealsPartialTrailingLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	// 合法行 + 无换行结尾的半行（模拟崩溃中断的 append，末行无 \n）。
+	// A valid line + a half line with no trailing newline (simulating a crash-interrupted append, last line has no \n).
 	content := "{\"type\":\"session\",\"id\":\"s\"}\n" +
 		"{\"type\":\"message\",\"role\":\"user\",\"content\":\"ok\"}\n" +
 		"{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"half"
@@ -185,14 +186,14 @@ func TestAppendMessages_HealsPartialTrailingLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSession after heal: %v", err)
 	}
-	// 半行 "half" 被截断；保留 ok + 新 after。未修时残行与 after 合并成非法行被容忍为尾行，msgs 仅 [ok]。
+	// The partial line "half" is truncated; ok + new after are kept. Without the fix the partial line and after merge into an illegal line tolerated as the trailing line, msgs only [ok].
 	if len(msgs) != 2 || msgs[0].Content != "ok" || msgs[1].Content != "after" {
-		t.Errorf("heal 后消息 = %+v，want [ok, after]（残行截断、新消息保留）", msgs)
+		t.Errorf("after heal msgs = %+v, want [ok, after] (partial line truncated, new message kept)", msgs)
 	}
 }
 
-// R4-1：已超 maxBytes 的文件（含崩溃半行）须直接拒绝且零修改——ensureTrailingNewline 慢路径
-// LimitReader(mb+1) 在 size>mb 时不完整读取会错位截断丢合法行，故前置 size>mb 守卫（与 LoadSession 一致）。
+// R4-1: a file already exceeding maxBytes (including a crash partial line) must be rejected directly with zero modification — the ensureTrailingNewline
+// slow path's LimitReader(mb+1) reads incompletely when size>mb and would mis-truncate and lose valid lines, so a size>mb guard is put in front (consistent with LoadSession).
 func TestAppendMessages_OversizedFileRejectedUntouched(t *testing.T) {
 	const mb = int64(1024)
 	path := filepath.Join(t.TempDir(), "s.jsonl")
@@ -205,14 +206,14 @@ func TestAppendMessages_OversizedFileRejectedUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "after"}}, mb); err == nil {
-		t.Fatal("超 mb 的文件应被拒绝")
+		t.Fatal("file exceeding mb should be rejected")
 	}
-	// 关键：文件未被截断（R4-1 回归点——旧实现会静默截断丢合法行）。
+	// Key point: the file is not truncated (R4-1 regression — the old implementation would silently truncate and lose valid lines).
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != content {
-		t.Errorf("超 mb 文件被修改（应零副作用）：orig=%d 字节 got=%d 字节", len(content), len(got))
+		t.Errorf("file exceeding mb was modified (should have zero side effects): orig=%d bytes got=%d bytes", len(content), len(got))
 	}
 }

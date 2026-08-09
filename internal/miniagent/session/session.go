@@ -13,8 +13,8 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// maxSessionBytes 是 session 文件默认大小上限：50MB 覆盖长会话，同时防止无限增长。
-// 运行时经 Limits.MaxSessionBytes 覆盖（<=0 用此默认），由 LoadSession/AppendMessages/RewriteMessages 注入。
+// maxSessionBytes is the default size cap for session files: 50MB covers long sessions while preventing unbounded growth.
+// Overridden at runtime via Limits.MaxSessionBytes (<=0 uses this default); injected by LoadSession/AppendMessages/RewriteMessages.
 const maxSessionBytes = 50 << 20 // 50MB
 
 const (
@@ -22,8 +22,8 @@ const (
 	sessionTypeMessage = "message"
 )
 
-// SessionMeta 是 jsonl 首行 metadata（type=session），便于会话列举与多 provider 溯源。
-// LLMRequests 记录该会话累计 LLM 请求次数（跨多轮 Run 累加），用于用量追踪。
+// SessionMeta is the metadata first line of the jsonl (type=session), facilitating session listing and multi-provider provenance.
+// LLMRequests records the cumulative count of LLM requests for this session (accumulated across multiple Run turns), used for usage tracking.
 type SessionMeta struct {
 	Type        string `json:"type"`
 	ID          string `json:"id"`
@@ -34,32 +34,32 @@ type SessionMeta struct {
 	LLMRequests int    `json:"llm_requests,omitempty"`
 }
 
-// sessionLine 是 message 行的写入包装：嵌入 miniagent.Message 提升 role/content/kind 等字段，
-// 并补 type=message 判别（读侧按 type 分流到 SessionMeta 或 miniagent.Message）。
+// sessionLine is the write wrapper for message lines: embeds miniagent.Message to surface role/content/kind fields,
+// and adds type=message discrimination (the read side dispatches by type to SessionMeta or miniagent.Message).
 type sessionLine struct {
 	Type string `json:"type"`
 	miniagent.Message
 }
 
-// ResolveSessionPath 校验 id（白名单）后拼 {dir}/{id}.jsonl。仅解析路径，不判文件存在性——
-// 新建（-save-session）与接续（-session）的存在性语义由调用方裁决（resolveSessionForRun）。
+// ResolveSessionPath validates the id (allowlist) then joins {dir}/{id}.jsonl. It only resolves the path, not file existence —
+// existence semantics for new (-save-session) and resume (-session) are decided by the caller (resolveSessionForRun).
 func ResolveSessionPath(arg, dir string) (string, error) {
 	if arg == "" {
-		return "", errors.New("session 参数为空")
+		return "", errors.New("session argument is empty")
 	}
 	if err := ValidateSessionID(arg); err != nil {
 		return "", err
 	}
 	if dir == "" {
-		return "", fmt.Errorf("session %q 有效但未配置 session.dir", arg)
+		return "", fmt.Errorf("session %q is valid but session.dir is not configured", arg)
 	}
 	return filepath.Join(dir, arg+".jsonl"), nil
 }
 
-// LoadSession 读取 jsonl：首行 session metadata（若无则零值 meta），其余为 message 行。
-// 文件不存在返回 (零 meta, nil, nil) 等同新会话。损坏（非法 JSON 行、role 未知、tool 消息
-// 缺 tool_call_id、配对断裂、超大小上限）返回 error，调用方应报错退出而非静默丢历史。
-// opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
+// LoadSession reads the jsonl: the first line is session metadata (zero-value meta if absent), the rest are message lines.
+// A non-existent file returns (zero meta, nil, nil), equivalent to a new session. Corruption (illegal JSON line, unknown role,
+// tool message missing tool_call_id, broken pairing, exceeding size limit) returns an error; the caller should fail loudly rather
+// than silently drop history. opts: opts[0] overrides the maxSessionBytes limit (<=0 or omitted falls back to the maxSessionBytes constant).
 func LoadSession(path string, opts ...int64) (SessionMeta, []miniagent.Message, error) {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
@@ -73,20 +73,20 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []miniagent.Message, 
 		return SessionMeta{}, nil, err
 	}
 	defer func() { _ = f.Close() }()
-	// 单次 open + LimitReader：消除 Stat/ReadFile 间 TOCTOU，并硬封顶读取量防撑爆内存。
+	// Single open + LimitReader: eliminates Stat/ReadFile TOCTOU, and hard-caps the read volume to prevent memory blowup.
 	data, err := io.ReadAll(io.LimitReader(f, mb+1))
 	if err != nil {
 		return SessionMeta{}, nil, err
 	}
 	if int64(len(data)) > mb {
-		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 超过大小上限 %d 字节", path, mb)
+		return SessionMeta{}, nil, fmt.Errorf("session file %q exceeds size limit %d bytes", path, mb)
 	}
 	var meta SessionMeta
 	var msgs []miniagent.Message
 	sc := bufio.NewScanner(bytes.NewReader(data))
-	// 单行上限对齐 mb：避免单条大消息触发 ErrTooLong 致整会话不可读、append-only 无法修复（P2-7）。
+	// Per-line limit aligned with mb: prevents a single large message from triggering ErrTooLong, which would make the entire session unreadable and unfixable under append-only (P2-7).
 	sc.Buffer(make([]byte, 64*1024), int(mb+1))
-	var corruptLine int // 挂起的非法 JSON 行号（1-based），0=无
+	var corruptLine int // pending illegal JSON line number (1-based), 0=none
 	var corruptErr error
 	for i := 0; sc.Scan(); i++ {
 		line := bytes.TrimSpace(sc.Bytes())
@@ -97,50 +97,50 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []miniagent.Message, 
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(line, &probe); err != nil {
-			// 非法 JSON 行：append-only 崩溃仅污染末行，先挂起待确认是否尾行；此前已有挂起行则中间损坏。
+			// Illegal JSON line: an append-only crash only corrupts the last line; suspend and confirm whether it is the tail line. If there is already a pending line, this is mid-file corruption.
 			if corruptLine != 0 {
-				return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行非法 JSON：%w", path, corruptLine, corruptErr)
+				return SessionMeta{}, nil, fmt.Errorf("session file %q line %d illegal JSON: %w", path, corruptLine, corruptErr)
 			}
 			corruptLine = i + 1
 			corruptErr = err
 			continue
 		}
-		// 本行合法：若存在挂起的非法行，它不在文件末尾 → 中间损坏，严格报错。
+		// This line is valid: if there is a pending illegal line, it is not at the end of file -> mid-file corruption, fail strictly.
 		if corruptLine != 0 {
-			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行非法 JSON（中间损坏）：%w", path, corruptLine, corruptErr)
+			return SessionMeta{}, nil, fmt.Errorf("session file %q line %d illegal JSON (mid-file corruption): %w", path, corruptLine, corruptErr)
 		}
 		if probe.Type == sessionTypeSession {
 			if err := json.Unmarshal(line, &meta); err != nil {
-				return SessionMeta{}, nil, fmt.Errorf("session 文件 %q metadata 行解析失败：%w", path, err)
+				return SessionMeta{}, nil, fmt.Errorf("session file %q metadata line parse failed: %w", path, err)
 			}
 			continue
 		}
-		// message 行（type=message 或历史无 type）：反序列化进 miniagent.Message，未知字段忽略。
+		// message line (type=message or legacy with no type): deserialize into miniagent.Message, unknown fields ignored.
 		var m miniagent.Message
-		//nolint:musttag // miniagent.Message 已有 json tag；sessionLine 嵌入 miniagent.Message 是 session 文件格式约定（非 wire）
+		//nolint:musttag // miniagent.Message already has json tags; sessionLine embedding miniagent.Message is a session file format convention (not wire)
 		if err := json.Unmarshal(line, &m); err != nil {
-			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 行解析失败：%w", path, i+1, err)
+			return SessionMeta{}, nil, fmt.Errorf("session file %q line %d parse failed: %w", path, i+1, err)
 		}
 		if err := validateSessionMessage(m); err != nil {
-			return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 第 %d 条消息非法：%w", path, i+1, err)
+			return SessionMeta{}, nil, fmt.Errorf("session file %q message %d is invalid: %w", path, i+1, err)
 		}
 		msgs = append(msgs, m)
 	}
 	if err := sc.Err(); err != nil {
-		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q 读取失败：%w", path, err)
+		return SessionMeta{}, nil, fmt.Errorf("failed to read session file %q: %w", path, err)
 	}
-	// 扫描结束：corruptLine 仍非 0 → 最后一行半写（append-only 崩溃残行），容忍丢弃，
-	// 返回此前合法的历史。validateToolPairing 仍严格执行：若残行致配对断裂则报清晰错误。
+	// Scan finished: corruptLine still non-zero -> last line is half-written (append-only crash residual), tolerate and discard it,
+	// return the valid history so far. validateToolPairing still runs strictly: if the residual line broke pairing, report a clear error.
 	if err := ValidateToolPairing(msgs); err != nil {
-		return SessionMeta{}, nil, fmt.Errorf("session 文件 %q：%w", path, err)
+		return SessionMeta{}, nil, fmt.Errorf("session file %q: %w", path, err)
 	}
 	return meta, msgs, nil
 }
 
-// AppendMessages append-only 追加 msgs 到 jsonl（新建/空时先写 metadata 行）。写侧护栏：flock
-// 跨进程锁防行边界交织非法 JSON（P2-13）；预序列化按 size+待写 超限拒绝，避免写入成功延后失败到
-// LoadSession 致永久卡死（P1-4）；写前 ensureTrailingNewline 截断崩溃半写残行（H3-1）。withSessionLock
-// 统一 O_NOFOLLOW + MkdirAll 0o700 + flock（P3）。opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落常量）。
+// AppendMessages append-only appends msgs to the jsonl (writes the metadata line first when creating/empty). Write-side guardrails: flock
+// cross-process lock prevents line-boundary interleaving illegal JSON (P2-13); pre-serialization rejects when size+pending exceeds limit, avoiding
+// successful write that fails later at LoadSession causing permanent stuck state (P1-4); ensureTrailingNewline before write truncates crash half-written residual lines (H3-1). withSessionLock
+// unifies O_NOFOLLOW + MkdirAll 0o700 + flock (P3). opts: opts[0] overrides maxSessionBytes limit (<=0 or omitted falls back to the constant).
 func AppendMessages(path string, meta SessionMeta, msgs []miniagent.Message, opts ...int64) error {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
@@ -149,25 +149,25 @@ func AppendMessages(path string, meta SessionMeta, msgs []miniagent.Message, opt
 	if len(msgs) == 0 {
 		return nil
 	}
-	// O_RDWR：写前需读末字节检测并截断崩溃半写残留的尾部不完整行（ensureTrailingNewline）。
+	// O_RDWR: needs to read the last byte before writing to detect and truncate crash half-written tail incomplete lines (ensureTrailingNewline).
 	return withSessionLock(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, func(f *os.File) error {
 		info, err := f.Stat()
 		if err != nil {
 			return err
 		}
-		// 已超 mb 的文件不 heal：ensureTrailingNewline 慢路径 LimitReader(mb+1) 在 size>mb 时只读前
-		// mb+1 字节、LastIndexByte 在不完整窗口错位，会截断丢弃合法行且无回滚（R4-1）。与 LoadSession
-		// 一致——>mb 直接报错、零修改文件。
+		// Files already exceeding mb are not healed: ensureTrailingNewline slow path LimitReader(mb+1) only reads the first
+		// mb+1 bytes when size>mb, LastIndexByte mislocates in the incomplete window and would truncate and drop legal lines with no rollback (R4-1). Consistent with LoadSession
+		// -> directly report error, zero modification to the file.
 		if info.Size() > mb {
-			return fmt.Errorf("session 文件 %q 已达 %d 字节超上限 %d（请压缩历史或新建会话）", path, info.Size(), mb)
+			return fmt.Errorf("session file %q has reached %d bytes, exceeds limit %d (please compact history or create a new session)", path, info.Size(), mb)
 		}
-		// 截断崩溃半写残留的尾部不完整行：否则 O_APPEND 盲写把新消息拼到无换行结尾的残行上，
-		// 使原本被 LoadSession 末行容忍的残行在后续保存反噬为中段损坏（永久丢会话）。
+		// Truncate crash half-written tail incomplete lines: otherwise O_APPEND blind write would concatenate new messages onto a residual line without a trailing newline,
+		// turning a residual line tolerated by LoadSession's last-line tolerance into mid-file corruption on subsequent saves (permanently losing the session).
 		size, err := ensureTrailingNewline(f, info.Size(), mb)
 		if err != nil {
 			return err
 		}
-		// 预序列化待写内容：既精确估算大小做写侧预判，又复用一次 marshal 避免重复劳动。
+		// Pre-serialize pending content: both for precise size estimation on the write side and to reuse a single marshal avoiding duplicate work.
 		var buf bytes.Buffer
 		if size == 0 {
 			if meta.Type == "" {
@@ -181,7 +181,7 @@ func AppendMessages(path string, meta SessionMeta, msgs []miniagent.Message, opt
 			buf.WriteByte('\n')
 		}
 		for _, m := range msgs {
-			//nolint:musttag // sessionLine 嵌入 miniagent.Message 是 session 文件格式约定（非 wire）
+			//nolint:musttag // miniagent.Message already has json tags; sessionLine embedding miniagent.Message is a session file format convention (not wire)
 			b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 			if err != nil {
 				return err
@@ -190,7 +190,7 @@ func AppendMessages(path string, meta SessionMeta, msgs []miniagent.Message, opt
 			buf.WriteByte('\n')
 		}
 		if size+int64(buf.Len()) > mb {
-			return fmt.Errorf("session 文件 %q 追加后将达 %d 字节，超上限 %d（请压缩历史或新建会话）", path, size+int64(buf.Len()), mb)
+			return fmt.Errorf("session file %q would reach %d bytes after append, exceeds limit %d (please compact history or create a new session)", path, size+int64(buf.Len()), mb)
 		}
 		w := bufio.NewWriter(f)
 		if _, err := w.Write(buf.Bytes()); err != nil {
@@ -199,14 +199,15 @@ func AppendMessages(path string, meta SessionMeta, msgs []miniagent.Message, opt
 		if err := w.Flush(); err != nil {
 			return err
 		}
-		// Sync 落盘缩小「已写残行 + 未落盘」崩溃窗口（配合 LoadSession 尾行容忍）。
+		// Sync flush reduces the "written residual line + unflushed" crash window (combined with LoadSession tail-line tolerance).
 		return f.Sync()
 	})
 }
 
-// ensureTrailingNewline 截断崩溃半写残留的尾部不完整行：O_APPEND 盲写会把新消息拼到无换行结尾的
-// 残行上、破坏行边界。快路径只读末字节；仅当文件不以 '\n' 结尾（罕见恢复场景）才回扫到最后一个
-// '\n' 并截断其后字节，返回截断后的文件大小供调用方判断是否需补写 metadata 头行。
+// ensureTrailingNewline truncates crash half-written trailing incomplete lines: O_APPEND blind write would concatenate new messages onto a
+// line with no trailing newline and break line boundaries. Fast path only reads the last byte; only when the file does not end with '\n'
+// (rare recovery scenario) does it scan back to the last '\n' and truncate the bytes after it, returning the truncated file size for the caller to decide
+// whether a metadata header line needs to be rewritten.
 func ensureTrailingNewline(f *os.File, size, mb int64) (int64, error) {
 	if size == 0 {
 		return 0, nil
@@ -218,7 +219,7 @@ func ensureTrailingNewline(f *os.File, size, mb int64) (int64, error) {
 	if last[0] == '\n' {
 		return size, nil
 	}
-	// 残行无换行结尾：读现有内容（上限 mb）定位最后一个 '\n' 并截断其后字节。
+	// Residual line has no trailing newline: read existing content (capped at mb) to locate the last '\n' and truncate the bytes after it.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return size, err
 	}
@@ -236,11 +237,11 @@ func ensureTrailingNewline(f *os.File, size, mb int64) (int64, error) {
 	return cutAt, nil
 }
 
-// RewriteMessages 全量重写 session 文件（写临时文件 → os.Rename 原子替换）。仅 Run 成功且
-// result.Compacted 时调用：append-only 落盘的 newMsgs 含被屏障的旧 summary 与被压中段，长会话
-// 需 rewrite 真正丢弃（审查 P2 session 文件永不压缩）。msgs 是全量 transcript；锁与临时文件策略
-// 见 withSessionLock；write/rename 失败都清理临时文件。rename 后下轮 LoadSession 读精简文件。
-// opts：opts[0] 覆盖 maxSessionBytes 上限（<=0 或缺省回落 maxSessionBytes 常量）。
+// RewriteMessages performs a full rewrite of the session file (write temp file -> os.Rename atomic swap). Only invoked when Run succeeds and
+// result.Compacted is true: the newMsgs persisted by append-only include the blocked old summary and the compacted middle, which long sessions
+// need a rewrite to truly discard (review P2 session file never compacts). msgs is the full transcript; lock and temp-file strategy
+// see withSessionLock; write/rename failures clean up temp files. After rename the next LoadSession reads the slimmed file.
+// opts: opts[0] overrides the maxSessionBytes limit (<=0 or omitted falls back to the maxSessionBytes constant).
 func RewriteMessages(path string, meta SessionMeta, msgs []miniagent.Message, opts ...int64) error {
 	mb := int64(maxSessionBytes)
 	if len(opts) > 0 && opts[0] > 0 {
@@ -257,7 +258,7 @@ func RewriteMessages(path string, meta SessionMeta, msgs []miniagent.Message, op
 	buf.Write(b)
 	buf.WriteByte('\n')
 	for _, m := range msgs {
-		//nolint:musttag // sessionLine 嵌入 miniagent.Message 是 session 文件格式约定（非 wire）
+		//nolint:musttag // sessionLine embedding miniagent.Message is a session file format convention (not wire)
 		b, err := json.Marshal(sessionLine{Type: sessionTypeMessage, Message: m})
 		if err != nil {
 			return err
@@ -266,11 +267,11 @@ func RewriteMessages(path string, meta SessionMeta, msgs []miniagent.Message, op
 		buf.WriteByte('\n')
 	}
 	if int64(buf.Len()) > mb {
-		return fmt.Errorf("session rewrite 后 %d 字节超上限 %d", buf.Len(), mb)
+		return fmt.Errorf("session rewrite exceeds %d bytes limit %d", buf.Len(), mb)
 	}
 	dir := filepath.Dir(path)
 	return withSessionLock(path, os.O_WRONLY|os.O_CREATE, func(*os.File) error {
-		// 临时文件与 path 同目录（保证 rename 同文件系统原子）；os.CreateTemp 默认 0o600。
+		// Temp file is in the same directory as path (ensures rename is atomic on the same filesystem); os.CreateTemp defaults to 0o600.
 		tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 		if err != nil {
 			return err
@@ -285,14 +286,14 @@ func RewriteMessages(path string, meta SessionMeta, msgs []miniagent.Message, op
 			_ = os.Remove(tmpPath)
 			return writeErr
 		}
-		// rename 原子替换 path：withSessionLock 持的 fd 此刻指向 unlinked 旧 inode，defer unlock/close 仍正确（fd 关闭释放锁）；下轮拿新 inode 的锁。
-		// rename 失败（权限/磁盘满/文件系统异常）同样清理 tmp，与 write/sync 失败一致（注释承诺"write/rename 失败都清理"）。
+		// rename atomically swaps path: the fd held by withSessionLock now points to the unlinked old inode, defer unlock/close still works correctly (closing fd releases lock); the next round takes the lock on the new inode.
+		// rename failure (permission/disk full/filesystem error) also cleans up tmp, consistent with write/sync failure (comment promises "write/rename failures both clean up").
 		if err := os.Rename(tmpPath, path); err != nil {
 			_ = os.Remove(tmpPath)
 			return err
 		}
-		// fsync 父目录提交 rename 的目录元数据：防崩溃落在 rename 与目录元数据提交窗口内致 rewrite 丢失
-		// （与已披露的 flock+rename 并发问题是不同维度——这是崩溃耐久性）。失败仅 best-effort（rename 已成功）。
+		// fsync the parent directory to commit rename's directory metadata: prevents a crash falling in the window between rename and directory metadata commit causing rewrite loss
+		// (a different dimension from the reported flock+rename concurrency issue — this is crash durability). Failure is best-effort (rename already succeeded).
 		if d, derr := os.Open(dir); derr == nil {
 			_ = d.Sync()
 			_ = d.Close()

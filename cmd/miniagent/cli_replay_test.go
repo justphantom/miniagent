@@ -16,7 +16,8 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
-// parseNDJSON 把 combined output 按行解析为事件列表，跳过空行与非 JSON（如 slog 日志行）。
+// parseNDJSON parses the combined output line-by-line into a list of events, skipping empty lines
+// and non-JSON (such as slog log lines).
 func parseNDJSON(t *testing.T, out string) []map[string]any {
 	t.Helper()
 	var events []map[string]any
@@ -46,20 +47,20 @@ func equalSlice(a, b []string) bool {
 	return true
 }
 
-// replaySession 单测：已知消息序列 → 精确事件序列。覆盖：
-//   - assistant 带 tool_calls+reasoning（step1：tool_use + reasoning_delta，无 text_delta）；
-//   - tool 消息经 callID→name map 反查工具名发 tool_result；
-//   - 终态 assistant 纯文本（step2：text_delta）；
-//   - 多步用量累加、result 汇总（steps/text/finish/model/usage）。
+// replaySession unit test: known message sequence → exact event sequence. Covers:
+//   - assistant with tool_calls+reasoning (step1: tool_use + reasoning_delta, no text_delta);
+//   - tool messages resolve the tool name via the callID→name map and emit tool_result;
+//   - terminal assistant plain text (step2: text_delta);
+//   - multi-step usage accumulation, result aggregation (steps/text/finish/model/usage).
 func TestReplaySession(t *testing.T) {
 	meta := session.SessionMeta{
 		Type: "session", ID: "s1", Model: "p/m", Provider: "p", Workdir: "/wd", Created: "2026-01-01T00:00:00Z",
 	}
 	msgs := []miniagent.Message{
-		{Role: miniagent.RoleUser, Content: "提问"},
-		{Role: miniagent.RoleAssistant, Reasoning: "我想想", ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "read", Args: `{"path":"/x"}`}}, Usage: &miniagent.Usage{InputTokens: 10, OutputTokens: 5}},
-		{Role: miniagent.RoleTool, ToolCallID: "c1", Content: "文件内容"},
-		{Role: miniagent.RoleAssistant, Content: "最终回答", Usage: &miniagent.Usage{InputTokens: 20, OutputTokens: 8}},
+		{Role: miniagent.RoleUser, Content: "question"},
+		{Role: miniagent.RoleAssistant, Reasoning: "let me think", ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "read", Args: `{"path":"/x"}`}}, Usage: &miniagent.Usage{InputTokens: 10, OutputTokens: 5}},
+		{Role: miniagent.RoleTool, ToolCallID: "c1", Content: "file content"},
+		{Role: miniagent.RoleAssistant, Content: "final answer", Usage: &miniagent.Usage{InputTokens: 20, OutputTokens: 8}},
 	}
 	var buf bytes.Buffer
 	if err := replaySession(&buf, meta, msgs); err != nil {
@@ -69,7 +70,7 @@ func TestReplaySession(t *testing.T) {
 
 	wantTypes := []string{"session", "tool_use", "reasoning_delta", "tool_result", "text_delta", "result"}
 	if !equalSlice(eventTypes(ev), wantTypes) {
-		t.Fatalf("事件类型 = %v, want %v", eventTypes(ev), wantTypes)
+		t.Fatalf("event types = %v, want %v", eventTypes(ev), wantTypes)
 	}
 	if ev[0]["id"] != "s1" || ev[0]["model"] != "p/m" {
 		t.Errorf("session id/model = %v/%v", ev[0]["id"], ev[0]["model"])
@@ -77,26 +78,26 @@ func TestReplaySession(t *testing.T) {
 	if ev[1]["name"] != "read" || ev[1]["input"] != `{"path":"/x"}` {
 		t.Errorf("tool_use name/input = %v/%v", ev[1]["name"], ev[1]["input"])
 	}
-	if ev[2]["step"] != float64(1) || ev[2]["text"] != "我想想" {
+	if ev[2]["step"] != float64(1) || ev[2]["text"] != "let me think" {
 		t.Errorf("reasoning_delta = %+v", ev[2])
 	}
-	// tool_result 的 name 由 c1 反查得 read；output 经 EmitToolResult（短串不截断）。
-	if ev[3]["name"] != "read" || ev[3]["call_id"] != "c1" || ev[3]["output"] != "文件内容" {
+	// the tool_result name is resolved from c1 to read; output goes through EmitToolResult (short string not truncated).
+	if ev[3]["name"] != "read" || ev[3]["call_id"] != "c1" || ev[3]["output"] != "file content" {
 		t.Errorf("tool_result = %+v", ev[3])
 	}
-	if ev[4]["step"] != float64(2) || ev[4]["text"] != "最终回答" {
+	if ev[4]["step"] != float64(2) || ev[4]["text"] != "final answer" {
 		t.Errorf("text_delta = %+v", ev[4])
 	}
-	if ev[5]["text"] != "最终回答" || ev[5]["steps"] != float64(2) || ev[5]["finish"] != "stop" ||
+	if ev[5]["text"] != "final answer" || ev[5]["steps"] != float64(2) || ev[5]["finish"] != "stop" ||
 		ev[5]["model"] != "p/m" || ev[5]["input_tokens"] != float64(30) || ev[5]["output_tokens"] != float64(13) {
 		t.Errorf("result = %+v", ev[5])
 	}
 }
 
-// 孤立 tool 消息（tool_call_id 在 assistant.ToolCalls 中无对应）→ name 回落空串，不崩；steps=0。
+// orphan tool message (tool_call_id has no match in assistant.ToolCalls) → name falls back to empty string, no crash; steps=0.
 func TestReplaySession_OrphanTool(t *testing.T) {
 	msgs := []miniagent.Message{
-		{Role: miniagent.RoleTool, ToolCallID: "ghost", Content: "残"},
+		{Role: miniagent.RoleTool, ToolCallID: "ghost", Content: "fragment"},
 	}
 	var buf bytes.Buffer
 	if err := replaySession(&buf, session.SessionMeta{Type: "session", ID: "s", Model: "m"}, msgs); err != nil {
@@ -104,23 +105,25 @@ func TestReplaySession_OrphanTool(t *testing.T) {
 	}
 	ev := parseNDJSON(t, buf.String())
 	if !equalSlice(eventTypes(ev), []string{"session", "tool_result", "result"}) {
-		t.Fatalf("事件类型 = %v", eventTypes(ev))
+		t.Fatalf("event types = %v", eventTypes(ev))
 	}
 	if ev[1]["name"] != "" || ev[1]["call_id"] != "ghost" {
-		t.Errorf("孤立 tool_result name 应为空串: %+v", ev[1])
+		t.Errorf("orphan tool_result name should be empty: %+v", ev[1])
 	}
 }
 
-// e2e：-save-session 造一个含 read 工具调用的会话 → -replay 重显。验证 replay 把落盘消息
-// 翻译成 NDJSON 事件流：session/tool_use/tool_result/text_delta/result，关键字段对齐。
-// 已知差异：save 那次非流式不发 text_delta，replay 总发（整串）；result.model 取 session 元数据 "p/m"，
-// 与运行时 result（用 ModelID "m"）不同——均属认可精度边界。
+// e2e: -save-session creates a session containing a read tool call → -replay replays it. Verifies replay
+// translates the persisted messages into an NDJSON event stream: session/tool_use/tool_result/text_delta/result,
+// with key fields aligned.
+// Known differences: the save pass is non-streaming and does not emit text_delta, while replay always emits
+// it (as a whole string); result.model comes from the session metadata "p/m", differing from the runtime result
+// (which uses ModelID "m") — both are accepted precision boundaries.
 func TestCLI_Replay(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "t.txt")
 	if err := os.WriteFile(target, []byte("hello-target"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// read args 经二次 Marshal 成合法 JSON 字符串嵌入 wire 的 arguments 字段。
+	// read args goes through a second Marshal into a valid JSON string embedded in the wire's arguments field.
 	argsVal, _ := json.Marshal(map[string]string{"path": target})
 	argsStr, _ := json.Marshal(string(argsVal))
 
@@ -141,17 +144,17 @@ func TestCLI_Replay(t *testing.T) {
 
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	code, out := runMainBin(t, "读那个文件", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "read that file", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("save-session code=%d out=%s", code, out)
 	}
 	matches, _ := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
 	if len(matches) != 1 {
-		t.Fatalf("session 文件数=%d out=%s", len(matches), out)
+		t.Fatalf("session file count=%d out=%s", len(matches), out)
 	}
 	id := strings.TrimSuffix(filepath.Base(matches[0]), ".jsonl")
 
-	// replay：空 stdin（replay 不读 stdin、不调 LLM）。
+	// replay: empty stdin (replay does not read stdin, does not call the LLM).
 	code, out2 := runMainBin(t, "", []string{"-config", cfgPath, "-replay", id}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("replay code=%d out=%s", code, out2)
@@ -160,7 +163,7 @@ func TestCLI_Replay(t *testing.T) {
 
 	wantTypes := []string{"session", "tool_use", "tool_result", "text_delta", "result"}
 	if !equalSlice(eventTypes(ev), wantTypes) {
-		t.Fatalf("replay 事件类型 = %v, want %v (out=%s)", eventTypes(ev), wantTypes, out2)
+		t.Fatalf("replay event types = %v, want %v (out=%s)", eventTypes(ev), wantTypes, out2)
 	}
 	if ev[0]["id"] != id {
 		t.Errorf("session id = %v, want %q", ev[0]["id"], id)
@@ -179,7 +182,7 @@ func TestCLI_Replay(t *testing.T) {
 	}
 }
 
-// -replay 与 -session 互斥 → 报错退出 1。
+// -replay and -session are mutually exclusive → error and exit 1.
 func TestCLI_ReplayMutex(t *testing.T) {
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, "http://127.0.0.1:1", sessionDir)
@@ -187,12 +190,12 @@ func TestCLI_ReplayMutex(t *testing.T) {
 	if code != 1 {
 		t.Errorf("code=%d want 1", code)
 	}
-	if !strings.Contains(out, "-replay") || !strings.Contains(out, "互斥") {
+	if !strings.Contains(out, "-replay") || !strings.Contains(out, "mutually exclusive") {
 		t.Errorf("missing mutex error: %s", out)
 	}
 }
 
-// -replay 指向不存在的会话 → 报错退出 1（防 typo 静默成功）。
+// -replay pointing to a non-existent session → error and exit 1 (prevents silent success on typo).
 func TestCLI_ReplayMissingExits1(t *testing.T) {
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, "http://127.0.0.1:1", sessionDir)
@@ -200,12 +203,12 @@ func TestCLI_ReplayMissingExits1(t *testing.T) {
 	if code != 1 {
 		t.Errorf("code=%d want 1", code)
 	}
-	if !strings.Contains(out, "不存在") {
+	if !strings.Contains(out, "not found") {
 		t.Errorf("missing not-exist error: %s", out)
 	}
 }
 
-// eventTypes 抽取事件列表的 type 字段（断言用）。
+// eventTypes extracts the type field of each event (for assertions).
 func eventTypes(events []map[string]any) []string {
 	types := make([]string, 0, len(events))
 	for _, e := range events {

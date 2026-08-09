@@ -13,15 +13,15 @@ import (
 	"testing"
 )
 
-// modelLine 是 -list-models 输出的 NDJSON 事件（与 events.go modelEvent 同构）。
+// modelLine is the NDJSON event output by -list-models (isomorphic with events.go modelEvent).
 type modelLine struct {
 	Type     string `json:"type"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 }
 
-// parseModelLines 从输出中提取 type=model 的 NDJSON 事件；非 JSON 行（stderr 文本）跳过，
-// 因为 runMainBin 把 stdout/stderr 合流（部分失败场景两者混杂）。
+// parseModelLines extracts type=model NDJSON events from the output; non-JSON lines (stderr text) are skipped,
+// because runMainBin merges stdout/stderr (in partial-failure scenarios the two are mixed).
 func parseModelLines(t *testing.T, out string) []modelLine {
 	t.Helper()
 	var evs []modelLine
@@ -35,7 +35,7 @@ func parseModelLines(t *testing.T, out string) []modelLine {
 	return evs
 }
 
-// -list-models：GET models-url，逐行输出 NDJSON {"type":"model","provider","model"}。
+// -list-models: GET models-url, outputs NDJSON {"type":"model","provider","model"} line by line.
 func TestCLI_ListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -65,7 +65,7 @@ func TestCLI_ListModels(t *testing.T) {
 	}
 }
 
-// -list-models 多 provider：聚合所有 provider 的模型列表，NDJSON 事件带各自 provider 字段。
+// -list-models multi-provider: aggregates all providers' model lists; NDJSON events carry their own provider field.
 func TestCLI_ListModels_MultiProvider(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -103,7 +103,7 @@ func TestCLI_ListModels_MultiProvider(t *testing.T) {
 	}
 }
 
-// -list-models 多 provider + -provider：仅列出指定 provider，仍输出前缀格式。
+// -list-models multi-provider + -provider: lists only the specified provider, still outputs the prefix format.
 func TestCLI_ListModels_MultiProvider_ProviderFilter(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -132,7 +132,7 @@ func TestCLI_ListModels_MultiProvider_ProviderFilter(t *testing.T) {
 	}
 }
 
-// -list-models 多 provider 部分失败：成功 provider 的 id 仍打印到 stdout，最终退出码 1。
+// -list-models multi-provider partial failure: the successful provider's id is still printed to stdout, final exit code 1.
 func TestCLI_ListModels_MultiProvider_PartialFailure(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -164,22 +164,22 @@ func TestCLI_ListModels_MultiProvider_PartialFailure(t *testing.T) {
 	}
 }
 
-// -result-only：stdout 仅 result.text，无 NDJSON 事件。
+// -result-only: stdout only has result.text, no NDJSON events.
 func TestCLI_ResultOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"纯结果"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"pure result"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer srv.Close()
 	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
-	if strings.TrimSpace(out) != "纯结果" {
+	if strings.TrimSpace(out) != "pure result" {
 		t.Errorf("result-only stdout should be bare text, got: %q", out)
 	}
 }
 
-// -result-only 失败：输出 "error: <msg>" + 退出码 1。
+// -result-only failure: outputs "error: <msg>" + exit code 1.
 func TestCLI_ResultOnlyError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -194,8 +194,8 @@ func TestCLI_ResultOnlyError(t *testing.T) {
 	}
 }
 
-// config 模式 e2e：system prompt 含 subagent 引导（config 绝对路径 + 无状态 fork 命令）。
-// subagent 改无状态后不再注入父 session id——无状态调用即触发 guidance 注入。
+// config-mode e2e: the system prompt contains subagent guidance (config absolute path + stateless fork command).
+// After the subagent became stateless the parent session id is no longer injected — a stateless invocation triggers guidance injection.
 func TestCLI_SubagentPromptInjected(t *testing.T) {
 	var mu sync.Mutex
 	var body string
@@ -223,7 +223,7 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	if !strings.Contains(body, abs) {
 		t.Errorf("system prompt missing config abs path %q: %s", abs, body)
 	}
-	if !strings.Contains(body, "无状态") || !strings.Contains(body, "subagent") {
+	if !strings.Contains(body, "stateless") || !strings.Contains(body, "subagent") {
 		t.Errorf("system prompt missing subagent stateless guidance: %s", body)
 	}
 }

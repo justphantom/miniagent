@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// OpenNoFollow 在 Windows 上应拒绝最终分量为符号链接，但允许普通文件。
+// OpenNoFollow on Windows should reject the final component when it is a symlink, but allow regular files.
 func TestOpenNoFollow_Windows_RejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	regular := filepath.Join(dir, "regular.txt")

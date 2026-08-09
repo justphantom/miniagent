@@ -11,7 +11,7 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// msgsContainContent 报告 msgs 中是否有任一 Content 含 sub。
+// msgsContainContent reports whether any Content in msgs contains sub.
 func msgsContainContent(msgs []miniagent.Message, sub string) bool {
 	for _, m := range msgs {
 		if strings.Contains(m.Content, sub) {
@@ -21,15 +21,15 @@ func msgsContainContent(msgs []miniagent.Message, sub string) bool {
 	return false
 }
 
-// §P1-E preserveRecentTokens：显式 >0 / window<=0 关闭 / floor(window/4) clamp [2000,8000]。
+// §P1-E preserveRecentTokens: explicit >0 / window<=0 disabled / floor(window/4) clamp [2000,8000].
 func TestPreserveRecentTokens(t *testing.T) {
 	cases := []struct{ preserve, window, want int }{
-		{5000, 0, 5000},   // 显式 >0 wins
-		{0, 0, 0},         // window<=0 → 关闭
+		{5000, 0, 5000},   // explicit >0 wins
+		{0, 0, 0},         // window<=0 -> disabled
 		{0, 8000, 2000},   // 8000/4
 		{0, 20000, 5000},  // 20000/4
-		{0, 100000, 8000}, // 25000 clamp 上限
-		{0, 4000, 2000},   // 1000 clamp 下限
+		{0, 100000, 8000}, // 25000 clamp upper limit
+		{0, 4000, 2000},   // 1000 clamp lower limit
 	}
 	for i, c := range cases {
 		b := ContextBudget{PreserveRecentTokens: c.preserve, ContextWindow: c.window}
@@ -39,7 +39,7 @@ func TestPreserveRecentTokens(t *testing.T) {
 	}
 }
 
-// §P1-E selectTailByTokens token 预算：大轮装不下进 middle（boundary shrink 失败时），最近小轮留 tail。
+// §P1-E selectTailByTokens token budget: a large round that doesn't fit goes into middle (when boundary shrink fails); the recent small round is kept in tail.
 func TestSelectTailByTokens_TokenBudget(t *testing.T) {
 	bigTool := strings.Repeat("x", 20000) // ~5000 tokens
 	rounds := [][]miniagent.Message{
@@ -47,24 +47,24 @@ func TestSelectTailByTokens_TokenBudget(t *testing.T) {
 		{{Role: miniagent.RoleUser, Content: "b"}},
 		{{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
 			{Role: miniagent.RoleTool, ToolCallID: "c1", Content: bigTool}},
-		{{Role: miniagent.RoleUser, Content: "d"}}, // 最近
+		{{Role: miniagent.RoleUser, Content: "d"}}, // recent
 	}
 	tail, middle := selectTailByTokens(rounds, 4, 50)
 	if !msgsContainContent(tail, "d") {
-		t.Errorf("tail 应含最近小轮 d: %+v", tail)
+		t.Errorf("tail should contain the recent small round d: %+v", tail)
 	}
 	if msgsContainContent(tail, "a") {
-		t.Errorf("远古小轮 a 不应在 tail（应进 middle）: %+v", tail)
+		t.Errorf("the ancient small round a should not be in tail (should go into middle): %+v", tail)
 	}
 	if !msgsContainContent(middle, "a") {
-		t.Errorf("middle 应含远古小轮 a: %+v", middle)
+		t.Errorf("middle should contain the ancient small round a: %+v", middle)
 	}
 	if !msgsContainContent(middle, bigTool[:50]) {
-		t.Errorf("middle 应含大轮 tool content（装不下）: tail=%d middle=%d", len(tail), len(middle))
+		t.Errorf("middle should contain the large round tool content (doesn't fit): tail=%d middle=%d", len(tail), len(middle))
 	}
 }
 
-// §P1-E selectTailByTokens 纯轮数回退（tokenBudget<=0）：tail=最近 maxTurns 轮，middle=其余。
+// §P1-E selectTailByTokens pure turn-count fallback (tokenBudget<=0): tail=the most recent maxTurns rounds, middle=the rest.
 func TestSelectTailByTokens_LegacyFallback(t *testing.T) {
 	rounds := [][]miniagent.Message{
 		{{Role: miniagent.RoleUser, Content: "a"}},
@@ -75,14 +75,14 @@ func TestSelectTailByTokens_LegacyFallback(t *testing.T) {
 	}
 	tail, middle := selectTailByTokens(rounds, 2, 0)
 	if len(tail) != 2 || !msgsContainContent(tail, "d") || !msgsContainContent(tail, "e") {
-		t.Errorf("tail 应为最近 2 轮 [d,e]: %+v", tail)
+		t.Errorf("tail should be the most recent 2 rounds [d,e]: %+v", tail)
 	}
 	if len(middle) != 3 || !msgsContainContent(middle, "a") || !msgsContainContent(middle, "c") {
-		t.Errorf("middle 应为 [a,b,c]: %+v", middle)
+		t.Errorf("middle should be [a,b,c]: %+v", middle)
 	}
 }
 
-// §P1-E selectTailByTokens all-fit：全部轮装下（n<=maxTurns 且未触 token 上界）→ tail=全部、middle=空。
+// §P1-E selectTailByTokens all-fit: all rounds fit (n<=maxTurns and the token upper bound not hit) -> tail=all, middle=empty.
 func TestSelectTailByTokens_AllFit(t *testing.T) {
 	rounds := [][]miniagent.Message{
 		{{Role: miniagent.RoleUser, Content: "a"}},
@@ -90,30 +90,32 @@ func TestSelectTailByTokens_AllFit(t *testing.T) {
 	}
 	tail, middle := selectTailByTokens(rounds, 5, 1000)
 	if len(tail) != 2 || !msgsContainContent(tail, "a") || !msgsContainContent(tail, "b") {
-		t.Errorf("all-fit: tail 应为全部 2 轮: %+v", tail)
+		t.Errorf("all-fit: tail should be all 2 rounds: %+v", tail)
 	}
 	if len(middle) != 0 {
-		t.Errorf("all-fit: middle 应为空: %+v", middle)
+		t.Errorf("all-fit: middle should be empty: %+v", middle)
 	}
 }
 
-// selectTailByTokens 不变量：最近轮单独超 tokenBudget 时仍强制并入 tail，不被压进 middle 摘要掉。
-// 回归：此前若最近轮 bulk 在 assistant.tool_call.Args（如 write 大文件，shrinkRoundToolContents 压不到），
-// boundary split/shrink 双失败 → tail 为空 → compactWithSummary 把最近轮并入 middle 摘要，丢失精确近期上下文。
+// selectTailByTokens invariant: when the most recent round alone exceeds tokenBudget, it is still force-merged
+// into tail and not squeezed into middle to be summarized.
+// Regression: previously, if the most recent round's bulk was in assistant.tool_call.Args (e.g. write a large file,
+// where shrinkRoundToolContents cannot compress it), boundary split/shrink would both fail -> tail empty ->
+// compactWithSummary would merge the most recent round into middle and summarize it, losing precise recent context.
 func TestSelectTailByTokens_RecentRoundExceedsBudget(t *testing.T) {
-	bigArgs := strings.Repeat("x", 20000) // 在 tool_call.Args，shrinkRoundToolContents 不触及 → 无法贴合预算
+	bigArgs := strings.Repeat("x", 20000) // in tool_call.Args; shrinkRoundToolContents does not touch it -> cannot fit the budget
 	rounds := [][]miniagent.Message{
 		{{Role: miniagent.RoleUser, Content: "old"}},
-		{ // 最近轮：bulk 在 assistant.tool_call.Args，shrink 无效
+		{ // recent round: bulk is in assistant.tool_call.Args, shrink is ineffective
 			{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "write", Args: bigArgs}}},
 			{Role: miniagent.RoleTool, ToolCallID: "c1", Content: "ok"},
 		},
 	}
 	tail, middle := selectTailByTokens(rounds, 4, 50)
 	if len(tail) == 0 {
-		t.Fatalf("tail 不可为空：最近轮即使单独超预算也须并入 tail")
+		t.Fatalf("tail must not be empty: even if the most recent round alone exceeds the budget it must be merged into tail")
 	}
-	// 最近轮（含 c1）应在 tail，不在 middle
+	// The recent round (containing c1) should be in tail, not in middle.
 	hasC1 := false
 	for _, m := range tail {
 		if m.ToolCallID == "c1" {
@@ -126,17 +128,17 @@ func TestSelectTailByTokens_RecentRoundExceedsBudget(t *testing.T) {
 		}
 	}
 	if !hasC1 {
-		t.Errorf("最近轮（c1）应留在 tail 不被摘要: tail=%+v", tail)
+		t.Errorf("the recent round (c1) should stay in tail and not be summarized: tail=%+v", tail)
 	}
 	if !msgsContainContent(middle, "old") {
-		t.Errorf("older 轮应进 middle: %+v", middle)
+		t.Errorf("the older round should go into middle: %+v", middle)
 	}
 	if err := session.ValidateToolPairing(tail); err != nil {
-		t.Errorf("tail 配对应自洽: %v", err)
+		t.Errorf("tail tool-call pairing should be self-consistent: %v", err)
 	}
 }
 
-// §P1-E shrinkRoundToolContents：保 assistant.tool_calls 与 tool 结果配对不变，仅 tool content 被截。
+// §P1-E shrinkRoundToolContents: keeps assistant.tool_calls and tool result pairing unchanged; only tool content is truncated.
 func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	round := []miniagent.Message{
 		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
@@ -144,25 +146,26 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	}
 	shrunk := shrinkRoundToolContents(round, 200)
 	if len(shrunk) != 2 {
-		t.Fatalf("shrink 后轮长度应不变（2 条）: %d", len(shrunk))
+		t.Fatalf("the round length after shrink should be unchanged (2 items): %d", len(shrunk))
 	}
 	if len(shrunk[0].ToolCalls) != 1 || shrunk[0].ToolCalls[0].ID != "c1" {
-		t.Errorf("assistant.tool_calls 应原样保留: %+v", shrunk[0].ToolCalls)
+		t.Errorf("assistant.tool_calls should be kept as-is: %+v", shrunk[0].ToolCalls)
 	}
 	if shrunk[1].Role != miniagent.RoleTool || shrunk[1].ToolCallID != "c1" {
-		t.Errorf("tool 结果应保留 id 配对: %+v", shrunk[1])
+		t.Errorf("the tool result should keep its id pairing: %+v", shrunk[1])
 	}
 	if len(shrunk[1].Content) >= 8000 {
-		t.Errorf("tool content 应被压缩: len=%d", len(shrunk[1].Content))
+		t.Errorf("tool content should be compressed: len=%d", len(shrunk[1].Content))
 	}
 	if err := session.ValidateToolPairing(shrunk); err != nil {
-		t.Errorf("shrink 后配对应自洽: %v", err)
+		t.Errorf("pairing should be self-consistent after shrink: %v", err)
 	}
 }
 
-// §P1-E compactWithSummary 端到端：token 预算成为绑定约束——最近轮含超大 tool 结果（> 预算）时，
-// 该轮不进 tail（进 middle 被摘要）。守护 preserveRecentTokens(budget) wiring（review Finding 2）：
-// 若 tokenBudget 误改成 0（纯轮数回退），tail=最近 keepRecent 轮会含 bigTool，此断言失败。
+// §P1-E compactWithSummary end-to-end: the token budget becomes a binding constraint -- when the most recent
+// round contains a huge tool result (> the budget), that round does not go into tail (it goes into middle and is
+// summarized). Guards the preserveRecentTokens(budget) wiring (review Finding 2): if tokenBudget is wrongly changed
+// to 0 (pure turn-count fallback), tail=the most recent keepRecent rounds would contain bigTool, failing this assertion.
 func TestCompactWithSummary_TokenBudgetTailE2E(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("sum")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -179,21 +182,21 @@ func TestCompactWithSummary_TokenBudgetTailE2E(t *testing.T) {
 	}
 	budget := ContextBudget{
 		Model:         "m",
-		ContextWindow: 8000, // preserveRecentTokens = floor(8000/4)=2000 → clamp[2000,8000]=2000
+		ContextWindow: 8000, // preserveRecentTokens = floor(8000/4)=2000 -> clamp[2000,8000]=2000
 		Summarize:     testBudget(llm).Summarize,
 	}
 	out, summary, _, err := compactWithSummary(context.Background(), budget, msgs, 4)
 	if err != nil || summary.Kind != miniagent.KindSummary {
-		t.Fatalf("应生成 miniagent.KindSummary: kind=%v err=%v", summary.Kind, err)
+		t.Fatalf("should generate miniagent.KindSummary: kind=%v err=%v", summary.Kind, err)
 	}
 	if len(out) == 0 || out[0].Content != "h0" {
-		t.Errorf("out[0] 应为 head h0: %+v", out)
+		t.Errorf("out[0] should be the head h0: %+v", out)
 	}
-	// token 预算绑定：超大 tool 结果（5000 tokens > 预算 2000）不应进 tail（应进 middle 摘要）。
-	// tokenBudget=0 回退时 tail=最近 4 轮会含 bigTool，此断言失败。
+	// Token budget binding: a huge tool result (5000 tokens > budget 2000) should not go into tail (it goes into middle and is summarized).
+	// When tokenBudget=0 falls back, tail=the most recent 4 rounds would contain bigTool, failing this assertion.
 	for _, m := range out {
 		if strings.Contains(m.Content, bigTool[:50]) {
-			t.Fatalf("token 预算应阻止超大 tool 结果进 tail（应进 middle）: out 含 bigTool")
+			t.Fatalf("the token budget should prevent a huge tool result from entering tail (should go into middle): out contains bigTool")
 		}
 	}
 }

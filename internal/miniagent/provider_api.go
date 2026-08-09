@@ -8,22 +8,24 @@ type Request struct {
 	Messages  []Message
 	MaxTokens int
 	Tools     []Tool
-	// ThinkingLevel 是请求侧思考级别（off/minimal/low/medium/high/xhigh/max）。
-	// 空串或 ThinkingOff 不写入 wire。具体字段名/取值映射由 Thinking 覆盖（跨供应商兼容）。
+	// ThinkingLevel is the request-side thinking level (off/minimal/low/medium/high/xhigh/max).
+	// An empty string or ThinkingOff is not written to the wire. The concrete field name / value mapping is
+	// overridden by Thinking (for cross-provider compatibility).
 	ThinkingLevel string
-	// Thinking 覆盖默认 wire 字段名（reasoning_effort）与级别取值映射；nil 用默认。
+	// Thinking overrides the default wire field name (reasoning_effort) and the level value mapping; nil uses the default.
 	Thinking *ThinkingMapping
-	// Stream 决定 buildChatBody 是否生成 stream:true。由 DoStream（true）/prepareDo（false）内部强制设置——
-	// 调用方应直接调 DoStream（流式）或 Do（非流式），不应手设 Stream；保留导出仅因 LLM 接口契约需 struct 传值。
+	// Stream decides whether buildChatBody emits stream:true. It is forced internally by DoStream (true) /
+	// prepareDo (false) — callers should call DoStream (streaming) or Do (non-streaming) directly and not set
+	// Stream by hand; it remains exported only because the LLM interface contract requires passing a struct.
 	Stream bool
 }
 
 type Response struct {
 	Text         string
-	Reasoning    string // 思考链（reasoning_content / reasoning），按需入历史回灌
+	Reasoning    string // reasoning chain (reasoning_content / reasoning), fed back into history as needed
 	ToolCalls    []ToolCall
 	Usage        Usage
-	FinishReason string // stop|length|tool_calls|content_filter|null；非 stop 表示回答被截断/过滤
+	FinishReason string // stop|length|tool_calls|content_filter|null; non-stop means the answer was truncated/filtered
 }
 
 type Usage struct {
@@ -31,34 +33,40 @@ type Usage struct {
 	OutputTokens int
 }
 
-// Doer 是「发一个非流式 chat 请求」的最小能力。压缩的摘要调用只需此（summarizeMiddle）。
-// 把它从具体 *ChatClient 抽成接口，使压缩可挂任意能 Do 的 provider。
+// Doer is the minimal capability of "send a non-streaming chat request". The compaction summary call only
+// needs this (summarizeMiddle). Abstracting it from a concrete *ChatClient into an interface lets compaction
+// attach any provider that can Do.
 type Doer interface {
 	Do(ctx context.Context, req Request) (Response, error)
 }
 
-// LLM 是 Run 依赖的 provider 接口：Do（非流式）+ DoStream（流式）。核心据此与具体 provider 解耦——
-// 调用方可挂任意实现（OpenAI 兼容、Anthropic 原生、本地、mock），核心循环零改动。嵌入 Doer 复用 Do 契约。
-// 这是核心对外部 provider 的唯一依赖缝口（除工具/压缩/事件钩子外）。
+// LLM is the provider interface Run depends on: Do (non-streaming) + DoStream (streaming). The core decouples
+// from the concrete provider through this — callers may attach any implementation (OpenAI-compatible,
+// Anthropic-native, local, mock) with zero changes to the core loop. Embedding Doer reuses the Do contract.
+// This is the core's only dependency seam on external providers (besides tools/compaction/event hooks).
 type LLM interface {
 	Doer
 	DoStream(ctx context.Context, req Request, onDelta func(Delta) error) (Response, error)
 }
 
-// ThinkingOff 是思考级别的「关闭」哨兵：空串与它都表示不向 wire 写入思考字段。
-// 其余级别（minimal/low/medium/high/xhigh/max）由 CLI/config 校验取值，wire 透传。
+// ThinkingOff is the "off" sentinel for the thinking level: both an empty string and this value mean the
+// thinking field is not written to the wire. The other levels (minimal/low/medium/high/xhigh/max) are
+// validated by CLI/config and passed through to the wire.
 const ThinkingOff = "off"
 
-// ThinkingMapping 让 provider 显式声明思考字段的 wire 名（如 openai 的 reasoning_effort）
-// 与级别取值映射（跨供应商兼容）。钉死：启用思考时 provider 必声明 {field,map}，wire 必经映射。
-// 属核心 wire 契约（Request.Thinking / LoopConfig.Thinking 引用），故留 core，不随 config 子包外迁。
+// ThinkingMapping lets a provider explicitly declare the wire name of the thinking field (e.g. openai's
+// reasoning_effort) and the level value mapping (for cross-provider compatibility). Pinned rule: when
+// thinking is enabled the provider must declare {field,map}, and the wire must go through the mapping.
+// It is a core wire contract (referenced by Request.Thinking / LoopConfig.Thinking), so it stays in core
+// and is not moved out with the config subpackage.
 type ThinkingMapping struct {
 	Field string            `json:"field"`
 	Map   map[string]string `json:"map,omitempty"`
 }
 
-// Delta 是推给消费方的流式增量（LLM.DoStream 的 onDelta 回调参数）。
-// 属核心流式契约（LLM 接口引用），故留 core；SSE 解析在 internal/provider/openai。
+// Delta is the streaming increment pushed to the consumer (the onDelta callback parameter of LLM.DoStream).
+// It is a core streaming contract (referenced by the LLM interface), so it stays in core; SSE parsing lives
+// in internal/provider/openai.
 type Delta struct {
 	Kind DeltaKind
 	Text string

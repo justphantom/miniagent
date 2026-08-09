@@ -15,18 +15,22 @@ import (
 	"github.com/justphantom/miniagent/internal/text"
 )
 
-// maxReadFileBytes 是 read 单文件读取上限：1MB 覆盖大文件（generated code、大数据常量），
-// 同时防止超大日志/生成文件撑爆内存。运行时经 miniagent.Limits.MaxReadFileBytes 覆盖（<=0 用此默认）。
+// maxReadFileBytes is the per-file read cap for the read tool: 1MB covers large files
+// (generated code, large data constants) while preventing huge logs/generated files from
+// exhausting memory. Overridden at runtime via miniagent.Limits.MaxReadFileBytes (<=0 uses this default).
 const maxReadFileBytes = 1 << 20 // 1MB
 
-// fileOpTimeout 是 read/edit 的内置操作超时：IsRegular 已切断 FIFO 阻塞主因，
-// 此处兜底挂起的文件系统（NFS 服务端失联、坏盘、网络黑洞）。
+// fileOpTimeout is the built-in operation timeout for read/edit: IsRegular already cuts off
+// the main cause of FIFO blocking; this is a fallback for hung filesystems (NFS server down,
+// bad disk, network black hole).
 //
-// 已知取舍（P2-10，文档化而非重构）：select 命中 runCtx.Done 后主流程返回，但后台
-// 读 goroutine 可能仍阻塞在不可中断的内核 read（D 态，如 NFS 服务端失联时 read 不响
-// 应信号），ctx 无法取消 → goroutine 不可回收，长跑进程会累积。完整修复需非阻塞 IO
-// + 周期 ctx 轮询的重构（成本高、收益低，默认 isolation 下进程短命），暂以注释明示。
-// 彻底规避靠调用方按 README「运行隔离」配容器/低权限用户。
+// Known trade-off (P2-10, documented rather than refactored): after select hits runCtx.Done
+// the main flow returns, but the background read goroutine may still block in an uninterruptible
+// kernel read (D state, e.g. NFS server unreachable where read ignores signals); ctx cannot
+// cancel it -> the goroutine is not reclaimable, accumulating over a long-running process. A
+// complete fix requires non-blocking IO + periodic ctx polling (high cost, low benefit; default
+// isolation keeps processes short-lived), so this is documented here for now.
+// Full avoidance relies on the caller configuring container/low-privilege user per README "Run Isolation".
 const fileOpTimeout = 30 * time.Second
 
 const maxLineLimit = 10000
@@ -37,8 +41,8 @@ type readFileArgs struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-// ReadFileTool returns a read tool bound to workspaceRoot. timeout<=0 用默认 fileOpTimeout。
-// maxBytes<=0 用默认 maxReadFileBytes（miniagent.Limits.MaxReadFileBytes 注入）。
+// ReadFileTool returns a read tool bound to workspaceRoot. timeout<=0 uses the default fileOpTimeout.
+// maxBytes<=0 uses the default maxReadFileBytes (injected via miniagent.Limits.MaxReadFileBytes).
 func ReadFileTool(workspaceRoot string, timeout time.Duration, maxBytes int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
@@ -49,15 +53,15 @@ func ReadFileTool(workspaceRoot string, timeout time.Duration, maxBytes int) min
 	maxChars := maxBytes / 4
 	return miniagent.Tool{
 		Name:        "read",
-		Description: fmt.Sprintf("读取文本文件，输出带行号（N │ line，edit 据此定位 offset）。支持 offset/limit 分段读大文件。拒绝二进制（含 NUL）、最终分量符号链接（中间目录 symlink 仍跟随）与非普通文件。单文件 %d 字节、输出 %d 字符上限。path 相对 workdir 或绝对。", maxBytes, maxChars),
+		Description: fmt.Sprintf("Reads a text file and outputs it with line numbers (N │ line; edit locates offset based on this). Supports offset/limit for paginating large files. Rejects binary files (containing NUL), symlinks as the final path component (intermediate directory symlinks are still followed), and non-regular files. Per-file limit %d bytes, output limit %d chars. path is relative to workdir or absolute.", maxBytes, maxChars),
 		Parameters: object(map[string]any{
-			"path":   map[string]any{"type": "string", "description": "要读取的文件路径，相对 workdir 或绝对路径"},
-			"offset": map[string]any{"type": "integer", "description": "起始行号（1-based），默认 1（从头开始）"},
-			"limit":  map[string]any{"type": "integer", "description": "最多返回的行数，默认全部"},
+			"path":   map[string]any{"type": "string", "description": "File path to read, relative to workdir or absolute"},
+			"offset": map[string]any{"type": "integer", "description": "Starting line number (1-based), default 1 (from the beginning)"},
+			"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to return, default all"},
 		}, "path"),
 		ResultLimit: maxFileResultInHistory,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
-			return runWithTimeout(ctx, timeout, "读取", func(_ context.Context) miniagent.ToolResult { return runReadFile(workspaceRoot, args, maxBytes) })
+			return runWithTimeout(ctx, timeout, "read", func(_ context.Context) miniagent.ToolResult { return runReadFile(workspaceRoot, args, maxBytes) })
 		},
 	}
 }
@@ -68,30 +72,33 @@ func runReadFile(workspaceRoot, args string, maxBytes int) miniagent.ToolResult 
 		return miniagent.ToolResult{IsError: true, Output: err.Error()}
 	}
 	full := resolveToolPath(workspaceRoot, a.Path)
-	// Lstat 而非 Stat：与 edit/openNoFollow 对齐，对最终路径分量是符号链接直接拒
-	// （Stat 会跟随软链读目标，与「拒绝符号链接」描述不符）。中间目录的 symlink
-	// 仍跟随（read 本就无路径约束，仅最终分量由 O_NOFOLLOW/Lstat 兜底）。
+	// Lstat instead of Stat: aligns with edit/openNoFollow, rejecting a symlink as the final
+	// path component directly (Stat would follow the symlink to read the target, contradicting
+	// the "reject symlinks" description). Intermediate directory symlinks are still followed
+	// (read has no path constraints; only the final component is guarded by O_NOFOLLOW/Lstat).
 	info, err := os.Lstat(full)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to read %q: %v", a.Path, err)}
 	}
 	if !info.Mode().IsRegular() {
-		// 拒绝非普通文件：FIFO/设备/socket 会让 openNoFollow 阻塞（无写者的
-		// FIFO 永久卡住）或读出非文本字节流；symlink（mode 含 ModeSymlink）同样
-		// 在此拦截，给出清晰错误而非落到 openNoFollow 的 O_NOFOLLOW errno。
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("%q 不是普通文件（mode=%s），仅支持 regular file", a.Path, info.Mode().String())}
+		// Reject non-regular files: FIFO/device/socket would block openNoFollow (a FIFO with no
+		// writer hangs forever) or read out non-text byte streams; symlink (mode contains
+		// ModeSymlink) is also intercepted here, giving a clear error instead of falling through
+		// to openNoFollow's O_NOFOLLOW errno.
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("%q is not a regular file (mode=%s); only regular files are supported", a.Path, info.Mode().String())}
 	}
 	content, err := readFileContent(full, maxBytes)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("读取 %q 失败：%v", a.Path, err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to read %q: %v", a.Path, err)}
 	}
-	// 二进制兜底：含 NUL 字节几乎必为二进制（UTF-8/常见编码均不使用 NUL），
-	// 让 LLM 读乱码会污染上下文 + 浪费 token。检测前 8 KiB 足够低成本拦截。
+	// Binary fallback: containing NUL bytes is almost certainly binary (UTF-8/common encodings
+	// never use NUL); letting the LLM read garbled output would pollute context + waste tokens.
+	// Scanning the first 8 KiB is enough for a low-cost interception.
 	scanLimit := min(len(content), 8192)
 	if strings.IndexByte(content[:scanLimit], 0) >= 0 {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("%q 是二进制文件（含 NUL 字节），read 仅支持文本", a.Path)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("%q is a binary file (contains NUL bytes); read only supports text", a.Path)}
 	}
-	// 始终带行号：edit 需要精确匹配，行号帮助 LLM 定位 offset。
+	// Always include line numbers: edit requires exact matching; line numbers help the LLM locate offset.
 	formatted, err := formatLines(content, a.Offset, a.Limit)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: err.Error()}
@@ -102,10 +109,10 @@ func runReadFile(workspaceRoot, args string, maxBytes int) miniagent.ToolResult 
 func parseReadArgs(args string) (readFileArgs, error) {
 	var a readFileArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return readFileArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
+		return readFileArgs{}, fmt.Errorf("argument parsing failed: %w (received %q)", err, args)
 	}
 	if a.Path == "" {
-		return readFileArgs{}, errors.New("参数缺失：path")
+		return readFileArgs{}, errors.New("missing argument: path")
 	}
 	if a.Offset < 0 {
 		a.Offset = 0
@@ -113,8 +120,8 @@ func parseReadArgs(args string) (readFileArgs, error) {
 	return a, nil
 }
 
-// LimitReader 天然处理超大文件：超过 maxReadFileBytes 的部分直接丢弃，
-// 无需按 size 预分支。
+// LimitReader naturally handles oversized files: content beyond maxReadFileBytes is discarded;
+// no need to pre-branch on file size.
 func readFileContent(full string, maxBytes int) (string, error) {
 	f, err := openNoFollow(full, os.O_RDONLY, 0)
 	if err != nil {
@@ -128,21 +135,23 @@ func readFileContent(full string, maxBytes int) (string, error) {
 	return string(data), nil
 }
 
-// formatLines 给 content 加 "N │ line" 前缀，按 [offset, offset+limit-1] 范围
-// 截取。offset<=0 视作 1；limit<=0 或越界视作读到末尾；limit>maxLineLimit 截断。
-// offset 超过文件行数时返回 error（让调用方标记 IsError，而非静默空输出）。
-// 空文件（content==""）直接返回空串，避免输出"1 │ "伪空行。
+// formatLines prefixes content with "N │ line" and extracts the range [offset, offset+limit-1].
+// offset<=0 is treated as 1; limit<=0 or out of range is treated as read-to-end; limit>maxLineLimit is truncated.
+// When offset exceeds the file's line count, returns an error (so the caller marks IsError, rather than silently
+// emitting empty output).
+// Empty file (content=="") returns an empty string directly, avoiding a spurious empty line "1 │ ".
 func formatLines(content string, offset, limit int) (string, error) {
 	if content == "" {
 		return "", nil
 	}
-	// limit<=0（含负数）视作读到末尾（不截断）；仅 limit>maxLineLimit 才截到上限。与 doc「limit<=0…读到末尾」一致。
+	// limit<=0 (including negatives) means read-to-end (no truncation); only limit>maxLineLimit is truncated. Consistent with doc "limit<=0 ... read to end".
 	if limit > maxLineLimit {
 		limit = maxLineLimit
 	}
 	lines := strings.Split(content, "\n")
-	// POSIX 文本文件以换行结尾时 Split 产生末尾空串，当作一行会输出假末空行（N │ ）误导 LLM 行号/编辑。
-	// 仅当原内容以 \n 结尾才丢末尾空串（保留无尾换行的真末行）。
+	// POSIX text files ending with a newline make Split produce a trailing empty string; treating it as a line
+	// would emit a spurious trailing empty line (N │ ) that misleads the LLM's line numbers/edits.
+	// Drop the trailing empty string only when the original content ends with \n (preserving the real last line when there's no trailing newline).
 	if n := len(lines); n > 0 && lines[n-1] == "" && strings.HasSuffix(content, "\n") {
 		lines = lines[:n-1]
 	}
@@ -152,7 +161,7 @@ func formatLines(content string, offset, limit int) (string, error) {
 		end = start + limit - 1
 	}
 	if start > len(lines) {
-		return "", fmt.Errorf("offset %d 超出文件行数（共 %d 行）", start, len(lines))
+		return "", fmt.Errorf("offset %d exceeds the file's line count (%d lines total)", start, len(lines))
 	}
 	var sb strings.Builder
 	width := len(strconv.Itoa(end))

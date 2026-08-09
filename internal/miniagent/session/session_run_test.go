@@ -13,36 +13,36 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/looptest"
 )
 
-// maxIterations 对齐 core 默认迭代上限（miniagent.maxIterations 未导出），供本文件撞上限断言。
+// maxIterations aligns with the core default iteration cap (miniagent.maxIterations is unexported), for the hit-the-limit assertions in this file.
 const maxIterations = 20
 
 func TestResolveSessionPath(t *testing.T) {
-	// 合法 id → {dir}/{id}.jsonl
+	// valid id → {dir}/{id}.jsonl
 	p, err := ResolveSessionPath("mysess", ".miniagent/sessions")
 	if err != nil || p != filepath.Join(".miniagent/sessions", "mysess.jsonl") {
 		t.Errorf("id resolution: p=%q err=%v", p, err)
 	}
-	// 生成 id 形态（字母/数字/-）合法。
+	// a generated-style id (letters/digits/-) is valid.
 	if _, err := ResolveSessionPath("20260805-143022-abc123", "dir"); err != nil {
 		t.Errorf("generated-style id should be valid: %v", err)
 	}
-	// 非法字符（路径分隔符、点、空格等）必须报错。
+	// illegal characters (path separators, dots, spaces, etc.) must error.
 	for _, bad := range []string{"s.json", "./x/s", "a/b", "a\\b", "a b", ".."} {
 		if _, err := ResolveSessionPath(bad, "dir"); err == nil {
 			t.Errorf("bad id %q should error", bad)
 		}
 	}
-	// 空报错。
+	// empty errors.
 	if _, err := ResolveSessionPath("", "dir"); err == nil {
 		t.Error("empty id should error")
 	}
-	// dir 空报错。
+	// empty dir errors.
 	if _, err := ResolveSessionPath("mysess", ""); err == nil {
 		t.Error("id without dir should error")
 	}
 }
 
-// NewMessages 仅含本轮新增（不含 History），Messages 含 History 前缀。
+// NewMessages contains only this turn's additions (excluding History); Messages includes the History prefix.
 func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 	tool := miniagent.Tool{Name: "echo", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "echoed"} }}
 	tr := &looptest.FakeTransport{Responses: []string{
@@ -72,7 +72,7 @@ func TestRun_NewMessagesExcludesHistory(t *testing.T) {
 	}
 }
 
-// History 作为前缀拼在新 prompt 之前发给 LLM；miniagent.Run 不修改调用方的 History。
+// History is prepended before the new prompt and sent to the LLM; miniagent.Run does not mutate the caller's History.
 func TestRun_HistoryPrefixSent(t *testing.T) {
 	tr := &looptest.FakeTransport{Responses: []string{looptest.TextResponse("a2")}}
 	llm := looptest.NewFakeLLM(tr)
@@ -102,8 +102,9 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 	if len(res.Messages) != len(want) {
 		t.Fatalf("Messages len = %d, want %d: %+v", len(res.Messages), len(want), res.Messages)
 	}
-	// §P0-B 后新产生的 assistant 带 miniagent.Usage/Ts、新 user 带 Ts（非确定性），故只校验 Role+Content，
-	// 不再整体 reflect.DeepEqual（history q1/a1 仍无 miniagent.Usage/Ts，深比会因新字段失稳）。
+	// After §P0-B, newly produced assistant messages carry miniagent.Usage/Ts and new user messages carry Ts (non-deterministic),
+	// so only Role+Content are validated here; a full reflect.DeepEqual is no longer used (history q1/a1 still lack
+	// miniagent.Usage/Ts, and a deep compare would be destabilized by the new fields).
 	for i, w := range want {
 		if res.Messages[i].Role != w.Role || res.Messages[i].Content != w.Content {
 			t.Errorf("Messages[%d] = {Role:%q Content:%q}, want {Role:%q Content:%q}",
@@ -112,7 +113,7 @@ func TestRun_HistoryPrefixSent(t *testing.T) {
 	}
 }
 
-// 最终 assistant 文本必须进入 Messages（接续对话依赖上一轮的回答）。
+// The final assistant text must enter Messages (continuing the conversation depends on the previous turn's answer).
 func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	tr := &looptest.FakeTransport{Responses: []string{looptest.TextResponse("final answer")}}
 	llm := looptest.NewFakeLLM(tr)
@@ -126,22 +127,22 @@ func TestRun_FinalTextAppendedToMessages(t *testing.T) {
 	}
 }
 
-// 两轮接续：第一轮的完整 transcript 作为 History 传入第二轮，请求体按序含全部 4 类消息。
+// Two-turn continuation: turn 1's complete transcript is passed as History into turn 2; the request body contains all 4 message types in order.
 func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 	tool := miniagent.Tool{Name: "echo", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "echoed"} }}
 	tr := &looptest.FakeTransport{Responses: []string{
 		looptest.ToolResponse(miniagent.ToolCall{ID: "c1", Name: "echo", Args: `{"x":1}`}),
-		looptest.TextResponse("第一轮回答"),
+		looptest.TextResponse("turn 1 reply"),
 	}}
 	llm := looptest.NewFakeLLM(tr)
-	r1, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}}, "第一轮", miniagent.LoopHooks{}, nil)
+	r1, err := miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}}, "turn 1", miniagent.LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run turn1: %v", err)
 	}
 
-	tr2 := &looptest.FakeTransport{Responses: []string{looptest.TextResponse("第二轮回答")}}
+	tr2 := &looptest.FakeTransport{Responses: []string{looptest.TextResponse("turn 2 reply")}}
 	llm = looptest.NewFakeLLM(tr2)
-	_, err = miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: r1.Messages}, "第二轮", miniagent.LoopHooks{}, nil)
+	_, err = miniagent.Run(context.Background(), llm, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: r1.Messages}, "turn 2", miniagent.LoopHooks{}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run turn2: %v", err)
 	}
@@ -161,12 +162,12 @@ func TestRun_ContinuationSendsFullTranscript(t *testing.T) {
 	if !reflect.DeepEqual(roles, want) {
 		t.Errorf("turn2 request roles = %v, want %v", roles, want)
 	}
-	if !strings.Contains(tr2.LastBody, "第一轮回答") {
+	if !strings.Contains(tr2.LastBody, "turn 1 reply") {
 		t.Errorf("turn2 request missing turn1 final text: %s", tr2.LastBody)
 	}
 }
 
-// LLM 报错：Result.Messages 仍带回已累积历史（含本轮 user prompt）。
+// LLM errors: Result.Messages still brings back the accumulated history (including this turn's user prompt).
 func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 	tr := &looptest.FakeTransport{Statuses: []int{
 		http.StatusServiceUnavailable,
@@ -183,8 +184,8 @@ func TestRun_ErrorStillReturnsMessages(t *testing.T) {
 	}
 }
 
-// 撞 maxIterations：Messages 含全部累积的 tool 往返 + 末尾注入的 summary request。
-// Option B：在 iterLimit 步工具调用后注入 summaryRequestPrompt，故多一条 system 消息。
+// Hitting maxIterations: Messages contains all accumulated tool round-trips + the summary request injected at the end.
+// Option B: after the iterLimit step's tool call, summaryRequestPrompt is injected, so there is one extra system message.
 func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	tool := miniagent.Tool{Name: "loop", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "x"} }}
 	responses := make([]string, maxIterations+2)
@@ -197,11 +198,11 @@ func TestRun_MaxIterationsReturnsMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("miniagent.Run: %v", err)
 	}
-	// 1 (user) + 2*maxIterations (assistant+tool 各 maxIterations 轮)；summary 引导消息不进 transcript。
+	// 1 (user) + 2*maxIterations (assistant+tool, maxIterations turns each); the summary guidance message does not enter the transcript.
 	if want := 1 + 2*maxIterations; len(res.Messages) != want {
 		t.Errorf("Messages len = %d, want %d", len(res.Messages), want)
 	}
-	// 最后一条应是最近一次工具结果（summary 经临时 reqMsgs 发送，不污染 Messages）。
+	// The last message should be the most recent tool result (the summary is sent via temporary reqMsgs and does not pollute Messages).
 	if res.Messages[len(res.Messages)-1].Role != miniagent.RoleTool {
 		t.Errorf("last message role = %q, want %q", res.Messages[len(res.Messages)-1].Role, miniagent.RoleTool)
 	}

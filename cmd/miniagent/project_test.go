@@ -17,13 +17,13 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
-// loadProjectRules：workdir 有 .miniagent 时读取 persona/rules。
+// loadProjectRules: reads persona/rules when workdir has .miniagent.
 func TestLoadProjectRules_WorkdirOnly(t *testing.T) {
 	workdir := t.TempDir()
 	writeFile(t, filepath.Join(workdir, ".miniagent", "rules.md"), "workdir-rule")
 	writeFile(t, filepath.Join(workdir, ".miniagent", "persona.md"), "workdir-persona")
 
-	// 隔离 home，确认仅读 workdir（全局层已取消）。
+	// Isolate home to confirm it only reads workdir (the global layer was removed).
 	oldHome := os.Getenv("HOME")
 	t.Setenv("HOME", t.TempDir())
 	defer os.Setenv("HOME", oldHome)
@@ -37,7 +37,7 @@ func TestLoadProjectRules_WorkdirOnly(t *testing.T) {
 	}
 }
 
-// loadProjectRules：workdir 不存在时无规则。
+// loadProjectRules: no rules when workdir does not exist.
 func TestLoadProjectRules_EmptyWorkdirNoRules(t *testing.T) {
 	oldHome := os.Getenv("HOME")
 	t.Setenv("HOME", t.TempDir())
@@ -49,21 +49,21 @@ func TestLoadProjectRules_EmptyWorkdirNoRules(t *testing.T) {
 	}
 }
 
-// loadProjectRules：workdir 有完整 .miniagent 时正确加载所有来源。
+// loadProjectRules: correctly loads all sources when workdir has a complete .miniagent.
 func TestLoadProjectRules_AllSources(t *testing.T) {
 	workdir := t.TempDir()
-	writeFile(t, filepath.Join(workdir, ".miniagent", "persona.md"), "你是本项目专属 agent。")
-	writeFile(t, filepath.Join(workdir, ".miniagent", "rules.md"), "禁止提交未跑测试的代码。")
+	writeFile(t, filepath.Join(workdir, ".miniagent", "persona.md"), "You are the dedicated agent for this project.")
+	writeFile(t, filepath.Join(workdir, ".miniagent", "rules.md"), "Do not commit code without running tests.")
 
 	oldHome := os.Getenv("HOME")
 	t.Setenv("HOME", t.TempDir())
 	defer os.Setenv("HOME", oldHome)
 
 	pr := loadProjectRules(workdir)
-	if pr.persona != "你是本项目专属 agent。" {
+	if pr.persona != "You are the dedicated agent for this project." {
 		t.Errorf("persona = %q", pr.persona)
 	}
-	if !strings.Contains(pr.rules, "禁止提交") {
+	if !strings.Contains(pr.rules, "Do not commit") {
 		t.Errorf("rules = %q", pr.rules)
 	}
 	if !pr.hasAny() {
@@ -71,7 +71,7 @@ func TestLoadProjectRules_AllSources(t *testing.T) {
 	}
 }
 
-// 全局 ~/.miniagent/ 不再读取（全局层已取消）。
+// Global ~/.miniagent/ is no longer read (the global layer was removed).
 func TestLoadProjectRules_HomeIgnored(t *testing.T) {
 	homeDir := t.TempDir()
 	writeFile(t, filepath.Join(homeDir, ".miniagent", "rules.md"), "home-rule")
@@ -80,33 +80,33 @@ func TestLoadProjectRules_HomeIgnored(t *testing.T) {
 	t.Setenv("HOME", homeDir)
 	defer os.Setenv("HOME", oldHome)
 
-	// 无 workdir → 不读 home → 无规则。
+	// No workdir → does not read home → no rules.
 	if pr := loadProjectRules(""); pr.hasAny() {
-		t.Errorf("全局 ~/.miniagent/ 不应再读取，got %+v", pr)
+		t.Errorf("global ~/.miniagent/ should no longer be read, got %+v", pr)
 	}
 }
 
-// mergeSystemPrompt：persona 取代 base；rules 追加；hasAny 时告知 LLM。
+// mergeSystemPrompt: persona replaces base; rules are appended; when hasAny the LLM is informed.
 func TestMergeSystemPrompt_PersonaOverridesBase(t *testing.T) {
-	got := mergeSystemPrompt("default-workflow", "专属人格", "规则A", true)
-	if !strings.HasPrefix(got, "专属人格") {
+	got := mergeSystemPrompt("default-workflow", "dedicated-persona", "ruleA", true)
+	if !strings.HasPrefix(got, "dedicated-persona") {
 		t.Errorf("persona should be base: %s", got)
 	}
-	if !strings.Contains(got, "## 项目规则\n规则A") {
+	if !strings.Contains(got, "## Project Rules\nruleA") {
 		t.Errorf("rules missing: %s", got)
 	}
-	if !strings.Contains(got, "已加载 .miniagent/") {
+	if !strings.Contains(got, ".miniagent/ project rules loaded") {
 		t.Errorf("should note loaded rules: %s", got)
 	}
 }
 
-// mergeSystemPrompt：无 persona 时沿用 base（工作流约束），仅追加 rules。
+// mergeSystemPrompt: keeps base (workflow constraints) when there is no persona, only appends rules.
 func TestMergeSystemPrompt_KeepsBaseWhenNoPersona(t *testing.T) {
-	got := mergeSystemPrompt("default-workflow", "", "规则A", true)
+	got := mergeSystemPrompt("default-workflow", "", "ruleA", true)
 	if !strings.HasPrefix(got, "default-workflow") {
 		t.Errorf("base should be kept: %s", got)
 	}
-	if !strings.Contains(got, "规则A") {
+	if !strings.Contains(got, "ruleA") {
 		t.Errorf("rules missing: %s", got)
 	}
 }

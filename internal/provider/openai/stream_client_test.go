@@ -21,19 +21,19 @@ func TestStreamClient_StreamClientNoTimeout(t *testing.T) {
 	if c.streamClient() != sc {
 		t.Error("stream client not cached")
 	}
-	// 模拟新 buildLLM 注入：带 120s 总 Timeout + 自定义 Transport 的 client。
+	// Simulate a fresh buildLLM injection: a client with a 120s overall Timeout + custom Transport.
 	inj := &http.Client{Timeout: 120 * time.Second, Transport: &http.Transport{}}
 	c2 := &StreamClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}
 	got := c2.streamClient()
 	if got.Timeout != 0 {
-		t.Errorf("stream client Timeout = %v, want 0（流式清零总 Timeout）", got.Timeout)
+		t.Errorf("stream client Timeout = %v, want 0 (streaming zeroes out the overall Timeout)", got.Timeout)
 	}
 	if got.Transport != inj.Transport {
-		t.Error("stream client 须保留注入的 Transport（代理/连接配置）")
+		t.Error("stream client must preserve the injected Transport (proxy/connection config)")
 	}
 }
 
-// Run + Stream 端到端：cfg.Stream=true 走 DoStream，OnDelta 推增量，聚合 Text。
+// Run + Stream end-to-end: cfg.Stream=true goes through DoStream, OnDelta pushes deltas, Text is aggregated.
 func TestRun_StreamAggregates(t *testing.T) {
 	const sse = `data: {"choices":[{"delta":{"content":"streamed"}}]}
 data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
@@ -58,7 +58,7 @@ data: [DONE]
 	}
 }
 
-// parseSSE 遇到非法 JSON chunk 上报错误（中途断流/乱数据）。
+// parseSSE reports an error on a malformed JSON chunk (mid-stream break / garbled data).
 func TestParseSSE_MalformedChunk(t *testing.T) {
 	sse := "data: not-json\n\ndata: [DONE]\n"
 	if _, err := parseSSE(strings.NewReader(sse), nil); err == nil {
@@ -66,7 +66,7 @@ func TestParseSSE_MalformedChunk(t *testing.T) {
 	}
 }
 
-// DoStream 携带自定义请求头。
+// DoStream carries the custom request headers.
 func TestDoStream_CustomHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Custom") != "stream-val" {

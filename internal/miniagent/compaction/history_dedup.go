@@ -9,15 +9,20 @@ import (
 	"strings"
 )
 
-// ─── P6 / P8' / P9b：tool 结果与 tool_call args 的跨消息去重/折叠 ───
+// ─── P6 / P8' / P9b: cross-message dedup/folding of tool results and tool_call args ───
 //
-// 三者均仅改 context 侧拷贝（不碰 newMsgs/session），复用 keepToolArgs 保留窗口
-// （最近 N 条 assistant 及其 tool 消息不动），与 stripStaleToolArgs 同窗口语义。
-// 裁剪触发条件统一为「同 key 更晚的出现已取代更早的」——更早的纯占位重发，压成占位零/低损失。
+// All three only modify context-side copies (never touch newMsgs/session), reusing the keepToolArgs
+// retention window (the most recent N assistant messages and their tool messages are untouched),
+// with the same window semantics as stripStaleToolArgs.
+// The trimming trigger is uniformly "a later occurrence of the same key has superseded the earlier one"
+// — the earlier one is a pure redundant re-send, compressed to a placeholder with zero/low loss.
 
-// windowStartOf 返回保留窗口起点 index：i < windowStart 视为窗口外（可 dedup/fold），i >= windowStart 窗口内（保留）。
-// keepN<=0 → len(msgs)（不保留任何 assistant = 全窗口外 = 全压，修正原返回 0 被解读为「全窗口内」的语义矛盾）；
-// keepN 条 assistant 存在 → 第 keepN 条（从后）的 index；assistant 不足 keepN → 0（全窗口内 = 全保留）。
+// windowStartOf returns the start index of the retention window: i < windowStart is outside
+// the window (eligible for dedup/fold), i >= windowStart is inside the window (retained).
+// keepN<=0 → len(msgs) (retain no assistant = all outside window = compress all; fixes the original
+// return 0 being misinterpreted as "all inside window");
+// keepN assistant messages exist → the index of the keepN-th (from the end); fewer than keepN
+// assistants → 0 (all inside window = retain all).
 func windowStartOf(msgs []miniagent.Message, keepN int) int {
 	if keepN <= 0 {
 		return len(msgs)
@@ -34,8 +39,8 @@ func windowStartOf(msgs []miniagent.Message, keepN int) int {
 	return 0
 }
 
-// argPath 从工具调用 raw JSON args 提取非空 path 字段（read/write/edit/glob 等路径类工具）。
-// 解析失败或无 path 返回 ("", false)。
+// argPath extracts the non-empty path field from raw JSON args of a tool call
+// (path-type tools like read/write/edit/glob). Returns ("", false) on parse failure or no path.
 func argPath(args string) (string, bool) {
 	var m map[string]any
 	if json.Unmarshal([]byte(args), &m) != nil {
@@ -48,8 +53,9 @@ func argPath(args string) (string, bool) {
 	return s, true
 }
 
-// argReadOffset 提取 read 的 offset（默认 1）。P6 按 (path,offset) 分组——同 path 不同 offset
-// 是文件不同段，不能互相覆盖（v5 §2.1 关键约束）。
+// argReadOffset extracts the offset of read (default 1). P6 groups by (path,offset) —
+// the same path with different offsets are different segments of the file and must not overwrite
+// each other (v5 §2.1 key constraint).
 func argReadOffset(args string) int {
 	var m map[string]any
 	if json.Unmarshal([]byte(args), &m) != nil {
@@ -61,15 +67,18 @@ func argReadOffset(args string) int {
 	return 1
 }
 
-// normalizePath 归一工具路径供跨调用比较：filepath.Clean 统一 "a/./b"、"./a"、"a//" 等。
-// 不做 EvalSymlinks——history 阶段无 workspaceRoot，且同会话模型发出的路径基准一致，
-// 相对路径 Clean 已覆盖绝大多数情形；绝对/相对混用罕见，按字面比较即可。
+// normalizePath normalizes a tool path for cross-call comparison: filepath.Clean unifies
+// "a/./b", "./a", "a//", etc. EvalSymlinks is intentionally skipped — the history phase has no
+// workspaceRoot, and paths emitted by the model within the same session share a consistent base,
+// so relative-path Clean already covers the vast majority of cases; absolute/relative mixing is
+// rare and literal comparison suffices.
 func normalizePath(p string) string {
 	return filepath.Clean(p)
 }
 
-// shellCmdKey 提取 shell command 的规范化签名供 P9b 去重：按空白拆 token、小写、重 join。
-// 使 "ls  -la"、"LS -la"、"ls -la" 视作同义。解析失败/无 command 返回 ("", false)。
+// shellCmdKey extracts a normalized command signature for P9b dedup: splits on whitespace,
+// lowercases, rejoins. Treats "ls  -la", "LS -la", "ls -la" as synonymous.
+// Returns ("", false) on parse failure or no command.
 func shellCmdKey(args string) (string, bool) {
 	var m map[string]any
 	if json.Unmarshal([]byte(args), &m) != nil {
@@ -86,9 +95,11 @@ func shellCmdKey(args string) (string, bool) {
 	return strings.Join(fields, " "), true
 }
 
-// successWriteEditPaths 扫描 msgs，返回 path → 成功 write/edit 的 assistant msgIdx 升序列表。
-// 成功 = 对应 tool 消息 IsError=false（失败写入不改文件，不计入）。供 P8'/P11 判定
-// 「同 path 是否存在更晚的成功写入」——P8' 据此折叠更早的 write/edit args，P11 折叠更早的 read 结果。
+// successWriteEditPaths scans msgs and returns path → ascending list of assistant msgIdx
+// for successful write/edit calls. Success = the corresponding tool message has IsError=false
+// (failed writes don't modify the file, not counted). Used by P8'/P11 to determine whether a
+// later successful write to the same path exists — P8' folds earlier write/edit args based on
+// this, P11 folds earlier read results.
 func successWriteEditPaths(msgs []miniagent.Message) map[string][]int {
 	isErrOf := map[string]bool{}
 	for _, m := range msgs {
@@ -105,7 +116,7 @@ func successWriteEditPaths(msgs []miniagent.Message) map[string][]int {
 			if tc.Name != "write" && tc.Name != "edit" {
 				continue
 			}
-			if isErrOf[tc.ID] { // 失败写入不改文件，不计入「成功写入」
+			if isErrOf[tc.ID] { // failed writes don't modify the file, not counted as "successful write"
 				continue
 			}
 			p, ok := argPath(tc.Args)
@@ -118,11 +129,14 @@ func successWriteEditPaths(msgs []miniagent.Message) map[string][]int {
 	return succ
 }
 
-// foldStaleWriteEditArgs（P8'）对保留窗口外的 write/edit tool_call，若同 path 上存在更晚的
-// 成功 write/edit，把其 args 折叠为「path + 占位」。成功判定经 successWriteEditPaths（依赖
-// tool 消息 IsError）——失败写入不改文件，前置 write/edit 正文仍有效，不能折叠（v5 §2 P8' 与
-// P4 的关键区别）。与 P4（compressToolArgs 压成前缀）互补：P4 减单条体积，P8' 在「被后续同 path
-// 写入取代」时整条折叠。无可折叠项零拷贝；深拷贝被改 assistant 的 ToolCalls slice。
+// foldStaleWriteEditArgs (P8') folds the args of write/edit tool_calls outside the retention
+// window to "path + placeholder" when a later successful write/edit to the same path exists.
+// Success is determined via successWriteEditPaths (depends on tool message IsError) — failed
+// writes don't modify the file, so the preceding write/edit body is still effective and must
+// not be folded (key difference between v5 §2 P8' and P4). Complementary to P4
+// (compressToolArgs compresses to a prefix): P4 reduces per-item size, P8' folds the entire
+// item when "superseded by a later same-path write". Zero-copy when nothing to fold; deep-copies
+// the ToolCalls slice of modified assistant messages.
 func foldStaleWriteEditArgs(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	succ := successWriteEditPaths(msgs)
 	if len(succ) == 0 {
@@ -159,7 +173,7 @@ func foldStaleWriteEditArgs(msgs []miniagent.Message, keepN int) []miniagent.Mes
 			continue
 		}
 		for _, wIdx := range succ[e.path] {
-			if wIdx > e.msgIdx { // 同 path 更晚的成功写入存在 → 本条 args 折叠
+			if wIdx > e.msgIdx { // a later successful write to the same path exists → fold this item's args
 				toFold[foldKey{e.msgIdx, e.tcIdx}] = e.path
 				break
 			}
@@ -190,12 +204,13 @@ func foldStaleWriteEditArgs(msgs []miniagent.Message, keepN int) []miniagent.Mes
 	return out
 }
 
-// foldedWriteEditArgs 构造 P8' 折叠后的 args：仅保留 path + 占位。历史里的旧 tool_call 不必
-// 严格匹配工具 schema（端点不校验历史 args），模型只需知道「这个文件被改过」。
+// foldedWriteEditArgs constructs the folded args for P8': retains only path + placeholder.
+// Old tool_calls in history need not strictly match the tool schema (the endpoint doesn't
+// validate historical args); the model only needs to know "this file was modified".
 func foldedWriteEditArgs(path string) string {
 	b, err := json.Marshal(map[string]any{
 		"path":    path,
-		"content": "…[此前的 write/edit 旧正文已被后续对同文件的成功写入取代]",
+		"content": "…[prior write/edit content superseded by a later successful write to the same file]",
 	})
 	if err != nil {
 		return `{"path":"` + path + `"}`
@@ -203,10 +218,12 @@ func foldedWriteEditArgs(path string) string {
 	return string(b)
 }
 
-// dedupShellCommands（P9b）对保留窗口外的 shell tool_call，按规范化 command 签名去重：
-// 每组保留时间序最后一次原文，更早的同义 command 折叠为占位。ReAct 会话高频重复探查命令
-// （pwd && ls、find ... -name），更早的同义命令对后续决策无价值（v5 §3 P9b）。无需 IsError。
-// 深拷贝被改 assistant 的 ToolCalls slice。
+// dedupShellCommands (P9b) deduplicates shell tool_calls outside the retention window by
+// normalized command signature: each group keeps the last occurrence verbatim in time order;
+// earlier synonymous commands are folded to a placeholder. ReAct sessions frequently repeat
+// exploration commands (pwd && ls, find ... -name); earlier synonymous commands have no value
+// for subsequent decisions (v5 §3 P9b). No IsError needed. Deep-copies the ToolCalls slice of
+// modified assistant messages.
 func dedupShellCommands(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	shellKeyOf := map[string]string{}
 	for _, m := range msgs {
@@ -281,8 +298,9 @@ func dedupShellCommands(msgs []miniagent.Message, keepN int) []miniagent.Message
 		copy(calls, out[i].ToolCalls)
 		for j := range calls {
 			if toFold[foldKey{i, j}] {
-				// json.Marshal 构造占位（与 foldedWriteEditArgs 一致），防硬编码 JSON 因文案引入引号/反斜杠而断裂。
-				placeholder, _ := json.Marshal(map[string]string{"command": "…[此前的同类 shell 命令已被后续执行取代]"})
+				// json.Marshal constructs the placeholder (consistent with foldedWriteEditArgs), preventing
+				// hardcoded JSON from breaking due to quotes/backslashes introduced by the text.
+				placeholder, _ := json.Marshal(map[string]string{"command": "…[prior identical shell command superseded by a later execution]"})
 				calls[j].Args = string(placeholder)
 			}
 		}

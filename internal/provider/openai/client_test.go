@@ -14,7 +14,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// 正常文本回复：解析出 content、usage、finish_reason。
+// Normal text response: content, usage, and finish_reason are parsed out.
 func TestChatClient_Do_TextResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":5}}`)
@@ -40,7 +40,7 @@ func TestChatClient_Do_TextResponse(t *testing.T) {
 	}
 }
 
-// 带 tool_calls 的回复：name/arguments/id 正确解析。
+// Response with tool_calls: name/arguments/id are parsed correctly.
 func TestChatClient_Do_ToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
@@ -64,7 +64,7 @@ func TestChatClient_Do_ToolCalls(t *testing.T) {
 	}
 }
 
-// 空 choices（端点内容过滤/代理故障）必须报错，而非当作"成功的空回答"。
+// Empty choices (endpoint content filtering / proxy failure) must error, not be treated as a "successful empty answer".
 func TestChatClient_Do_EmptyChoicesFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":0}}`)
@@ -81,7 +81,7 @@ func TestChatClient_Do_EmptyChoicesFails(t *testing.T) {
 	}
 }
 
-// 非 200 状态码：返回错误，body 截断到 500 字。
+// Non-200 status code: returns an error.
 func TestChatClient_Do_NonOKStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -99,7 +99,7 @@ func TestChatClient_Do_NonOKStatus(t *testing.T) {
 	}
 }
 
-// 超大 body 应报错，不撑爆内存也不静默截断。
+// An oversized body should error, neither blowing up memory nor being silently truncated.
 func TestChatClient_Do_RejectsOversizedBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(bytes.Repeat([]byte("a"), maxChatBodyBytes+1024))
@@ -116,7 +116,7 @@ func TestChatClient_Do_RejectsOversizedBody(t *testing.T) {
 	}
 }
 
-// 空 API key：prepareDo 阶段就报错。
+// Empty API key: errors at the prepareDo stage.
 func TestChatClient_Do_EmptyAPIKey(t *testing.T) {
 	c := &ChatClient{}
 	_, err := c.Do(context.Background(), miniagent.Request{})
@@ -125,7 +125,7 @@ func TestChatClient_Do_EmptyAPIKey(t *testing.T) {
 	}
 }
 
-// BaseURL 缺 scheme：错误信息应提示 "http(s)://"。
+// BaseURL missing scheme: the error message should hint at "http(s)://".
 func TestChatClient_Do_BaseURLMissingScheme(t *testing.T) {
 	c := &ChatClient{APIKey: "sk", ChatURL: "api.example.com"}
 	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
@@ -137,23 +137,23 @@ func TestChatClient_Do_BaseURLMissingScheme(t *testing.T) {
 	}
 }
 
-// BaseURL 用非 http(s) scheme（如 ftp）：必须在组请求前拒绝，而非等请求
-// 失败才报错。
+// BaseURL using a non-http(s) scheme (e.g. ftp): must be rejected before building the request,
+// rather than only erroring once the request fails.
 func TestChatClient_Do_BaseURLUnsupportedScheme(t *testing.T) {
 	c := &ChatClient{APIKey: "sk", ChatURL: "ftp://example.com"}
 	_, err := c.Do(context.Background(), miniagent.Request{Model: "m"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "不支持") {
+	if !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("err should reject scheme: %v", err)
 	}
 }
 
-// 恰好达到上限的 body 不应被误报截断。
+// A body exactly at the limit must not be falsely flagged as truncated.
 func TestChatClient_Do_AcceptsLimitBody(t *testing.T) {
-	// 构造一个合法的 JSON，content 长度填到接近 maxChatBodyBytes。
-	// 用 padding 字段避免 JSON 结构本身超限。
+	// Build a valid JSON whose content length fills up to near maxChatBodyBytes.
+	// A padding field avoids pushing the JSON structure itself over the limit.
 	padding := bytes.Repeat([]byte("a"), maxChatBodyBytes-200)
 	body := fmt.Sprintf(`{"choices":[{"message":{"content":"x","padding":"%s"},"finish_reason":"stop"}]}`, string(padding))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +196,7 @@ func TestBuildChatBody_SkipsZeroMaxTokens(t *testing.T) {
 	}
 }
 
-// 非流式：buildChatBody 不应再带 stream / stream_options。
+// Non-streaming: buildChatBody must not carry stream / stream_options.
 func TestBuildChatBody_NoStream(t *testing.T) {
 	body, err := buildChatBody(miniagent.Request{Model: "m"})
 	if err != nil {
@@ -207,8 +207,8 @@ func TestBuildChatBody_NoStream(t *testing.T) {
 	}
 }
 
-// ResultLimit 是内部字段，不得泄进工具 schema（buildChatBody 只序列化
-// name/description/parameters）。
+// ResultLimit is an internal field and must not leak into the tool schema (buildChatBody only
+// serializes name/description/parameters).
 func TestBuildChatBody_ResultLimitNotSerialized(t *testing.T) {
 	body, err := buildChatBody(miniagent.Request{
 		Model: "m",
@@ -222,7 +222,7 @@ func TestBuildChatBody_ResultLimitNotSerialized(t *testing.T) {
 	}
 }
 
-// reasoning 解析双兼容：reasoning_content 优先，缺失时回退 reasoning。
+// reasoning parsing is dual-compatible: reasoning_content takes precedence, falling back to reasoning when absent.
 func TestParseChatResponse_Reasoning(t *testing.T) {
 	resp, err := parseChatResponse([]byte(`{"choices":[{"message":{"role":"assistant","content":"ans","reasoning_content":"rc"},"finish_reason":"stop"}]}`))
 	if err != nil {
@@ -240,7 +240,7 @@ func TestParseChatResponse_Reasoning(t *testing.T) {
 	}
 }
 
-// 400 + context_length 特征 → ErrContextLength（供上层单次历史收紧重试）。
+// 400 + context_length signature -> ErrContextLength (lets the upper layer do a single history-tightening retry).
 func TestChatClient_Do_ContextLength400(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -254,15 +254,16 @@ func TestChatClient_Do_ContextLength400(t *testing.T) {
 	}
 }
 
-// NEW-6：c.HTTP==nil 时 client() 每次按 defaultTimeout 构造（去缓存）。原 defaultClient 缓存被
-// chat(120s)/models(30s) 端点共用、sync.Once 使首调用方 timeout 固化、后续被静默忽略；现每次取自身 timeout。
+// NEW-6: when c.HTTP==nil, client() is built per call with defaultTimeout (cache removed). The former
+// defaultClient cache was shared by the chat(120s)/models(30s) endpoints, and sync.Once pinned the
+// first caller's timeout while later values were silently ignored; now each call uses its own timeout.
 func TestChatClient_DefaultClientPerCallTimeout(t *testing.T) {
 	c := &ChatClient{APIKey: "sk", ChatURL: "http://x"}
 	if got := c.client(2 * time.Second); got.Timeout != 2*time.Second {
 		t.Errorf("first call Timeout = %v, want 2s", got.Timeout)
 	}
 	if got := c.client(5 * time.Second); got.Timeout != 5*time.Second {
-		t.Errorf("second call Timeout = %v, want 5s（去缓存后各取自身 timeout，不被首调用固化）", got.Timeout)
+		t.Errorf("second call Timeout = %v, want 5s (after removing the cache each call uses its own timeout, not pinned by the first call)", got.Timeout)
 	}
 	inj := &http.Client{Timeout: 30 * time.Second}
 	c2 := &ChatClient{APIKey: "sk", ChatURL: "http://x", HTTP: inj}

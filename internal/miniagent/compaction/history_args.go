@@ -10,20 +10,24 @@ import (
 	"slices"
 )
 
-// stripStaleToolArgs（P4）对非最近 keepN 条 assistant 的 write/edit tool_call，把超大 Args
-// （content/old_string/new_string）压缩为「前缀 + 省略标记」。与 stripStaleReasoning 同构：
-// 仅改 context 侧拷贝，不碰 newMsgs/session，不动 ToolCallID（tool_calls/tool 配对完整）。
+// stripStaleToolArgs (P4) compresses the oversized Args (content/old_string/new_string) of write/edit tool_calls
+// belonging to assistant messages older than the most recent keepN, into "prefix + ellipsis marker". Symmetric with
+// stripStaleReasoning: it only mutates the context-side copy, never touches newMsgs/session, and leaves ToolCallID
+// intact (tool_calls/tool pairing stays complete).
 //
-// 现状盲区：handleToolCalls 把 tool_call.Args 原样入历史、每轮全量回灌，而 tool 结果有 trimForHistory
-// 三级裁剪、tool 参数零裁剪——不对称。write 的 content（≤10MiB）、edit 的 old/new_string 写成功后
-// 已落盘或已被替换（old_string 在文件中已不存在），历史里那份纯占位重发；保留 path 让模型知道改过
-// 哪个文件。仅当某字段超 toolArgsCompressThreshold 才压（小改动不动）；read/grep 等小 args 工具不压。
-// 无可压缩项（非 write/edit 会话、或大 args 全在保留窗口内）时原样返回（零拷贝）。
+// Current blind spot: handleToolCalls pushes tool_call.Args verbatim into history and replays them in full every
+// turn, while tool results get trimForHistory's three-tier trimming and tool args get zero trimming — asymmetric.
+// write's content (≤10MiB) and edit's old/new_string, once the write succeeds, are already persisted or already
+// replaced (old_string no longer exists in the file); the copy in history is pure ballast being resent. Keeping
+// path lets the model know which file was changed. Only fields exceeding toolArgsCompressThreshold are compressed
+// (small edits untouched); small-args tools like read/grep are not compressed.
+// When nothing is compressible (no write/edit session, or all large args are inside the retention window) it
+// returns as-is (zero-copy).
 func stripStaleToolArgs(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	if keepN < 0 {
 		keepN = 0
 	}
-	// 预扫：从后往前跳过最近 keepN 条 assistant，检查更早的 assistant 是否有可压缩 tool_call。
+	// Pre-scan: skip the most recent keepN assistants backward, check whether older assistants have compressible tool_calls.
 	kept := 0
 	hasCompressible := false
 	for i := range slices.Backward(msgs) {
@@ -58,9 +62,10 @@ func stripStaleToolArgs(msgs []miniagent.Message, keepN int) []miniagent.Message
 			kept++
 			continue
 		}
-		// 仅当该 assistant 含可压缩 tool_call 才处理。深拷贝其 ToolCalls slice 再改——
-		// copy(msgs) 是浅拷贝，ToolCalls 底层 array 与调用方输入（msgs/History/newMsgs）共享，
-		// 原地改元素会污染持久化层（违背「仅改 context 侧拷贝」）。
+		// Only process when this assistant contains a compressible tool_call. Deep-copy its ToolCalls slice before
+		// mutating — copy(msgs) is shallow, the ToolCalls backing array is shared with the caller's input
+		// (msgs/History/newMsgs); mutating elements in place would pollute the persistence layer (violating
+		// "only mutate the context-side copy").
 		compressible := false
 		for _, tc := range out[i].ToolCalls {
 			if isLargeArgTool(tc.Name) && hasCompressibleArg(tc.Args) {
@@ -83,12 +88,12 @@ func stripStaleToolArgs(msgs []miniagent.Message, keepN int) []miniagent.Message
 	return out
 }
 
-// isLargeArgTool 判定工具是否携带可能超大的写入参数（write/edit）。其余工具 args 体积小，不压。
+// isLargeArgTool reports whether the tool carries potentially oversized write params (write/edit). Other tools have small args and are not compressed.
 func isLargeArgTool(name string) bool {
 	return name == "write" || name == "edit"
 }
 
-// hasCompressibleArg 判定 args JSON 是否含超过 toolArgsCompressThreshold 的大字段。
+// hasCompressibleArg reports whether the args JSON contains a large field exceeding toolArgsCompressThreshold.
 func hasCompressibleArg(args string) bool {
 	var m map[string]any
 	if json.Unmarshal([]byte(args), &m) != nil {
@@ -107,7 +112,7 @@ func hasCompressibleArg(args string) bool {
 	return false
 }
 
-// hasLargeStringField 判定 m 中任一指定 key 的字符串值是否超过压缩阈值。
+// hasLargeStringField reports whether any of the specified keys in m has a string value exceeding the compression threshold.
 func hasLargeStringField(m map[string]any, keys ...string) bool {
 	for _, k := range keys {
 		if s, ok := m[k].(string); ok && len([]rune(s)) > toolArgsCompressThreshold {
@@ -117,9 +122,11 @@ func hasLargeStringField(m map[string]any, keys ...string) bool {
 	return false
 }
 
-// compressToolArgs 把 args JSON 里超过阈值的大字段压缩为「前缀 + 省略标记」。解析或序列化失败、
-// 或无任何字段超阈值（无需压缩）时原样返回——绝不破坏 JSON 合法性（否则配对/wire 出错），也避免
-// 无谓重序列化（Go map 按 key 字典序输出，会改变 key 顺序引入噪声）。path 始终保留，让模型知道改过哪个文件。
+// compressToolArgs compresses oversized fields in the args JSON into "prefix + ellipsis marker". On parse/serialize
+// failure, or when no field exceeds the threshold (nothing to compress), it returns the input unchanged — it must
+// never break JSON validity (otherwise pairing/wire breaks), and it avoids needless re-serialization (Go emits map
+// keys in sorted order, which would reshuffle key order and inject noise). path is always retained so the model
+// knows which file was changed.
 func compressToolArgs(args string) string {
 	var m map[string]any
 	if json.Unmarshal([]byte(args), &m) != nil {
@@ -131,7 +138,7 @@ func compressToolArgs(args string) string {
 		if !ok || len([]rune(s)) <= toolArgsCompressThreshold {
 			return v, false
 		}
-		return text.Truncate(s, toolArgsKeepChars, "…[参数已省略]"), true
+		return text.Truncate(s, toolArgsKeepChars, "…[args omitted]"), true
 	}
 	for _, k := range []string{"content", "old_string", "new_string"} {
 		if _, ok := m[k]; ok {

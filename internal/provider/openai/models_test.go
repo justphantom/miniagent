@@ -41,7 +41,7 @@ func TestListModels_EmptyData(t *testing.T) {
 func keyForTest(_ config.ProviderConfig) string { return "sk-test" }
 
 func TestListAllModels_StaticNoGET(t *testing.T) {
-	// ModelsURL 空 + 静态 Models → 直接返回，绝不发 HTTP（无需 server 即证明不 GET）。
+	// Empty ModelsURL + static Models -> returned directly, never sends HTTP (no server needed proves no GET).
 	providers := []config.ProviderConfig{{Name: "p", Models: []config.ModelConfig{{Name: "a"}, {Name: "b"}}}}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err != nil {
@@ -210,7 +210,7 @@ func TestListAllModels_DeterministicOrder(t *testing.T) {
 	}
 }
 
-// ListModels 携带自定义请求头。
+// ListModels carries the custom request headers.
 func TestChatClient_ListModels_CustomHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Custom") != "xyz" {

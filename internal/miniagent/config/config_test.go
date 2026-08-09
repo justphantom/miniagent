@@ -27,8 +27,8 @@ func validConfigBody() string {
 }`
 }
 
-// mkFullConfig 构造 defaults/compaction 两处模型对齐全（拆分必填后）的 Config 公共固件；
-// providers 缺省时补一个名为 provName 的 provider。
+// mkFullConfig builds a Config fixture where defaults/compaction model pairs are both aligned (required after the
+// split into mandatory fields); when providers is omitted it fills in a single provider named provName.
 func mkFullConfig(provName, model string, providers ...ProviderConfig) *Config {
 	if len(providers) == 0 {
 		providers = []ProviderConfig{{Name: provName, ChatURL: "https://a/v1/chat/completions"}}
@@ -50,7 +50,7 @@ func TestLoadConfig_OK(t *testing.T) {
 	}
 }
 
-// 配置文件中不再支持 ${VAR} 注入；key 按字面量读取。
+// The config file no longer supports ${VAR} expansion; the key is read as a literal.
 func TestLoadConfig_NoVarExpansion(t *testing.T) {
 	body := strings.ReplaceAll(validConfigBody(),
 		`"models":[{"name":"glm"}]`,
@@ -118,8 +118,9 @@ func TestLoadConfig_DefaultsModelUnknownProvider(t *testing.T) {
 	}
 }
 
-// L3-12：defaults.thinking 用「只在另一 provider 声明的自定义键」须在 config 校验阶段就拒
-// （与 Resolve 的 per-provider 校验一致），而非聚合所有 provider 放行、留到 resolve 才失败。
+// L3-12: defaults.thinking using a custom key declared only on another provider must be rejected at the config
+// validation stage (consistent with Resolve's per-provider validation), rather than aggregating all providers
+// and letting it pass until resolve fails.
 func TestLoadConfig_ThinkingKeyScopedToDefaultProvider(t *testing.T) {
 	body := `{
   "providers":[
@@ -128,36 +129,36 @@ func TestLoadConfig_ThinkingKeyScopedToDefaultProvider(t *testing.T) {
   ],
   "defaults":{"provider":"a","model":"m","thinking":"fast"}
 }`
-	// a 未声明 fast：config 阶段就应报错（旧聚合逻辑会放行，留到 resolve 才失败）。
+	// a does not declare fast: the config stage should error (old aggregation logic would let it pass, leaving resolve to fail).
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
-		t.Error("defaults.thinking 用 a 未声明的自定义键 fast 应在 config 阶段报错（per-provider 校验）")
+		t.Error("defaults.thinking using custom key fast not declared on a should error at the config stage (per-provider validation)")
 	}
-	// 反例：defaults 指向声明了 fast 的 b 则合法。
+	// Counter-example: pointing defaults at b, which declares fast, is valid.
 	bodyOK := strings.Replace(body, `"provider":"a","model":"m","thinking":"fast"`, `"provider":"b","model":"m","thinking":"fast"`, 1)
 	if _, err := LoadConfig(writeTmpConfig(t, bodyOK)); err != nil {
-		t.Errorf("defaults 指向声明了 fast 的 b 应合法: %v", err)
+		t.Errorf("defaults pointing at b which declares fast should be valid: %v", err)
 	}
 }
 
-// 钉死：defaults.thinking≠off 但 provider 完全未声明 thinking → 启动期报错（强制声明 {field,map}）。
+// Pin: defaults.thinking≠off but the provider declares no thinking at all → startup error (forcing {field,map} declaration).
 func TestLoadConfig_ThinkingPinRequiresDeclaration(t *testing.T) {
 	body := `{
   "providers":[{"name":"a","chat_url":"https://a/v1/chat/completions","models":[{"name":"m"}]}],
   "defaults":{"provider":"a","model":"m","thinking":"medium"}
 }`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
-		t.Fatal("defaults.thinking≠off 且 provider 未声明 thinking 应报错（钉死：启用思考必声明 {field,map}）")
+		t.Fatal("defaults.thinking≠off with provider not declaring thinking should error (pin: enabling thinking requires declaring {field,map})")
 	}
 }
 
-// 成对规则：defaults 对必填；compaction 只设一个字段即报错。
+// Pairing rule: the defaults pair is required; setting only one compaction field errors.
 func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	providers := `"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}]`
 	def := `"defaults":{"provider":"p","model":"m"}`
 	cases := map[string]string{
-		"defaults.provider 缺": `{` + providers + `,"defaults":{"model":"m"}}`,
-		"defaults.model 缺":    `{` + providers + `,"defaults":{"provider":"p"}}`,
-		"compaction 仅 model":  `{` + providers + `,` + def + `,"compaction":{"model":"m"}}`,
+		"defaults.provider missing":   `{` + providers + `,"defaults":{"model":"m"}}`,
+		"defaults.model missing":      `{` + providers + `,"defaults":{"provider":"p"}}`,
+		"compaction model-only":       `{` + providers + `,` + def + `,"compaction":{"model":"m"}}`,
 	}
 	for name, body := range cases {
 		if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
@@ -166,7 +167,7 @@ func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	}
 }
 
-// compaction 整段留空合法（Resolve 时整体回落 defaults 对）。
+// An entirely empty compaction section is valid (Resolve falls back to the defaults pair as a whole).
 func TestLoadConfig_SecondaryOmittedOK(t *testing.T) {
 	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"}}`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err != nil {
@@ -192,7 +193,7 @@ func TestFindProvider_Unknown(t *testing.T) {
 	}
 }
 
-// S4：config run.* JSON 标签 round-trip（max_tool_result_chars 等）。
+// S4: config run.* JSON tag round-trip (max_tool_result_chars etc.).
 func TestLoadConfig_StrategyConstants(t *testing.T) {
 	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"},"compaction":{"provider":"p","model":"m"},"run":{"max_tool_result_chars":1234,"max_file_result_chars":9999,"max_parallel_tools":3,"context_keep_recent":8,"summary_max_chars":1500,"context_keep_reasoning":2}}`
 	cfg, err := LoadConfig(writeTmpConfig(t, body))
@@ -217,19 +218,19 @@ func TestLoadConfig_StrategyConstants(t *testing.T) {
 	}
 }
 
-// config.example.json 是发版旗舰示例：strip // 注释后必须可被 LoadConfig 加载
-// （钉死后 openai provider 显式声明 thinking{field:reasoning_effort,map:identity}；defaults.thinking=off 不强制）。
+// config.example.json is the release flagship sample: after stripping // comments it must be loadable by LoadConfig
+// (after pinning, the openai provider explicitly declares thinking{field:reasoning_effort,map:identity}; defaults.thinking=off is not enforced).
 func TestLoadConfig_ExampleFile(t *testing.T) {
 	data, err := os.ReadFile("../../../config.example.json")
 	if err != nil {
 		t.Fatalf("read example: %v", err)
 	}
 	if _, err := LoadConfig(writeTmpConfig(t, stripJSONComments(string(data)))); err != nil {
-		t.Fatalf("config.example.json strip 注释后应可加载: %v", err)
+		t.Fatalf("config.example.json should be loadable after stripping comments: %v", err)
 	}
 }
 
-// stripJSONComments 去掉整行 // 注释（config.example.json 的注释均为独立行，故按行判断即可）。
+// stripJSONComments removes whole-line // comments (all comments in config.example.json are on standalone lines, so per-line checks suffice).
 func stripJSONComments(in string) string {
 	var b strings.Builder
 	for line := range strings.SplitSeq(in, "\n") {
@@ -242,7 +243,7 @@ func stripJSONComments(in string) string {
 	return b.String()
 }
 
-// headers 字段 round-trip：provider 自定义头被正确解析。
+// headers field round-trip: provider custom headers are parsed correctly.
 func TestLoadConfig_ProviderHeaders(t *testing.T) {
 	body := `{
   "providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","headers":{"X-Custom":"abc","Authorization":"Bearer override"}}],
@@ -262,7 +263,7 @@ func TestLoadConfig_ProviderHeaders(t *testing.T) {
 	}
 }
 
-// breaking：models 字段必须是对象形式 [{"name":...}]；旧字符串形式 ["x"] 加载报错。
+// breaking: the models field must be object-form [{"name":...}]; the legacy string form ["x"] fails to load.
 func TestLoadConfig_ModelsMustBeObjects(t *testing.T) {
 	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","models":["legacy-string"]}],"defaults":{"provider":"p","model":"m"}}`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
@@ -270,7 +271,7 @@ func TestLoadConfig_ModelsMustBeObjects(t *testing.T) {
 	}
 }
 
-// 提示词字段 round-trip：subagent_guidance/summary_create_instruction/summary_update_instruction/summary_template。
+// Prompt field round-trip: subagent_guidance/summary_create_instruction/summary_update_instruction/summary_template.
 func TestLoadConfig_PromptFields(t *testing.T) {
 	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","models":[{"name":"m"}]}],"defaults":{"provider":"p","model":"m","subagent_guidance":"G{config_path}","summary_create_instruction":"C{max_chars}","summary_update_instruction":"U{max_chars}","summary_template":"T"},"compaction":{"provider":"p","model":"m"}}`
 	cfg, err := LoadConfig(writeTmpConfig(t, body))

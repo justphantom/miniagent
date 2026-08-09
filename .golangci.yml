@@ -1,162 +1,162 @@
-# golangci-lint v2 配置
+# golangci-lint v2 configuration
 #
-# 设计原则（参照 Go 官方 + 社区经验）：
-#   1. 默认 5 linter（errcheck/govet/ineffassign/staticcheck/unused）打底，
-#      覆盖 Go 团队推荐的最低检查集。
-#   2. 追加"客观正确性"linter（bodyclose/errorlint/gosec/nilerr 等）——这些
-#      检查真实 bug 或安全隐患，与项目风格无关，应全开。
-#   3. 选择性开启"主观风格"linter，但阈值调宽，与 AGENTS.md "节制抽象/只做
-#      明确要求/命名自解释" 的项目哲学保持一致；不开启会与 Go 惯用法冲突
-#      的（如 varnamelen 禁用短变量名 `i`/`n`、wsl 强制空行风格）。
-#   4. gosec 误报在 settings.gosec.excludes 中精确 silence 并附理由，不做
-#      全局排除。
-#   5. 不开启 nolintlint：会让 nolint 注释维护成本爆炸，社区共识是默认关。
-#   6. 平台范围：仅 Linux/macOS（Unix）。platform.go 用 //go:build !windows
-#      隔离 setpgid/killpg/O_NOFOLLOW，无 windows fallback。
+# Design principles (referencing Go official + community experience):
+#   1. The default 5 linters (errcheck/govet/ineffassign/staticcheck/unused) as the foundation,
+#      covering the minimum checks recommended by the Go team.
+#   2. Add "objective correctness" linters (bodyclose/errorlint/gosec/nilerr etc.) — these
+#      catch real bugs or security issues, independent of project style, and should all be enabled.
+#   3. Selectively enable "subjective style" linters, but with relaxed thresholds, consistent with the AGENTS.md philosophy of "moderate abstraction / only do
+#      explicit requirements / self-explanatory naming"; do not enable those that conflict with Go idioms
+#      (e.g. varnamelen bans short variable names `i`/`n`, wsl enforces blank-line style).
+#   4. gosec false positives are silenced precisely in settings.gosec.excludes with reasons; no
+#      global exclusions.
+#   5. Do not enable nolintlint: it makes nolint comment maintenance cost explode; community consensus is to leave it off by default.
+#   6. Platform scope: Linux/macOS only (Unix). platform.go uses //go:build !windows
+#      to isolate setpgid/killpg/O_NOFOLLOW, with no windows fallback.
 #
-# 运行：golangci-lint run
-# 全量：golangci-lint run --default=all（启用全部 linter，含未在 enable 列出的）
+# Run: golangci-lint run
+# Full: golangci-lint run --default=all (enables all linters, including those not listed in enable)
 
 version: "2"
 
 run:
   timeout: 5m
-  # 测试文件单独配置，避免对测试代码施加生产级严格度。
+  # Test files are configured separately to avoid applying production-level strictness to test code.
   tests: true
 
 linters:
-  # default 控制未在 enable/disable 中显式提及的 linter 的默认行为。
-  # standard = 仅 Go 团队推荐的 5 个；all = 全部；none = 全关。
+  # default controls the default behavior of linters not explicitly mentioned in enable/disable.
+  # standard = only the 5 recommended by the Go team; all = all linters; none = disable all.
   default: standard
 
   enable:
-    # ===== 客观正确性（必开）=====
-    - bodyclose        # HTTP 响应 body 必关，本项目重 HTTP 路径
-    - errorlint        # 强制 %w 包装，保持 errors.Is/As 链路
-    - nilerr           # 拦截 "err 非 nil 却返回 nil" 反模式
-    - noctx            # HTTP 请求必须带 ctx
-    - contextcheck     # 检查函数是否用了非继承的 ctx
-    - nilnesserr       # 比 nilerr 更严格的 nil 路径分析
-    - fatcontext       # 检测循环/闭包里的 nested context
-    - durationcheck    # 两个 duration 相乘的反模式
-    - canonicalheader  # HTTP header 必须用规范大小写
-    - nosprintfhostport # 拦截 "host:port" 拼接到 URL 的 sprintf 反模式
-    - sqlclosecheck    # sql.Rows 必 Close（本项目暂无 sql，留作扩展）
-    - rowserrcheck     # sql.Rows 必检查 Err()
-    - makezero         # make([]T, 0) 与 append 配合的反模式
-    - gocheckcompilerdirectives # //go: 指令拼写检查
+    # ===== Objective correctness (must-enable) =====
+    - bodyclose        # HTTP response body must be closed; this project has heavy HTTP paths
+    - errorlint        # enforce %w wrapping to preserve the errors.Is/As chain
+    - nilerr           # catch the "err is non-nil but returns nil" anti-pattern
+    - noctx            # HTTP requests must carry a ctx
+    - contextcheck     # check whether functions use a non-inherited ctx
+    - nilnesserr       # stricter nil-path analysis than nilerr
+    - fatcontext       # detect nested context in loops/closures
+    - durationcheck    # anti-pattern of multiplying two durations
+    - canonicalheader  # HTTP headers must use canonical casing
+    - nosprintfhostport # catch the sprintf anti-pattern of concatenating "host:port" into a URL
+    - sqlclosecheck    # sql.Rows must be Closed (no sql in this project yet, kept for extension)
+    - rowserrcheck     # sql.Rows must check Err()
+    - makezero         # anti-pattern of combining make([]T, 0) with append
+    - gocheckcompilerdirectives # //go: directive spelling check
 
-    # ===== 安全（必开，误报在 settings 精确排除）=====
+    # ===== Security (must-enable, false positives precisely excluded in settings) =====
     - gosec
 
-    # ===== 现代化（推荐，Go 1.21+ 标准库替代品）=====
-    - modernize        # 提示用 max/min/slices/std 库替代旧写法
-    - mirror           # 提示用技术性镜像包装（如 bytes.NewBufferString）
-    - exptostd         # golang.org/x/exp 已进标准库的函数
-    - usestdlibvars    # 用 http.StatusOK 等常量替代魔法数
-    - predeclared      # 避免遮蔽内置名（如 real/copy/new）
-    - recvcheck        # receiver 一致性（指针/值）
-    - unconvert        # 移除冗余类型转换
-    - perfsprint       # fmt.Sprintf 性能提示（小字符串拼接）
+    # ===== Modernization (recommended, Go 1.21+ stdlib replacements) =====
+    - modernize        # suggest using max/min/slices/std libs to replace older idioms
+    - mirror           # suggest technical mirroring wrappers (e.g. bytes.NewBufferString)
+    - exptostd         # functions from golang.org/x/exp that have entered the standard library
+    - usestdlibvars    # use constants like http.StatusOK instead of magic numbers
+    - predeclared      # avoid shadowing builtins (e.g. real/copy/new)
+    - recvcheck        # receiver consistency (pointer/value)
+    - unconvert        # remove redundant type conversions
+    - perfsprint       # fmt.Sprintf performance hints (small string concatenation)
 
-    # ===== 可读性/风格（选择性，与项目哲学兼容）=====
-    - unparam          # 函数参数从未使用，移除
-    - misspell         # 拼写错误
-    - dupword          # 注释/字符串里的重复词
-    - revive           # golint 继任者，综合性风格
-    - gochecknoinits   # 禁用 init()（项目刻意用，例外见 exclusions）
-    - importas         # import 别名一致性
-    - gochecksumtype   # sum type exhaustiveness（switch enum 完备）
-    # goconst 不开启：map key（"type"/"description"）和 JSON schema 字段
-    # 反复出现是结构需要，提常量反而降低可读性。Role 字段（"user"/"assistant"）
-    # 等可考虑单独抽常量，但不强制通过 linter 推动。
-    - bidichk          # Unicode 双向字符注入攻击
-    - asciicheck       # 标识符必须 ASCII
-    - copyloopvar      # Go 1.22+ loop variable 语义（项目 go 1.25，相关）
-    - intrange         # 提示用 for range int
-    - testifylint      # testify 用法检查（项目用标准 testing，无影响）
-    - inamedparam      # interface 方法必须命名参数
-    - interfacebloat   # interface 方法数上限
-    - goprintffuncname # printf 类函数命名以 f 结尾
-    - reassign         # 重定义标准库变量（如 http.DefaultClient）
-    - musttag          # 结构体字段必须有 json tag（本项目已做）
+    # ===== Readability/style (selective, compatible with project philosophy) =====
+    - unparam          # function parameters never used, remove
+    - misspell         # spelling mistakes
+    - dupword          # duplicate words in comments/strings
+    - revive           # successor to golint, comprehensive style
+    - gochecknoinits   # disable init() (project uses it deliberately, exceptions in exclusions)
+    - importas         # import alias consistency
+    - gochecksumtype   # sum type exhaustiveness (complete switch over enum)
+    # goconst not enabled: map keys ("type"/"description") and JSON schema fields
+    # recur by structural necessity; extracting constants would reduce readability. Role fields ("user"/"assistant")
+    # could be extracted as standalone constants, but this is not forced via a linter.
+    - bidichk          # Unicode bidirectional character injection attacks
+    - asciicheck       # identifiers must be ASCII
+    - copyloopvar      # Go 1.22+ loop variable semantics (project uses go 1.25, relevant)
+    - intrange         # suggest using for range int
+    - testifylint      # testify usage checks (project uses standard testing, no impact)
+    - inamedparam      # interface methods must have named parameters
+    - interfacebloat   # upper bound on interface method count
+    - goprintffuncname # printf-style functions must be named ending in f
+    - reassign         # redefining standard library variables (e.g. http.DefaultClient)
+    - musttag          # struct fields must have json tags (already done in this project)
 
-    # ===== 不开启（与项目哲学冲突）=====
-    # - varnamelen    : 禁用短变量名，违反 Go 惯用法（i/n/s/m）
-    # - wsl / wsl_v5  : 强制空行风格，过严且主观
-    # - funlen        : 函数长度，AGENTS.md 已限定单函数职责
-    # - cyclop/gocognit/gocyclo/maintidx : 复杂度，手写 HTML tokenizer
-    #                  为避免引入第三方依赖而保留高复杂度，属合理取舍
-    # - lll           : 行长，AGENTS.md 未限定行长
-    # - mnd           : 魔法数字，标准库代码大量魔法数（如 1<<20）
-    # - exhaustruct   : 结构体必须全字段初始化，过严
-    # - wrapcheck     : 强制 wrap 库 error，与项目"errors 直接返回"约定冲突
-    # - err113        : 强制 error 作 sentinel，与项目"标准库优先"冲突
-    # - tagliatelle   : JSON tag 命名风格，本项目用 OpenAI schema 已定
-    # - nlreturn      : return 前空行，过严
-    # - nestif        : if 嵌套深度，过严
-    # - testpackage   : 强制 _test 包名外，违反测试访问私有字段的合理需求
-    # - paralleltest  : 强制 t.Parallel()，本项目测试无并行需求
-    # - depguard      : 依赖白名单，纯标准库项目无意义
-    # - godoclint     : 注释格式，无 godoc 需求
-    # - gosmopolitan  : i18n 检查，项目明确中文输出
-    # - godot         : 注释必须句号结尾，过严
-    # - godox         : 禁止 TODO/FIXME，过严
-    # - nolintlint    : 让 nolint 注释维护成本爆炸，默认不开
-    # - ireturn       : 禁止返回 interface，过严
-    # - nonamedreturns: 禁止命名返回，过严
-    # - noinlineerr   : 禁止内联 err 声明，过严
-    # - nakedret      : 禁止裸 return，过严
-    # - dupl          : 重复代码检测，噪音大
-    # - dogsled       : 禁用 _ 占位，过严
-    # - gosec 的 G302/G304 等需要 file 级别判断，见 settings 处理
+    # ===== Not enabled (conflicts with project philosophy) =====
+    # - varnamelen    : bans short variable names, violates Go idioms (i/n/s/m)
+    # - wsl / wsl_v5  : enforces blank-line style, too strict and subjective
+    # - funlen        : function length, AGENTS.md already limits single-function responsibility
+    # - cyclop/gocognit/gocyclo/maintidx : complexity; the hand-written HTML tokenizer
+    #                  retains high complexity to avoid third-party dependencies, a reasonable tradeoff
+    # - lll           : line length, AGENTS.md does not limit line length
+    # - mnd           : magic numbers, standard library code uses many (e.g. 1<<20)
+    # - exhaustruct   : structs must initialize all fields, too strict
+    # - wrapcheck     : forces wrapping library errors, conflicts with project's "return errors directly" convention
+    # - err113        : forces errors as sentinels, conflicts with project's "standard library first"
+    # - tagliatelle   : JSON tag naming style, this project uses the already-fixed OpenAI schema
+    # - nlreturn      : blank line before return, too strict
+    # - nestif        : if nesting depth, too strict
+    # - testpackage   : forces _test package name, violates the reasonable need for tests to access private fields
+    # - paralleltest  : forces t.Parallel(), this project's tests have no parallelism needs
+    # - depguard      : dependency whitelist, meaningless for a pure standard library project
+    # - godoclint     : comment format, no godoc needs
+    # - gosmopolitan  : i18n checks, project explicitly outputs in Chinese
+    # - godot         : comments must end with a period, too strict
+    # - godox         : forbids TODO/FIXME, too strict
+    # - nolintlint    : makes nolint comment maintenance cost explode, not enabled by default
+    # - ireturn       : forbids returning interfaces, too strict
+    # - nonamedreturns: forbids named returns, too strict
+    # - noinlineerr   : forbids inline err declarations, too strict
+    # - nakedret      : forbids naked return, too strict
+    # - dupl          : duplicate code detection, too noisy
+    # - dogsled       : forbids _ placeholders, too strict
+    # - gosec's G302/G304 etc. need file-level judgment, see settings handling
     #
-    # 以下 disable 段是 --default=all 模式下的"黑名单"：default=standard 时
-    # 这些 linter 本就不会启用，此处仅为了让 golangci-lint run --default=all
-    # 也能通过。每项附理由。
+    # The disable section below is the "blacklist" under --default=all mode: when default=standard
+    # these linters would not be enabled anyway; this is only so that golangci-lint run --default=all
+    # can also pass. Each item has a reason attached.
 
   disable:
-    - depguard       # 需要显式依赖白名单；cmd 引用 internal/miniagent 是 monorepo 正常结构
-    - err113         # 强制 error 作 sentinel，与项目"标准库优先"约定冲突
-    - exhaustruct    # 强制结构体全字段初始化，过严；HTTPClient 等结构体允许零值
-    - funcorder      # 强制导出方法在前；本项目测试依赖包内方法顺序，已通过重构满足但不愿受约束
-    - gochecknoglobals # 禁止所有包级 var 过严；version 等合理使用
-    - gocognit       # 认知复杂度；手写 HTML tokenizer 为避免第三方依赖而保留高复杂度
-    - goconst        # JSON tag/map key/role 字符串反复出现是结构需要，提常量降低可读性
-    - gocyclo        # 圈复杂度；与 gocognit 一致，手写 tokenizer 合理取舍
-    - godoclint      # 包注释格式；项目无 godoc 需求
-    - gosmopolitan   # i18n 检查；项目明确中文输出
-    - lll            # 行长度；AGENTS.md 未限定行长
-    - maintidx       # 维护性指数；与 gocognit/gocyclo 一致
-    - mnd            # 魔法数字；标准库代码与工具配置中大量使用
-    - nlreturn       # return/break/continue 前强制空行，过严
-    - noinlineerr    # 禁止内联 err 声明；与项目惯用写法冲突
-    - nolintlint     # nolint 注释维护成本爆炸，默认不开
-    - nonamedreturns # 禁止命名返回；doOnce/doGetOnce 等命名返回表达意图更清晰
-    - paralleltest   # 强制 t.Parallel()；本项目测试无并行需求
-    - tagliatelle    # JSON tag 命名风格；本项目用 OpenAI schema 已定
-    - testpackage    # 强制 _test 包名；违反测试访问私有字段的合理需求
-    - varnamelen     # 禁用短变量名；违反 Go 惯用法（i/n/s/m/sb）
-    - wrapcheck      # 强制 wrap 库 error；与项目"errors 直接返回"约定冲突
-    - wsl            # 强制空行风格（cuddling），过严且主观
-    - wsl_v5         # wsl 的 v5 版本
+    - depguard       # requires an explicit dependency whitelist; cmd referencing internal/miniagent is a normal monorepo structure
+    - err113         # forces errors as sentinels, conflicts with project's "standard library first" convention
+    - exhaustruct    # forces full-field struct initialization, too strict; structs like HTTPClient allow zero values
+    - funcorder      # forces exported methods first; this project's tests rely on in-package method order, satisfied via refactor but unwilling to be constrained
+    - gochecknoglobals # forbidding all package-level vars is too strict; version etc. are reasonable uses
+    - gocognit       # cognitive complexity; the hand-written HTML tokenizer retains high complexity to avoid third-party dependencies
+    - goconst        # JSON tag/map key/role strings recur by structural necessity; extracting constants reduces readability
+    - gocyclo        # cyclomatic complexity; same as gocognit, hand-written tokenizer is a reasonable tradeoff
+    - godoclint      # package comment format; project has no godoc needs
+    - gosmopolitan   # i18n checks; project explicitly outputs in Chinese
+    - lll            # line length; AGENTS.md does not limit line length
+    - maintidx       # maintainability index; same as gocognit/gocyclo
+    - mnd            # magic numbers; heavily used in standard library code and tool configs
+    - nlreturn       # forces blank line before return/break/continue, too strict
+    - noinlineerr    # forbids inline err declarations; conflicts with project's usual style
+    - nolintlint     # nolint comment maintenance cost explodes, not enabled by default
+    - nonamedreturns # forbids named returns; named returns like doOnce/doGetOnce express intent more clearly
+    - paralleltest   # forces t.Parallel(); this project's tests have no parallelism needs
+    - tagliatelle    # JSON tag naming style; this project uses the already-fixed OpenAI schema
+    - testpackage    # forces _test package name; violates the reasonable need for tests to access private fields
+    - varnamelen     # bans short variable names; violates Go idioms (i/n/s/m/sb)
+    - wrapcheck      # forces wrapping library errors; conflicts with project's "return errors directly" convention
+    - wsl            # enforces blank-line style (cuddling), too strict and subjective
+    - wsl_v5         # the v5 version of wsl
 
   settings:
-    # ===== 风格 linter 阈值调宽，避免与项目冲突 =====
+    # ===== Style linter thresholds relaxed to avoid conflicts with the project =====
     interfacebloat:
-      max: 10          # 默认 10，保持
+      max: 10          # default 10, kept
 
     gocritic:
-      # 只启用高置信度检查，避免噪音
+      # Enable only high-confidence checks to avoid noise
       enabled-tags:
         - diagnostic
         - performance
       disabled-checks:
-        - hugeParam       # 大结构体按值传递（项目无此问题）
-        - rangeValCopy    # range 值拷贝（项目用 index 访问）
+        - hugeParam       # large structs passed by value (no such issue in this project)
+        - rangeValCopy    # range value copy (project accesses via index)
 
     revive:
-      # 精选 revive 规则，避开过严项
+      # Curated revive rules, avoiding overly strict ones
       rules:
         - name: blank-imports
         - name: context-as-argument
@@ -167,7 +167,7 @@ linters:
         - name: error-return
         - name: errorf
         - name: exported
-          disabled: true  # 项目无 godoc 需求，不强制导出注释
+          disabled: true  # project has no godoc needs, do not force exported comments
         - name: increment-decrement
         - name: indent-error-flow
         - name: package-comments
@@ -182,63 +182,63 @@ linters:
         - name: var-declaration
         - name: var-naming
 
-    # ===== gosec 误报精确排除（附真实理由）=====
+    # ===== gosec false positives precisely excluded (with real reasons) =====
     gosec:
       excludes:
-        # G302/G301 文件/目录权限：write/edit 用 0o644/0o750 是合理默认，
-        # 工具文件不含敏感信息，权限收紧无额外收益。
+        # G302/G301 file/directory permissions: write/edit using 0o644/0o750 are reasonable defaults;
+        # tool files contain no sensitive info, tightening permissions yields no extra benefit.
         - G301
         - G302
-        # G304 路径变量：本形态为 free 模式（README 明示无路径边界约束），
-        # 路径来源是 LLM 而非可信输入，约束责任交给调用方（容器/cgroup）。
-        # openNoFollow 仅拒绝符号链接最终段，不做目录边界校验。
+        # G304 path variables: this form is free mode (README states no path boundary constraints);
+        # the path source is the LLM rather than trusted input, and the responsibility for constraints falls to the caller (container/cgroup).
+        # openNoFollow only rejects the final symlink segment, with no directory boundary validation.
         - G304
-        # G602 slice 越界：estimateTokens 已删（无记忆层），误报兜底保留。
+        # G602 slice out-of-bounds: estimateTokens has been removed (no memory layer), false-positive fallback retained.
         - G602
-        # G204 tainted 子进程：shell 工具的本质就是执行 LLM 命令，已有
-        # 60s 超时 + 进程组 SIGKILL 清理；真正隔离依赖调用方。
+        # G204 tainted subprocess: the essence of the shell tool is to execute LLM commands; it already has
+        # a 60s timeout + process-group SIGKILL cleanup; real isolation depends on the caller.
         - G204
-        # G115 整数溢出转换：platform.go flock/fd 操作在 int↔uintptr 间转换是
-        # syscall API 要求，fd 值域远未溢出，无实际风险。
+        # G115 integer overflow conversion: platform.go flock/fd operations converting between int↔uintptr are
+        # required by the syscall API, the fd value range is far from overflow, no real risk.
         - G115
-        # G117 字段名匹配密钥模式：APIKey 是结构体字段名（从环境变量/配置注入），
-        # 非硬编码密钥常量，属命名需要。
+        # G117 field name matches key pattern: APIKey is a struct field name (injected from env var/config),
+        # not a hardcoded key constant, a naming necessity.
         - G117
-        # G703 路径遍历污点：memory/session 的 tmpPath 由 os.CreateTemp 生成，
-        # 非 LLM/用户输入；与 G304 的 user-facing 路径不同。
+        # G703 path traversal taint: memory/session tmpPath is generated by os.CreateTemp,
+        # not LLM/user input; different from G304's user-facing paths.
         - G703
-        # G704 SSRF 污点：请求 URL 来自 config（可信配置），非 LLM 输出；
-        # miniagent 是 CLI 工具，URL 信任边界由调用方控制。
+        # G704 SSRF taint: the request URL comes from config (trusted config), not LLM output;
+        # miniagent is a CLI tool, the URL trust boundary is controlled by the caller.
         - G704
-        # G705 XSS 污点：fmt.Fprintf 到 os.Stderr（非 HTTP 响应体），
-        # CLI 工具的 stderr 输出无 XSS 攻击面。
+        # G705 XSS taint: fmt.Fprintf to os.Stderr (not an HTTP response body),
+        # a CLI tool's stderr output has no XSS attack surface.
         - G705
 
   exclusions:
-    # gosec 内置的 preset，已包含常见误报
+    # gosec built-in presets, already cover common false positives
     presets:
       - common-false-positives
       - legacy
       - std-error-handling
 
     rules:
-      # 测试代码放宽：WriteFile 权限、ResponseWriter.Write 忽略返回值等
-      # 是测试惯例
+      # Test code is relaxed: WriteFile permissions, ignoring ResponseWriter.Write return values, etc.
+      # are testing conventions
       - path: _test\.go
         linters: [gosec, errcheck, noctx]
         text: "G306|G104|ResponseWriter"
 
-      # main 包的命令行输出：fmt.Println/Printf 是 CLI 工具职责
+      # main package command-line output: fmt.Println/Printf is a CLI tool's responsibility
       - path: ^cmd/
         linters: [gocritic]
         text: "fmt\\.Print|print|println"
 
-      # errcheck 对 defer Close 的检查：Go 惯用法是只读关闭后忽略错误，
-      # 用 _ = 显式忽略已表达意图
+      # errcheck checks on defer Close: the Go idiom is to close read-only then ignore the error;
+      # using _ = to explicitly ignore already expresses intent
       - linters: [errcheck]
         text: "Close"
 
-      # 默认排除列表（golangci-lint v2 标准做法）
+      # Default exclusion list (standard practice for golangci-lint v2)
       - path: _test\.go
         linters:
           - gocyclo
@@ -249,7 +249,7 @@ linters:
           - gochecknoinits
 
 issues:
-  # 每个类别最大展示数，调高便于一次看完
+  # Max issues shown per category, raised to view them all at once
   max-issues-per-linter: 0
   max-same-issues: 0
 

@@ -8,18 +8,19 @@ import (
 	"log/slog"
 )
 
-// callLLMWithDowngrade：callLLMOnce 之上做单步 thinking 降级重试，回传 downgraded 供 Run
-// 跨步固化 cfg；其余（重试一次、日志、截断告警）原样保留。
+// callLLMWithDowngrade performs a single-step thinking downgrade retry on top of callLLMOnce, returning
+// downgraded so Run can persist cfg across steps; everything else (one-shot retry, logging, truncation
+// warning) is kept as-is.
 func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks, logger *slog.Logger) (resp Response, downgraded bool, requests int, err error) {
 	if logger != nil {
 		logger.Debug("llm call start", "step", step, "model", cfg.Model, "stream", cfg.Stream, "thinking", cfg.ThinkingLevel)
 	}
 	resp, err = callLLMOnce(ctx, llm, cfg, step, msgs, hooks)
 	requests = 1
-	// thinking 不被支持：去字段重试一次（仅当确实发了 thinking，避免无谓重试，审查 v2 #7）。
+	// thinking unsupported: retry once with the field dropped (only when thinking was actually sent, to avoid a pointless retry; review v2 #7).
 	if errors.Is(err, ErrThinkingUnsupported) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
 		if logger != nil {
-			logger.Warn("thinking 不被端点支持，去字段重试一次", "step", step)
+			logger.Warn("thinking unsupported by endpoint, retrying once with the field dropped", "step", step)
 		}
 		down := cfg
 		down.ThinkingLevel = ""
@@ -37,20 +38,24 @@ func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int
 	if logger != nil {
 		logger.Info("llm call done", "step", step, "input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens, "tool_calls", len(resp.ToolCalls), "finish_reason", resp.FinishReason)
 	}
-	// finish_reason 非 stop/tool_calls 表示回答被 max_tokens 或内容过滤截断。核心仅告警、不续写——
-	// 截断的 resp.Text 会被当作最终文本/工具调用继续处理（LLM 层限制，核心无法廉价自动续写）。
+	// A finish_reason other than stop/tool_calls means the answer was truncated by max_tokens or content
+	// filtering. The core only warns and does not continue — the truncated resp.Text is still processed as
+	// the final text / tool calls (an LLM-layer limitation; the core cannot cheaply auto-continue).
 	if logger != nil && resp.FinishReason != "" && resp.FinishReason != "stop" && resp.FinishReason != "tool_calls" {
 		logger.Warn("llm response truncated", "step", step, "finish_reason", resp.FinishReason)
 	}
 	return resp, downgraded, requests, nil
 }
 
-// callLLMOnce 构造 Request（含 thinking）并单次调用 llm.Do / llm.DoStream，不含降级/重试逻辑。
+// callLLMOnce builds the Request (including thinking) and performs a single llm.Do / llm.DoStream call,
+// with no downgrade/retry logic.
 //
-// 放在 loop_extra.go 是为了携带 panic 兜底（审查 P3 LLM panic 兜底）：Do/DoStream 的响应
-// 解析路径（parseChatResponse / parseSSE）在畸形 payload 上可能 panic，无兜底则单次坏响应
-// 就崩进程——与防 tool panic 的 safeCall 不对称。recover 转为 error，使 callLLMWithDowngrade
-// 沿正常 error 路径处理（降级/重试逻辑仍适用，误判无害）。命名返回值让 defer 能在 panic 后赋值 err。
+// It lives in loop_extra.go to carry the panic fallback (review P3 LLM panic fallback): the response parse
+// paths of Do/DoStream (parseChatResponse / parseSSE) may panic on malformed payloads, and without a
+// fallback a single bad response would crash the process — asymmetric with safeCall which guards tool
+// panics. recover converts the panic into an error so callLLMWithDowngrade handles it along the normal
+// error path (the downgrade/retry logic still applies, and a misjudgment is harmless). Named return values
+// let the defer assign err after a panic.
 func callLLMOnce(ctx context.Context, llm LLM, cfg LoopConfig, step int, msgs []Message, hooks LoopHooks) (resp Response, err error) {
 	defer func() {
 		if r := recover(); r != nil {

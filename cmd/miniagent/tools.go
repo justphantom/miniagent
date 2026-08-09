@@ -7,15 +7,15 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/tools"
 )
 
-// buildTools 注册 7 个内置工具，按 mode 调整约束：
-//   - default：写工具（write/edit）经 confineWrap 限定在 workdir 子树；
-//     shell 以 mode=default 注册（拒 sudo/su）。workdir 必填（main 入口校验）。
-//   - auto：无任何约束（shell mode=auto，写工具不包装）。
+// buildTools registers 7 builtin tools and adjusts constraints by mode:
+//   - default: write tools (write/edit) are confined to the workdir subtree via confineWrap;
+//     shell is registered with mode=default (rejects sudo/su). workdir is required (validated at the main entry).
+//   - auto: no constraints (shell mode=auto, write tools are not wrapped).
 //
-// workdir 为空时文件工具走 resolveToolPath、shell 的 cmd.Dir 留空。shellTimeout<=0 用默认 120s。
-// fileOpTimeout<=0 用默认 30s；writeTimeout<=0 用默认 30s。
-// fileResultLimit>0 时覆盖 read/edit 的 Tool.ResultLimit（S4：config run.max_file_result_chars），
-// <=0 保留构造器内置默认（maxFileResultInHistory）。
+// When workdir is empty the file tools go through resolveToolPath and shell's cmd.Dir is left empty. shellTimeout<=0 uses the default 120s.
+// fileOpTimeout<=0 uses the default 30s; writeTimeout<=0 uses the default 30s.
+// When fileResultLimit>0 it overrides read/edit's Tool.ResultLimit (S4: config run.max_file_result_chars);
+// <=0 keeps the constructor builtin default (maxFileResultInHistory).
 func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, limits miniagent.Limits) []miniagent.Tool {
 	shellMode := mode
 	if shellMode == "" {
@@ -25,7 +25,7 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	write := tools.WriteFileTool(workdir, writeTimeout)
 	edit := tools.EditFileTool(workdir, fileOpTimeout)
 	if fileResultLimit > 0 {
-		// ResultLimit 是导出字段；confineWrap 保留它（仅替换 Call），故先设再包装。
+		// ResultLimit is an exported field; confineWrap preserves it (only replacing Call), so set it before wrapping.
 		read.ResultLimit = fileResultLimit
 		edit.ResultLimit = fileResultLimit
 	}
@@ -51,6 +51,6 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		codemap,
 		tools.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
 	}
-	// todo 工具（单 Run 内存）：每轮 buildTools 新建 *TodoList，跨 step 共享、跨 Run 重置。
+	// todo tools (in-memory for a single Run): each buildTools call creates a new *TodoList, shared across steps, reset across Runs.
 	return append(built, tools.TodoTools(&tools.TodoList{})...)
 }

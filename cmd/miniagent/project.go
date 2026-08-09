@@ -8,20 +8,20 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
-// projectRules 是 loadProjectRules 的返回：workdir/.miniagent/ 下的 persona/rules 文本。
+// projectRules is the return of loadProjectRules: the persona/rules text under workdir/.miniagent/.
 type projectRules struct {
 	persona string
 	rules   string
 }
 
-// hasAny 报告是否加载到任意项目规则（决定是否在 system prompt 末尾告知 LLM）。
+// hasAny reports whether any project rules were loaded (decides whether to inform the LLM at the end of the system prompt).
 func (p projectRules) hasAny() bool {
 	return p.persona != "" || p.rules != ""
 }
 
-// loadProjectRules 读 <workdir>/.miniagent/ 的项目规则（persona.md/rules.md）。
-// workdir 为空或目录/文件不存在时返回零值（不报错）。仅项目级单层查找——全局 system
-// 定制改用 config defaults.system_prompt（取消 ~/.miniagent/ 全局规则层）。
+// loadProjectRules reads the project rules (persona.md/rules.md) from <workdir>/.miniagent/.
+// Returns the zero value (no error) when workdir is empty or the directory/file does not exist. Project-level single-layer lookup only — global system
+// customization uses config defaults.system_prompt instead (the ~/.miniagent/ global rules layer was removed).
 func loadProjectRules(workdir string) projectRules {
 	var pr projectRules
 	if workdir == "" {
@@ -37,7 +37,7 @@ func loadProjectRules(workdir string) projectRules {
 	return pr
 }
 
-// maxProjectFileBytes 是 persona.md/rules.md 等规则文件的字节上限。
+// maxProjectFileBytes is the byte upper bound for rule files such as persona.md/rules.md.
 const maxProjectFileBytes = 1 << 20 // 1 MiB
 
 func readTrimmedFile(path string) string {
@@ -48,19 +48,19 @@ func readTrimmedFile(path string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// mergeSystemPrompt 按优先级 persona.md > rules.md > defaults.system_prompt 合并 system prompt
-// （persona 存在则取代 base 作身份基线，否则沿用 base=defaults.system_prompt 工作流约束），
-// 追加 rules 段，并在加载了任意项目规则时显式告知 LLM（P0）。
+// mergeSystemPrompt merges the system prompt by priority persona.md > rules.md > defaults.system_prompt
+// (when persona is present it replaces base as the identity baseline, otherwise base=defaults.system_prompt workflow constraints are kept),
+// appends the rules section, and explicitly informs the LLM when any project rules were loaded (P0).
 func mergeSystemPrompt(base, persona, rules string, hasAny bool) string {
 	if persona != "" {
 		base = persona
 	}
 	parts := []string{base}
 	if rules != "" {
-		parts = append(parts, "## 项目规则\n"+rules)
+		parts = append(parts, "## Project Rules\n"+rules)
 	}
 	if hasAny {
-		parts = append(parts, "（已加载 .miniagent/ 项目规则）")
+		parts = append(parts, "(.miniagent/ project rules loaded)")
 	}
 	return strings.Join(parts, "\n\n")
 }

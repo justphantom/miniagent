@@ -26,7 +26,7 @@ func TestCodemapTool_Basic(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, res.Output)
 		}
 	}
-	// 二级条目缩进两个空格。
+	// Second-level entries are indented two spaces.
 	if !strings.Contains(res.Output, "\n  b.go") {
 		t.Errorf("expected 2-space indent for nested file:\n%s", res.Output)
 	}
@@ -49,7 +49,7 @@ func TestCodemapTool_DepthLimit(t *testing.T) {
 	if strings.Contains(res.Output, "b.go") || strings.Contains(res.Output, "deep") {
 		t.Errorf("depth=1 should not expand subdirectories:\n%s", res.Output)
 	}
-	// depth<=0 不限深度。
+	// depth<=0 means unlimited depth.
 	res = CodemapTool(dir, 0).Call(context.Background(), `{"depth":-1}`)
 	if !strings.Contains(res.Output, "c.go") {
 		t.Errorf("depth<=0 should be unlimited:\n%s", res.Output)
@@ -67,7 +67,7 @@ func TestCodemapTool_EntryLimitTruncates(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "已停止收集") {
+	if !strings.Contains(res.Output, "collection stopped") {
 		t.Errorf("expected truncation notice:\n%s", res.Output)
 	}
 	if n := strings.Count(strings.TrimSpace(res.Output), "\n") + 1; n > maxCodemapEntries+1 {
@@ -104,8 +104,8 @@ func TestCodemapTool_SkipSymlinks(t *testing.T) {
 	if strings.Contains(res.Output, "linkdir") || strings.Contains(res.Output, "linkfile") {
 		t.Errorf("symlinks not skipped:\n%s", res.Output)
 	}
-	// 顶层条目数不应把符号链接计入（a.go + sub = 2）。codemapWalk 不标注根目录，
-	// 改由 depth=1 时 sub 的计数间接验证开销过大，此处仅验证符号链接不出现。
+	// The top-level entry count should not count symlinks (a.go + sub = 2). codemapWalk does not annotate the root directory;
+	// indirectly verifying it via sub's count at depth=1 is too costly, so here we only verify that symlinks do not appear.
 }
 
 func TestCodemapTool_MissingRootErrors(t *testing.T) {
@@ -120,7 +120,7 @@ func TestCodemapTool_EmptyDir(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "空目录") {
+	if !strings.Contains(res.Output, "empty directory") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }

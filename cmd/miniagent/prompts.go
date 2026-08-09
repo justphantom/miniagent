@@ -4,24 +4,29 @@ import (
 	"strings"
 )
 
-// defaultSystemPrompt 是面向工程代码开发的默认系统提示词：约束 ReAct 工作流
-// （先观察 → 后修改 → 改后验证 → 失败复盘），降低模型盲改/臆测的概率。用户可用
-// config defaults.system_prompt 覆盖（或项目 .miniagent/persona.md 取代）。prompt 只写"为什么/怎么做"的约束，工具语法在各工具描述里。
-const defaultSystemPrompt = `你是一名务实的软件工程师，在一个真实代码仓库里工作。遵守以下工作方式：
+// defaultSystemPrompt is the default system prompt oriented toward engineering code development:
+// it constrains the ReAct workflow (observe first -> then modify -> verify after changes ->
+// review on failure), reducing the chance of the model making blind/speculative changes.
+// Users can override it via config defaults.system_prompt (or replace it with a project
+// .miniagent/persona.md). The prompt only states "why/how" constraints; tool syntax lives
+// in each tool's description.
+const defaultSystemPrompt = `You are a pragmatic software engineer working inside a real code repository. Follow this workflow:
 
-- 先观察后动手：改任何文件前，先用 read/grep/glob 确认当前内容与结构；路径或符号不确定就先定位，不要猜。
-- 改后必须验证：代码改动后用 shell 跑相关的构建/测试（如 go build、go test）；未验证不要声称"完成"。
-- 失败先复盘：命令或工具返回错误时，先 read 错误信息和相关文件，理解根因再改；不要反复盲改同一处。
-- 精确修改：用 edit 时 old_string 须与文件精确匹配且唯一；多处相同改动用 replace_all；新建文件用 write。
-- 大文件分段：read 返回带行号；文件较大时用 offset/limit 分段读取，不要一次吞下。
-- 多步规划：任务超过几步时用 todo_create/update/list 显式跟踪进度（status: pending|in_progress|completed），短任务不必用。`
+- Observe before acting: before changing any file, use read/grep/glob to confirm the current content and structure; locate first when the path or symbol is uncertain, do not guess.
+- Verify after changes: after code changes, run the relevant build/test via shell (e.g. go build, go test); do not claim "done" without verification.
+- Review failures first: when a command or tool returns an error, first read the error message and related files, understand the root cause before changing; do not repeatedly blind-edit the same spot.
+- Precise edits: when using edit, old_string must match the file exactly and be unique; use replace_all for multiple identical changes; use write to create new files.
+- Segment large files: read returns lines with numbers; for large files use offset/limit to read in segments, do not swallow it all at once.
+- Multi-step planning: when a task exceeds a few steps, use todo_create/update/list to explicitly track progress (status: pending|in_progress|completed); short tasks need not use it.`
 
-// assembleSystemPrompt 装配最终 system prompt：空 base 兜底 defaultSystemPrompt → merge 项目规则
-// （persona>rules>defaults）→ inject subagent 引导。集中三步使默认兜底可单测（NEW-1 回归）。
+// assembleSystemPrompt assembles the final system prompt: empty base falls back to defaultSystemPrompt
+// -> merge project rules (persona>rules>defaults) -> inject subagent guidance. Centralizing the three steps
+// makes the default fallback unit-testable (NEW-1 regression).
 //
-// 默认配置（config 无 system_prompt / 无 .miniagent/persona）下 resolved.System 为空：
-// 须兜底 defaultSystemPrompt。否则 injectSubagentGuidance 向空串追加 subagent 引导使其非空，
-// loopCfg 的 `if system == ""` fallback 永不触发（死代码），agent 静默丢失全部 ReAct 约束。
+// Under the default config (config has no system_prompt / no .miniagent/persona) resolved.System is empty:
+// it must fall back to defaultSystemPrompt. Otherwise injectSubagentGuidance appends subagent guidance to the
+// empty string making it non-empty, the loopCfg `if system == ""` fallback never triggers (dead code), and the
+// agent silently loses all ReAct constraints.
 func assembleSystemPrompt(base string, pr projectRules, guidance, configAbsPath, mode string) string {
 	if base == "" {
 		base = defaultSystemPrompt
@@ -29,10 +34,12 @@ func assembleSystemPrompt(base string, pr projectRules, guidance, configAbsPath,
 	return injectSubagentGuidance(mergeSystemPrompt(base, pr.persona, pr.rules, pr.hasAny()), guidance, configAbsPath, mode)
 }
 
-// injectSubagentGuidance 把 subagent fork 引导附加到 system prompt：注入 config 绝对路径
-// （审查 v1 #12 + v2 #9 + v3 #6/#8）。configAbsPath 空则不注入。mode 透传父会话权限模式
-// （审查 v3 P3）：不再硬编码 default，auto 父会话 fork 出的 subagent 继承 auto；空值回落 default。
-// subagent 为无状态单次调用（不落盘会话，stdout 即结果），故不再注入父 session id。
+// injectSubagentGuidance appends the subagent fork guidance to the system prompt: injects the absolute path
+// to config (reviewed v1 #12 + v2 #9 + v3 #6/#8). If configAbsPath is empty, nothing is injected. mode is passed
+// through from the parent session's permission mode (review v3 P3): default is no longer hardcoded; a subagent
+// forked from an auto parent session inherits auto; an empty value falls back to default.
+// The subagent is a stateless single invocation (session is not persisted, stdout is the result), so the parent
+// session id is no longer injected.
 func injectSubagentGuidance(system, guidance, configAbsPath, mode string) string {
 	if configAbsPath == "" {
 		return system
@@ -43,21 +50,23 @@ func injectSubagentGuidance(system, guidance, configAbsPath, mode string) string
 	return system + "\n\n" + renderSubagentGuidance(guidance, configAbsPath, mode)
 }
 
-// shellSingleQuote 单引号包裹 s 并转义内部单引号，使含空格/元字符的 config 路径（如 macOS
-// /Users/First Last/.miniagent/miniagent.json）安全作为 subagent 引导命令的参数。
+// shellSingleQuote wraps s in single quotes and escapes embedded single quotes so that a config path
+// containing spaces/metacharacters (e.g. macOS /Users/First Last/.miniagent/miniagent.json) can be used safely
+// as an argument in the subagent guidance command.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// defaultSubagentGuidance 是 subagent fork 引导默认模板；占位符 {config_path}/{mode} 由
-// renderSubagentGuidance 替换（config_path 经 shellSingleQuote 包裹；mode 透传父会话权限模式，
-// 父 auto 时 subagent 命令用 -mode auto）。可经 config defaults.subagent_guidance 覆盖。
-const defaultSubagentGuidance = `- 子任务委派：可并行的子任务用 shell 再调一次 miniagent（仅在必要时 fork，建议嵌套≤2 层）：
-  echo "<子任务>" | miniagent -config {config_path} -workdir . -mode {mode} -result-only
-  subagent 为无状态单次调用（不落盘会话）；stdout 纯文本即结果。`
+// defaultSubagentGuidance is the default subagent fork guidance template; the placeholders {config_path}/{mode}
+// are replaced by renderSubagentGuidance (config_path is wrapped via shellSingleQuote; mode is passed through from
+// the parent session's permission mode; when the parent is auto the subagent command uses -mode auto).
+// It can be overridden via config defaults.subagent_guidance.
+const defaultSubagentGuidance = `- Subtask delegation: for parallelizable subtasks, invoke miniagent once more via shell (fork only when necessary, recommended nesting depth <= 2):
+  echo "<subtask>" | miniagent -config {config_path} -workdir . -mode {mode} -result-only
+  The subagent is a stateless single invocation (session is not persisted); stdout plain text is the result.`
 
-// renderSubagentGuidance 渲染 subagent 引导：guidance 空用默认模板，占位符 {config_path}/{mode}
-// 替换为 shellSingleQuote(configAbsPath)/mode。
+// renderSubagentGuidance renders the subagent guidance: if guidance is empty it uses the default template;
+// the placeholders {config_path}/{mode} are replaced by shellSingleQuote(configAbsPath)/mode.
 func renderSubagentGuidance(guidance, configAbsPath, mode string) string {
 	if guidance == "" {
 		guidance = defaultSubagentGuidance

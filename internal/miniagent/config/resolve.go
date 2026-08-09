@@ -8,17 +8,18 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// CLIOverrides 收集「显式传入」的 CLI 参数（main 用 flag.Visit 区分未设置），供 Resolve
-// 按 cli>config>builtin 优先级裁决。指针为 nil 表示未传入。P2 后仅保留 CLI 核心参数；
-// 策略参数（summary/duration/window 等）只在 config，故此处不含。
+// CLIOverrides collects the "explicitly passed" CLI parameters (main uses flag.Visit to distinguish unset),
+// for Resolve to arbitrate by cli>config>builtin precedence. A nil pointer means not passed. After P2 only
+// core CLI parameters remain; strategy parameters (summary/duration/window etc.) live only in config, so they are absent here.
 type CLIOverrides struct {
 	Provider, Model, Thinking, Mode, Workdir *string
 	MaxIterations                            *int
 	Stream, ResultOnly                       *bool
 }
 
-// ResolvedRun 是 Resolve 输出的运行参数——仅含需裁决或解析的字段（cli>config 三态裁决 + duration 解析）。
-// 纯透传字段（仅 config 来源、无 CLI 覆盖、无解析）不经此间接层，消费方直读 Resolved.RunConfig（= cfg.Run）。
+// ResolvedRun holds the run parameters produced by Resolve — only fields that need arbitration or parsing
+// (cli>config three-state arbitration + duration parsing). Pure pass-through fields (config-only source, no CLI
+// override, no parsing) bypass this indirection; consumers read Resolved.RunConfig (= cfg.Run) directly.
 type ResolvedRun struct {
 	Workdir                                                *string
 	MaxIterations                                          *int
@@ -45,27 +46,27 @@ type Resolved struct {
 	SummaryTemplate          string
 	Session                  SessionConfig
 	Run                      ResolvedRun
-	RunConfig                RunConfig // 原始 cfg.Run：纯透传字段源，消费方直读，不经 ResolvedRun 间接层
-	// 分层模型参数（消费方读这些而非 Run/RunConfig）：
-	// MaxTokens/ContextWindow：model>provider>global（无 cli）；HTTPTimeout：provider>global（无 model）。
+	RunConfig                RunConfig // original cfg.Run: source of pure pass-through fields; consumers read directly, bypassing the ResolvedRun indirection
+	// Layered model parameters (consumers read these instead of Run/RunConfig):
+	// MaxTokens/ContextWindow: model>provider>global (no cli); HTTPTimeout: provider>global (no model).
 	MaxTokens     *int
 	ContextWindow *int
 	HTTPTimeout   *time.Duration
 }
 
-// Resolve 按 cli>config>builtin 裁决产出 Resolved。cfg 必须非 nil（S1 删裸模式后始终有 config）。
-// key 不在此处理（main 据 provider.Key/env 决定）。
+// Resolve arbitrates by cli>config>builtin to produce Resolved. cfg must be non-nil (after S1 removed bare mode, config always exists).
+// The key is not handled here (main decides based on provider.Key/env).
 func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	if cfg == nil {
-		return nil, errors.New("Resolve: cfg 为 nil（S1 后 config 必须存在）")
+		return nil, errors.New("Resolve: cfg is nil (config must exist after S1)")
 	}
 	r := &Resolved{Session: cfg.Session, RunConfig: cfg.Run}
 
-	// 成对规则：CLI -provider/-model 须同传（只传其一报错）；不传则以 config defaults 对为准。
+	// Pair rule: CLI -provider/-model must be passed together (passing only one errors); passing neither uses the config defaults pair.
 	cliProv := o.Provider != nil && *o.Provider != ""
 	cliModel := o.Model != nil && *o.Model != ""
 	if cliProv != cliModel {
-		return nil, errors.New("-provider 与 -model 须成对传入（同传覆盖，同缺以 config 为准）")
+		return nil, errors.New("-provider and -model must be passed as a pair (both override; neither falls back to config)")
 	}
 	defProv, defModel, err := resolveProviderModel(cfg, "defaults", cfg.Defaults.Provider, cfg.Defaults.Model)
 	if err != nil {
@@ -80,8 +81,8 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		r.Provider, r.ModelID = p, *o.Model
 	}
 
-	// 模型参数分层（model>provider>global；max_tokens/context_window 无 cli）。
-	// 选定 provider 后在其 Models 查找模型级配置，逐层裁决；http_timeout 仅 provider>global（无 model）。
+	// Model parameter layering (model>provider>global; max_tokens/context_window have no cli).
+	// After the provider is selected, model-level config is looked up in its Models and arbitrated layer by layer; http_timeout is provider>global only (no model).
 	mc, _ := findModelConfig(r.Provider, r.ModelID)
 	r.MaxTokens = pickMPG(mc.MaxTokens, r.Provider.MaxTokens, cfg.Run.MaxTokens)
 	r.ContextWindow = pickMPG(mc.ContextWindow, r.Provider.ContextWindow, cfg.Run.ContextWindow)
@@ -93,20 +94,20 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		return nil, err
 	}
 
-	// compaction：成对可选——同设取自身（可跨 provider），同空整体回落 defaults 对。
+	// compaction: optional pair — both set takes itself (may cross providers); both empty falls back to the defaults pair.
 	cp, cm, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel)
 	if err != nil {
 		return nil, err
 	}
 	r.CompactionProvider, r.CompactionModelID = cp, cm
-	// §P1-B：静默用量溢出检测开关 + reserve。Auto 缺省（nil）= 启用；Reserved 缺省（nil）置 0，
-	// 由 compaction 引擎的 compactionReserve 回落 min(compactionBuffer=20000, max_tokens)——Resolve 不回落。
+	// §P1-B: silent usage overflow detection switch + reserve. Auto default (nil) = enabled; Reserved default (nil) is 0,
+	// falling back to min(compactionBuffer=20000, max_tokens) via the compaction engine's compactionReserve — Resolve does not fall back.
 	r.CompactionAuto = cfg.Compaction.Auto == nil || *cfg.Compaction.Auto
 	if cfg.Compaction.Reserved != nil {
 		r.CompactionReserved = *cfg.Compaction.Reserved
 	}
 
-	// thinking level 四态：cli > model > provider(ThinkingLevel) > defaults。
+	// thinking level four states: cli > model > provider(ThinkingLevel) > defaults.
 	switch {
 	case o.Thinking != nil:
 		r.Thinking = *o.Thinking
@@ -138,10 +139,10 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		r.Mode = "default"
 	}
 	if r.Mode != miniagent.ModeDefault && r.Mode != miniagent.ModeAuto {
-		return nil, fmt.Errorf("mode %q 非法（%s|%s）", r.Mode, miniagent.ModeDefault, miniagent.ModeAuto)
+		return nil, fmt.Errorf("mode %q is invalid (%s|%s)", r.Mode, miniagent.ModeDefault, miniagent.ModeAuto)
 	}
 	r.System = cfg.Defaults.SystemPrompt
-	// summary_request / summarizer_prompt 仅 config 来源（P2 移出 CLI）。
+	// summary_request / summarizer_prompt are config-only sources (moved out of CLI in P2).
 	if cfg.Defaults.SummaryRequest != "" {
 		r.SummaryRequest = cfg.Defaults.SummaryRequest
 	}
@@ -162,15 +163,15 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	return r, nil
 }
 
-// resolveProviderModel 校验必填模型对（defaults）：两者均非空且 provider 已声明，
-// 通过则返回该 provider 与原样 model id（model id 允许含 '/'，不再承担 provider 前缀语义）。
-// label 是 JSON 段名（defaults），用于错误定位。validateConfig 与 Resolve 共用。
+// resolveProviderModel validates the required model pair (defaults): both non-empty and the provider is declared;
+// on success it returns that provider and the model id as-is (the model id may contain '/', no longer carrying provider-prefix semantics).
+// label is the JSON section name (defaults), used for error location. Shared by validateConfig and Resolve.
 func resolveProviderModel(cfg *Config, label, provider, model string) (ProviderConfig, string, error) {
 	if provider == "" {
-		return ProviderConfig{}, "", fmt.Errorf("%s.provider 必填", label)
+		return ProviderConfig{}, "", fmt.Errorf("%s.provider is required", label)
 	}
 	if model == "" {
-		return ProviderConfig{}, "", fmt.Errorf("%s.model 必填", label)
+		return ProviderConfig{}, "", fmt.Errorf("%s.model is required", label)
 	}
 	p, err := FindProvider(cfg, provider)
 	if err != nil {
@@ -179,14 +180,14 @@ func resolveProviderModel(cfg *Config, label, provider, model string) (ProviderC
 	return p, model, nil
 }
 
-// resolveOptionalPair 校验可选模型对（compaction）：provider/model 同空时整体回落
-// defaults 对（def/defModel）；同设时 provider 须已声明；只设其一报错（成对规则不允许交叉回落）。
+// resolveOptionalPair validates the optional model pair (compaction): when provider/model are both empty it falls back
+// to the defaults pair (def/defModel); when both are set the provider must be declared; setting only one errors (the pair rule disallows cross fallback).
 func resolveOptionalPair(cfg *Config, label, provider, model string, def ProviderConfig, defModel string) (ProviderConfig, string, error) {
 	if provider == "" && model == "" {
 		return def, defModel, nil
 	}
 	if provider == "" || model == "" {
-		return ProviderConfig{}, "", fmt.Errorf("%s.provider 与 %s.model 须成对设置（同空则回落 defaults）", label, label)
+		return ProviderConfig{}, "", fmt.Errorf("%s.provider and %s.model must be set as a pair (both empty falls back to defaults)", label, label)
 	}
 	p, err := FindProvider(cfg, provider)
 	if err != nil {
@@ -195,23 +196,23 @@ func resolveOptionalPair(cfg *Config, label, provider, model string, def Provide
 	return p, model, nil
 }
 
-// FindProvider 按名查找 provider；未找到报错。provider/model 拆分后取代 ParseModelSpec。
+// FindProvider looks up a provider by name; it errors when not found. It replaces ParseModelSpec after the provider/model split.
 func FindProvider(cfg *Config, name string) (ProviderConfig, error) {
 	if cfg == nil {
-		return ProviderConfig{}, errors.New("FindProvider: cfg 为 nil（S1 后 config 必须存在）")
+		return ProviderConfig{}, errors.New("FindProvider: cfg is nil (config must exist after S1)")
 	}
 	for _, p := range cfg.Providers {
 		if p.Name == name {
 			return p, nil
 		}
 	}
-	return ProviderConfig{}, fmt.Errorf("未知 provider %q", name)
+	return ProviderConfig{}, fmt.Errorf("unknown provider %q", name)
 }
 
 func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	var r ResolvedRun
-	// 三态裁决（cli>config）：Workdir/MaxIterations/Stream 可被 CLI 覆盖；nil=未配置。
-	// MaxTokens 不在此（无 cli，分层见 Resolve）；HTTPTimeout 移至 Resolved（provider>global）。
+	// Three-state arbitration (cli>config): Workdir/MaxIterations/Stream can be overridden by CLI; nil=unset.
+	// MaxTokens is not here (no cli, layering is in Resolve); HTTPTimeout moved to Resolved (provider>global).
 	if o.Workdir != nil && *o.Workdir != "" {
 		r.Workdir = o.Workdir
 	} else {
@@ -223,7 +224,7 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	} else {
 		r.Stream = cfg.Run.Stream
 	}
-	// durations：*string → *time.Duration。纯透传字段不经此（消费方读 Resolved.RunConfig）。
+	// durations: *string → *time.Duration. Pure pass-through fields bypass this (consumers read Resolved.RunConfig).
 	var err error
 	r.MaxDuration, err = ParseDuration(cfg.Run.MaxDuration, "run.max_duration")
 	if err != nil {
@@ -255,7 +256,7 @@ func pickInt(ov, cv *int) *int {
 	return cv
 }
 
-// findModelConfig 在 provider.Models 中按 model id 查找模型级配置；未声明返回零值 + false。
+// findModelConfig looks up model-level config by model id within provider.Models; if not declared it returns the zero value + false.
 func findModelConfig(p ProviderConfig, modelID string) (ModelConfig, bool) {
 	for _, m := range p.Models {
 		if m.Name == modelID {
@@ -265,7 +266,7 @@ func findModelConfig(p ProviderConfig, modelID string) (ModelConfig, bool) {
 	return ModelConfig{}, false
 }
 
-// pickMPG 三态裁决 model>provider>global（无 cli），用于 max_tokens/context_window。
+// pickMPG arbitrates model>provider>global (no cli) for max_tokens/context_window.
 func pickMPG(model, provider, global *int) *int {
 	if model != nil {
 		return model
@@ -276,8 +277,8 @@ func pickMPG(model, provider, global *int) *int {
 	return global
 }
 
-// ParseDuration 解析 config 中的 duration 字符串（"30s"）；cv 为 nil 表示未配置，返回 (nil, nil)。
-// 负值不合法。供 Resolve 与 cmd 层（httpTimeoutFromConfig）共享，统一 duration 校验语义与错误格式。
+// ParseDuration parses a duration string ("30s") from config; cv == nil means unset and returns (nil, nil).
+// Negative values are invalid. Shared by Resolve and the cmd layer (httpTimeoutFromConfig), unifying duration validation semantics and error format.
 func ParseDuration(cv *string, label string) (*time.Duration, error) {
 	if cv == nil {
 		return nil, nil
@@ -287,7 +288,7 @@ func ParseDuration(cv *string, label string) (*time.Duration, error) {
 		return nil, fmt.Errorf("config %s %q: %w", label, *cv, err)
 	}
 	if d < 0 {
-		return nil, fmt.Errorf("config %s %q: 负值不合法", label, *cv)
+		return nil, fmt.Errorf("config %s %q: negative value is invalid", label, *cv)
 	}
 	return &d, nil
 }

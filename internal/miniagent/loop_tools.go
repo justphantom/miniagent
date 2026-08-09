@@ -9,7 +9,7 @@ import (
 
 )
 
-// maxParallelTools：同一步并行工具上限，防耗尽 FD/连接或触发目标限流。
+// maxParallelTools: upper bound of parallel tools per step, to prevent exhausting FDs/connections or triggering target rate limiting.
 const maxParallelTools = 8
 
 func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args string) (res ToolResult) {
@@ -18,7 +18,7 @@ func safeCall(ctx context.Context, logger *slog.Logger, tool Tool, name, args st
 			if logger != nil {
 				logger.Error("tool panic recovered", "tool", name, "panic", r)
 			}
-			res = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: fmt.Sprintf("工具 %q 内部错误", name)}
+			res = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: fmt.Sprintf("tool %q internal error", name)}
 		}
 	}()
 	return tool.Call(ctx, args)
@@ -28,7 +28,7 @@ func buildToolIndex(tools []Tool, logger *slog.Logger) map[string]Tool {
 	toolByName := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		if _, dup := toolByName[t.Name]; dup && logger != nil {
-			// 重名静默覆盖会让前者不可达且无任何线索，路由歧义极难排查。
+			// Silently overwriting duplicates makes the first unreachable with no clue; routing ambiguity is extremely hard to debug.
 			logger.Warn("duplicate tool name, last wins", "tool", t.Name)
 		}
 		toolByName[t.Name] = t
@@ -44,14 +44,14 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			calls[i].ID = fmt.Sprintf("synth_%d_%d", step, i)
 		}
 	}
-	// 思考链随 assistant 消息入历史（回灌 reasoning 模型所需）。§P0-B：附真实 usage 供后续防陈旧估算。
-	// Content: resp.Text —— 模型常在 tool_call 前附说明文本（Claude 经 OpenAI 代理、部分开源模型），
-	// 入历史保多轮连贯；最终文本(loop.go:166)/总结(:102)路径均设 Content，此处对齐（R4-2，原被丢弃）。
+		// Chain-of-thought enters history with the assistant message (needed to feed back reasoning models). §P0-B: attach real usage for subsequent stale-estimate prevention.
+	// Content: resp.Text — models often prepend explanatory text before tool_calls (Claude via OpenAI proxy, some open-source models);
+	// including it in history preserves multi-turn coherence; the final text (loop.go:166)/summary (:102) paths both set Content, this aligns (R4-2, was previously discarded).
 	appendMsg(&msgs, newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
 
-	// 先按序通知本轮全部 tool_use：消费方尽早看到完整工具计划，且顺序确定。
-	// OnToolUse 返回 ErrToolDenied 表示拒绝该工具（如危险命令未确认）：记录后继续
-	// 通知其余工具，runToolsParallel 跳过被拒者；其他 error 仍终止循环。
+	// First notify all tool_use calls in this turn in order: consumers see the complete tool plan as early as possible, with deterministic ordering.
+	// OnToolUse returning ErrToolDenied rejects that tool (e.g. dangerous command not confirmed): record then continue
+	// notifying the rest; runToolsParallel skips the denied one; other errors still terminate the loop.
 	denied := make(map[string]bool)
 	if hooks.OnToolUse != nil {
 		for _, tc := range calls {
@@ -60,18 +60,19 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 					denied[tc.ID] = true
 					continue
 				}
-				// 配对补全：assistant 消息（含全部 tool_calls）已在 :52 append，此时 runToolsParallel
-				// 尚未执行，须为全部 calls 补占位 tool 消息保配对——与 OnToolResult(:89)/ShapeToolResult(:103)
-				// 错误路径一致（彼处 i.. 或 i+1.. 视已执行范围），防续跑被端点 400。
+				// Pairing backfill: the assistant message (containing all tool_calls) was appended at :52, but runToolsParallel
+				// hasn't executed yet — must backfill placeholder tool messages for all calls to preserve pairing (same as
+				// OnToolResult(:89)/ShapeToolResult(:103) error paths, where i.. or i+1.. covers the executed range),
+				// preventing endpoint 400 on resume.
 				fillPlaceholderTail(&msgs, newMsgs, calls, 0)
 				return msgs, err
 			}
 		}
 	}
 
-	// 同一步内 LLM 一次发起的多个 tool_call 相互独立，串行会让总耗时 = Σ 单工具
-	// 耗时（shell 可达数十秒）。并行执行，结果按原 index 回填，保证历史消息
-	// 与 assistant.tool_calls 一一对应（OpenAI 要求顺序匹配）。
+	// Multiple tool_calls from the same LLM turn are mutually independent; serial execution makes total time = Σ individual
+	// tool durations (shell can take tens of seconds). Execute in parallel, results backfilled by original index, ensuring
+	// history messages correspond one-to-one with assistant.tool_calls (OpenAI requires ordered matching).
 	parallel := cfg.MaxParallelTools
 	if parallel <= 0 {
 		parallel = maxParallelTools
@@ -83,33 +84,33 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 		if logger != nil {
 			logger.Info("tool executed", "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
 		}
-		// 工具执行后通知消费方结果（含 ExitCode/is_error），供实时观察与校验。
+		// Notify consumer of tool results after execution (including ExitCode/is_error), for real-time observation and verification.
 		if hooks.OnToolResult != nil {
 			if err := hooks.OnToolResult(tc.Name, tc.ID, tres); err != nil {
-				// 配对补全：下游不可写，剩余 calls（含当前 i）结果无法提交；但 assistant.tool_calls 已入历史，
-				// 须为每个补一条占位 tool 消息，否则 Messages 配对断裂、续跑被端点 400（P2-1）。
+				// Pairing backfill: downstream unwritable, remaining calls (including current i) results cannot be committed; but assistant.tool_calls are already in history,
+				// must backfill a placeholder tool message for each, otherwise Messages pairing breaks and resume gets endpoint 400 (P2-1).
 				fillPlaceholderTail(&msgs, newMsgs, calls, i)
 				return msgs, err
 			}
 		}
-		// 工具结果成型：经 ShapeToolResult 钩子外挂（截断/落盘/RAG 摘要等）。nil=核心透传原文、零成型
-		// （极简模式）；默认实现 NewDefaultShapeToolResult 承载原 trimForHistory 截断 + 可选落盘。
-		// 只改 tool 消息 content，不动 role/tool_call_id——配对不变量由核心保证。
+		// Tool result shaping: via ShapeToolResult hook (truncate/persist/RAG summary etc.). nil = core passes through raw output, no shaping
+		// (minimal mode); default implementation NewDefaultShapeToolResult carries the original trimForHistory truncation + optional persist.
+		// Only changes tool message content, not role/tool_call_id — pairing invariant guaranteed by core.
 		content := tres.Output
 		if hooks.ShapeToolResult != nil {
 			c, serr := hooks.ShapeToolResult(tc.Name, tc.ID, step, tres)
 			if serr != nil {
-				// 成型钩子抛错：当前 i 已执行（OnToolResult 已成功通知真实结果），用原始 Output 入历史
-				// 保与消费方所见一致；剩余 calls 补占位保配对（区别于 OnToolResult 抛错：彼处消费方未确认，i 亦占位）。
+				// Shaping hook error: current i already executed (OnToolResult already successfully notified with real result), use raw Output
+				// into history to stay consistent with what consumer saw; remaining calls backfill placeholders to preserve pairing (unlike OnToolResult error: consumer not confirmed there, i also gets placeholder).
 				appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: tc.ID, Content: tres.Output, IsError: tres.IsError})
-				// i+1.. 工具已执行（runToolsParallel 全跑），其真实结果尽力通知 OnToolResult——两钩子关注点可能独立
-				//（如 ShapeToolResult 落盘磁盘满，而 OnToolResult 的 stdout 管道仍可用），否则消费方漏看已执行工具的结果。
-				// OnToolResult 再抛错则从该处补占位并返回该错（下游不可写，继续通知无意义）。
+				// i+1.. tools already executed (runToolsParallel ran all), their real results best-effort notified via OnToolResult — the two hooks' concerns may be independent
+				// (e.g. ShapeToolResult persist disk full, while OnToolResult's stdout pipe still usable), otherwise consumer misses results of executed tools.
+				// OnToolResult error again: backfill placeholders from that point and return that error (downstream unwritable, further notification is pointless).
 				if hooks.OnToolResult != nil {
 					for j := i + 1; j < len(calls); j++ {
 						if err := hooks.OnToolResult(calls[j].Name, calls[j].ID, results[j]); err != nil {
-							// OnToolResult 在 j 处再抛错：i+1..j-1 虽已成功通知消费方，但 transcript 未 append
-							// 任何 tool 消息（仅 :106 追加了 i）。故从 i+1 起全补占位（非 j），否则 i+1..j-1 缺配对。
+							// OnToolResult error at j: i+1..j-1 were successfully notified to consumer, but transcript hasn't appended
+							// any tool messages (only :106 appended i). So backfill placeholders from i+1 (not j), otherwise i+1..j-1 lack pairing.
 							fillPlaceholderTail(&msgs, newMsgs, calls, i+1)
 							return msgs, err
 						}
@@ -127,42 +128,43 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 	return msgs, nil
 }
 
-// fillPlaceholderTail 在下游不可写（OnToolResult/ShapeToolResult 抛错）时，为 calls[from:] 每条
-// 补一条占位 tool 消息，保 Messages 配对完整——assistant.tool_calls 已入历史，缺配对会致续跑被端点 400。
+// fillPlaceholderTail backfills one placeholder tool message per call in calls[from:] when downstream is unwritable
+// (OnToolResult/ShapeToolResult error), preserving complete Messages pairing — assistant.tool_calls already in history,
+// missing pairing causes endpoint 400 on resume.
 func fillPlaceholderTail(msgs, newMsgs *[]Message, calls []ToolCall, from int) {
 	for j := from; j < len(calls); j++ {
-		appendMsg(msgs, newMsgs, Message{Role: RoleTool, ToolCallID: calls[j].ID, Content: "工具未提交结果：上游管道错误", IsError: true})
+		appendMsg(msgs, newMsgs, Message{Role: RoleTool, ToolCallID: calls[j].ID, Content: "tool result not submitted: upstream pipeline error", IsError: true})
 	}
 }
 
-// runToolsParallel 并行执行 calls，返回与 calls 同序的结果。
-// 各 goroutine 写入 results 的不同下标，无内存竞争；wg.Wait 提供 happens-before。
-// 未知工具在调度前短路，直接回填错误结果。每个 tool 的 panic 由 safeCall 兜底。
-// 用 buffered chan 做信号量限制同时在途的工具数（默认 maxParallelTools，cfg.MaxParallelTools 可覆盖）。
+// runToolsParallel executes calls in parallel, returning results in the same order as calls.
+// Each goroutine writes to a different index in results, no data race; wg.Wait provides happens-before.
+// Unknown tools short-circuit before scheduling, directly backfilling error results. Each tool's panic is caught by safeCall.
+// Uses a buffered chan as semaphore to limit in-flight tools (default maxParallelTools, cfg.MaxParallelTools can override).
 func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall, toolByName map[string]Tool, denied map[string]bool, parallel int) []ToolResult {
 	results := make([]ToolResult, len(calls))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, parallel)
 	for i, tc := range calls {
 		if denied[tc.ID] {
-			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "用户拒绝执行"}
+			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "user rejected execution"}
 			continue
 		}
 		tool, ok := toolByName[tc.Name]
 		if !ok {
-			// ExitCode=ExitCodeNotSet 与 denied 一致：未知工具从未真正执行，零值 0 会被事件层误读为成功（P3-4）。
-			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: fmt.Sprintf("未知工具 %q", tc.Name)}
+			// ExitCode=ExitCodeNotSet same as denied: unknown tool never actually executed, zero value 0 would be misread by event layer as success (P3-4).
+			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: fmt.Sprintf("unknown tool %q", tc.Name)}
 			continue
 		}
 		wg.Add(1)
 		go func(i int, tc ToolCall, tool Tool) {
 			defer wg.Done()
-			// 信号量获取联动 ctx：取消后排队中的调用直接放弃，不再等空位；
-			// 否则一个不尊重 ctx 的阻塞工具会永久占位，wg.Wait 不返回、Run 挂死。
+			// Semaphore acquisition tied to ctx: after cancellation, queued calls immediately abort without waiting for a slot;
+			// otherwise a ctx-disrespecting blocking tool would hold a slot forever, wg.Wait wouldn't return, Run hangs.
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "已取消"}
+			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "cancelled"}
 				return
 			}
 			defer func() { <-sem }()

@@ -36,15 +36,15 @@ func requireConfig(configPath string) (*config.Config, error) {
 	if p != "" {
 		return config.LoadConfig(p)
 	}
-	return nil, errors.New("miniagent config 不存在（-config <path> 或 ~/.miniagent/miniagent.json）")
+	return nil, errors.New("miniagent config not found (-config <path> or ~/.miniagent/miniagent.json)")
 }
 
-// findDefaultConfigPath 查找默认 config 路径：仅 ~/.miniagent/miniagent.json。
-// 返回找到的路径的绝对路径；若都未找到返回空字符串；若 stat 出错返回该错误。
+// findDefaultConfigPath locates the default config path: only ~/.miniagent/miniagent.json.
+// Returns the absolute path if found; an empty string if none; the stat error if stat fails.
 func findDefaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("定位 home 目录失败：%w", err)
+		return "", fmt.Errorf("locate home directory failed: %w", err)
 	}
 	p := filepath.Join(home, ".miniagent", "miniagent.json")
 	if _, err := os.Stat(p); err == nil {
@@ -56,8 +56,8 @@ func findDefaultConfigPath() (string, error) {
 	return "", nil
 }
 
-// collectOverrides 用 flag.Visit 收集「显式传入」的 flag（未传入置 nil），供 Resolve 裁决。
-// P2 后仅保留 CLI 核心参数；策略参数（summary/duration/window 等）只在 config，不经 CLI。
+// collectOverrides uses flag.Visit to collect explicitly-set flags (unset left nil), for Resolve to arbitrate.
+// After P2 only core CLI params remain; policy params (summary/duration/window etc.) live only in config, not via CLI.
 func collectOverrides(f *cliFlags) config.CLIOverrides {
 	set := map[string]bool{}
 	flag.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
@@ -89,7 +89,7 @@ func collectOverrides(f *cliFlags) config.CLIOverrides {
 	return o
 }
 
-// resolveFinalKey：config(provider.Key) > env。机密建议用环境变量注入，避免明文入 config。
+// resolveFinalKey: config(provider.Key) > env. Secrets should be injected via env vars to avoid plaintext in config.
 func resolveFinalKey(providerKey string) string {
 	if providerKey != "" {
 		return providerKey
@@ -98,22 +98,22 @@ func resolveFinalKey(providerKey string) string {
 }
 
 func validateConversation(resolved *config.Resolved, f *cliFlags) {
-	// 互斥查「解析后」的 stream（cli>config）：config run.stream=true + CLI -result-only 也须触发，
-	// 否则 loopCfg.Stream 解析为 true 而 buildHooks 返回空事件钩子，SSE 被拉取却丢弃、违反文档互斥语义。
+	// Check mutex on the resolved stream (cli>config): config run.stream=true + CLI -result-only must also trigger,
+	// otherwise loopCfg.Stream resolves true while buildHooks returns an empty event hook, SSE is fetched then discarded, violating documented mutual-exclusion semantics.
 	if intoBool(resolved.Run.Stream, *f.stream) && *f.resultOnly {
-		fmt.Fprintln(os.Stderr, "miniagent: -stream（或 config run.stream）与 -result-only 互斥")
+		fmt.Fprintln(os.Stderr, "miniagent: -stream (or config run.stream) is mutually exclusive with -result-only")
 		os.Exit(1)
 	}
 	if *f.saveSession && *f.session != "" {
-		fmt.Fprintln(os.Stderr, "miniagent: -save-session 与 -session 互斥")
+		fmt.Fprintln(os.Stderr, "miniagent: -save-session is mutually exclusive with -session")
 		os.Exit(1)
 	}
 	if *f.saveSession && *f.resultOnly {
-		fmt.Fprintln(os.Stderr, "miniagent: -save-session 与 -result-only 互斥（subagent fork 无状态，不落盘会话）")
+		fmt.Fprintln(os.Stderr, "miniagent: -save-session is mutually exclusive with -result-only (subagent fork is stateless, does not persist session)")
 		os.Exit(1)
 	}
 	if resolved.Mode == miniagent.ModeDefault && effectiveWorkdir(resolved, f) == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: default 模式需 -workdir（或 config run.workdir，或用 -mode auto）")
+		fmt.Fprintln(os.Stderr, "miniagent: default mode requires -workdir (or config run.workdir, or use -mode auto)")
 		os.Exit(1)
 	}
 }
@@ -183,7 +183,7 @@ func maxSessionBytesOf(resolved *config.Resolved) int {
 
 func buildHooks(resultOnly bool) miniagent.LoopHooks {
 	if resultOnly {
-		// subagent fork：stdout 纯文本即结果，不发 NDJSON 事件。
+		// subagent fork: stdout is plain-text result, no NDJSON events emitted.
 		return miniagent.LoopHooks{}
 	}
 	emit := event.ToolUseWriter(os.Stdout)
@@ -221,9 +221,9 @@ func emitRunResult(result miniagent.Result, model string, resultOnly bool, logge
 	}
 }
 
-// absConfigPath 返回实际加载的 config 绝对路径（显式 -config 或默认 ~/.miniagent/miniagent.json），
-// 供 subagent fork 引导注入。cfg 始终非 nil（S1 删裸模式）。
-// 逻辑与 requireConfig 保持一致：显式 -config > ~/.miniagent/miniagent.json。
+// absConfigPath returns the absolute path of the actually-loaded config (explicit -config or default ~/.miniagent/miniagent.json),
+// for subagent fork bootstrap injection. cfg is always non-nil (S1 removed bare mode).
+// Logic mirrors requireConfig: explicit -config > ~/.miniagent/miniagent.json.
 func absConfigPath(configPath string) string {
 	if configPath != "" {
 		abs, _ := filepath.Abs(configPath)

@@ -11,18 +11,18 @@ import (
 func TestBuildTools_AlwaysRegisters10(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{})
 	if len(tools) != 10 {
-		t.Fatalf("got %d tools, want 10（7 内置 + 3 todo）", len(tools))
+		t.Fatalf("got %d tools, want 10 (7 builtins + 3 todo)", len(tools))
 	}
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{})
 	if len(tools) != 10 {
-		t.Fatalf("got %d tools, want 10（7 内置 + 3 todo）", len(tools))
+		t.Fatalf("got %d tools, want 10 (7 builtins + 3 todo)", len(tools))
 	}
 }
 
-// S4：fileResultLimit>0 覆盖 read/edit 的 ResultLimit；<=0 保留构造器内置默认。
+// S4: fileResultLimit>0 overrides read/edit's ResultLimit; <=0 keeps the constructor builtin default.
 func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	dir := t.TempDir()
 	byName := map[string]int{}
@@ -34,7 +34,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 			t.Errorf("%s ResultLimit = %d, want 4242", name, byName[name])
 		}
 	}
-	// <=0：保留内置 maxFileResultInHistory（8000）。
+	// <=0: keeps the builtin maxFileResultInHistory (8000).
 	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}) {
 		if tl.Name == "read" && tl.ResultLimit != 8000 {
 			t.Errorf("read ResultLimit = %d, want builtin 8000 when limit<=0", tl.ResultLimit)
@@ -42,7 +42,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	}
 }
 
-// buildTools(default) 后写工具对越界 path 返回 IsError（含「default 模式」）。
+// After buildTools(default), write tools return IsError for an out-of-bounds path (containing "default mode").
 func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
 	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{})
@@ -57,7 +57,7 @@ func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	}
 	for _, c := range cases {
 		r := byName[c.name].Call(context.Background(), c.args)
-		if !r.IsError || !strings.Contains(r.Output, "default 模式") {
+		if !r.IsError || !strings.Contains(r.Output, "default mode") {
 			t.Errorf("%s escape should be rejected: %s", c.name, r.Output)
 		}
 	}

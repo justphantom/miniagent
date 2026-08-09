@@ -16,21 +16,22 @@ import (
 	"time"
 )
 
-// maxShellOutputChars 是 shell/glob/grep 共享的工具输出字符上限：100KB 覆盖典型命令输出。
-// 运行时经 miniagent.Limits.MaxShellOutputChars 覆盖（<=0 用此默认）。streamWindow 默认 = maxOutputChars*8。
+// maxShellOutputChars is the shared tool output character cap for shell/glob/grep: 100KB covers typical command output.
+// Overridden at runtime via miniagent.Limits.MaxShellOutputChars (<=0 uses this default). streamWindow defaults to maxOutputChars*8.
 const maxShellOutputChars = 100000
 
 const shellTimeout = 120 * time.Second
 
-// sudoSuRe 词边界匹配常见特权提升器（sudo/su/doas/pkexec/gsudo/run0）与专有特权/
-// 命名空间工具（setpriv/nsenter/unshare/chroot/machinectl）：覆盖 "cd /x && sudo ..."
-// 等中段命令。setpriv 等是低频专有工具，误伤远小于作为提权/逃逸工具的收益。仍可被
-// 变量拼接/拆分/未列出的提权器绕过——default 是薄软约束，不构成安全边界
-// （审查 v2 #10、P2-12、三轮 P3）。不含 please：它是英文常用词，误伤远大于收益。
+// sudoSuRe word-boundary matches common privilege escalators (sudo/su/doas/pkexec/gsudo/run0) and proprietary
+// privilege/namespace tools (setpriv/nsenter/unshare/chroot/machinectl): covers mid-segment commands like
+// "cd /x && sudo ...". setpriv et al. are low-frequency proprietary tools; their false-positive cost is far
+// smaller than the value of catching them as escalation/escape tools. This can still be bypassed by variable
+// concatenation/splitting or unlisted escalators — default is a thin soft constraint, not a security boundary
+// (review v2 #10, P2-12, three rounds of P3). Does not include please: a common English word whose false-positive cost outweighs the benefit.
 var sudoSuRe = regexp.MustCompile(`\b(sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl)\b`)
 
-// ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 用默认 shellTimeout。
-// workspaceRoot 为空时 cmd.Dir 留空，exec 继承父进程 cwd。mode=default 时拒绝 sudo/su。
+// ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 uses the default shellTimeout.
+// When workspaceRoot is empty cmd.Dir is left empty and exec inherits the parent process's cwd. mode=default rejects sudo/su.
 func ShellTool(workspaceRoot string, timeout time.Duration, mode string, maxOutputChars, streamWindow int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
@@ -43,34 +44,34 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string, maxOutp
 	}
 	return miniagent.Tool{
 		Name:        "shell",
-		Description: "通过 sh -c 执行一条 shell 命令。返回 stdout+stderr 合并输出。命令最长运行 " + timeout.String() + "；输出超过 " + strconv.Itoa(maxOutputChars) + " 字符会被截断。",
+		Description: "Runs a shell command via sh -c. Returns merged stdout+stderr output. The command runs at most " + timeout.String() + "; output exceeding " + strconv.Itoa(maxOutputChars) + " characters is truncated.",
 		Parameters: object(map[string]any{
-			"command": map[string]any{"type": "string", "description": "要执行的 shell 命令"},
+			"command": map[string]any{"type": "string", "description": "The shell command to execute"},
 		}, "command"),
 		ResultLimit:   policy.MaxToolResultInHistory,
-		SplitTruncate: true, // shell 输出的错误结论（exit status / FAIL）常在尾部，前截断会丢失
+		SplitTruncate: true, // the error conclusion of shell output (exit status / FAIL) is often at the tail; front-truncation would lose it
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			var a struct {
 				Command string `json:"command"`
 			}
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
+				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed: %v (received %q)", err, args)}
 			}
 			if strings.TrimSpace(a.Command) == "" {
-				return miniagent.ToolResult{IsError: true, Output: "参数缺失：command"}
+				return miniagent.ToolResult{IsError: true, Output: "missing argument: command"}
 			}
 			return runShellCommand(ctx, workspaceRoot, mode, a.Command, timeout, maxOutputChars, streamWindow)
 		},
 	}
 }
 
-// runShellCommand 执行 command（经 sh -c），含 mode 黑名单/env 剥离/进程组/超时/输出截断/退出码映射。
-// shell 工具与 script 工具共用（P1：.miniagent/scripts.json 注册的工具继承同一套安全策略）。
-// timeout<=0 用默认 shellTimeout。区分 shell 自身超时与父 ctx 取消：父 ctx 未取消、仅 runCtx 到期
-// 才是 shell 自身超时；非 0 退出是命令的合法结果（IsError=false，LLM 据 ExitCode 判成败）。
+// runShellCommand executes command (via sh -c), including the mode blacklist / env scrubbing / process group / timeout / output truncation / exit-code mapping.
+// Shared by the shell tool and the script tool (P1: tools registered via .miniagent/scripts.json inherit the same set of security policies).
+// timeout<=0 uses the default shellTimeout. Distinguishes the shell's own timeout from parent ctx cancellation: only when the parent ctx is not cancelled
+// and runCtx expires is it the shell's own timeout; a non-zero exit is a legitimate command result (IsError=false, the LLM decides success via ExitCode).
 func runShellCommand(ctx context.Context, workdir, mode, command string, timeout time.Duration, maxOutputChars, streamWindow int) miniagent.ToolResult {
 	if mode == miniagent.ModeDefault && sudoSuRe.MatchString(command) {
-		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: "default 模式禁止特权提升器 sudo/su/doas/pkexec/gsudo/run0/setpriv/nsenter/unshare/chroot/machinectl（用 -mode auto 放行）"}
+		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: "default mode forbids privilege escalators sudo/su/doas/pkexec/gsudo/run0/setpriv/nsenter/unshare/chroot/machinectl (use -mode auto to allow)"}
 	}
 	if timeout <= 0 {
 		timeout = shellTimeout
@@ -85,29 +86,29 @@ func runShellCommand(ctx context.Context, workdir, mode, command string, timeout
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "sh", "-c", command)
 	cmd.Dir = workdir
-	// 剥离 MINIAGENT_* 前缀与含密钥关键字的变量，降低 LLM 直接 echo 宿主
-	// 配置/凭证的概率；非隔离边界，见 scrubEnv 注释。
+	// Scrub MINIAGENT_* prefixed entries and entries whose names contain secret-related keywords, lowering the chance
+	// the LLM directly echoes host config/credentials; this is not an isolation boundary, see scrubEnv comment.
 	cmd.Env = scrubEnv(os.Environ())
-	// 独立进程组：超时 kill(-pgid) 才能连带清理 sh 派生的孙子进程，
-	// 否则 make/find 之类会成孤儿继续跑。
+	// Separate process group: on timeout kill(-pgid) can also clean up the grandchild processes spawned by sh,
+	// otherwise make/find and the like would go orphan and keep running.
 	setPGID(cmd)
 	body, err := runShellLimited(runCtx, cmd, maxOutputChars, streamWindow)
 	if err != nil {
-		// runCtx 是 ctx 的子，父超时也会令 runCtx 到期；仅父 ctx 未取消时才算 shell 自身超时。
+		// runCtx is a child of ctx; a parent timeout also expires runCtx; only when the parent ctx is not cancelled is it the shell's own timeout.
 		if ctx.Err() == nil && runCtx.Err() != nil {
-			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\n⏱ 命令超时（>%s），已终止。", timeout)}
+			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\n⏱ command timed out (>%s), terminated.", timeout)}
 		}
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if ee.ExitCode() < 0 {
-				// 信号杀死（含父 ctx 取消的 SIGKILL、shell 超时后的进程组清理）：非命令合法退出，
-				// 按 IsError + miniagent.ExitCodeNotSet 记——守住「miniagent.ExitCodeNotSet ⟺ IsError」约定（与超时/取消一致），
-				// 避免 LLM 看到 IsError=false + 负退出码的矛盾结果。
-				return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\n命令被信号终止：%v。", ee)}
+				// Killed by signal (including the SIGKILL from parent ctx cancellation and the process-group cleanup after a shell timeout): not a legitimate command exit,
+				// recorded as IsError + miniagent.ExitCodeNotSet — upholding the "miniagent.ExitCodeNotSet ⟺ IsError" convention (consistent with timeout/cancellation),
+				// so the LLM never sees the contradictory IsError=false + negative exit code.
+				return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\ncommand terminated by signal: %v.", ee)}
 			}
 			return miniagent.ToolResult{Output: body, ExitCode: ee.ExitCode()}
 		}
-		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\n执行失败：%v", err)}
+		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\nexecution failed: %v", err)}
 	}
 	return miniagent.ToolResult{Output: body, ExitCode: 0}
 }
@@ -120,9 +121,9 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd, maxOutputChars, streamW
 		_ = pw.Close()
 		return "", err
 	}
-	// exec 不会主动关闭 io.PipeWriter；ctx 超时后主进程已被 CommandContext
-	// 杀掉，但 pw 仍开着，读循环会永久阻塞。这里监听 ctx，一旦 done 就关闭
-	// pw 并 kill 整组，让读循环解除阻塞、cmd.Wait 返回 kill-error。
+	// exec does not actively close the io.PipeWriter; after ctx times out the main process has been killed by
+	// CommandContext, but pw is still open and the read loop would block forever. Here we listen on ctx, and once
+	// done we close pw and kill the whole group so the read loop unblocks and cmd.Wait returns a kill-error.
 	go func() {
 		<-ctx.Done()
 		killProcessGroup(cmd)
@@ -133,41 +134,42 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd, maxOutputChars, streamW
 		waitErr <- cmd.Wait()
 		_ = pw.Close()
 	}()
-	// §P1-D：字节滑窗累积器——运行中保最近 keep 字节（尾部）、超窗丢中段（保住 shell 错误/退出码所在尾部），
-	// 子进程因 pipe 被持续排空不阻塞、不被输出量打断（移除旧 LimitReader+volume-kill），跑到 Wait 返回可信 ExitCode。
-	// phase-1 落盘默认关（headSpillBytes=0）。
+	// §P1-D: byte sliding-window accumulator — keeps the most recent keep bytes (tail) during execution, drops the middle when over the window (preserving the tail where shell errors/exit codes live);
+	// the subprocess never blocks because the pipe is continuously drained, and is not interrupted by output volume (removing the old LimitReader+volume-kill), running until Wait returns a trustworthy ExitCode.
+	// phase-1 disk spill is off by default (headSpillBytes=0).
 	accum := newOutputAccum(streamWindow, 0, "", "miniagent_shell_")
 	buf := make([]byte, 32*1024)
 	for {
 		n, rerr := pr.Read(buf)
 		if n > 0 {
-			_ = accum.write(string(buf[:n])) // 落盘失败 best-effort（phase-1 关，不会触发）
+			_ = accum.write(string(buf[:n])) // disk-spill failure is best-effort (phase-1 off, won't trigger)
 		}
 		if rerr != nil {
-			break // EOF（pw 关闭）或读错
+			break // EOF (pw closed) or read error
 		}
 	}
 	_ = accum.closeSink()
 	err := <-waitErr
-	// 兜底：正常退出后也整组清理一次，防后台 & 残留（不再为 volume kill）。
+	// Fallback: clean up the whole group once more after normal exit, to prevent leftover background & jobs (no longer for volume kill).
 	killProcessGroup(cmd)
 	return accum.finalize(maxOutputChars), err
 }
 
-// scrubEnv 复制 env 并移除：所有 MINIAGENT_* 前缀条目，以及变量名（大写后）含
-// KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT 的条目。后者覆盖 config
-// 模式 ${MAIN_API_KEY} 注入的来源变量（非 MINIAGENT_ 前缀但同样承载真实 key），以及
-// AWS_ACCESS_KEY_ID、GH_TOKEN/GITHUB_TOKEN/GITHUB_PAT/GITLAB_PAT、DATABASE_PASSWORD、
-// MYSQL_PWD、DB_PASS/REDIS_PASS、GPG_PASSPHRASE、BASIC_AUTH/AUTH_HEADER 等高频宿主凭证，
-// 降低 LLM 经环境变量 echo 出密钥的概率。PWD/PASS/AUTH 等短关键字会扩大误伤面
-// （如 AUTHPROXY、PASSWORDLESS 中含 PASS/PASSWORD）——安全侧倾斜的已知取舍，倾向过度
-// 剥离而非泄漏。PAT 单独排除 PATH 族（PATH/PATHEXT/*_PATH），见 hasSecretKeyword 注释。
+// scrubEnv copies env and removes: all MINIAGENT_* prefixed entries, and entries whose variable name (uppercased) contains
+// KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT. The latter covers the source variable injected in
+// config mode via ${MAIN_API_KEY} (not MINIAGENT_ prefixed but equally carrying a real key), as well as high-frequency host
+// credentials such as AWS_ACCESS_KEY_ID, GH_TOKEN/GITHUB_TOKEN/GITHUB_PAT/GITLAB_PAT, DATABASE_PASSWORD,
+// MYSQL_PWD, DB_PASS/REDIS_PASS, GPG_PASSPHRASE, BASIC_AUTH/AUTH_HEADER, lowering the chance the LLM echoes a key out via
+// an environment variable. Short keywords like PWD/PASS/AUTH widen the false-positive surface (e.g. AUTHPROXY, PASSWORDLESS
+// contain PASS/PASSWORD) — a known trade-off tilted toward security, preferring over-scrubbing over leakage. PAT specifically
+// excludes the PATH family (PATH/PATHEXT/*_PATH), see hasSecretKeyword comment.
 //
-// 已知未覆盖（依赖调用方 OS 隔离兜底，不强制剥离以免误伤 agent 自身 shell 命令
-// 所需环境）：DATABASE_URL/SERVICE_URL（URL 过宽）、*_COOKIE、*_DSN、*_CONN。
-// 这些是增量泄漏面收窄，不是密钥隔离边界——未列出的凭证名仍继承，且子进程可经
-// /proc/$PPID/environ 读到 exec 前的完整环境快照。彻底方案是调用方隔离（容器/独立 UID）；
-// key 若经 $MINIAGENT_API_KEY 注入则必在进程 env，procfs 可读。
+// Known gaps (relying on the caller's OS isolation as a fallback; not force-scrubbed to avoid breaking the environment the
+// agent's own shell commands need): DATABASE_URL/SERVICE_URL (URL too broad), *_COOKIE, *_DSN, *_CONN.
+// These narrow the incremental leakage surface, they are not a key isolation boundary — unlisted credential names are still
+// inherited, and a subprocess can read the full pre-exec environment snapshot via /proc/$PPID/environ. The thorough solution
+// is caller-side isolation (container/dedicated UID); if a key is injected via $MINIAGENT_API_KEY it is necessarily in the
+// process env and readable via procfs.
 func scrubEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
@@ -186,10 +188,11 @@ func scrubEnv(env []string) []string {
 	return out
 }
 
-// hasSecretKeyword 报告大写变量名是否含密钥相关关键字。仅服务于 scrubEnv。
-// PAT 覆盖 GITHUB_PAT 等 fine-grained token，但 PATH 族变量共享 P-A-T 子串——PATH 是 shell
-// 解析可执行路径的必需变量，误剥会让 ls/grep/cat 全部失效。故 PAT 单独走「含 PATH 必为路径类、
-// 豁免」分支。COMPAT_*/PATCH_* 等罕见变量会被过度剥离，接受。
+// hasSecretKeyword reports whether the uppercased variable name contains a secret-related keyword. Serves scrubEnv only.
+// PAT covers fine-grained tokens like GITHUB_PAT, but the PATH family of variables shares the P-A-T substring — PATH is the
+// required variable for shell executable-path resolution, and scrubbing it would break ls/grep/cat entirely. So PAT goes
+// through a separate "if it contains PATH it must be path-like, exempt" branch. Rare variables like COMPAT_*/PATCH_* are
+// over-scrubbed, accepted.
 func hasSecretKeyword(upperName string) bool {
 	for _, kw := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PWD", "PASS", "PASSPHRASE", "AUTH"} {
 		if strings.Contains(upperName, kw) {

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 缓存 parse：chatEndpoint 多次调用返回同一 *url.URL（不每请求重做，审查 v3 #10）。
+// Cached parse: chatEndpoint returns the same *url.URL across calls (not re-parsed per request, review v3 #10).
 func TestChatEndpoint_CachedParse(t *testing.T) {
 	c := &ChatClient{ChatURL: "https://api/v1/chat/completions"}
 	_, u1, err := c.chatEndpoint(time.Second)
@@ -20,8 +20,9 @@ func TestChatEndpoint_CachedParse(t *testing.T) {
 	}
 }
 
-// 并发懒解析（直接 struct 构造、chatURL 未缓存）不应数据竞争（sync.Once 保护，修复 R4）。
-// go test -race 下验证：多 goroutine 首次触发的懒解析无竞争，且都返回同一缓存指针。
+// Concurrent lazy parsing (direct struct construction, chatURL not cached) must not data-race
+// (sync.Once guards it, fixes R4). Verified under go test -race: the lazy parse triggered first by
+// multiple goroutines is race-free and all return the same cached pointer.
 func TestChatEndpoint_ConcurrentLazyParse(t *testing.T) {
 	c := &ChatClient{ChatURL: "https://api/v1/chat/completions"}
 	const n = 20

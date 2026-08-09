@@ -9,8 +9,8 @@ import (
 	"github.com/justphantom/miniagent/internal/text"
 )
 
-// 工具调用永不停：每次都返回 tool_calls，触发 maxIterations 上限。
-// 终止信号由 Finish=max_iterations 表达（Steps=maxIterations + 空 Text）。
+// Tool calls never stop: every response returns tool_calls, hitting the maxIterations cap.
+// The termination signal is expressed via Finish=max_iterations (Steps=maxIterations + empty Text).
 func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	responses := make([]string, maxIterations+2)
@@ -32,14 +32,16 @@ func TestRun_MaxIterationsReturnsBurnedUsage(t *testing.T) {
 	if res.Text != "" {
 		t.Errorf("Text = %q, want empty (truncated)", res.Text)
 	}
-	// 每步 toolResponse 的 prompt_tokens=1；maxIterations 步主循环 + 总结步 → InputTokens 至少 maxIterations。
-	// 弱断言只查非零会放过部分步骤漏记（如回归只记 1 token 仍绿），故查累加下界。
+	// Each step's toolResponse has prompt_tokens=1; maxIterations steps of the main loop + summary step →
+	// InputTokens is at least maxIterations. A weak assertion that only checks non-zero would miss steps that
+	// go unrecorded (e.g. a regression that records only 1 token would still pass green), so we check a
+	// cumulative lower bound.
 	if res.Usage.InputTokens < maxIterations {
-		t.Errorf("usage 累加漏记: InputTokens=%d, want >= %d", res.Usage.InputTokens, maxIterations)
+		t.Errorf("usage accumulation missed: InputTokens=%d, want >= %d", res.Usage.InputTokens, maxIterations)
 	}
 }
 
-// MaxIterations 可覆盖默认上限：设为 3 则第 3 步撞顶（不受包默认 20 影响）。
+// MaxIterations can override the default cap: set to 3 and the 3rd step hits the cap (unaffected by the package default of 20).
 func TestRun_MaxIterationsOverride(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	responses := make([]string, 10)
@@ -60,7 +62,8 @@ func TestRun_MaxIterationsOverride(t *testing.T) {
 	}
 }
 
-// MaxIterations<=0 回退默认值：第 2 步给最终文本，验证未被误解析为极小上限。
+// MaxIterations<=0 falls back to the default: step 2 yields the final text, verifying it was not
+// misinterpreted as a tiny cap.
 func TestRun_MaxIterationsNonPositiveUsesDefault(t *testing.T) {
 	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	for _, v := range []int{0, -1} {
@@ -79,31 +82,31 @@ func TestRun_MaxIterationsNonPositiveUsesDefault(t *testing.T) {
 	}
 }
 
-// truncateHeadTail：头 n/4 + 尾 3n/4 + 中段 marker；短输入不截；n<=0 原样返回。
+// truncateHeadTail: head n/4 + tail 3n/4 + a middle marker; short input is not truncated; n<=0 returns as-is.
 func TestTruncateHeadTail(t *testing.T) {
-	s := "H" + strings.Repeat("m", 100) + "T" // 头 H，尾 T，中间噪声
-	got := text.TruncateHeadTail(s, 40, "…[省略中间段]")
+	s := "H" + strings.Repeat("m", 100) + "T" // head H, tail T, noise in between
+	got := text.TruncateHeadTail(s, 40, "…[middle omitted]")
 	if !strings.HasPrefix(got, "H") || !strings.HasSuffix(got, "T") {
-		t.Errorf("应保留首尾字符: %q", got)
+		t.Errorf("head/tail chars should be preserved: %q", got)
 	}
-	if !strings.Contains(got, "…[省略中间段]") {
-		t.Errorf("应含中段 marker: %q", got)
+	if !strings.Contains(got, "…[middle omitted]") {
+		t.Errorf("should contain the middle marker: %q", got)
 	}
-	// 头占 n/4=10，尾占 30。
+	// Head takes n/4=10, tail takes 30.
 	if !strings.HasPrefix(got, "H"+strings.Repeat("m", 9)) {
-		t.Errorf("头部应占 n/4: %q", got[:min(len(got), 12)])
+		t.Errorf("head should occupy n/4: %q", got[:min(len(got), 12)])
 	}
-	// 短输入不截断（无 marker）。
+	// Short input is not truncated (no marker).
 	if got := text.TruncateHeadTail("short", 100, "…"); strings.Contains(got, "…") {
-		t.Errorf("短输入不应截断: %q", got)
+		t.Errorf("short input should not be truncated: %q", got)
 	}
-	// n<=0 原样返回。
+	// n<=0 returns as-is.
 	if got := text.TruncateHeadTail(s, 0, "…"); got != s {
-		t.Errorf("n<=0 应原样返回")
+		t.Errorf("n<=0 should return as-is")
 	}
 }
 
-// C-3：reasoning 进入 transcript 并在下一步请求中以 reasoning_content 回灌。
+// C-3: reasoning enters the transcript and is fed back as reasoning_content in the next request.
 func TestRun_ReasoningEntersHistory(t *testing.T) {
 	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	step1 := `{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"think-step1","tool_calls":[{"id":"c1","type":"function","function":{"name":"q","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
@@ -127,8 +130,8 @@ func TestRun_ReasoningEntersHistory(t *testing.T) {
 	}
 }
 
-// StepOutput{Commit:true, View:nil}（调用方误用）不应清空 transcript——
-// applyBeforeLLM 的 Commit 路径用 toSend（已 nil 补救）而非裸 View。
+// StepOutput{Commit:true, View:nil} (caller misuse) must not clear the transcript —
+// the Commit path of applyBeforeLLM uses toSend (already nil-rescued) rather than the raw View.
 func TestApplyBeforeLLM_CommitNilViewKeepsTranscript(t *testing.T) {
 	msgs := []Message{{Role: RoleUser, Content: "keep"}}
 	newMsgs := []Message{{Role: RoleUser, Content: "keep"}}
@@ -144,15 +147,16 @@ func TestApplyBeforeLLM_CommitNilViewKeepsTranscript(t *testing.T) {
 		t.Fatalf("applyBeforeLLM: %v", err)
 	}
 	if len(toSend) != 1 || toSend[0].Content != "keep" {
-		t.Errorf("toSend 应保留原 transcript: %+v", toSend)
+		t.Errorf("toSend should preserve the original transcript: %+v", toSend)
 	}
 	if len(msgs) != 1 || msgs[0].Content != "keep" {
-		t.Errorf("Commit+View=nil 不应清空 msgs: %+v", msgs)
+		t.Errorf("Commit+View=nil must not clear msgs: %+v", msgs)
 	}
 }
 
-// 总结路径注入的 RoleSystem 引导消息不应进入 Result.Messages——
-// 用临时 reqMsgs 发请求，transcript 始终干净（修复前 summaryReq 裸 append 进 msgs 泄漏）。
+// The RoleSystem bootstrap message injected by the summary path must not enter Result.Messages —
+// the request uses a temporary reqMsgs, keeping the transcript clean (before the fix summaryReq did a raw
+// append into msgs, leaking it).
 func TestRun_SummaryPathDoesNotLeakSystemPrompt(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
@@ -170,13 +174,14 @@ func TestRun_SummaryPathDoesNotLeakSystemPrompt(t *testing.T) {
 	}
 	for i, m := range res.Messages {
 		if m.Role == RoleSystem {
-			t.Errorf("Result.Messages[%d] 不应含内部 RoleSystem 引导消息: %+v", i, m)
+			t.Errorf("Result.Messages[%d] should not contain an internal RoleSystem bootstrap message: %+v", i, m)
 		}
 	}
 }
 
-// 总结步返回 tool_calls（回落 FinishMaxIterations）时，该次调用 usage 仍应记账（与主路径 tool_calls 一致；
-// 修复前 tool_calls 分支在累加前 return，致总结步 token 未进 total）。
+// When the summary step returns tool_calls (falling back to FinishMaxIterations), that call's usage should
+// still be accounted for (consistent with the main path's tool_calls; before the fix the tool_calls branch
+// returned before accumulation, so the summary-step tokens never entered the total).
 func TestRun_SummaryFallbackAccountsUsage(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	step1 := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`
@@ -192,22 +197,23 @@ func TestRun_SummaryFallbackAccountsUsage(t *testing.T) {
 		t.Errorf("Finish = %q, want %q", res.Finish, FinishMaxIterations)
 	}
 	if res.Usage.InputTokens != 300 || res.Usage.OutputTokens != 30 {
-		t.Errorf("Usage = %+v, want {300, 30}（step1 100+10 + 总结 200+20）", res.Usage)
+		t.Errorf("Usage = %+v, want {300, 30} (step1 100+10 + summary 200+20)", res.Usage)
 	}
 }
 
-// 总结步 AfterLLM 抛错时 Steps 计 s（=iterLimit），与主路径 AfterLLM err 的 step-1 语义一致
-// （recordStepUsage 未执行、usage 未记这步）。修复前误记 s+1。
+// When the summary-step AfterLLM throws an error, Steps counts s (=iterLimit), consistent with the step-1
+// semantics of a main-path AfterLLM error (recordStepUsage did not run, usage for that step is not recorded).
+// Before the fix it was mistakenly recorded as s+1.
 func TestRun_SummaryAfterLLMErrorSteps(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
-		textResponse("总结"),
+		textResponse("summary"),
 	}}
 	llm := testClients(tr)
 	hooks := LoopHooks{
 		AfterLLM: func(_ context.Context, step int, _ Response) error {
-			if step == 2 { // 总结步 s+1
+			if step == 2 { // summary step s+1
 				return errors.New("afterllm boom")
 			}
 			return nil
@@ -219,6 +225,6 @@ func TestRun_SummaryAfterLLMErrorSteps(t *testing.T) {
 		t.Fatal("expected AfterLLM error")
 	}
 	if res.Steps != 1 {
-		t.Errorf("Steps = %d, want 1（总结 AfterLLM err 按 usage-未记语义计 s=iterLimit）", res.Steps)
+		t.Errorf("Steps = %d, want 1 (summary AfterLLM err counts s=iterLimit per the usage-not-recorded semantics)", res.Steps)
 	}
 }

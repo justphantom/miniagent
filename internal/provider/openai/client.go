@@ -16,16 +16,17 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
-const maxChatBodyBytes = 4 << 20 // 4 MiB；恰好达到不截断，多 1 字节即报错
+const maxChatBodyBytes = 4 << 20 // 4 MiB; exactly at the limit so it does not truncate, 1 byte over errors
 
-// ChatClient 调 OpenAI 兼容 chat completions 端点（非流式）+ models 列表。
-// 懒解析（直接 struct 构造的测试路径）用 sync.Once 保护，确保并发 Do 无竞争（修复 R4）。
-// 流式走 StreamClient（P4 拆分）；本 client 的 *http.Client 带总 Timeout 兜底防单次调用挂死。
+// ChatClient calls an OpenAI-compatible chat completions endpoint (non-streaming) + the models list.
+// Lazy parsing (the test path that constructs the struct directly) is guarded by sync.Once to ensure
+// concurrent Do calls are race-free (fixes R4). Streaming goes through StreamClient (P4 split); this
+// client's *http.Client carries an overall Timeout as a fallback against a single call hanging.
 type ChatClient struct {
 	APIKey     string
 	ChatURL    string
 	ModelsURL  string
-	Headers    map[string]string // 自定义请求头，不覆盖 Authorization / Content-Type
+	Headers    map[string]string // custom request headers; does not override Authorization / Content-Type
 	chatURL    *url.URL
 	chatOnce   sync.Once
 	chatErr    error
@@ -36,8 +37,9 @@ type ChatClient struct {
 	Logger     *slog.Logger
 }
 
-// NewChatClient 构造时 parse 并缓存 chatURL/modelsURL（审查 v3 #10）。modelsURL 可空
-// （ListAllModels 静态回落时不 GET）。headers 为 provider 自定义请求头，可为 nil。
+// NewChatClient parses and caches chatURL/modelsURL at construction time (review v3 #10). modelsURL
+// may be empty (ListAllModels does not GET when falling back to the static list). headers is the
+// provider's custom request header map and may be nil.
 func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*ChatClient, error) {
 	chat, err := config.ValidateURL(chatURL)
 	if err != nil {
@@ -54,8 +56,9 @@ func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, l
 	return c, nil
 }
 
-// cacheEndpoint 解析 raw 缓存进 dst（已设则不动），失败缓存进 errp。调用方在
-// sync.Once.Do 内调用以并发安全（chat/models 复用，修复 R4）。
+// cacheEndpoint parses raw and caches it into dst (no-op if already set); on failure it caches the
+// error into errp. The caller invokes it inside sync.Once.Do for concurrency safety (reused by
+// chat/models, fixes R4).
 func cacheEndpoint(dst **url.URL, errp *error, raw string) {
 	if *dst != nil {
 		return
@@ -68,7 +71,8 @@ func cacheEndpoint(dst **url.URL, errp *error, raw string) {
 	*dst = u
 }
 
-// chatEndpoint 返回缓存的 chatURL（懒解析兜底直接构造，sync.Once 保证并发安全）。
+// chatEndpoint returns the cached chatURL (lazy-parse fallback for direct construction; sync.Once
+// guarantees concurrency safety).
 func (c *ChatClient) chatEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
 	c.chatOnce.Do(func() { cacheEndpoint(&c.chatURL, &c.chatErr, c.ChatURL) })
 	if c.chatErr != nil {
@@ -80,7 +84,7 @@ func (c *ChatClient) chatEndpoint(defaultTimeout time.Duration) (*http.Client, *
 func (c *ChatClient) modelsEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
 	c.modelsOnce.Do(func() {
 		if c.modelsURL == nil && c.ModelsURL == "" {
-			c.modelsErr = errors.New("miniagent: models_url 未配置")
+			c.modelsErr = errors.New("miniagent: models_url not configured")
 			return
 		}
 		cacheEndpoint(&c.modelsURL, &c.modelsErr, c.ModelsURL)
@@ -91,9 +95,11 @@ func (c *ChatClient) modelsEndpoint(defaultTimeout time.Duration) (*http.Client,
 	return c.client(defaultTimeout), c.modelsURL, nil
 }
 
-// client 返回非流式 http.Client。c.HTTP!=nil 沿用注入；否则每次按 defaultTimeout 构造（构造廉价、
-// 共享 DefaultTransport 故连接池不受影响）。原 defaultClient 缓存被 chat(120s)/models(30s) 端点共用，
-// sync.Once 使首调用方 timeout 固化、后续 defaultTimeout 被静默忽略，故去缓存。
+// client returns the non-streaming http.Client. When c.HTTP != nil the injected client is reused;
+// otherwise a new client is built per call with defaultTimeout (cheap to build, shares
+// DefaultTransport so the connection pool is unaffected). The former defaultClient cache was shared
+// by the chat(120s)/models(30s) endpoints, and sync.Once pinned the first caller's timeout while
+// later defaultTimeout values were silently ignored, so the cache was removed.
 func (c *ChatClient) client(defaultTimeout time.Duration) *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
@@ -101,12 +107,13 @@ func (c *ChatClient) client(defaultTimeout time.Duration) *http.Client {
 	return &http.Client{Timeout: defaultTimeout}
 }
 
-// Do 调用 POST ChatURL（非流式），解析 choices[0] / usage / finish_reason。响应 body
-// 上限 maxChatBodyBytes，越界报错。
+// Do posts to ChatURL (non-streaming) and parses choices[0] / usage / finish_reason. The response
+// body is capped at maxChatBodyBytes; exceeding it errors.
 //
-// 重试策略：429/500/502/503/504 与网络错误自动重试 maxRetries 次，退避按
-// retryBaseDelay * 2^attempt；若响应带 Retry-After（秒数或 HTTP-date），用它取代退避
-// （仍受 retryMaxDelay 封顶）。其他 4xx / 解析错误 / 超大 body 立即返回。重试可被 ctx 取消。
+// Retry policy: 429/500/502/503/504 and network errors are retried automatically up to maxRetries
+// times with backoff of retryBaseDelay * 2^attempt; if the response carries Retry-After (seconds or
+// HTTP-date) it replaces the backoff (still capped by retryMaxDelay). Other 4xx / parse errors /
+// oversized bodies return immediately. Retries are cancelable via ctx.
 func (c *ChatClient) Do(ctx context.Context, req miniagent.Request) (miniagent.Response, error) {
 	client, u, body, err := c.prepareDo(req)
 	if err != nil {
@@ -125,7 +132,7 @@ func (c *ChatClient) Do(ctx context.Context, req miniagent.Request) (miniagent.R
 			return resp, nil
 		}
 		if !retryable || attempt == maxRetries {
-			// 用尽重试或不可重试错误：补"已重试 N 次"上下文便于排错。
+			// Retries exhausted or non-retryable error: add "after N retries" context to aid debugging.
 			if attempt > 0 {
 				return miniagent.Response{}, fmt.Errorf("after %d retries: %w", attempt, err)
 			}
@@ -140,22 +147,24 @@ func (c *ChatClient) Do(ctx context.Context, req miniagent.Request) (miniagent.R
 		}
 		backoff *= 2
 	}
-	// 循环正常退出（不会到达，所有路径已在循环内 return）；保留兜底。
+	// Normal loop exit (unreachable; all paths return inside the loop); kept as a defensive fallback.
 	return miniagent.Response{}, errors.New("llm retry loop exited unexpectedly")
 }
 
-// doOnce 执行单次 HTTP 调用并解析。retryable 表示错误是否值得重试；
-// retryAfter 是 Retry-After 头解析出的等待时长（-1 表示未提供）。
+// doOnce performs a single HTTP call and parses it. retryable reports whether the error is worth
+// retrying; retryAfter is the wait duration parsed from the Retry-After header (-1 means absent).
 func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL, body []byte) (miniagent.Response, bool, time.Duration, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return miniagent.Response{}, false, 0, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
-	// 重定向安全：依赖标准库默认 CheckRedirect——跨域重定向前自动剥离 Authorization
-	// 等敏感头。若未来自定义 CheckRedirect，必须保留该语义。
+	// Redirect safety: relies on the standard library's default CheckRedirect — it strips
+	// Authorization and other sensitive headers before cross-origin redirects. If a custom
+	// CheckRedirect is added in the future, this semantics must be preserved.
 	httpReq.Header.Set("Content-Type", "application/json")
-	// 注入 provider 自定义头；跳过 Authorization/Content-Type 防覆盖鉴权与内容类型（与下方注释承诺一致）。
+	// Inject provider custom headers; skip Authorization/Content-Type to avoid clobbering auth and
+	// content-type (matches the comment promise above).
 	for k, v := range c.Headers {
 		if ck := http.CanonicalHeaderKey(k); ck == "Authorization" || ck == "Content-Type" {
 			continue
@@ -170,7 +179,7 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		if c.Logger != nil {
 			c.Logger.Warn("llm request failed", "error", err, "duration_ms", callDur.Milliseconds())
 		}
-		// 网络层错误（连接拒绝/DNS/超时）：值得重试，无 Retry-After。
+		// Network-layer error (connection refused / DNS / timeout): retryable, no Retry-After.
 		return miniagent.Response{}, true, -1, fmt.Errorf("llm request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -180,16 +189,20 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		return miniagent.Response{}, true, -1, fmt.Errorf("read response: %w", rerr)
 	}
 	if resp.StatusCode != http.StatusOK {
-		// context 超限（400/413 + 特征词）单列：上层 Run 据此做一次历史收紧重试。
-		// §P1-C：状态门从仅 400 放宽到 400||413（Anthropic request_too_large 走 413）。
+		// context-length-exceeded (400/413 + signature words) is singled out: the upper-layer Run
+		// uses it to perform a single history-tightening retry. §P1-C: the status gate was widened
+		// from 400-only to 400||413 (Anthropic request_too_large comes back as 413).
 		if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge) && miniagent.IsContextLengthError(raw) {
-			// raw 仅用于特征识别，不回显进 error——恶意/调试代理可能在错误体回显请求 URL/Authorization，
-			// error 经 emitRunError 进 NDJSON stdout 与 session jsonl 会泄漏 key。仅回显状态码 + 哨兵类型。
-			return miniagent.Response{}, false, 0, fmt.Errorf("%w（状态 %d）", miniagent.ErrContextLength, resp.StatusCode)
+			// raw is used only for signature detection and is not echoed into the error — a malicious
+			// or debug proxy may echo the request URL/Authorization in the error body, and the error
+			// flows through emitRunError into NDJSON stdout and the session jsonl, leaking the key.
+			// Only the status code + sentinel error type are surfaced.
+			return miniagent.Response{}, false, 0, fmt.Errorf("%w (status %d)", miniagent.ErrContextLength, resp.StatusCode)
 		}
-		// thinking 参数不被支持（400 + 特征词）：callLLMWithDowngrade 据此去字段重试一次（审查 v2 #7）。
+		// thinking parameter unsupported (400 + signature words): callLLMWithDowngrade uses this to
+		// retry once with the field dropped (review v2 #7).
 		if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
-			return miniagent.Response{}, false, 0, fmt.Errorf("%w（状态 %d）", miniagent.ErrThinkingUnsupported, resp.StatusCode)
+			return miniagent.Response{}, false, 0, fmt.Errorf("%w (status %d)", miniagent.ErrThinkingUnsupported, resp.StatusCode)
 		}
 		msg := fmt.Sprintf("llm returned %d", resp.StatusCode)
 		if shouldRetryStatus(resp.StatusCode) {
@@ -197,7 +210,8 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 		}
 		return miniagent.Response{}, false, 0, errors.New(msg)
 	}
-	// 200 路径超大才硬失败：非 200 的超大错误体不抑制重试（按状态走 shouldRetryStatus，与 stream.go/models.go 一致）。
+	// The 200 path only hard-fails on oversize: an oversize non-200 error body does not suppress
+	// retries (status flows through shouldRetryStatus, matching stream.go/models.go).
 	if int64(len(raw)) > maxChatBodyBytes {
 		return miniagent.Response{}, false, 0, fmt.Errorf("response exceeded %d bytes", maxChatBodyBytes)
 	}
@@ -219,7 +233,7 @@ func (c *ChatClient) prepareDo(req miniagent.Request) (*http.Client, *url.URL, [
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	req.Stream = false // Do 必非流式，防御调用方误设
+	req.Stream = false // Do is always non-streaming; guard against caller missetting it
 	body, err := buildChatBody(req)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("build request body: %w", err)
@@ -227,10 +241,11 @@ func (c *ChatClient) prepareDo(req miniagent.Request) (*http.Client, *url.URL, [
 	return client, u, body, nil
 }
 
-// Provider 是 OpenAI 兼容 LLM 的默认实现：把 ChatClient（Do，非流式）与 StreamClient
-// （DoStream，流式）组合，满足 miniagent.LLM 接口。cmd 装配它喂给 Run；自定义 provider
-// 实现 miniagent.LLM 即可替换，核心 Run 零改动（这是「provider 作为外挂」的默认实现）。
-// Stream 仅在 cfg.Stream=true 时被调，非流式场景可为 nil。
+// Provider is the default implementation of an OpenAI-compatible LLM: it composes ChatClient (Do,
+// non-streaming) and StreamClient (DoStream, streaming) to satisfy the miniagent.LLM interface. The
+// cmd wires it up to feed Run; a custom provider need only implement miniagent.LLM to replace it
+// with zero changes to the core Run (this is the default impl of "provider as a plugin"). Stream is
+// invoked only when cfg.Stream=true and may be nil in non-streaming scenarios.
 type Provider struct {
 	Chat   *ChatClient
 	Stream *StreamClient

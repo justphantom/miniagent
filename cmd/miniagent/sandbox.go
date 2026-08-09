@@ -11,21 +11,22 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// confineWrap 包装工具的 Call：执行前校验 args.path 落在 root 子树内，越界拒绝。
-// 用于 read/write/edit/grep/glob——其中 read/write/edit 的 path 必填，grep/glob 的
-// path 可选（默认 workdir，已被 workspaceRoot 约束）。
+// confineWrap wraps a tool's Call: before execution it checks that args.path falls within the root subtree; rejects out-of-bounds.
+// Used for read/write/edit/grep/glob — read/write/edit require path, grep/glob path is optional
+// (defaults to workdir, already constrained by workspaceRoot).
 //
-// 仅当 args 能解析出非空 path 时做越界校验；path 缺省/空或 JSON 非法时直通 orig：
-// 各工具自身会校验 path（write/edit 空路径报错；read 必填；grep/glob 空路径回落
-// workspaceRoot）。此前对空 path 一律拒绝会误伤 grep/glob（path 可选）使 default
-// 模式下基本不可用。
+// It performs the out-of-bounds check only when args can be parsed into a non-empty path; when path is
+// absent/empty or JSON is invalid it passes through to orig: each tool validates path itself (write/edit
+// errors on empty path; read requires it; grep/glob with empty path falls back to workspaceRoot). Previously
+// rejecting all empty paths would incorrectly break grep/glob (path is optional), making default mode essentially unusable.
 //
-// TOCTOU 取舍（审查 P2-11）：checkConfine 是纯词法校验（Clean+Abs+HasPrefix），与
-// 后续 MkdirAll/Rename 之间存在窗口；runToolsParallel 并行执行时，shell 可在窗口内
-// 把上级目录替换为软链，使最终 rename 落到 workdir 之外。default 模式本就不是安全
-// 边界（shell 已是无限制写原语，README 已声明），能力不增——此处仅做误操作护栏，
-// 不强行 EvalSymlinks（会改变 default 语义并引入新失败模式）。真隔离靠低权限用户
-// + 容器 + OS 层（见 README「运行隔离」）。
+// TOCTOU trade-off (review P2-11): checkConfine is pure lexical validation (Clean+Abs+HasPrefix), with a
+// window between it and the subsequent MkdirAll/Rename; under runToolsParallel parallel execution, shell can
+// replace a parent directory with a symlink within the window, making the final rename land outside workdir.
+// default mode is not a security boundary in the first place (shell is already an unrestricted write primitive,
+// as stated in the README), so capability is not increased — this is only a guardrail against misoperation,
+// without forcibly calling EvalSymlinks (which would change default semantics and introduce new failure modes).
+// True isolation relies on a low-privilege user + container + OS layer (see README "Runtime isolation").
 func confineWrap(tool miniagent.Tool, root string) miniagent.Tool {
 	orig := tool.Call
 	tool.Call = func(ctx context.Context, args string) miniagent.ToolResult {
@@ -42,9 +43,9 @@ func confineWrap(tool miniagent.Tool, root string) miniagent.Tool {
 	return tool
 }
 
-// checkConfine 薄版路径校验：p（相对 root 或绝对）经 Clean+Abs 后须落在 root 子树内。
-// 额外检查从 root 到 target 的已存在路径分量均不得为符号链接，缩小 TOCTOU 窗口。
-// 不做 EvalSymlinks 追检——default 是薄软约束，符号链接逃逸由调用方 OS 隔离兜底。
+// checkConfine is a lightweight path validation: p (relative to root or absolute) after Clean+Abs must fall within the root subtree.
+// It additionally checks that existing path components from root to target are not symlinks, narrowing the TOCTOU window.
+// It does not do an EvalSymlinks follow-up — default is a thin soft constraint, symlink escapes are mitigated by the caller's OS isolation.
 func checkConfine(root, p string) error {
 	full := p
 	if !filepath.IsAbs(p) {
@@ -52,26 +53,26 @@ func checkConfine(root, p string) error {
 	}
 	absTarget, err := filepath.Abs(filepath.Clean(full))
 	if err != nil {
-		return fmt.Errorf("解析路径 %q 失败：%w", p, err)
+		return fmt.Errorf("resolve path %q failed: %w", p, err)
 	}
 	rootAbs, err := filepath.Abs(filepath.Clean(root))
 	if err != nil {
-		return fmt.Errorf("解析 workdir %q 失败：%w", root, err)
+		return fmt.Errorf("resolve workdir %q failed: %w", root, err)
 	}
 	sep := string(filepath.Separator)
-	// 拒绝 path="." 或等于 workdir 绝对路径：rename 覆盖目录会 EISDIR（错误含糊），
-	// 且若 MkdirAll/Rename 真生效将摧毁整个 workdir（审查 P3-8）。
+	// Reject path="." or path equal to the workdir absolute path: rename over a directory would EISDIR (ambiguous error),
+	// and if MkdirAll/Rename actually took effect it would destroy the entire workdir (review P3-8).
 	if absTarget == rootAbs {
-		return fmt.Errorf("路径 %q 指向 workdir 根本身，不能覆盖", p)
+		return fmt.Errorf("path %q points to the workdir root itself, cannot overwrite", p)
 	}
 	if !strings.HasPrefix(absTarget+sep, rootAbs+sep) {
-		return fmt.Errorf("路径 %q 越出 workdir（default 模式）", p)
+		return fmt.Errorf("path %q escapes workdir (default mode)", p)
 	}
-	// 检查已存在路径分量是否含符号链接：攻击者可能将某层目录替换为软链使最终
-	// IO 落到 workdir 外。该检查在 IO 前执行，可缩小但无法完全消除 TOCTOU。
+	// Check whether existing path components contain symlinks: an attacker may replace some directory level with a symlink
+	// to make the final IO land outside workdir. This check runs before IO and narrows but cannot fully eliminate TOCTOU.
 	rel, err := filepath.Rel(rootAbs, absTarget)
 	if err != nil {
-		return fmt.Errorf("路径 %q 相对 workdir 解析失败：%w", p, err)
+		return fmt.Errorf("resolve path %q relative to workdir failed: %w", p, err)
 	}
 	current := rootAbs
 	for part := range strings.SplitSeq(rel, sep) {
@@ -82,12 +83,12 @@ func checkConfine(root, p string) error {
 		info, err := os.Lstat(current)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return nil // 剩余分量不存在，将由后续 MkdirAll/Create 创建
+				return nil // remaining components do not exist, will be created by subsequent MkdirAll/Create
 			}
-			return fmt.Errorf("检查路径 %q 失败：%w", current, err)
+			return fmt.Errorf("check path %q failed: %w", current, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("路径 %q 含符号链接 %q（default 模式）", p, current)
+			return fmt.Errorf("path %q contains symlink %q (default mode)", p, current)
 		}
 	}
 	return nil

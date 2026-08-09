@@ -13,18 +13,19 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// P1-1 回归：compactWithSummary 后 summary 必须排在 user_prompt 之前。loop.go miniagent.Run 入口
-// 先把本轮 user_prompt 加入 newMsgs，故此时 newMsgs=[user_prompt]；合并路径（生产为 mergePersisted）
-// 前插 summary，使其排在 user_prompt 之前——否则下一轮 applyCompactionBarrier 会屏障掉本轮 user_prompt。
+// P1-1 regression: after compactWithSummary the summary must precede the user_prompt. The loop.go miniagent.Run
+// entry adds this turn's user_prompt to newMsgs first, so at that point newMsgs=[user_prompt]; the merge path
+// (mergePersisted in production) prepends the summary so it ranks before the user_prompt — otherwise the next
+// turn's applyCompactionBarrier would barrier out this turn's user_prompt.
 func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("历史摘要")}}
+	tr := &fakeTransport{responses: []string{textResponse("history summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
-	// 模拟 loop.go miniagent.Run：入口已把本轮 user_prompt 加入 newMsgs 与 msgs。
-	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "本轮新问题"}}
+	// Simulate loop.go miniagent.Run: the entry has already added this turn's user_prompt to newMsgs and msgs.
+	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "current-turn-question"}}
 	msgs = append(msgs, newMsgs...)
 	_, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
 	if err != nil || summary.Kind != miniagent.KindSummary {
@@ -35,31 +36,31 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 		t.Fatalf("newMsgs len=%d, want 2 (summary+user_prompt): %+v", len(newMsgs), newMsgs)
 	}
 	if newMsgs[0].Kind != miniagent.KindSummary {
-		t.Errorf("newMsgs[0] 应为 summary，got %+v", newMsgs[0])
+		t.Errorf("newMsgs[0] should be summary, got %+v", newMsgs[0])
 	}
-	if newMsgs[1].Role != miniagent.RoleUser || newMsgs[1].Content != "本轮新问题" {
-		t.Errorf("newMsgs[1] 应为本轮 user_prompt，got %+v", newMsgs[1])
+	if newMsgs[1].Role != miniagent.RoleUser || newMsgs[1].Content != "current-turn-question" {
+		t.Errorf("newMsgs[1] should be this turn's user_prompt, got %+v", newMsgs[1])
 	}
 }
 
-// P1-1 端到端：compactWithSummary + summary 前插合并（生产为 mergePersisted）→ session.AppendMessages 落盘
-// → session.LoadSession 读取 → applyCompactionBarrier：本轮 user_prompt 必须仍在结果中。
+// P1-1 end-to-end: compactWithSummary + summary-prepending merge (mergePersisted in production) → session.AppendMessages
+// persists → session.LoadSession reads → applyCompactionBarrier: this turn's user_prompt must still be in the result.
 func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("既往对话摘要")}}
+	tr := &fakeTransport{responses: []string{textResponse("previous conversation summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "hist" + strconv.Itoa(i)})
 	}
-	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "上一轮问题"}}
+	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "previous-question"}}
 	msgs = append(msgs, newMsgs...)
 	_, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
 	if err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
 	newMsgs = append([]miniagent.Message{summary}, newMsgs...)
-	// 模拟上一轮 miniagent.Run 末尾把 assistant 最终回答加入 newMsgs（接续对话依赖上一轮答案）。
-	newMsgs = append(newMsgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "上一轮回答"})
+	// Simulate the end of the previous miniagent.Run appending the assistant's final answer to newMsgs (the continuing conversation depends on the previous turn's answer).
+	newMsgs = append(newMsgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "previous-answer"})
 
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	if err := session.AppendMessages(path, session.SessionMeta{ID: "s"}, newMsgs); err != nil {
@@ -72,23 +73,23 @@ func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
 	barrier := applyCompactionBarrier(loaded)
 	var hasPrompt, hasAnswer bool
 	for _, m := range barrier {
-		if m.Content == "上一轮问题" {
+		if m.Content == "previous-question" {
 			hasPrompt = true
 		}
-		if m.Content == "上一轮回答" {
+		if m.Content == "previous-answer" {
 			hasAnswer = true
 		}
 	}
 	if !hasPrompt {
-		t.Errorf("P1-1 回归：barrier 后本轮 user_prompt 丢失：barrier=%+v", barrier)
+		t.Errorf("P1-1 regression: this turn's user_prompt is missing after barrier: barrier=%+v", barrier)
 	}
 	if !hasAnswer {
-		t.Errorf("barrier 后本轮 assistant 回答丢失：barrier=%+v", barrier)
+		t.Errorf("this turn's assistant answer is missing after barrier: barrier=%+v", barrier)
 	}
 }
 
-// mergeSummaryIntoNewMsgs 与 loop.go mergePersisted 等价的测试侧合并：剔 newMsgs 中已有
-// KindSummary 后把 summary 前插（跨轮 barrier 命中最新 summary 的语义）。
+// mergeSummaryIntoNewMsgs is the test-side merge equivalent of loop.go mergePersisted: it drops any KindSummary
+// already in newMsgs then prepends the summary (the cross-turn barrier-hits-the-latest-summary semantics).
 func mergeSummaryIntoNewMsgs(newMsgs *[]miniagent.Message, summary miniagent.Message) {
 	filtered := make([]miniagent.Message, 0, len(*newMsgs)+1)
 	for _, m := range *newMsgs {
@@ -99,17 +100,18 @@ func mergeSummaryIntoNewMsgs(newMsgs *[]miniagent.Message, summary miniagent.Mes
 	*newMsgs = append([]miniagent.Message{summary}, filtered...)
 }
 
-// P2 单轮多次压缩反转：单轮内压缩触发 ≥2 次时，第二次的中段含第一次写入的旧 summary（已被进一步
-// 压进新 summary）。合并路径（生产为 mergePersisted，按 Kind 剔旧再前插）后 newMsgs 只有一个
-// miniagent.KindSummary（最新）、排在最前，且 applyCompactionBarrier 命中它。
+// P2 single-turn multiple-compaction reversal: when compaction triggers >=2 times within a single turn, the second
+// time's middle contains the old summary written by the first (which gets further compressed into the new summary).
+// After the merge path (mergePersisted in production, drops the old by Kind then prepends) newMsgs has only one
+// miniagent.KindSummary (the latest), ranked first, and applyCompactionBarrier hits it.
 func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("摘要1"), textResponse("摘要2")}}
+	tr := &fakeTransport{responses: []string{textResponse("summary1"), textResponse("summary2")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 20 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
-	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "本轮新问题"}}
+	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "current-turn-question"}}
 	msgs = append(msgs, newMsgs...)
 
 	out, summary1, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
@@ -118,7 +120,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	}
 	msgs = out
 	mergeSummaryIntoNewMsgs(&newMsgs, summary1)
-	// 模拟步进：追加更多轮使再次超窗触发第二次压缩（miniagent.Run 的 appendMsg 同时写 msgs/newMsgs）。
+	// Simulate stepping: append more rounds so the window is exceeded again and a second compaction triggers (miniagent.Run's appendMsg writes both msgs and newMsgs).
 	for i := range 10 {
 		m := miniagent.Message{Role: miniagent.RoleUser, Content: "more" + strconv.Itoa(i)}
 		msgs = append(msgs, m)
@@ -140,24 +142,25 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected exactly 1 summary after two compactions (old must be dropped), got %d: %+v", count, newMsgs)
 	}
-	if newMsgs[0].Kind != miniagent.KindSummary || !strings.Contains(newMsgs[0].Content, "摘要2") {
+	if newMsgs[0].Kind != miniagent.KindSummary || !strings.Contains(newMsgs[0].Content, "summary2") {
 		t.Errorf("newest summary must be first: %+v", newMsgs[0])
 	}
 	barrier := applyCompactionBarrier(newMsgs)
-	if len(barrier) == 0 || barrier[0].Kind != miniagent.KindSummary || !strings.Contains(barrier[0].Content, "摘要2") {
+	if len(barrier) == 0 || barrier[0].Kind != miniagent.KindSummary || !strings.Contains(barrier[0].Content, "summary2") {
 		t.Errorf("barrier should start at newest summary: %+v", barrier)
 	}
 }
 
-// P2-1 跨轮继承：上轮 session.LoadSession 带入的旧 miniagent.KindSummary 经 applyCompactionBarrier 落在 msgs 头，
-// splitRounds 使其单独成 rounds[0]；compactWithSummary 检测到后（§P0-A 默认路径）抽作
-// previousSummary 经 UPDATE 模式下传，旧摘要文本仍出现在 LLM 请求体（system 的
-// <previous-summary> 块）中，真正继承而非断链。
+// P2-1 cross-turn inheritance: the old miniagent.KindSummary brought in by the previous session.LoadSession lands at
+// the head of msgs via applyCompactionBarrier, and splitRounds makes it a standalone rounds[0]; after compactWithSummary
+// detects it (§P0-A default path) it is extracted as previousSummary and passed down via UPDATE mode, so the old
+// summary text still appears in the LLM request body (the <previous-summary> block of the system prompt), truly
+// inherited rather than a broken chain.
 func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("新摘要内容")}}
+	tr := &fakeTransport{responses: []string{textResponse("new-summary-content")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{
-		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "[既往对话摘要]\n远古摘要内容-旧"},
+		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "[Previous Conversation Summary]\nlegacy-summary-content-old"},
 		{Role: miniagent.RoleUser, Content: "real0"},
 		{Role: miniagent.RoleUser, Content: "real1"},
 		{Role: miniagent.RoleUser, Content: "real2"},
@@ -165,7 +168,7 @@ func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 		{Role: miniagent.RoleUser, Content: "real4"},
 		{Role: miniagent.RoleUser, Content: "real5"},
 	}
-	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "本轮新问题"}}
+	newMsgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "current-turn-question"}}
 	msgs = append(msgs, newMsgs...)
 
 	out, summary, _, err := compactWithSummary(context.Background(), testBudget(llm), msgs, 3)
@@ -174,14 +177,14 @@ func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 	}
 	_ = newMsgs
 
-	// (a) LLM 输入必须含旧 summary 文本——修复前 middle 排除 rounds[0]，继承断链。
+	// (a) The LLM input must contain the old summary text — before the fix middle excluded rounds[0], breaking the chain.
 	if len(tr.bodies) == 0 {
 		t.Fatal("expected summarizeMiddle to be called")
 	}
-	if !strings.Contains(tr.bodies[0], "远古摘要内容-旧") {
-		t.Errorf("LLM 输入应含旧 summary 文本以真正继承：body=%s", tr.bodies[0])
+	if !strings.Contains(tr.bodies[0], "legacy-summary-content-old") {
+		t.Errorf("LLM input should contain the old summary text to truly inherit: body=%s", tr.bodies[0])
 	}
-	// (b) 结果恰 1 条 miniagent.KindSummary，位于头部（旧 summary 已并入新 summary，不独立保留）。
+	// (b) The result has exactly 1 miniagent.KindSummary, at the head (the old summary has been merged into the new, not kept standalone).
 	count := 0
 	for _, m := range out {
 		if m.Kind == miniagent.KindSummary {
@@ -191,20 +194,20 @@ func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected exactly 1 miniagent.KindSummary in out, got %d: %+v", count, out)
 	}
-	if len(out) == 0 || out[0].Kind != miniagent.KindSummary || !strings.Contains(out[0].Content, "新摘要内容") {
+	if len(out) == 0 || out[0].Kind != miniagent.KindSummary || !strings.Contains(out[0].Content, "new-summary-content") {
 		t.Errorf("head should be the new summary: %+v", out)
 	}
 	if len(out) != 1+3 {
 		t.Errorf("out len = %d, want 4 (1 summary + 3 recent): %+v", len(out), out)
 	}
-	// (c) applyCompactionBarrier 命中头部新 summary。
+	// (c) applyCompactionBarrier hits the new summary at the head.
 	barrier := applyCompactionBarrier(out)
-	if len(barrier) == 0 || barrier[0].Kind != miniagent.KindSummary || !strings.Contains(barrier[0].Content, "新摘要内容") {
+	if len(barrier) == 0 || barrier[0].Kind != miniagent.KindSummary || !strings.Contains(barrier[0].Content, "new-summary-content") {
 		t.Errorf("barrier should start at new summary: %+v", barrier)
 	}
 }
 
-// FitHistory：未超 window（ContextWindow<=0）→ 原样 noop。
+// FitHistory: not over the window (ContextWindow<=0) → noop as-is.
 func TestFitHistory_NoWindowNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -221,16 +224,16 @@ func TestFitHistory_NoWindowNoop(t *testing.T) {
 	}
 }
 
-// FitHistory：摘要失败回落有损 compactHistory，最终不超窗→不报错、summarized=false。
+// FitHistory: summarization failure falls back to lossy compactHistory, and when the final result fits the window → no error, summarized=false.
 func TestFitHistory_SummarizeErrorFallsBackLossy(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	big := strings.Repeat("x", 1000) // 每条 ~250 tokens，使 30 条远超窗、压到 4 条后落回窗内
+	big := strings.Repeat("x", 1000) // each msg ~250 tokens, making 30 msgs far exceed the window; compacted to 4 it falls back inside the window
 	var msgs []miniagent.Message
 	for range 30 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: big})
 	}
-	// ContextWindow=4000 → 阈值 3200：30 条(~7900)超窗触发；compactHistory 压到 4 条(~1400)落回窗内。
+	// ContextWindow=4000 → threshold 3200: 30 msgs (~7900) exceed the window and trigger; compactHistory compacts to 4 msgs (~1400) which falls back inside the window.
 	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Summarize: testBudget(llm).Summarize}
 	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
@@ -244,24 +247,25 @@ func TestFitHistory_SummarizeErrorFallsBackLossy(t *testing.T) {
 	}
 }
 
-// L3-6：FitHistory 是导出函数，直接调用方若漏设 Summarize（Force=true 或超窗进 compactWithSummary）→
-// nil 守卫返回 error → FitHistory 回落有损 compactHistory（不 panic、summarized=false、不报错）。
+// L3-6: FitHistory is an exported function; if a direct caller forgets to set Summarize (Force=true or over the
+// window entering compactWithSummary) → the nil guard returns an error → FitHistory falls back to lossy
+// compactHistory (no panic, summarized=false, no error).
 func TestFitHistory_NilSummarizeFallsBackLossy(t *testing.T) {
-	big := strings.Repeat("x", 1000) // 每条 ~250 tokens
+	big := strings.Repeat("x", 1000) // each msg ~250 tokens
 	var msgs []miniagent.Message
 	for range 30 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: big})
 	}
-	// Force=true 跳过 4/5 门控直接进 compactWithSummary；Summarize=nil（零值）触发 nil 守卫→有损 fallback。
+	// Force=true skips the 4/5 gate and enters compactWithSummary directly; Summarize=nil (zero value) triggers the nil guard → lossy fallback.
 	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Force: true}
 	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
-		t.Fatalf("nil Summarize 应回落有损而非报错: %v", err)
+		t.Fatalf("nil Summarize should fall back to lossy rather than error: %v", err)
 	}
 	if summarized {
-		t.Error("Summarize=nil → summarized 应为 false（有损 fallback）")
+		t.Error("Summarize=nil → summarized should be false (lossy fallback)")
 	}
 	if len(out) >= len(msgs) {
-		t.Errorf("有损 fallback 应收缩: out=%d in=%d", len(out), len(msgs))
+		t.Errorf("lossy fallback should shrink: out=%d in=%d", len(out), len(msgs))
 	}
 }

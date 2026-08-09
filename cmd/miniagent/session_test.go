@@ -9,46 +9,46 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
-// generateSessionID 输出仅含拉丁字母/数字/-（过 ValidateSessionID），且含时间戳前缀。
+// generateSessionID outputs only latin letters/digits/- (passes ValidateSessionID), with a timestamp prefix.
 func TestGenerateSessionID_Format(t *testing.T) {
 	id := generateSessionID()
 	if err := session.ValidateSessionID(id); err != nil {
-		t.Errorf("id %q 不合法: %v", id, err)
+		t.Errorf("id %q invalid: %v", id, err)
 	}
 	ts := time.Now().Format("20060102-150405")
 	if !strings.HasPrefix(id, ts+"-") {
-		t.Errorf("id %q 缺时间戳前缀 %q-", id, ts)
+		t.Errorf("id %q missing timestamp prefix %q-", id, ts)
 	}
 }
 
-// 同秒并发生成不应碰撞（随机段 64 bit 保证；回落路径加 pid 也区分同秒不同进程）。
+// Concurrent generation within the same second should not collide (random segment 64-bit guarantees it; fallback path adds pid to distinguish same-second different-process).
 func TestGenerateSessionID_Unique(t *testing.T) {
 	seen := map[string]bool{}
 	for i := range 1000 {
 		id := generateSessionID()
 		if seen[id] {
-			t.Fatalf("第 %d 次碰撞: %q", i, id)
+			t.Fatalf("collision on iteration %d: %q", i, id)
 		}
 		seen[id] = true
 	}
 }
 
-// 无状态：saveNew=false 且 sessionArg="" → 空 path、零 meta、nil history。
+// Stateless: saveNew=false and sessionArg="" → empty path, zero meta, nil history.
 func TestResolveSessionForRun_Stateless(t *testing.T) {
 	path, meta, history := resolveSessionForRun(false, "", t.TempDir(), "p/m", "p", "/wd", 0)
 	if path != "" {
-		t.Errorf("path = %q, 想空（无状态不落盘）", path)
+		t.Errorf("path = %q, want empty (stateless does not persist)", path)
 	}
 	if meta != (session.SessionMeta{}) {
-		t.Errorf("meta = %+v, 想零值", meta)
+		t.Errorf("meta = %+v, want zero value", meta)
 	}
 	if history != nil {
-		t.Errorf("history 应 nil，got %v", history)
+		t.Errorf("history should be nil, got %v", history)
 	}
 }
 
-// 新建分支：文件不存在时构造 meta，Type 留空（由 AppendMessages 写盘时补 session），
-// Provider 独立于 modelSpec 单列，便于会话列举/多 provider 溯源免解析字符串。
+// New-session branch: when file does not exist, build meta with Type left empty (filled with session when AppendMessages writes to disk),
+// Provider listed separately from modelSpec, to ease session listing / multi-provider tracing without parsing strings.
 func TestResolveSessionForRun_NewSession_FillsProvider(t *testing.T) {
 	sessionDir := t.TempDir()
 	path, meta, history := resolveSessionForRun(true, "", sessionDir, "openai/gpt-4o", "openai", "/repo", 0)
@@ -57,7 +57,7 @@ func TestResolveSessionForRun_NewSession_FillsProvider(t *testing.T) {
 		t.Errorf("path = %q, want %q", path, wantPath)
 	}
 	if meta.Type != "" {
-		t.Errorf("Type = %q, 想空（AppendMessages 写盘时补 session）", meta.Type)
+		t.Errorf("Type = %q, want empty (filled with session when AppendMessages writes to disk)", meta.Type)
 	}
 	if meta.Provider != "openai" {
 		t.Errorf("Provider = %q, want openai", meta.Provider)
@@ -66,18 +66,18 @@ func TestResolveSessionForRun_NewSession_FillsProvider(t *testing.T) {
 		t.Errorf("Model = %q, want openai/gpt-4o", meta.Model)
 	}
 	if meta.Workdir != "/repo" {
-		t.Errorf("Workdir = %q, want /repo（absWorkdir 对绝对路径原样返回）", meta.Workdir)
+		t.Errorf("Workdir = %q, want /repo (absWorkdir returns absolute paths as-is)", meta.Workdir)
 	}
 	if meta.ID == "" {
-		t.Error("ID 为空")
+		t.Error("ID is empty")
 	}
 	if err := session.ValidateSessionID(meta.ID); err != nil {
-		t.Errorf("meta.ID %q 不合法: %v", meta.ID, err)
+		t.Errorf("meta.ID %q invalid: %v", meta.ID, err)
 	}
 	if _, err := time.Parse(time.RFC3339, meta.Created); err != nil {
-		t.Errorf("Created %q 非 RFC3339: %v", meta.Created, err)
+		t.Errorf("Created %q not RFC3339: %v", meta.Created, err)
 	}
 	if history != nil {
-		t.Errorf("history 应 nil（新会话无历史），got %v", history)
+		t.Errorf("history should be nil (new session has no history), got %v", history)
 	}
 }

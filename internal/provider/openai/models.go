@@ -15,12 +15,10 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
-// ListModels 调 GET ModelsURL，返回 id 列表。复用 ChatClient.modelsEndpoint/鉴权。
-// 对 429/5xx 与网络错误自动重试 maxRetries 次，退避策略与 Do 一致。
-const maxModelsBodyBytes = 1 << 20 // 1 MiB；models 列表远小于 chat body，封顶防 OOM
+const maxModelsBodyBytes = 1 << 20 // 1 MiB; the models list is far smaller than the chat body, cap prevents OOM
 
-// ListModels 调 GET ModelsURL，返回 id 列表。复用 ChatClient.modelsEndpoint/鉴权。
-// 对 429/5xx 与网络错误自动重试 maxRetries 次，退避策略与 Do 一致。
+// ListModels issues GET ModelsURL and returns the id list. Reuses ChatClient.modelsEndpoint/auth.
+// Retries 429/5xx and network errors automatically up to maxRetries times with the same backoff policy as Do.
 func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	client, u, err := c.modelsEndpoint(30 * time.Second)
 	if err != nil {
@@ -53,15 +51,16 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	return nil, errors.New("list models retry loop exited unexpectedly")
 }
 
-// listModelsOnce 单次 GET /models，返回 (ids, retryable, retryAfter, error)。retryAfter 解析自
-// Retry-After 头（-1=未提供），供 ListModels 重试退避与 ChatClient.Do 对齐（此前恒 -1 致忽略上游 backpressure）。
+// listModelsOnce performs a single GET /models and returns (ids, retryable, retryAfter, error).
+// retryAfter is parsed from the Retry-After header (-1 = absent) so ListModels retry backoff aligns
+// with ChatClient.Do (previously it was always -1, ignoring upstream backpressure).
 func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u *url.URL) ([]string, bool, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, false, 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	// 注入 provider 自定义头；跳过 Authorization/Content-Type 防覆盖鉴权（与 ChatClient.doOnce 一致）。
+	// Inject provider custom headers; skip Authorization/Content-Type to avoid clobbering auth (same as ChatClient.doOnce).
 	for k, v := range c.Headers {
 		if ck := http.CanonicalHeaderKey(k); ck == "Authorization" || ck == "Content-Type" {
 			continue
@@ -74,23 +73,26 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		// 排空 body 供连接 keepalive 复用（重试可能复用同一连接）；封顶 maxModelsBodyBytes 防
-		// 恶意/异常端点慢 trickle 把每次重试拖到 client timeout（与 200 路径的 LimitReader 对齐）。
-		// 不回显响应体——恶意/调试代理可能在错误体回显 URL/Authorization，error 经 -list-models stdout 泄漏 key
-		//（与 doOnce 一致，仅回显状态码）。
+		// Drain the body so the connection can be reused via keepalive (a retry may reuse the same
+		// connection); cap at maxModelsBodyBytes to stop a malicious/abnormal endpoint from slow-
+		// trickling each retry out to the client timeout (aligned with the 200 path's LimitReader).
+		// The response body is not echoed — a malicious/debug proxy may echo the URL/Authorization in
+		// the error body, and the error flows through -list-models stdout leaking the key (same as
+		// doOnce, only the status code is surfaced).
 		retryAfter := parseRetryAfter(resp.Header)
 		if _, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, maxModelsBodyBytes+1)); readErr != nil {
 			return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d: read body: %w", resp.StatusCode, readErr)
 		}
 		return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d", resp.StatusCode)
 	}
-	// 200 路径封顶防 OOM（与 doOnce 的 LimitReader(maxChatBodyBytes+1) 对齐；models 响应更小，取 1 MiB）。
+	// 200 path caps to prevent OOM (aligned with doOnce's LimitReader(maxChatBodyBytes+1); models
+	// responses are smaller, so 1 MiB is used).
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxModelsBodyBytes+1))
 	if rerr != nil {
 		return nil, false, 0, fmt.Errorf("read response: %w", rerr)
 	}
 	if int64(len(raw)) > maxModelsBodyBytes {
-		return nil, false, 0, fmt.Errorf("models 响应超过 %d 字节上限", maxModelsBodyBytes)
+		return nil, false, 0, fmt.Errorf("models response exceeded %d byte limit", maxModelsBodyBytes)
 	}
 	var v struct {
 		Data []struct {
@@ -107,18 +109,20 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	return ids, false, 0, nil
 }
 
-// ListAllModels 聚合多个 provider 的可用模型，以 config.ModelRef 切片返回（provider/model 分离）。
-// 并发请求各 provider 的 ModelsURL（最多 8 路并发）；静态 models（无 ModelsURL）直接返回配置，不 GET。
-// 单个 provider 失败时记录警告但继续其他，最终返回首个错误（若有）。
-// keyFor 按 provider 返回最终 API key；httpClient 非 nil 时复用其 transport/timeout。
-// 调用方须保证 providers 已校验（名称唯一、URL 合法）。
+// ListAllModels aggregates the available models across multiple providers and returns them as a
+// slice of config.ModelRef (provider/model kept separate). It requests each provider's ModelsURL
+// concurrently (at most 8 in flight); static models (no ModelsURL) return the config directly
+// without a GET. A single provider failure is logged as a warning but the rest continue; the first
+// error (if any) is returned at the end. keyFor returns the final API key per provider; when
+// httpClient is non-nil its transport/timeout is reused. The caller must ensure providers are
+// already validated (unique names, valid URLs).
 func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFor func(config.ProviderConfig) string, httpClient *http.Client, logger *slog.Logger) ([]config.ModelRef, error) {
 	var (
 		firstErr error
 		mu       sync.Mutex
 		wg       sync.WaitGroup
 	)
-	// 按 provider 名称收集结果，最后按输入顺序拼接，保证输出稳定。
+	// Collect results keyed by provider name, then concatenate in input order for stable output.
 	results := make(map[string][]config.ModelRef, len(providers))
 
 	const maxConcurrent = 8
@@ -134,7 +138,7 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 			var err error
 			if p.ModelsURL == "" {
 				if len(p.Models) == 0 {
-					err = fmt.Errorf("provider %q 无 models_url 且静态 models 为空", p.Name)
+					err = fmt.Errorf("provider %q has no models_url and its static models list is empty", p.Name)
 				} else {
 					ids = make([]string, 0, len(p.Models))
 					for _, mm := range p.Models {

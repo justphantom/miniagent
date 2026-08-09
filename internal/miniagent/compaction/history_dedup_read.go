@@ -4,10 +4,13 @@ import "github.com/justphantom/miniagent/internal/miniagent"
 
 import "strconv"
 
-// dedupReadResults（P6）对保留窗口外的 read 结果按 (path,offset) 去重：每组保留时间序最后一次
-// 的原文，更早的压成占位。覆盖两类（v5 §2.1）：连续同 (path,offset) read（P6a，零损失）与
-// read→edit/write→read 验证（P6b，消除 stale 旧内容）。无需 IsError——保留最后一次即正确语义
-// （失败 read 的错误内容被后续成功 read 覆盖天然合理）。不同 offset 不合并。无可压项零拷贝。
+// dedupReadResults (P6) deduplicates read results outside the retention window by (path,offset):
+// each group keeps the last occurrence in time order verbatim; earlier ones are compressed to a
+// placeholder. Covers two categories (v5 §2.1): consecutive same (path,offset) reads (P6a, zero loss)
+// and read→edit/write→read verification (P6b, removes stale old content). No IsError needed — keeping
+// the last occurrence is the correct semantics (the error content of a failed read is naturally
+// overridden by a subsequent successful read, which is correct). Different offsets are not merged.
+// Zero-copy when nothing to compress.
 func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	readKeyOf := map[string]string{}
 	for _, m := range msgs {
@@ -22,8 +25,9 @@ func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 			if !ok {
 				continue
 			}
-			// key 仅用于 map 去重 + 占位 marker 文案，用可读分隔符（path + offset=N）；
-			// 勿用 \x00 等不可见字节——marker 会进 tool Content → wire 请求体，致 tokenizer/proxy 报错或乱码。
+			// key is only for map dedup + placeholder marker text, using a readable separator (path + offset=N);
+			// do not use invisible bytes like \x00 — the marker ends up in tool Content → wire request body,
+			// which would cause tokenizer/proxy errors or garbled text.
 			readKeyOf[tc.ID] = normalizePath(p) + " offset=" + strconv.Itoa(argReadOffset(tc.Args))
 		}
 	}
@@ -31,7 +35,8 @@ func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 		return msgs
 	}
 	windowStart := windowStartOf(msgs, keepN)
-	// 窗口外同 key 最后出现 index；窗口内是否出现过同 key（窗口内出现则窗口外该 key 全压）。
+	// last occurrence index of the same key outside the window; whether the same key appears inside
+	// the window (if it appears inside the window, all occurrences of that key outside the window are compressed).
 	lastIdx := map[string]int{}
 	hasInWindow := map[string]bool{}
 	for i, m := range msgs {
@@ -43,7 +48,7 @@ func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 			continue
 		}
 		if i < windowStart {
-			lastIdx[key] = i // 升序遍历后覆盖前 → 窗口外该 key 的最大 index
+			lastIdx[key] = i // ascending traversal overwrites earlier → max index of that key outside window
 		} else {
 			hasInWindow[key] = true
 		}
@@ -58,7 +63,7 @@ func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 			continue
 		}
 		if hasInWindow[key] || lastIdx[key] > i {
-			toCompress[i] = "…[此前的 read(" + key + ") 已被更新的读取取代]"
+			toCompress[i] = "…[prior read(" + key + ") superseded by a more recent read]"
 		}
 	}
 	if len(toCompress) == 0 {
@@ -72,12 +77,16 @@ func dedupReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	return out
 }
 
-// foldStaleReadResults（P11）对保留窗口外的 read 结果，若同 path 上存在更晚的成功 write/edit，
-// 把其 Content 折叠为占位。edit/write 成功后文件已变，更早的 read 读到的是旧版本（stale，可能
-// 误导）；P6 需「再次 read 同 (path,offset)」才清前置 read（P6b），P8' 只清 write/edit args——
-// 二者都漏「edit 后未再 read」的旧 read（v6 §4 实测：占 payload 36%）。P11 与 P8' 对称补全：同
-// path 更晚成功写入触发，按 path 不限 offset（edit 可影响任意行，同 path 所有 offset 的旧 read 均
-// 过期）。成功判定经 successWriteEditPaths（IsError）。无可压项零拷贝；仅改 tool 消息 Content 拷贝。
+// foldStaleReadResults (P11) folds the Content of read results outside the retention window to a
+// placeholder when a later successful write/edit to the same path exists. After a successful
+// edit/write the file has changed, and earlier reads return an old version (stale, potentially
+// misleading); P6 requires "reading the same (path,offset) again" to clear the preceding read (P6b),
+// and P8' only clears write/edit args — both miss the old read that was never followed by another
+// read after an edit (v6 §4 measured: this accounts for 36% of payload). P11 complements P8'
+// symmetrically: triggered by a later successful write to the same path, keyed by path regardless
+// of offset (edit can affect any line, so all offsets of old reads on the same path are stale).
+// Success is determined via successWriteEditPaths (IsError). Zero-copy when nothing to compress;
+// only modifies the Content copy of tool messages.
 func foldStaleReadResults(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	readPathOf := map[string]string{}
 	for _, m := range msgs {
@@ -111,8 +120,8 @@ func foldStaleReadResults(msgs []miniagent.Message, keepN int) []miniagent.Messa
 			continue
 		}
 		for _, wIdx := range succ[rp] {
-			if wIdx > i { // 同 path 更晚的成功写入存在 → 旧 read 结果折叠
-				toFold[i] = "…[此前的 read(" + rp + ") 结果已被后续编辑取代]"
+			if wIdx > i { // a later successful write to the same path exists → fold the old read result
+				toFold[i] = "…[prior read(" + rp + ") result superseded by a later edit]"
 				break
 			}
 		}

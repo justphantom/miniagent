@@ -8,8 +8,8 @@ import (
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// object() 在不传 required 时必须省略 required 键，而非序列化成 null。
-// OpenAI 等严格后端会对 "required":null 返回 400。
+// object() must omit the required key when none is passed, rather than serializing it as null.
+// Strict backends like OpenAI return a 400 on "required":null.
 func TestObject_OmitsRequiredWhenNone(t *testing.T) {
 	schema := object(map[string]any{
 		"prefix": map[string]any{"type": "string"},
@@ -25,7 +25,7 @@ func TestObject_OmitsRequiredWhenNone(t *testing.T) {
 	if strings.Contains(raw, "null") {
 		t.Errorf("null leaked into schema: %s", raw)
 	}
-	// 反序列化校验：required 键应不存在。
+	// Deserialize and verify: the required key should be absent.
 	var got map[string]any
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -35,7 +35,7 @@ func TestObject_OmitsRequiredWhenNone(t *testing.T) {
 	}
 }
 
-// object() 传 required 时应输出非空字符串数组。
+// object() should emit a non-empty string array when required is passed.
 func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 	schema := object(map[string]any{"path": map[string]any{"type": "string"}}, "path")
 	b, err := json.Marshal(schema)
@@ -55,7 +55,7 @@ func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 	}
 }
 
-// 所有内置工具的 Parameters 序列化后，required 字段不得为 null。
+// After serializing the Parameters of all built-in tools, the required field must never be null.
 func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 	workdir := t.TempDir()
 	tools := []miniagent.Tool{
@@ -76,7 +76,7 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 			t.Errorf("%s: unmarshal: %v", tk.Name, err)
 			continue
 		}
-		// required 缺失合规（等同空数组）；存在但为 null 违规。
+		// A missing required is compliant (equivalent to an empty array); present-but-null is a violation.
 		if v, ok := schema["required"]; ok {
 			if v == nil {
 				t.Errorf("%s: required is null (causes LLM 400): %s", tk.Name, b)
@@ -85,13 +85,12 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 				t.Errorf("%s: required not array: %T (%s)", tk.Name, v, b)
 			}
 		}
-		// 顺带兜底：原始 JSON 文本不得出现 "required":null。
+		// Belt-and-suspenders: the raw JSON text must not contain "required":null.
 		if strings.Contains(string(b), `"required":null`) {
 			t.Errorf("%s: raw JSON has required:null: %s", tk.Name, b)
 		}
 	}
 }
 
-// validateConfig 拒绝 ThinkingMapping.Field 指向保留 payload key：testBuildChatBody 用
-// payload[field]=val 写思考级别（wire.go），命中保留 key（如 max_tokens）会 clobber
-// 标准字段（审查 v3 P3）。
+// validateConfig rejects ThinkingMapping.Field pointing at a reserved payload key: testBuildChatBody writes the thinking
+// level via payload[field]=val (wire.go), and hitting a reserved key (e.g. max_tokens) would clobber a standard field (review v3 P3).

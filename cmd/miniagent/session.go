@@ -13,13 +13,13 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
-// defaultSessionDir 是未配 session.dir 时的回落目录（Phase C 由 config 覆盖）。
+// defaultSessionDir is the fallback directory when session.dir is not configured (overridden by config in Phase C).
 const defaultSessionDir = ".miniagent/sessions"
 
-// resolveSessionForRun 按三态裁决会话（互斥由 validateConversation 保证不会同时真）：
-//   - saveNew=true：新建会话，generateSessionID 生成 id，构造 meta（id 的 stdout NDJSON 输出由 main 的 EmitSession 负责），history=nil。
-//   - sessionArg!=""：接续，校验 id 后 LoadSession；文件不存在（meta.Type==""）报错防 typo 建垃圾会话。
-//   - 两者皆空：无状态，返回空 path（main 据此跳过落盘）。
+// resolveSessionForRun adjudicates the session across three states (mutual exclusion is guaranteed by validateConversation so they are never both true):
+//   - saveNew=true: create a new session, generateSessionID generates the id, construct meta (the stdout NDJSON output of the id is handled by main's EmitSession), history=nil.
+//   - sessionArg!="": resume; validate the id then LoadSession; if the file does not exist (meta.Type=="") error out to prevent creating a garbage session on a typo.
+//   - both empty: stateless, return an empty path (main skips persistence accordingly).
 func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (string, session.SessionMeta, []miniagent.Message) {
 	if !saveNew && sessionArg == "" {
 		return "", session.SessionMeta{}, nil
@@ -40,8 +40,8 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provi
 	}
 	if meta.Type == "" {
 		if saveNew {
-			// 新会话：构造 metadata（Type 由 AppendMessages 补 session）。Provider 独立于
-			// modelSpec（"provider/id"）单列，供会话列举/多 provider 溯源免解析字符串。
+			// New session: construct metadata (Type is filled in as session by AppendMessages). Provider is listed separately from
+			// modelSpec ("provider/id"), so session listing / multi-provider tracing can avoid parsing the string.
 			meta = session.SessionMeta{
 				ID:       id,
 				Model:    modelSpec,
@@ -50,8 +50,8 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provi
 				Created:  time.Now().Format(time.RFC3339),
 			}
 		} else {
-			// 接续但文件不存在 → 报错（防 typo 创建垃圾会话；新建请用 -save-session）。
-			fmt.Fprintf(os.Stderr, "miniagent: session %q 不存在（新建请用 -save-session）\n", id)
+			// Resume but the file does not exist → error out (prevent creating a garbage session on a typo; use -save-session to create a new one).
+			fmt.Fprintf(os.Stderr, "miniagent: session %q not found (use -save-session to create a new one)\n", id)
 			os.Exit(1)
 		}
 	} else {
@@ -60,9 +60,9 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provi
 	return sessPath, meta, history
 }
 
-// generateSessionID 生成新会话 id：时间戳 + 随机 hex，仅含拉丁字母/数字/-（满足 ValidateSessionID）。
-// 随机段 8 字节（64 bit）：同秒并发新建的碰撞阈值抬到 2^32 量级，覆盖 CI 矩阵/批量 fork 场景。
-// crypto/rand 失败极罕见，回落时间戳+pid（仍合法；pid 区分同秒不同进程，避免裸时间戳必碰撞）。
+// generateSessionID generates a new session id: timestamp + random hex, containing only Latin letters/digits/- (satisfies ValidateSessionID).
+// The random segment is 8 bytes (64 bits): raises the collision threshold for concurrent same-second creation to the 2^32 range, covering CI matrix / batch fork scenarios.
+// crypto/rand failure is extremely rare; falls back to timestamp+pid (still valid; pid distinguishes different processes within the same second, avoiding the guaranteed collision of a bare timestamp).
 func generateSessionID() string {
 	ts := time.Now().Format("20060102-150405")
 	var b [8]byte
@@ -89,9 +89,9 @@ func absWorkdir(workdir string) string {
 
 func warnSessionMismatch(meta session.SessionMeta, modelSpec, workdir string) {
 	if modelSpec != "" && meta.Model != "" && meta.Model != modelSpec {
-		fmt.Fprintf(os.Stderr, "miniagent: warning: session model %q 与本次 %q 不一致\n", meta.Model, modelSpec)
+		fmt.Fprintf(os.Stderr, "miniagent: warning: session model %q does not match this run %q\n", meta.Model, modelSpec)
 	}
 	if aw := absWorkdir(workdir); aw != "" && meta.Workdir != "" && meta.Workdir != aw {
-		fmt.Fprintf(os.Stderr, "miniagent: warning: session workdir %q 与本次 %q 不一致\n", meta.Workdir, aw)
+		fmt.Fprintf(os.Stderr, "miniagent: warning: session workdir %q does not match this run %q\n", meta.Workdir, aw)
 	}
 }

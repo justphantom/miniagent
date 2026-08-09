@@ -11,23 +11,24 @@ import (
 	"unicode/utf8"
 )
 
-// toolOutputRetentionDefault 是落盘工具输出的默认保留时长（取自 opencode RETENTION=7d）。
+// toolOutputRetentionDefault is the default retention time for persisted tool output (taken from opencode RETENTION=7d).
 const toolOutputRetentionDefault = 7 * 24 * time.Hour
 
-// toolOutputMaxBytes 是单个落盘文件的字节硬封顶（防 OOM；高于 shell 入口 100KB 上限，留余量）。
+// toolOutputMaxBytes is the byte hard cap for a single persisted file (prevents OOM; above the shell entry 100KB cap, with headroom).
 const toolOutputMaxBytes = 1 << 20 // 1 MiB
 
-// toolOutputStore 是工具输出落盘存储，私有；由 Run 在入口构造一次、跨步复用。超 limit 的工具全文
-// 写盘，历史 Content 改为「现有预览 + 绝对路径提示」，模型用已有 read(offset/limit)/grep 按需回读，
-// 不再永久丢全文（§P1-A，修 trimForHistory 一次性硬截断的硬损口）。
+// toolOutputStore is the on-disk storage for tool output; private; constructed once at the Run entry and reused across steps.
+// Tool output exceeding the limit is written to disk in full; the history Content is replaced with "existing preview +
+// absolute path hint", letting the model use the existing read(offset/limit)/grep to read it back on demand, instead of
+// permanently losing the full text (§P1-A, fixes the hard loss of trimForHistory's one-shot hard truncation).
 type toolOutputStore struct {
-	dir       string        // 落盘根目录；构造时已确保非空
-	retention time.Duration // 过期清理阈值；<=0 用 toolOutputRetentionDefault
-	counter   atomic.Int64  // 同 (step,callID) 碰撞消解
+	dir       string        // on-disk root directory; verified non-empty at construction time
+	retention time.Duration // expiry cleanup threshold; <=0 uses toolOutputRetentionDefault
+	counter   atomic.Int64  // collision resolution for the same (step,callID)
 	logger    *slog.Logger
 }
 
-// newToolOutputStore 是 Run 入口构造。retention<=0 落 toolOutputRetentionDefault。dir 由调用方判空。
+// newToolOutputStore is the Run entry constructor. retention<=0 falls back to toolOutputRetentionDefault. dir is checked for emptiness by the caller.
 func newToolOutputStore(dir string, retention time.Duration, logger *slog.Logger) *toolOutputStore {
 	if retention <= 0 {
 		retention = toolOutputRetentionDefault
@@ -35,10 +36,10 @@ func newToolOutputStore(dir string, retention time.Duration, logger *slog.Logger
 	return &toolOutputStore{dir: dir, retention: retention, logger: logger}
 }
 
-// bound 是核心方法。truncated=false 原样返回 preview（无落盘）。truncated=true：把 output（按字节
-// cap 到 toolOutputMaxBytes）写入 <dir>/tool_<step>_<sanitize(callID)>_<counter>.txt（O_CREATE|O_EXCL
-// 0o600，仿 session.go 写侧护栏；失败 best-effort log warn 并返回 preview 不带 marker，等同当前硬截断），
-// 成功返回 preview + 路径提示（模型用 read(offset/limit)/grep 回读）。
+// bound is the core method. truncated=false returns preview as-is (no persistence). truncated=true: writes output
+// (byte-capped to toolOutputMaxBytes) to <dir>/tool_<step>_<sanitize(callID)>_<counter>.txt (O_CREATE|O_EXCL 0o600,
+// mirroring session.go write-side guard; on failure best-effort log warn and returns preview without a marker, equivalent
+// to the current hard truncation); on success returns preview + path hint (model reads back via read(offset/limit)/grep).
 func (s *toolOutputStore) bound(step int, callID, output, preview string, truncated bool) string {
 	if !truncated {
 		return preview
@@ -52,8 +53,9 @@ func (s *toolOutputStore) bound(step int, callID, output, preview string, trunca
 	data := []byte(output)
 	byteCapped := false
 	if len(data) > toolOutputMaxBytes {
-		// 超 1 MiB 硬封顶：回退到最近的 UTF-8 rune 边界再截，保证落盘文件始终是合法 UTF-8
-		// （否则多字节 rune 被从中间切开，模型 read 回读得乱码，回灌 API 可能引发 400）。
+		// Above the 1 MiB byte hard cap: fall back to the nearest UTF-8 rune boundary then truncate, ensuring the persisted
+		// file is always valid UTF-8 (otherwise a multi-byte rune is split in the middle, the model read-back gets garbled
+		// text, and feeding it back to the API may trigger a 400).
 		byteCapped = true
 		end := toolOutputMaxBytes
 		for end > 0 && !utf8.RuneStart(data[end]) {
@@ -72,7 +74,8 @@ func (s *toolOutputStore) bound(step int, callID, output, preview string, trunca
 		s.warnf("tool-output write failed: %v", err)
 		return preview
 	}
-	// Sync 兑现下方 marker「完整输出已保存」的语义：崩溃后模型 read 回读得完整数据而非空/残文件。
+	// Sync fulfills the semantics of the "full output saved" marker below: after a crash the model reads back
+	// complete data rather than an empty/residual file.
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
@@ -80,7 +83,8 @@ func (s *toolOutputStore) bound(step int, callID, output, preview string, trunca
 		return preview
 	}
 	if err := f.Close(); err != nil {
-		// 对齐写失败语义：close 失败则删孤儿文件、返回 preview 不带 marker，避免模型据 marker 回读到残文件。
+		// Align with write-failure semantics: on close failure delete the orphan file and return preview without a marker,
+		// to avoid the model reading back a residual file based on the marker.
 		_ = os.Remove(path)
 		s.warnf("tool-output close failed: %v", err)
 		return preview
@@ -89,21 +93,21 @@ func (s *toolOutputStore) bound(step int, callID, output, preview string, trunca
 	if err != nil {
 		abs = path
 	}
-	// 落盘文件可能被 1 MiB 字节封顶截断（byteCapped）——此时不可声称「完整」，否则模型 read 回读
-	// 得被截断的数据却以为是全文。
-	marker := "…[完整输出已保存"
+	// The persisted file may have been truncated by the 1 MiB byte cap (byteCapped) — in that case do not claim "complete",
+	// otherwise the model reads back truncated data but believes it is the full text.
+	marker := "…[full output saved"
 	if byteCapped {
-		marker = "…[输出已保存（超 1 MiB 部分已截断）"
+		marker = "…[output saved (over 1 MiB, partially truncated)"
 	}
-	return preview + "\n\n" + marker + "：" + abs + "；用 read(offset/limit) 或 grep 回读，勿整文件 read]"
+	return preview + "\n\n" + marker + ": " + abs + "; read it back via read(offset/limit) or grep, do not read the entire file]"
 }
 
-// cleanup 扫描 dir 下 tool_*.txt，对 mtime < now-retention 的 os.Remove（best-effort，失败仅 warn）。
-// Run 启动时机会性调用一次，贴合单次运行 CLI 形态（不做后台定时器）。
+// cleanup scans tool_*.txt under dir and os.Remove those with mtime < now-retention (best-effort, on failure only warn).
+// Run calls it once opportunistically at startup, fitting the single-run CLI form (no background timer).
 func (s *toolOutputStore) cleanup() {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return // 目录不存在等：无落盘文件可清，静默。
+		return // directory does not exist etc.: no persisted files to clean, silent.
 	}
 	cutoff := time.Now().Add(-s.retention)
 	for _, e := range entries {
@@ -122,9 +126,9 @@ func (s *toolOutputStore) cleanup() {
 	}
 }
 
-// sanitizeFileSegment 把 callID 压成文件名安全段：保留 [A-Za-z0-9_-]，其余替换为 '_'，
-// 截断到 ≤32 字节（b.Len() 计字节，非 rune；多字节 rune 可使段长略超 32B，counter 后缀消解碰撞）。
-// 防路径穿越（剔 / .. 等）。
+// sanitizeFileSegment compresses callID into a filename-safe segment: keeps [A-Za-z0-9_-], replaces the rest with '_',
+// truncates to <=32 bytes (b.Len() counts bytes, not runes; a multi-byte rune may make the segment slightly exceed 32B,
+// the counter suffix resolves collisions). Prevents path traversal (strips / .. etc.).
 func sanitizeFileSegment(s string) string {
 	var b strings.Builder
 	for _, r := range s {

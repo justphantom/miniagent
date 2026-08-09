@@ -7,13 +7,14 @@ import (
 	"os"
 )
 
-// maxPromptBytes 是 stdin prompt 的大小上限：无上限读取既撑内存，写回 session 后又会
-// 撞 LoadSession 的 maxSessionBytes 上限，导致会话永久无法接续。取值小于 session 上限。
+// maxPromptBytes is the size upper bound for a stdin prompt: unbounded reading both bloats memory and,
+// after being written back to the session, hits LoadSession's maxSessionBytes limit, making the session
+// permanently unresumable. The value is smaller than the session limit.
 const maxPromptBytes = 1 << 20
 
-// mustReadPrompt 读取 stdin prompt。读取放进 goroutine 并 select ctx：io.ReadAll 不可被信号中断，
-// 否则交互式无管道或慢 producer 时 Ctrl+C 无法打断（signal.NotifyContext 的 channel 满后还会吞后续信号）。
-// ctx 取消（SIGINT/SIGTERM）走码 130 干净退出，与主 Run 取消路径一致。读 goroutine 在进程退出后由 OS 回收。
+// mustReadPrompt reads the stdin prompt. The read is placed in a goroutine and selected against ctx: io.ReadAll cannot be interrupted by a signal,
+// otherwise Ctrl+C cannot break out when interactive without a pipe or with a slow producer (after signal.NotifyContext's channel fills it would also swallow subsequent signals).
+// ctx cancellation (SIGINT/SIGTERM) takes code 130 to exit cleanly, consistent with the main Run cancellation path. The read goroutine is reaped by the OS after the process exits.
 func mustReadPrompt(ctx context.Context, r io.Reader) []byte {
 	type readResult struct {
 		prompt []byte
@@ -33,7 +34,7 @@ func mustReadPrompt(ctx context.Context, r io.Reader) []byte {
 			os.Exit(1)
 		}
 		if len(res.prompt) > maxPromptBytes {
-			fmt.Fprintf(os.Stderr, "miniagent: stdin prompt 超过大小上限 %d 字节\n", maxPromptBytes)
+			fmt.Fprintf(os.Stderr, "miniagent: stdin prompt exceeds the size limit of %d bytes\n", maxPromptBytes)
 			os.Exit(1)
 		}
 		if len(res.prompt) == 0 {
@@ -42,6 +43,6 @@ func mustReadPrompt(ctx context.Context, r io.Reader) []byte {
 		}
 		return res.prompt
 	}
-	// unreachable：select 两分支各经 os.Exit/return 终止；os.Exit 不被编译器识别为终止，故须安抚。
+	// unreachable: both select branches terminate via os.Exit/return; os.Exit is not recognized by the compiler as terminating, so this is needed to appease it.
 	return nil
 }

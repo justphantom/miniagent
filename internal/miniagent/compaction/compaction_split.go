@@ -10,59 +10,69 @@ import (
 
 import "log/slog"
 
-// CompactionOptions 是 NewCompaction 的参数——把原散布在 LoopConfig 的上下文压缩策略集中到一处，
-// 让压缩成为可插拔的「外挂」而非核心配置。<=0/空 的字段在引擎内回落内置默认（见 context.go）。
+// CompactionOptions holds the parameters for NewCompaction — it consolidates the context-compaction strategy
+// originally scattered across LoopConfig into one place, making compaction a pluggable "add-on" rather than core
+// config. Fields <=0/empty fall back to the built-in defaults inside the engine (see context.go).
 type CompactionOptions struct {
-	// Chat 是摘要压缩用的 client（可与主 chat 不同 provider）；nil 时调用方须自行注入 Summarize，
-	// 否则 NewCompaction 用它构造 summarizeMiddle 回调。
+	// Chat is the client used for summary compaction (may be a different provider than the main chat); when nil
+	// the caller must inject Summarize, otherwise NewCompaction builds the summarizeMiddle callback from it.
 	Chat miniagent.Doer
-	// MaxTokens 是主请求的单次输出上限，供 isUsageOverflow 判定静默溢出（对标原 cfg.MaxTokens）。
+	// MaxTokens is the single-turn output limit of the main request, used by isUsageOverflow to detect silent
+	// overflow (mirrors the original cfg.MaxTokens).
 	MaxTokens int
-	// ContextWindow 是模型 context 上限（tokens）；<=0 关闭主动压缩（仅保留 ErrContextLength 被动重试）。
+	// ContextWindow is the model context limit (tokens); <=0 disables proactive compaction (only the
+	// ErrContextLength passive retry remains).
 	ContextWindow int
-	// Model 是主模型 id；CompactionModel 空时回落此值做摘要。
+	// Model is the main model id; when CompactionModel is empty, this is used as the fallback for summarization.
 	Model string
-	// CompactionModel 是摘要专用模型 id（可跨 provider）；空回落 Model。
+	// CompactionModel is the summary-specific model id (may span providers); empty falls back to Model.
 	CompactionModel string
 	System          string
 	Tools           []miniagent.Tool
-	KeepRecent      int // compactWithSummary 保留的最近轮数（<=0 用内置默认）。
-	// KeepReasoning/KeepToolArgs/KeepReasoningChars 是主动裁剪参数（P1/P4/P7，<=0/0 用内置默认）。
+	KeepRecent      int // compactWithSummary retains this many recent rounds (<=0 uses the built-in default).
+	// KeepReasoning/KeepToolArgs/KeepReasoningChars are proactive trimming params (P1/P4/P7, <=0/0 uses the built-in default).
 	KeepReasoning      int
 	KeepToolArgs       int
 	KeepReasoningChars int
-	SummarizerPrompt   string // 非空则全量 override 摘要 system prompt。
-	// SummaryCreateInstruction/SummaryUpdateInstruction 是摘要指令模板（CREATE/UPDATE），占位符 {max_chars}；
-	// SummaryTemplate 是固定摘要结构模板（无变量）。空用内置默认。经 config defaults.* 透传。
+	SummarizerPrompt   string // Non-empty fully overrides the summary system prompt.
+	// SummaryCreateInstruction/SummaryUpdateInstruction are the summary instruction templates (CREATE/UPDATE),
+	// placeholder {max_chars}; SummaryTemplate is the fixed summary structure template (no variables). Empty uses
+	// the built-in default. Passed through via config defaults.*.
 	SummaryCreateInstruction string
 	SummaryUpdateInstruction string
 	SummaryTemplate          string
 	SummaryMaxChars          int
-	// SummaryMaxTokens 限制摘要请求输出 token 数；<=0（默认）由 NewCompaction 从 SummaryMaxChars
-	// 派生（chars/2，CJK 最密口径），保证中文摘要不被 MaxTokens 先于 chars 截断。显式 >0 覆盖派生。
+	// SummaryMaxTokens caps the summary request output tokens; <=0 (default) NewCompaction derives it from
+	// SummaryMaxChars (chars/2, the densest CJK ratio), so a Chinese summary is not truncated by MaxTokens before
+	// reaching chars. Explicit >0 overrides the derivation.
 	SummaryMaxTokens     int
 	PreserveRecentTokens int
 	UseRealUsage         bool
-	// Auto 控制静默用量溢出检测（AfterLLM 采真实 usage 判溢出、置下步 Force 压缩）；false=关闭。
+	// Auto toggles silent usage-overflow detection (AfterLLM samples real usage to judge overflow and sets the
+	// next step's Force compaction); false=off.
 	Auto     bool
-	Reserved int // 从 ContextWindow 预留的 token 缓冲（<=0 回落内置默认）。
-	// SessionID 透传给 OnCompacting（CompactingInput.SessionID），空串兼容无 session。
+	Reserved int // Reserved is the token buffer reserved from ContextWindow (<=0 falls back to the built-in default).
+	// SessionID is passed through to OnCompacting (CompactingInput.SessionID); empty string tolerates no-session.
 	SessionID string
-	// OnCompacting 是每次摘要前的钩子（注入 context / 一次性替换 summarizerPrompt），nil=不启用。
+	// OnCompacting is the pre-summary hook (inject context / one-shot replace summarizerPrompt); nil=disabled.
 	OnCompacting CompactingHook
 	Logger       *slog.Logger
 }
 
-// 本文件是压缩子系统的「历史工具」部分（从 history_util.go 拆出），仅压缩引擎使用：
-// splitRounds/flatten/compactHistory/trimRecentRounds（轮次切分与有损裁剪）、
-// estimateTokensFromUsage 系列（真实 usage 优先 + 防陈旧的阈值估算）、
-// isUsageOverflow/usableTokens/compactionReserve（静默溢出判定）。
-// 与 context.go / history_*.go 同属压缩簇，将一并外迁到 internal/miniagent/compaction。
+// This file is the "history tools" portion of the compaction subsystem (split out from history_util.go), used
+// only by the compaction engine:
+// splitRounds/flatten/compactHistory/trimRecentRounds (round splitting and lossy trimming),
+// the estimateTokensFromUsage family (real-usage-first + staleness-aware threshold estimation),
+// isUsageOverflow/usableTokens/compactionReserve (silent overflow detection).
+// Together with context.go / history_*.go it belongs to the compaction cluster, all relocated to internal/miniagent/compaction.
 
-// estimateMessageTokensLocal 单条消息本地 token 估算（CJK≈1/2、其他≈1/4），计 Content+Reasoning+
-// ToolCalls.Args + 该消息入请求的边际开销（信封 EnvelopePerMsgTokens + tool_call 包装 EnvelopePerToolCallTokens）。
-// 不计 system/schema 全局开销（请求级常量，由 EstimateTokens 的 SystemOverheadTokens 兜底）。
-// 此前漏算信封/tool_call 包装，致 estimateTokensFromUsage 在长会话系统性低估（envelope 累积），压缩偏晚。
+// estimateMessageTokensLocal estimates the tokens of a single message locally (CJK≈1/2, others≈1/4), counting
+// Content+Reasoning+ToolCalls.Args + the marginal overhead of adding this message to the request (envelope
+// EnvelopePerMsgTokens + tool_call wrapping EnvelopePerToolCallTokens).
+// It does not count the global system/schema overhead (a request-level constant, covered by EstimateTokens'
+// SystemOverheadTokens fallback).
+// Previously the envelope/tool_call wrapping was undercounted, causing estimateTokensFromUsage to systematically
+// underestimate on long sessions (envelope accumulates), so compaction fired too late.
 func estimateMessageTokensLocal(m miniagent.Message) int {
 	var nonCJK, cjk int
 	n, c := text.CountCharsLocal(m.Content)
@@ -76,14 +86,15 @@ func estimateMessageTokensLocal(m miniagent.Message) int {
 	return nonCJK/4 + cjk/2 + policy.EnvelopePerMsgTokens + policy.EnvelopePerToolCallTokens*len(m.ToolCalls)
 }
 
-// contextTokensFromUsage 把单次响应 usage 折算成「该次请求前缀+输出 token 总量」。
-// miniagent 无 cache 字段，InputTokens 已含 OpenAI prompt_tokens 全量（含缓存命中）。
+// contextTokensFromUsage converts a single response's usage into "the total tokens of that request's prefix + output".
+// miniagent has no cache field; InputTokens already includes the full OpenAI prompt_tokens (including cache hits).
 func contextTokensFromUsage(u miniagent.Usage) int {
 	return u.InputTokens + u.OutputTokens
 }
 
-// lastApplicableUsageIndex 返回最近一条「usage 适用于当前前缀」的 assistant 索引，无则 -1。
-// 防陈旧判定：仅 miniagent.KindSummary（摘要）重定义前缀；取最后一条 Ts>=latestSummaryTs 且 usage 非零的 assistant。
+// lastApplicableUsageIndex returns the index of the most recent assistant whose usage "applies to the current
+// prefix", or -1 if none. Anti-staleness check: only miniagent.KindSummary (summary) redefines the prefix; take
+// the last assistant with Ts>=latestSummaryTs and non-zero usage.
 func lastApplicableUsageIndex(msgs []miniagent.Message) int {
 	var latestSummaryTs int64
 	for _, m := range msgs {
@@ -102,9 +113,9 @@ func lastApplicableUsageIndex(msgs []miniagent.Message) int {
 	return idx
 }
 
-// estimateTokensFromUsage 两段式估算：lastApplicableUsageIndex 找最近未陈旧真实 usage 锚点，
-// tokens = contextTokensFromUsage(usage) + Σ estimateMessageTokensLocal(msgs[idx+1:])。
-// ok=false（无锚点）时调用方回落 policy.EstimateTokens。
+// estimateTokensFromUsage is a two-stage estimate: lastApplicableUsageIndex finds the most recent non-stale
+// real-usage anchor, tokens = contextTokensFromUsage(usage) + Σ estimateMessageTokensLocal(msgs[idx+1:]).
+// When ok=false (no anchor) the caller falls back to policy.EstimateTokens.
 func estimateTokensFromUsage(msgs []miniagent.Message) (tokens int, ok bool) {
 	idx := lastApplicableUsageIndex(msgs)
 	if idx < 0 {
@@ -117,7 +128,7 @@ func estimateTokensFromUsage(msgs []miniagent.Message) (tokens int, ok bool) {
 	return tokens, true
 }
 
-// estimateThreshold 封装「优先真实 usage、回落本地」策略，供 FitHistory 单点调用。
+// estimateThreshold wraps the "real usage first, fall back to local" strategy for a single FitHistory call site.
 func estimateThreshold(msgs []miniagent.Message, system string, tools []miniagent.Tool, useRealUsage bool) int {
 	if useRealUsage {
 		if t, ok := estimateTokensFromUsage(msgs); ok {
@@ -127,15 +138,15 @@ func estimateThreshold(msgs []miniagent.Message, system string, tools []miniagen
 	return policy.EstimateTokens(msgs, system, tools)
 }
 
-// compactionBuffer 是为模型输出与未来轮次增长预留的 token 缓冲（对标 opencode COMPACTION_BUFFER=20000）。
+// compactionBuffer is the token buffer reserved for model output and future-round growth (mirrors opencode COMPACTION_BUFFER=20000).
 const compactionBuffer = 20000
 
-// usageFootprint 返回一次 LLM 调用的真实上下文占用（input+output）。
+// usageFootprint returns the real context footprint (input+output) of a single LLM call.
 func usageFootprint(u miniagent.Usage) int {
 	return contextTokensFromUsage(u)
 }
 
-// compactionReserve 返回从 ContextWindow 预留的 token 数（对标 opencode usable() 的 reserved）。
+// compactionReserve returns the number of tokens reserved from ContextWindow (mirrors reserved in opencode usable()).
 func compactionReserve(maxTokens, reservedCfg int) int {
 	if reservedCfg > 0 {
 		return reservedCfg
@@ -146,9 +157,10 @@ func compactionReserve(maxTokens, reservedCfg int) int {
 	return compactionBuffer
 }
 
-// usableTokens 返回可用于历史填充的 token 预算（对标 opencode usable()）。
-// reserve 上限 clamp 到 CW/5：防 compactionReserve（默认 min(20000,maxTokens)）在小 CW 下占 CW 过半，
-// 致 isUsageOverflow（usage>=usable）阈值低于 FitHistory 门控（CW*4/5=80%），Force 路径过早主导。
+// usableTokens returns the token budget available for history filling (mirrors opencode usable()).
+// reserve is clamped to at most CW/5: prevents compactionReserve (default min(20000,maxTokens)) from taking more
+// than half of CW on small CW, which would make the isUsageOverflow (usage>=usable) threshold lower than the
+// FitHistory gate (CW*4/5=80%), letting the Force path take over too early.
 func usableTokens(contextWindow, maxTokens, reservedCfg int) int {
 	if contextWindow <= 0 {
 		return 0
@@ -157,7 +169,7 @@ func usableTokens(contextWindow, maxTokens, reservedCfg int) int {
 	return max(0, contextWindow-reserve)
 }
 
-// isUsageOverflow 判定上一步真实 usage 是否已撞上下文窗口（对标 opencode isOverflow，§P1-B）。
+// isUsageOverflow determines whether the previous step's real usage has hit the context window (mirrors opencode isOverflow, §P1-B).
 func isUsageOverflow(u miniagent.Usage, contextWindow, maxTokens, reservedCfg int, auto bool) bool {
 	if !auto || contextWindow <= 0 {
 		return false
@@ -165,7 +177,7 @@ func isUsageOverflow(u miniagent.Usage, contextWindow, maxTokens, reservedCfg in
 	return usageFootprint(u) >= usableTokens(contextWindow, maxTokens, reservedCfg)
 }
 
-// 一轮（成组，保 tool_calls/tool 配对）；user 与无 tool_calls 的 assistant 各自独立成轮。
+// One round (grouped, preserving tool_calls/tool pairing); user and assistant without tool_calls each form their own round.
 func splitRounds(msgs []miniagent.Message) [][]miniagent.Message {
 	var rounds [][]miniagent.Message
 	var cur []miniagent.Message
@@ -177,13 +189,13 @@ func splitRounds(msgs []miniagent.Message) [][]miniagent.Message {
 	}
 	for _, m := range msgs {
 		if m.Role == miniagent.RoleTool && len(cur) > 0 {
-			cur = append(cur, m) // tool 归属当前开启的 assistant(tool_calls) 轮
+			cur = append(cur, m) // tool belongs to the currently open assistant(tool_calls) round
 			continue
 		}
 		flush()
 		cur = []miniagent.Message{m}
 		if len(m.ToolCalls) == 0 {
-			flush() // user / 纯 assistant：独立成轮
+			flush() // user / pure assistant: independent round
 		}
 	}
 	flush()
@@ -198,7 +210,8 @@ func flatten(rounds [][]miniagent.Message) []miniagent.Message {
 	return out
 }
 
-// compactHistory 是摘要失败/无中段时的有损 fallback：保留「最早 1 轮 + 最近 keepRecent 轮」。
+// compactHistory is the lossy fallback when summarization fails or there is no middle segment: retains
+// "the earliest 1 round + the most recent keepRecent rounds".
 func compactHistory(msgs []miniagent.Message, keepRecent int) []miniagent.Message {
 	rounds := splitRounds(msgs)
 	if len(rounds) <= 1+keepRecent {
@@ -209,15 +222,17 @@ func compactHistory(msgs []miniagent.Message, keepRecent int) []miniagent.Messag
 	return out
 }
 
-// trimRecentRounds 只保留最近 keepRecent 轮，是 compactHistory 仍超 window 时的最终有损裁剪。
+// trimRecentRounds keeps only the most recent keepRecent rounds; it is the final lossy trim when compactHistory
+// still exceeds the window.
 func trimRecentRounds(msgs []miniagent.Message, keepRecent int) []miniagent.Message {
 	rounds := splitRounds(msgs)
 	if len(rounds) <= keepRecent {
 		return msgs
 	}
 	trimmed := flatten(rounds[len(rounds)-keepRecent:])
-	// 保留最新一条 KindSummary（可能在被裁掉的头部——刚花摘要调用生成）：前插到裁剪结果头部，
-	// 否则白烧一次摘要 + 模型丢失中段摘要与初始上下文。裁剪结果已含 summary 或无 summary 可保则原样返回。
+	// Keep the most recent KindSummary (it may sit in the trimmed head — just generated by a summary call): prepend
+	// it to the trim result, otherwise the summary call is wasted + the model loses the middle-segment summary and
+	// the initial context. If the trim result already contains a summary, or there is no summary to keep, return as-is.
 	var latestSummary miniagent.Message
 	hasSummary := false
 	for i := range slices.Backward(msgs) {

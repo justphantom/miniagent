@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// e2e：config provider.key 提供 key，进入请求 Authorization。
+// e2e: config provider.key supplies the key, which goes into the request Authorization.
 func TestCLI_ProviderKeyAuth(t *testing.T) {
 	var mu sync.Mutex
 	var gotAuth string

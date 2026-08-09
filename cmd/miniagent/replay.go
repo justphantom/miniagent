@@ -1,6 +1,8 @@
-// replay.go 实现 -replay：读取指定 session 文件，离线（不调 LLM、不需 key）把落盘消息序列
-// 重新翻译成与运行时同构的 NDJSON 事件流，如实重显整个 session 的 ReAct 过程。与 -session 的
-// 区别：-session 加载历史继续新对话（消耗 token、产生新事件）；-replay 纯只读重显，播完即止。
+// replay.go implements -replay: it reads the specified session file and offline (no LLM call, no key needed)
+// re-translates the persisted message sequence into an NDJSON event stream isomorphic with the runtime,
+// faithfully replaying the entire session's ReAct process. Difference from -session: -session loads
+// history to continue a new conversation (consumes tokens, produces new events); -replay is purely
+// read-only replay, stops when finished.
 package main
 
 import (
@@ -13,7 +15,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
-// runReplay：id → path → load → replay。失败打 stderr + exit 1（错误口径与 resolveSessionForRun 一致）。
+// runReplay: id → path → load → replay. Failure prints to stderr + exit 1 (error wording matches resolveSessionForRun).
 func runReplay(out io.Writer, sessionDir, id string, maxBytes int64) {
 	sessPath, err := session.ResolveSessionPath(id, sessionDir)
 	if err != nil {
@@ -26,9 +28,9 @@ func runReplay(out io.Writer, sessionDir, id string, maxBytes int64) {
 		os.Exit(1)
 	}
 	if meta.Type == "" {
-		// LoadSession 容忍尾行半写；meta.Type=="" 表示文件不存在或首行缺失——与接续路径一致报错，
-		// 防 typo 静默成功。
-		fmt.Fprintf(os.Stderr, "miniagent: session %q 不存在\n", id)
+		// LoadSession tolerates a half-written tail line; meta.Type=="" means the file does not exist or the first line is missing — error out like the resume path,
+		// preventing silent success on a typo.
+		fmt.Fprintf(os.Stderr, "miniagent: session %q not found\n", id)
 		os.Exit(1)
 	}
 	if err := replaySession(out, meta, msgs); err != nil {
@@ -37,17 +39,17 @@ func runReplay(out io.Writer, sessionDir, id string, maxBytes int64) {
 	}
 }
 
-// replaySession 遍历 msgs 按 role 翻译成 NDJSON 事件：
-//   - assistant：step+1，每个 tool_call 发 tool_use（并记 callID→name 供后续 tool 消息反查）；
-//     reasoning 发 reasoning_delta，content 发 text_delta；累加该步用量。
-//   - tool：发 tool_result（name 由 map 反查，tool 消息本身只存 tool_call_id 不存 name）。
-//   - user/system：运行时本就不发事件，跳过。
+// replaySession iterates over msgs and translates them into NDJSON events by role:
+//   - assistant: step+1, each tool_call emits a tool_use (and records callID→name for later tool-message lookup);
+//     reasoning emits reasoning_delta, content emits text_delta; accumulates that step's usage.
+//   - tool: emits tool_result (name resolved via the map; the tool message itself stores only tool_call_id, not name).
+//   - user/system: the runtime never emits events for these, so they are skipped.
 //
-// 末尾发 result 汇总（steps=assistant turn 数、用量累加、finish 近似 "stop"、model 取 session 元数据）。
+// At the end a result summary is emitted (steps=number of assistant turns, usage accumulated, finish approximated as "stop", model taken from session metadata).
 //
-// 已知精度边界（用户认可，非缺陷）：text/reasoning 为整串一次发（session 无逐块切分）；
-// tool_result 经双重截断（落盘成型串 + EmitToolResult 的 2000 字符上限）且无 exit_code
-// （session tool 消息未存退出码）；压缩过的 session 回放的是压缩后快照；finish 恒 "stop"。
+// Known precision boundaries (accepted by the user, not defects): text/reasoning are emitted as a whole string at once (the session has no per-chunk splitting);
+// tool_result goes through double truncation (the persisted finalized string + EmitToolResult's 2000-char cap) and has no exit_code
+// (the session tool message does not store the exit code); a compacted session replays the post-compaction snapshot; finish is always "stop".
 func replaySession(w io.Writer, meta session.SessionMeta, msgs []miniagent.Message) error {
 	if err := event.EmitSession(w, meta); err != nil {
 		return err

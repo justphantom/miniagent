@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// 一步内的多个 tool_call 必须并发执行：3 个工具都启动后才能 release 任一个，
-// 串行执行下最多只有 1 个工具会在 release 前启动。
+// Multiple tool_calls within a single step must execute concurrently: all 3 tools must have started before
+// any one can be released; under serial execution at most 1 tool would start before release.
 func TestRun_ToolsRunInParallel(t *testing.T) {
 	started := make(chan string, 3)
 	release := make(chan struct{})
@@ -52,7 +52,7 @@ func TestRun_ToolsRunInParallel(t *testing.T) {
 	<-done
 }
 
-// 并行执行下，tool_use 信号仍按 LLM 给定的 tool_call 原序排列。
+// Under parallel execution, tool_use signals are still ordered as the LLM gave the tool_calls.
 func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 	tools := []Tool{
 		{Name: "a", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "A"} }},
@@ -80,8 +80,8 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 	}
 }
 
-// 已取消的 context 必须立即中止 Run，避免继续烧 token。
-// 已取消的 context 必须立即中止 Run，避免继续烧 token。
+// An already-cancelled context must abort Run immediately to avoid burning more tokens.
+// An already-cancelled context must abort Run immediately to avoid burning more tokens.
 func TestRun_CancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -92,12 +92,13 @@ func TestRun_CancelledCtx(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if tr.calls != 0 {
-		t.Errorf("calls = %d, want 0（ctx 已取消不应调 LLM）", tr.calls)
+		t.Errorf("calls = %d, want 0 (ctx already cancelled, should not call the LLM)", tr.calls)
 	}
 }
 
-// T3：一步内多 tool_call 并发执行，其中一个 panic——safeCall 须 recover 回填错误结果，
-// 其余工具正常完成，且 assistant.tool_calls 与 tool 消息配对完整（核心不变量）。此前仅测单工具 panic。
+// T3: multiple tool_calls execute concurrently within a single step and one of them panics — safeCall must
+// recover and backfill an error result, the other tools complete normally, and assistant.tool_calls stays
+// fully paired with tool messages (a core invariant). Previously only single-tool panic was tested.
 func TestRun_ConcurrentToolPanicRecovers(t *testing.T) {
 	tools := []Tool{
 		{Name: "a", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "A"} }},
@@ -115,7 +116,7 @@ func TestRun_ConcurrentToolPanicRecovers(t *testing.T) {
 	llm := testClients(tr)
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: tools}, "x", LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("Run: %v（panic 应被 recover 不应崩进程）", err)
+		t.Fatalf("Run: %v (panic should be recovered, must not crash the process)", err)
 	}
 	if res.Text != "done" {
 		t.Errorf("Text = %q, want done", res.Text)
@@ -127,12 +128,13 @@ func TestRun_ConcurrentToolPanicRecovers(t *testing.T) {
 		}
 	}
 	if toolMsgs != 3 {
-		t.Errorf("tool 消息数 = %d, want 3（panic 工具经 safeCall 回填、配对完整）", toolMsgs)
+		t.Errorf("tool message count = %d, want 3 (the panicking tool is backfilled via safeCall; pairing is complete)", toolMsgs)
 	}
 }
 
-// T4：工具执行中 ctx 取消，Run 须及时返回——runToolsParallel 信号量联动 ctx.Done + 工具响应 ctx，
-// 否则 wg.Wait 挂死、Run 不响应 SIGINT。此契约（loop_api.go:23）此前零测试。
+// T4: when the ctx is cancelled during tool execution, Run must return promptly — the runToolsParallel
+// semaphore ties ctx.Done together with the tool's response ctx; otherwise wg.Wait hangs and Run would not
+// respond to SIGINT. This contract (loop_api.go:23) previously had zero tests.
 func TestRun_CtxCancelledDuringToolReturns(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
@@ -141,7 +143,7 @@ func TestRun_CtxCancelledDuringToolReturns(t *testing.T) {
 		Call: func(c context.Context, _ string) ToolResult {
 			close(started)
 			<-c.Done()
-			return ToolResult{IsError: true, Output: "已取消"}
+			return ToolResult{IsError: true, Output: "cancelled"}
 		},
 	}
 	tr := &fakeTransport{responses: []string{
@@ -156,7 +158,7 @@ func TestRun_CtxCancelledDuringToolReturns(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("工具未启动")
+		t.Fatal("tool did not start")
 	}
 	cancel()
 	select {
@@ -165,13 +167,15 @@ func TestRun_CtxCancelledDuringToolReturns(t *testing.T) {
 			t.Errorf("err = %v, want context.Canceled", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("Run 未在 ctx 取消后及时返回（wg.Wait 挂死？）")
+		t.Fatal("Run did not return promptly after ctx cancellation (wg.Wait hung?)")
 	}
 }
 
-// M3-4：末轮（step==iterLimit）工具执行期间 ctx 取消——工具返「已取消」（非 error）→ handleToolCalls
-// 返 nil → summarizeAtLimit 用已取消 ctx 失败返 ok=false → 循环退出。循环末尾须有 ctx 守卫，否则取消
-// 被吞为 FinishMaxIterations + nil（退出码 0 非 130）。MaxIterations=1 使任一工具期取消都命中末轮。
+// M3-4: ctx is cancelled during tool execution in the final step (step==iterLimit) — the tool returns
+// "cancelled" (not an error) → handleToolCalls returns nil → summarizeAtLimit fails with ok=false on the
+// already-cancelled ctx → the loop exits. A ctx guard is needed at the end of the loop; otherwise the
+// cancellation is swallowed as FinishMaxIterations + nil (exit code 0 instead of 130). MaxIterations=1 makes
+// any tool-time cancellation hit the final step.
 func TestRun_CtxCancelledAtIterationLimitReturnsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
@@ -180,7 +184,7 @@ func TestRun_CtxCancelledAtIterationLimitReturnsCanceled(t *testing.T) {
 		Call: func(c context.Context, _ string) ToolResult {
 			close(started)
 			<-c.Done()
-			return ToolResult{IsError: true, Output: "已取消"}
+			return ToolResult{IsError: true, Output: "cancelled"}
 		},
 	}
 	tr := &fakeTransport{responses: []string{
@@ -195,15 +199,15 @@ func TestRun_CtxCancelledAtIterationLimitReturnsCanceled(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("工具未启动")
+		t.Fatal("tool did not start")
 	}
 	cancel()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
-			t.Errorf("err = %v, want context.Canceled（末轮取消须及时返回，非吞为 max_iterations）", err)
+			t.Errorf("err = %v, want context.Canceled (cancellation in the final step must return promptly, not be swallowed as max_iterations)", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("Run 未在 ctx 取消后及时返回")
+		t.Fatal("Run did not return promptly after ctx cancellation")
 	}
 }

@@ -23,8 +23,8 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// version 由 make build 经 -ldflags "-X main.version=$(git describe --tags)" 注入；
-// 不在源码写死字面量，避免发版后滞后。未注入时为空串。
+// version is injected at build time via make build using -ldflags "-X main.version=$(git describe --tags)";
+// we do not hardcode a literal here to avoid stale values after release. Empty string when not injected.
 var version string
 
 type cliFlags struct {
@@ -47,20 +47,20 @@ type cliFlags struct {
 
 func parseFlags() *cliFlags {
 	f := &cliFlags{}
-	f.configPath = flag.String("config", "", "配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）")
-	f.mode = flag.String("mode", "", "权限模式 default|auto（default 时 workdir 必填）；默认 default")
-	f.thinking = flag.String("thinking", "", "思考级别 off|minimal|low|medium|high|xhigh|max（默认 off）")
-	f.resultOnly = flag.Bool("result-only", false, "仅输出 result.text（subagent fork 用）；与 -stream 互斥")
-	f.provider = flag.String("provider", "", "LLM provider 名（与 -model 成对覆盖 defaults 对；-list-models 时单独用于筛选）")
-	f.model = flag.String("model", "", "LLM model id（与 -provider 成对覆盖 defaults 对）")
-	f.workdir = flag.String("workdir", "", "working directory (default 模式写工具边界 + shell cwd)")
-	f.session = flag.String("session", "", "接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错）")
-	f.saveSession = flag.Bool("save-session", false, "新建会话并落盘（id 内部生成；与 -session 互斥）")
-	f.replay = flag.String("replay", "", "回放指定会话（读 session 文件重显过程，不调 LLM；与 -save-session/-session/-result-only 互斥）")
+	f.configPath = flag.String("config", "", "path to config file (default looks up ~/.miniagent/miniagent.json; errors if not found)")
+	f.mode = flag.String("mode", "", "permission mode default|auto (workdir required when default); defaults to default")
+	f.thinking = flag.String("thinking", "", "thinking level off|minimal|low|medium|high|xhigh|max (default off)")
+	f.resultOnly = flag.Bool("result-only", false, "output only result.text (for subagent fork); mutually exclusive with -stream")
+	f.provider = flag.String("provider", "", "LLM provider name (pairs with -model to override the defaults pair; standalone for filtering with -list-models)")
+	f.model = flag.String("model", "", "LLM model id (pairs with -provider to override the defaults pair)")
+	f.workdir = flag.String("workdir", "", "working directory (default mode constrains write-tool boundaries + shell cwd)")
+	f.session = flag.String("session", "", "resume an existing session by id (resolved to a .jsonl file under session.dir; errors if not found)")
+	f.saveSession = flag.Bool("save-session", false, "create a new session and persist it (id generated internally; mutually exclusive with -session)")
+	f.replay = flag.String("replay", "", "replay the specified session (reads the session file and replays the process without calling the LLM; mutually exclusive with -save-session/-session/-result-only)")
 	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
-	f.maxIterations = flag.Int("max-iterations", 0, "单轮 LLM 调用上限（0=默认 20）")
-	f.stream = flag.Bool("stream", false, "流式输出（SSE）；默认非流式")
-	f.listModels = flag.Bool("list-models", false, "列出端点可用模型 id 后退出")
+	f.maxIterations = flag.Int("max-iterations", 0, "upper bound on LLM calls per turn (0=default 20)")
+	f.stream = flag.Bool("stream", false, "stream output (SSE); non-streaming by default")
+	f.listModels = flag.Bool("list-models", false, "list available model ids on the endpoint then exit")
 	f.showVer = flag.Bool("version", false, "show version")
 	flag.Parse()
 	return f
@@ -80,14 +80,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// SIGINT 与 SIGTERM 都路由到 ctx 取消 → 退出码 130（128+SIGINT）作通用「信号中断」码，
-	// 不区分 POSIX 的 SIGTERM=143：消费方只需识别「被信号打断」而非具体信号，多数工具合并处理。
+	// Both SIGINT and SIGTERM route to ctx cancellation → exit code 130 (128+SIGINT) as a generic "interrupted by signal" code;
+	// we do not distinguish POSIX SIGTERM=143: consumers only need to recognize "interrupted by signal" rather than the specific signal, most tools handle them together.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if *f.listModels {
-		// list-models 不要求 -provider/-model（本就为发现模型），故不走 Resolve；
-		// 逐行输出 NDJSON {"type":"model","provider","model"}。
+		// list-models does not require -provider/-model (its purpose is to discover models), so it skips Resolve;
+		// it outputs one NDJSON line per model {"type":"model","provider","model"}.
 		runListModels(ctx, cfg, *f.provider, logger)
 		return
 	}
@@ -97,13 +97,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 		os.Exit(1)
 	}
-	// -replay：离线回放指定 session，不调 LLM/不需 key/不落盘/不读 stdin。短路位置经取舍：
-	// 在 Resolve 后（需 resolved.Session.Dir 解析 session 目录）、在 validateConversation 前
-	//（不需 workdir）、在 apiKey 前（不需 key）、在 mustReadPrompt 前（不读 stdin）。
-	// sessionDir 三行与下方主路径同逻辑，内联以避免挪动主流程结构。
+	// -replay: offline replay of the specified session, does not call the LLM / does not need a key / does not persist / does not read stdin. Short-circuit location chosen deliberately:
+	// after Resolve (needs resolved.Session.Dir to resolve the session directory), before validateConversation
+	// (does not need workdir), before apiKey (does not need a key), before mustReadPrompt (does not read stdin).
+	// The three sessionDir lines share logic with the main path below; inlined to avoid restructuring the main flow.
 	if *f.replay != "" {
 		if *f.saveSession || *f.session != "" || *f.resultOnly {
-			fmt.Fprintln(os.Stderr, "miniagent: -replay 与 -save-session/-session/-result-only 互斥")
+			fmt.Fprintln(os.Stderr, "miniagent: -replay is mutually exclusive with -save-session/-session/-result-only")
 			os.Exit(1)
 		}
 		sessionDir := defaultSessionDir
@@ -118,7 +118,7 @@ func main() {
 
 	validateConversation(resolved, f)
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: API key 缺失（provider.key / $MINIAGENT_API_KEY）")
+		fmt.Fprintln(os.Stderr, "miniagent: API key missing (provider.key / $MINIAGENT_API_KEY)")
 		os.Exit(1)
 	}
 	warnInsecureURL(resolved.Provider.ChatURL)
@@ -131,19 +131,19 @@ func main() {
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
 	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, resolved.Provider.Name, workdir, int64(maxSessionBytesOf(resolved)))
 	if *f.saveSession {
-		// 新建会话：session 元数据作为 stdout NDJSON 首条事件（与 jsonl 首行同构），供消费方程序化捕获接续 id。
-		// 互斥保证 -result-only 下不会触发，不污染 subagent 的纯文本 stdout。
-		// ⚠️ id 在 Run 前 emit，jsonl 直到 Run 成功才落盘；Run 失败/空 stdin 时消费方捕获的 id 磁盘上不存在，须校验退出码。
+		// New session: session metadata is emitted as the first NDJSON event on stdout (mirrors the first line of the jsonl) so consumers can programmatically capture the id to resume.
+		// The mutual-exclusion check guarantees -result-only never triggers this, so it does not pollute the pure-text stdout of subagents.
+		// ⚠️ id is emitted before Run, and jsonl is only persisted after Run succeeds; if Run fails / stdin is empty, the id captured by the consumer does not exist on disk — the consumer must verify the exit code.
 		if err := event.EmitSession(os.Stdout, meta); err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: emit session: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	// P0：发现 .miniagent/ 项目规则，合并进 system prompt（persona>rules>defaults + 默认兜底，见 assembleSystemPrompt）。
+	// P0: discover .miniagent/ project rules and merge them into the system prompt (persona>rules>defaults + builtin fallback, see assembleSystemPrompt).
 	pr := loadProjectRules(workdir)
 	resolved.System = assembleSystemPrompt(resolved.System, pr, resolved.SubagentGuidance, absConfigPath(*f.configPath), resolved.Mode)
 
-	// 应用运行时配置覆盖（优先级：config>builtin）。
+	// Apply runtime config overrides (precedence: config>builtin).
 	limits := miniagent.Limits{
 		MaxReadFileBytes:       maxReadFileBytesOf(resolved),
 		MaxShellOutputChars:    maxShellOutputCharsOf(resolved),
@@ -153,13 +153,13 @@ func main() {
 		ContextTrimToolChars:   into(resolved.RunConfig.ContextTrimToolChars, 0),
 	}
 
-	// 主 provider chat/stream +（跨 provider 时）摘要 compChat；key 缺失或端点非法时 os.Exit。
+	// Main provider chat/stream + summary compChat (when crossing providers); os.Exit on missing key or invalid endpoint.
 	chat, stream, compChat := buildRuntimeClients(resolved, apiKey, logger)
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits)
 	baseCfg := loopCfg(resolved, f, history, tools)
-	// §P1-A：工具输出落盘目录——config 显式优先；否则 -save-session/-session 激活时按 session 目录
-	// 派生 <sessionDir>/<id>.tool-output/（无 session 且 config 未配则禁用）。
+	// §P1-A: tool output persist directory — explicit config wins; otherwise, when -save-session/-session is active, derive from the session directory
+	// as <sessionDir>/<id>.tool-output/ (disabled when there is no session and no config set).
 	if resolved.RunConfig.ToolOutputDir != nil && *resolved.RunConfig.ToolOutputDir != "" {
 		baseCfg.ToolOutputDir = *resolved.RunConfig.ToolOutputDir
 	} else if sessPath != "" {
@@ -168,13 +168,13 @@ func main() {
 	if resolved.Run.ToolOutputRetention != nil {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
 	}
-	// 压缩作为外挂：经 NewCompaction 取 before/after；三项默认策略（OnLLMError/OnBudget/ShapeToolResult）经 assembleHooks 外挂。
+	// Compaction as a plugin: obtain before/after via NewCompaction; the three default policies (OnLLMError/OnBudget/ShapeToolResult) are attached via assembleHooks.
 	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, chat, compChat, baseCfg.System, tools, logger))
 	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, baseCfg, tools, limits, logger)
 
 	prompt := mustReadPrompt(ctx, os.Stdin)
-	// runCtx 含 -max-duration 超时（若有）；在 stdin 读取之后构造——mustReadPrompt 用 signal ctx 不受限，
-	// 若 runCtx 在前则慢 stdin 会消耗 max-duration 预算致 Run 拿到已过期 ctx（DeadlineExceeded exit 1）。
+	// runCtx carries the -max-duration timeout (if any); constructed after stdin read — mustReadPrompt uses the signal ctx and is unconstrained.
+	// If runCtx were constructed earlier, a slow stdin would consume the max-duration budget causing Run to get an already-expired ctx (DeadlineExceeded exit 1).
 	runCtx := ctx
 	if d := maxDurationOf(resolved); d > 0 {
 		var cancel context.CancelFunc
@@ -184,19 +184,19 @@ func main() {
 	llm := &openai.Provider{Chat: chat, Stream: stream}
 	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
 
-	// saveSession 救回本轮已执行的部分供 resume：Run 经 defer 保证 result.Messages/NewMessages 在
-	// 出错/取消路径亦带回，且 tool_call↔tool_result 配对由 fillPlaceholderTail 补全完整——故不只
-	// 成功路径落盘，出错/取消亦调用，消除「工具已执行、jsonl 未追加」的孤儿不一致（如 tool-output
-	// 残留而 jsonl 停在上一轮）。保存期间忽略 SIGINT/SIGTERM：避免截断 session 文件或残留临时文件。
-	// 返回 saveErr 由调用方裁决 exit code：成功路径失败仍 exit 1（原语义）；出错/取消路径仅 warn 不改码。
+	// saveSession recovers the already-executed part of this turn for resume: Run via defer guarantees result.Messages/NewMessages are returned on
+	// error/cancel paths as well, and tool_call↔tool_result pairing is completed by fillPlaceholderTail — hence it persists
+	// not only on the success path but also on error/cancel paths, eliminating the "tool already executed, jsonl not appended" orphan inconsistency
+	// (e.g. tool-output residual while jsonl stops at the previous turn). SIGINT/SIGTERM are ignored during save: avoid truncating the session file or leaving temp files behind.
+	// Returns saveErr for the caller to decide the exit code: failure on the success path still exits 1 (original semantics); error/cancel paths only warn without changing the code.
 	saveSession := func() (saveErr error) {
 		if sessPath == "" || len(result.NewMessages) == 0 {
 			return nil
 		}
 		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
-		// 跨轮累加累计 LLM 请求次数到 session 元数据首行。
-		// 始终用 RewriteMessages：需更新首行 meta（LLMRequests），append-only 无法改首行。
-		// session 文件有 MaxSessionBytes 上限且 saveSession 单次调用不在热路径，全量重写开销可忽略。
+		// Accumulate the cross-turn cumulative LLM request count into the session metadata first line.
+		// Always use RewriteMessages: the first meta line (LLMRequests) needs updating, append-only cannot change the first line.
+		// The session file has a MaxSessionBytes upper bound and saveSession is a single call off the hot path, so the full rewrite cost is negligible.
 		meta.LLMRequests += result.LLMRequests
 		saveErr = session.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
 		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
@@ -204,8 +204,8 @@ func main() {
 	}
 
 	if err != nil {
-		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不 emit error（审查 P3 SIGINT 退出码）。
-		// 取消亦落盘：配对完整，救回已执行部分供下次续聊。
+		// Signal cancellation (SIGINT/SIGTERM) takes code 130 to exit cleanly, does not emit error (review P3 SIGINT exit code).
+		// Cancellation also persists: pairing is complete, recovering the executed part for the next continuation.
 		if errors.Is(err, context.Canceled) {
 			if se := saveSession(); se != nil {
 				fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", se)
@@ -225,14 +225,14 @@ func main() {
 	}
 }
 
-// buildRuntimeClients 构造主 provider 的 chat/stream client 与（compaction 跨 provider 时）摘要用 compChat。
-// compChat 与主 provider 同名时留 nil（loop 回落主 chat）。key 缺失或端点非法时 os.Exit（原 secondaryClient 闭包仅 compaction 一处用，内联）。
+// buildRuntimeClients constructs the main provider's chat/stream client and (when compaction crosses providers) the summarization compChat.
+// compChat is left nil when it has the same name as the main provider (loop falls back to main chat). os.Exit on missing key or invalid endpoint (the original secondaryClient closure is used only by compaction, inlined).
 func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.Logger) (chat *openai.ChatClient, stream *openai.StreamClient, compChat *openai.ChatClient) {
 	chat, stream = buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
 		key := resolveFinalKey(resolved.CompactionProvider.Key)
 		if key == "" {
-			fmt.Fprintf(os.Stderr, "miniagent: compaction provider API key 缺失（provider.key / $MINIAGENT_API_KEY）\n")
+			fmt.Fprintf(os.Stderr, "miniagent: compaction provider API key missing (provider.key / $MINIAGENT_API_KEY)\n")
 			os.Exit(1)
 		}
 		warnProviderInsecureURLs(resolved.CompactionProvider)
@@ -241,8 +241,8 @@ func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.
 	return chat, stream, compChat
 }
 
-// assembleHooks 组装 LoopHooks：事件输出（buildHooks）+ 压缩 before/after + 三项默认策略外挂
-// （OnLLMError 历史收紧重试 / OnBudget 估算+熔断 / ShapeToolResult 截断+落盘）。核心 Run 零策略，本函数装配即恢复完整能力。
+// assembleHooks assembles LoopHooks: event output (buildHooks) + compaction before/after + three default policy attachments
+// (OnLLMError history-tightening retry / OnBudget estimation+circuit-break / ShapeToolResult truncation+persist). The core Run has zero policies; this function assembles them to restore full capability.
 func assembleHooks(
 	compBefore func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error),
 	compAfter func(context.Context, int, miniagent.Response) error,
@@ -257,10 +257,10 @@ func assembleHooks(
 	return hooks
 }
 
-// loopCfg 按 resolved（cli>config）覆盖 flag 默认，构造 LoopConfig（循环本体 + 策略载体字段；
-// 压缩策略经 NewCompaction 外挂，其余策略经 NewDefault* 钩子工厂外挂，核心 Run 零策略）。
-// 生产路径下 resolved.System 经 assembleSystemPrompt（main.go:126）保证非空，下面的空串兜底仅对
-// 直接构造 loopCfg 的测试有意义（防漏传 System 致空 prompt）。
+// loopCfg overrides flag defaults per resolved (cli>config) to construct LoopConfig (loop body + policy-carrier fields;
+// compaction policies are attached via NewCompaction, other policies via NewDefault* hook factories, core Run has zero policies).
+// On the production path resolved.System is guaranteed non-empty by assembleSystemPrompt (main.go:126); the empty-string fallback below
+// only matters for tests that directly construct loopCfg (prevents missing System from causing an empty prompt).
 func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
 	system := resolved.System
 	if system == "" {
@@ -283,8 +283,8 @@ func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message
 	}
 }
 
-// compactionOptions 把 resolved 的压缩策略装配成 CompactionOptions。chat 是摘要用 client
-// （compChat 非空用之，否则回落主 chat）。
+// compactionOptions assembles the resolved compaction policies into CompactionOptions. chat is the summarization client
+// (use compChat if non-nil, otherwise fall back to main chat).
 func compactionOptions(resolved *config.Resolved, meta session.SessionMeta, chat, compChat *openai.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
 	compClient := compChat
 	if compClient == nil {
@@ -324,7 +324,7 @@ func intoBool(ov *bool, def bool) bool {
 	return def
 }
 
-// into 解析 *int 覆盖：ov 非 nil 用 *ov，否则用 def。loopCfg 与 main 的 buildTools 调用共用。
+// into parses *int overrides: if ov is non-nil use *ov, otherwise use def. Shared by loopCfg and main's buildTools.
 func into(ov *int, def int) int {
 	if ov != nil {
 		return *ov

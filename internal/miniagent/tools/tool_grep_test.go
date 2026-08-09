@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// writeTree 在 dir 下按相对路径写多个文件（自动建父目录），供 grep/glob 测试建树。
+// writeTree writes multiple files under dir by relative path (auto-creating parent directories), to build a tree for grep/glob tests.
 func writeTree(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
 	for name, content := range files {
@@ -60,7 +60,7 @@ func TestGrepTool_NoMatch(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "无命中") {
+	if !strings.Contains(res.Output, "no matches") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
@@ -84,15 +84,15 @@ func TestGrepTool_SkipDotGit(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	// 仅命中 a.go；.git 下两处必须跳过。
+	// Only a.go matches; the two hits under .git must be skipped.
 	if strings.Count(res.Output, ":foo") != 1 {
 		t.Errorf(".git not skipped (want 1 hit): %s", res.Output)
 	}
 }
 
-// P2-9：单文件大小上限。超过 maxGrepFileBytes 的文件入口 Stat 直接跳过，避免
-// 无匹配的巨文件逐行扫到 fileOpTimeout(30s) 纯耗 IO。用 Truncate 造稀疏文件
-// （Size() 报告大但不占盘），grepFile 在读前就返回，跳过路径不读内容。
+// P2-9: per-file size cap. Files exceeding maxGrepFileBytes are skipped directly at the entry-point Stat, avoiding a
+// no-match giant file being scanned line by line until fileOpTimeout(30s) — pure IO waste. Truncate builds a sparse file
+// (Size() reports large but no disk is consumed); grepFile returns before reading, and the skipped path is never read.
 func TestGrepFile_SkipsOversized(t *testing.T) {
 	dir := t.TempDir()
 	big := filepath.Join(dir, "big.log")
@@ -100,7 +100,7 @@ func TestGrepFile_SkipsOversized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// 稀疏文件：Size() 报告 maxGrepFileBytes+1，文件系统不实际分配（ext4/tmpfs 支持）。
+	// Sparse file: Size() reports maxGrepFileBytes+1 while the filesystem allocates nothing (supported on ext4/tmpfs).
 	if err := f.Truncate(maxGrepFileBytes + 1); err != nil {
 		_ = f.Close()
 		t.Skipf("truncate to sparse size unsupported: %v", err)
@@ -113,7 +113,7 @@ func TestGrepFile_SkipsOversized(t *testing.T) {
 	}
 }
 
-// 端到端验证：大文件被跳过、小文件正常命中，结果只含小文件。
+// End-to-end verification: the large file is skipped, the small file matches normally, and the result contains only the small file.
 func TestGrepTool_SkipsOversizedFile(t *testing.T) {
 	dir := t.TempDir()
 	big := filepath.Join(dir, "big.log")

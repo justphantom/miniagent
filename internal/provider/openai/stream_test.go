@@ -12,7 +12,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// 纯文本 + reasoning + usage + [DONE]：聚合正确，onDelta 收到每个片段。
+// Plain text + reasoning + usage + [DONE]: aggregation correct, onDelta receives each fragment.
 func TestParseSSE_TextReasoningUsage(t *testing.T) {
 	const sse = `data: {"choices":[{"delta":{"content":"Hello "}}]}
 data: {"choices":[{"delta":{"content":"world","reasoning_content":"think"}}]}
@@ -37,13 +37,13 @@ data: [DONE]
 	if res.Usage.InputTokens != 5 || res.Usage.OutputTokens != 2 {
 		t.Errorf("Usage = %+v", res.Usage)
 	}
-	// "Hello "、"world"、"think" 各一片。
+	// "Hello ", "world", "think": one delta each.
 	if len(deltas) != 3 {
 		t.Errorf("deltas = %d (%+v)", len(deltas), deltas)
 	}
 }
 
-// tool_calls 跨多 chunk 按 index 累积，多个 index 按升序聚合。
+// tool_calls accumulated across multiple chunks by index, multiple indexes aggregated in ascending order.
 func TestParseSSE_ToolCallsAccumulated(t *testing.T) {
 	const sse = "data: " + `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"pa"}}]}}]}` + "\n" +
 		"data: " + `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"a.go\"}"}}]}}]}` + "\n" +
@@ -68,7 +68,7 @@ func TestParseSSE_ToolCallsAccumulated(t *testing.T) {
 	}
 }
 
-// DoStream 经 httptest 喂 SSE：聚合 Response + onDelta 推增量。
+// DoStream fed SSE via httptest: aggregate Response + onDelta pushes increments.
 func TestDoStream_Aggregates(t *testing.T) {
 	const sse = `data: {"choices":[{"delta":{"content":"Hi"}}]}
 data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
@@ -100,8 +100,8 @@ data: [DONE]
 	}
 }
 
-// DoStream 非 200：pre-delta 阶段重试 maxRetries 次后仍失败上抛（含 "503"）。
-// Retry-After: 0 使退避即时，避免测试等待（重试耗尽路径的严格断言见 client_retry_test.go）。
+// DoStream non-200: in the pre-delta phase retries maxRetries times then still fails and propagates (contains "503").
+// Retry-After: 0 makes backoff immediate to avoid test waits (strict assertions for the retry-exhaust path are in client_retry_test.go).
 func TestDoStream_NonOKErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "0")
@@ -116,9 +116,9 @@ func TestDoStream_NonOKErrors(t *testing.T) {
 	}
 }
 
-// P3：DoStream 在 attempt>0 收到 context-length 400 时，错误带 "after N retries" 前缀（与
-// 通用非 200 路径一致，排错信息）；哨兵 ErrContextLength 链仍可被 errors.Is 命中供 Run 降级。
-// 流程：首次 503 触发一次重试 → 第二次返 400 context-length（在 attempt=1，即 after 1 retries）。
+// P3: DoStream receives context-length 400 when attempt>0, the error carries the "after N retries" prefix (consistent with the
+// generic non-200 path, for debugging); the sentinel ErrContextLength chain can still be matched via errors.Is for Run to downgrade.
+// Flow: first 503 triggers one retry → second call returns 400 context-length (at attempt=1, i.e. after 1 retries).
 func TestDoStream_ContextLengthAfterRetry(t *testing.T) {
 	var attempts int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +147,7 @@ func TestDoStream_ContextLengthAfterRetry(t *testing.T) {
 	}
 }
 
-// P1-2：流直接以 [DONE] 开始/无 choices/仅 usage，必须报错而非返回空 Response 伪装成功。
+// P1-2: stream starts directly with [DONE] / no choices / only usage must error instead of returning an empty Response pretending success.
 func TestParseSSE_EmptyStreamErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -170,7 +170,7 @@ func TestParseSSE_EmptyStreamErrors(t *testing.T) {
 	}
 }
 
-// P1-3：provider 中途以 {"error":{"message":...}} chunk 报错，必须上抛而非吞掉当成功。
+// P1-3: provider reports an error mid-stream via a {"error":{"message":...}} chunk, must propagate instead of swallowing it as success.
 func TestParseSSE_MidStreamError(t *testing.T) {
 	const sse = `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n" +
 		`data: {"error":{"message":"content filter triggered"}}` + "\n" +
@@ -187,7 +187,7 @@ func TestParseSSE_MidStreamError(t *testing.T) {
 	}
 }
 
-// P3-2：单个 data 行载荷 > 1MB（旧上限）但 < 4MB（新上限）应能解析，不触发 ErrTooLong。
+// P3-2: a single data line payload > 1MB (old limit) but < 4MB (new limit) should parse, not trigger ErrTooLong.
 func TestParseSSE_LongLine(t *testing.T) {
 	big := strings.Repeat("a", 1500*1024)
 	chunk := fmt.Sprintf(`{"choices":[{"delta":{"content":%q}}]}`, big)
@@ -206,19 +206,20 @@ func TestParseSSE_LongLine(t *testing.T) {
 	}
 }
 
-// P2-5/P1-A：c.HTTP==nil 时 streamClient 返回无 Timeout 的 client（流式总时长由 ctx 控制，
-// http.Client.Timeout 覆盖 body 读取会砍断长流）；缓存同一实例；注入时沿用注入。
-// 注入契约（buildLLM 注入带 120s Timeout 的 client）：streamClient 须把注入 client 的
-// 总 Timeout 清零（P1-A：流式 body 不被砍），但保留其 Transport（代理/连接配置，#2）。
+// P2-5/P1-A: when c.HTTP==nil, streamClient returns a client without Timeout (stream total duration is controlled by ctx;
+// http.Client.Timeout covers body reading and would cut off long streams); caches the same instance; if injected, reuse the injected one.
+// Injection contract (buildLLM injects a client with a 120s Timeout): streamClient must zero out the injected client's
+// total Timeout (P1-A: streaming body must not be cut), but preserve its Transport (proxy/connection config, #2).
 
-// DoStream 非 200 错误不回显响应体：防恶意/调试代理在错误体回显 Authorization 致 key 经 error
-// 进 NDJSON stdout / session jsonl。与非流式 client.go 威胁模型对齐。
-// 回归：此前三处用 text.Truncate(raw,500,…) 把 body 灌进 error。
+// DoStream non-200 error must not echo the response body: prevents malicious/debug proxies from echoing Authorization in the
+// error body, which would let the key leak into NDJSON stdout / session jsonl via the error. Aligns with the threat model of the
+// non-streaming client.go.
+// Regression: previously three places used text.Truncate(raw,500,…) to dump the body into the error.
 func TestDoStream_ErrorOmitsBody(t *testing.T) {
 	const secret = "Bearer sk-leak-credential"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest) // 非 context-length/thinking 特征 → 走通用 status-only 分支
+		w.WriteHeader(http.StatusBadRequest) // non-context-length/thinking feature → take the generic status-only branch
 		fmt.Fprint(w, `{"echoed":"`+secret+`"}`)
 	}))
 	defer srv.Close()
@@ -228,9 +229,9 @@ func TestDoStream_ErrorOmitsBody(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	if strings.Contains(err.Error(), secret) {
-		t.Errorf("错误不得回显响应体（防凭证泄漏进 session）: %q", err.Error())
+		t.Errorf("error must not echo response body (prevent credential leak into session): %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "400") {
-		t.Errorf("错误应含状态码 400 便于排错: %q", err.Error())
+		t.Errorf("error should contain status code 400 for debugging: %q", err.Error())
 	}
 }

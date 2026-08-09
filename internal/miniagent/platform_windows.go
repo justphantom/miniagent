@@ -7,12 +7,13 @@ import (
 	"os"
 )
 
-// OpenNoFollow 在 Windows 上回退为 Lstat+OpenFile 并拒绝最终分量为符号链接。
-// 注意：Windows 无 O_NOFOLLOW 等价 syscall，Lstat→OpenFile 间存在理论 TOCTOU（攻击者此时把 path
-// 替换为 symlink）。主平台 Linux/macOS 用 O_NOFOLLOW 单次 syscall 无此问题；Windows 是次要 fallback
-// 平台（见 .golangci.yml 平台范围），此处接受该限制。彻底修复需 FILE_FLAG_OPEN_REPARSE_POINT +
-// reparse point 检查（成本高、场景窄，未实现）。
-// 留核心：session 子包（withSessionLock）与 config 子包（ReadFileLimited）共用。
+// OpenNoFollow falls back to Lstat+OpenFile on Windows, rejecting the final component when it is a symlink.
+// Note: Windows has no O_NOFOLLOW-equivalent syscall, so there is a theoretical TOCTOU between Lstat and
+// OpenFile (an attacker could replace path with a symlink in between). The main platforms Linux/macOS use a
+// single O_NOFOLLOW syscall and have no such issue; Windows is a secondary fallback platform (see the
+// platform scope in .golangci.yml), so this limitation is accepted here. A complete fix would require
+// FILE_FLAG_OPEN_REPARSE_POINT + reparse point inspection (high cost, narrow scenario, not implemented).
+// Kept in core: shared by the session subpackage (withSessionLock) and the config subpackage (ReadFileLimited).
 func OpenNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 	fi, err := os.Lstat(path)
 	if err == nil && fi.Mode()&os.ModeSymlink != 0 {

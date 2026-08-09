@@ -12,7 +12,7 @@ import (
 
 const maxWriteFileBytes = 10 << 20
 
-// writeOpTimeout 是 write 的内置操作超时：原子写入本身极快，此处兜底极端文件系统延迟。
+// writeOpTimeout is the built-in operation timeout for write: the atomic write itself is very fast; this is a fallback for extreme filesystem latency.
 const writeOpTimeout = 30 * time.Second
 
 type writeFileArgs struct {
@@ -20,21 +20,21 @@ type writeFileArgs struct {
 	Content string `json:"content"`
 }
 
-// WriteFileTool returns a write tool bound to workspaceRoot. timeout<=0 用默认 writeOpTimeout。
+// WriteFileTool returns a write tool bound to workspaceRoot. timeout<=0 uses the default writeOpTimeout.
 func WriteFileTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = writeOpTimeout
 	}
-	desc := fmt.Sprintf("整体覆盖写入文件（自动建父目录、保留原文件权限）。content 上限 10MiB。path 相对 workdir 或绝对。仅用于新建文件或完整重写；局部改动用 edit。超时 %s。", timeout)
+	desc := fmt.Sprintf("Overwrite the entire file (auto-creating parent directories, preserving original file permissions). content limit 10MiB. path is relative to workdir or absolute. Use only for creating new files or full rewrites; for partial changes use edit. Timeout %s.", timeout)
 	return miniagent.Tool{
 		Name:        "write",
 		Description: desc,
 		Parameters: object(map[string]any{
-			"path":    map[string]any{"type": "string", "description": "要写入的文件路径，相对 workdir 或绝对路径"},
-			"content": map[string]any{"type": "string", "description": "要写入的完整文件内容"},
+			"path":    map[string]any{"type": "string", "description": "Path of the file to write, relative to workdir or absolute"},
+			"content": map[string]any{"type": "string", "description": "Complete file content to write"},
 		}, "path", "content"),
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
-			return runWithTimeout(ctx, timeout, "写入", func(_ context.Context) miniagent.ToolResult { return runWriteFile(workspaceRoot, args) })
+			return runWithTimeout(ctx, timeout, "write", func(_ context.Context) miniagent.ToolResult { return runWriteFile(workspaceRoot, args) })
 		},
 	}
 }
@@ -42,31 +42,32 @@ func WriteFileTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 func runWriteFile(workspaceRoot, args string) miniagent.ToolResult {
 	var a writeFileArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to parse args: %v (received %q)", err, args)}
 	}
 	if a.Path == "" {
-		return miniagent.ToolResult{IsError: true, Output: "参数缺失：path"}
+		return miniagent.ToolResult{IsError: true, Output: "missing parameter: path"}
 	}
 	if len(a.Content) > maxWriteFileBytes {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("content 超过最大限制 %d 字节", maxWriteFileBytes)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("content exceeds the maximum limit of %d bytes", maxWriteFileBytes)}
 	}
 	full := resolveToolPath(workspaceRoot, a.Path)
 	if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("创建父目录失败：%v", err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to create parent directory: %v", err)}
 	}
 	mode := os.FileMode(0o644)
 	if info, err := os.Lstat(full); err == nil {
-		// 拒绝非普通文件：FIFO/字符设备会让后续 Rename 报含糊错误，目录会
-		// EISDIR；与 edit 对齐明确报「不是普通文件」（审查 P3-7）。
+		// Reject non-regular files: FIFO/character devices would cause ambiguous errors from
+		// subsequent Rename, directories would EISDIR; aligned with edit to report "not a
+		// regular file" explicitly (review P3-7).
 		if !info.Mode().IsRegular() {
-			return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("%q 不是普通文件（mode=%s），仅支持 regular file", a.Path, info.Mode().String())}
+			return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("%q is not a regular file (mode=%s), only regular file is supported", a.Path, info.Mode().String())}
 		}
 		mode = info.Mode().Perm()
 	}
 	if err := writeFileAtomic(full, []byte(a.Content), mode); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("写入 %q 失败：%v", a.Path, err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to write %q: %v", a.Path, err)}
 	}
-	return miniagent.ToolResult{Output: fmt.Sprintf("已写入 %d 字节到 %s", len(a.Content), a.Path)}
+	return miniagent.ToolResult{Output: fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.Path)}
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
@@ -77,8 +78,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpName) }
-	// 先写再 Chmod：CreateTemp 默认 0600，写入期间 temp 保持最窄权限；写完后再设为
-	// 目标 perm（常见 0644），避免在写入过程中就以宽权限暴露未完成内容。
+	// Write first then Chmod: CreateTemp defaults to 0600, so the temp keeps the
+	// narrowest permissions during the write; only after writing do we set the target
+	// perm (commonly 0644), avoiding exposing unfinished content with wide permissions
+	// mid-write.
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		cleanup()

@@ -10,7 +10,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
-// 每次调用写一条 tool_use 事件，且不含 output 字段。
+// Each call writes a single tool_use event, and it carries no output field.
 func TestToolUseWriter(t *testing.T) {
 	var buf bytes.Buffer
 	emit := ToolUseWriter(&buf)
@@ -47,7 +47,7 @@ func TestEmitResult(t *testing.T) {
 	}
 }
 
-// 即使所有数值字段为 0，键名也必须出现（消费方稳定 parse 的契约）。
+// Even when all numeric fields are 0, the key names must still appear (a contract for stable consumer parsing).
 func TestEmitResult_ZeroFieldsPresent(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EmitResult(&buf, miniagent.Result{}, ""); err != nil {
@@ -78,7 +78,7 @@ func TestEmitError(t *testing.T) {
 	}
 }
 
-// Type 空时补 "session"，且全字段（id/model/workdir/provider/created）输出——与 jsonl 首行 metadata 同构。
+// When Type is empty it falls back to "session", and all fields (id/model/workdir/provider/created) are emitted — isomorphic to the first jsonl metadata line.
 func TestEmitSession(t *testing.T) {
 	var buf bytes.Buffer
 	meta := session.SessionMeta{
@@ -96,7 +96,7 @@ func TestEmitSession(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if ev["type"] != "session" {
-		t.Errorf("type = %v, want session (Type 空时应补全)", ev["type"])
+		t.Errorf("type = %v, want session (should fall back when Type is empty)", ev["type"])
 	}
 	if ev["id"] != meta.ID || ev["model"] != meta.Model || ev["workdir"] != meta.Workdir ||
 		ev["provider"] != meta.Provider || ev["created"] != meta.Created {
@@ -118,7 +118,7 @@ func TestEmitToolResult_ShellExitCode(t *testing.T) {
 	}
 }
 
-// 非 shell 工具不输出 exit_code，避免零值 0 被误读为「命令成功」。
+// Non-shell tools must not emit exit_code, so a zero value of 0 is not misread as "command succeeded".
 func TestEmitToolResult_NonShellOmitsExitCode(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EmitToolResult(&buf, "read", "c2", miniagent.ToolResult{Output: "data"}); err != nil {

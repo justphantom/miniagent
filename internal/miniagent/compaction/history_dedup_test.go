@@ -11,8 +11,9 @@ import (
 	"testing"
 )
 
-// dedupReadResults（P6）：同 (path,offset) 保留最后一次，更早压占位；不同 offset 不合并；
-// 保留窗口内不动；无 read 零拷贝；不改调用方输入。
+// dedupReadResults (P6): same (path,offset) keeps the last occurrence, earlier ones are folded to a placeholder;
+// different offsets are not merged; messages inside the retention window are untouched; no read → zero-copy;
+// does not modify the caller's input.
 func TestDedupReadResults(t *testing.T) {
 	msgs := []miniagent.Message{
 		{Role: "user", Content: "q"}, // 0
@@ -21,21 +22,21 @@ func TestDedupReadResults(t *testing.T) {
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "r2", Name: "read", Args: `{"path":"a.go"}`}}}, // 3
 		{Role: "tool", ToolCallID: "r2", Content: "second read"},                                                // 4
 	}
-	out := dedupReadResults(msgs, 1) // 保留最近 1 条 assistant（idx3）
+	out := dedupReadResults(msgs, 1) // retain the most recent 1 assistant (idx3)
 	if out[2].Content == "first read" {
-		t.Errorf("旧 read 结果应被压占位，got %q", out[2].Content)
+		t.Errorf("old read result should be folded to a placeholder, got %q", out[2].Content)
 	}
-	if !strings.Contains(out[2].Content, "已被更新的读取取代") || !strings.Contains(out[2].Content, "a.go") {
-		t.Errorf("旧 read 占位应含路径与取代说明，got %q", out[2].Content)
+	if !strings.Contains(out[2].Content, "superseded by a more recent read") || !strings.Contains(out[2].Content, "a.go") {
+		t.Errorf("old read placeholder should contain the path and superseded note, got %q", out[2].Content)
 	}
 	if out[4].Content != "second read" {
-		t.Errorf("窗口内最新 read 应保留原文，got %q", out[4].Content)
+		t.Errorf("the newest read inside the window should keep its original text, got %q", out[4].Content)
 	}
 	if msgs[2].Content != "first read" {
-		t.Errorf("调用方输入被修改")
+		t.Errorf("caller input was modified")
 	}
 
-	// 不同 offset 不合并。
+	// different offsets are not merged.
 	diff := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go","offset":1}`}}},
 		{Role: "tool", ToolCallID: "r1", Content: "seg1"},
@@ -43,49 +44,50 @@ func TestDedupReadResults(t *testing.T) {
 		{Role: "tool", ToolCallID: "r2", Content: "seg100"},
 	}
 	if got := dedupReadResults(diff, 1); got[1].Content != "seg1" {
-		t.Errorf("不同 offset 的同 path read 不应合并，got %q", got[1].Content)
+		t.Errorf("same path reads with different offsets should not be merged, got %q", got[1].Content)
 	}
 
-	// 无 read → 零拷贝。
+	// no read → zero-copy.
 	plain := []miniagent.Message{{Role: "user", Content: "q"}}
 	if got := dedupReadResults(plain, 1); &got[0] != &plain[0] {
-		t.Errorf("无 read 会话应原样返回同一 slice")
+		t.Errorf("session without read should return the same slice as-is")
 	}
-	// 全在保留窗口内 → 零拷贝。
+	// all inside the retention window → zero-copy.
 	if got := dedupReadResults(msgs, 10); &got[0] != &msgs[0] {
-		t.Errorf("全在窗口内应原样返回")
+		t.Errorf("all inside window should return as-is")
 	}
 }
 
-// foldStaleWriteEditArgs（P8'）：同 path 更晚成功 write/edit 触发折叠更早 args；
-// 更晚失败不触发；不同 path 不互折叠；单条/全窗口零拷贝；不改调用方输入。
+// foldStaleWriteEditArgs (P8'): a later successful write/edit to the same path triggers folding
+// of earlier args; a later failure does not trigger; different paths are not folded against each other;
+// single item / full window → zero-copy; does not modify the caller's input.
 func TestFoldStaleWriteEditArgs(t *testing.T) {
-	// 两次成功 write 同 path：更早折叠。
+	// two successful writes to the same path: the earlier one is folded.
 	msgs := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"old"}`}}},
 		{Role: "tool", ToolCallID: "w1", Content: "ok"},
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "w2", Name: "write", Args: `{"path":"a.go","content":"new"}`}}},
 		{Role: "tool", ToolCallID: "w2", Content: "ok"},
 	}
-	out := foldStaleWriteEditArgs(msgs, 1) // 保留最近 1 条 assistant（idx2）
-	if !strings.Contains(out[0].ToolCalls[0].Args, "已被后续对同文件的成功写入取代") {
-		t.Errorf("被后续成功写入取代的旧 write args 应折叠，got %q", out[0].ToolCalls[0].Args)
+	out := foldStaleWriteEditArgs(msgs, 1) // retain the most recent 1 assistant (idx2)
+	if !strings.Contains(out[0].ToolCalls[0].Args, "superseded by a later successful write to the same file") {
+		t.Errorf("old write args superseded by a later successful write should be folded, got %q", out[0].ToolCalls[0].Args)
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(out[0].ToolCalls[0].Args), &m); err != nil {
-		t.Errorf("折叠后 args 非合法 JSON: %q (err %v)", out[0].ToolCalls[0].Args, err)
+		t.Errorf("folded args not valid JSON: %q (err %v)", out[0].ToolCalls[0].Args, err)
 	}
 	if m["path"] != "a.go" {
-		t.Errorf("折叠后应保留 path，got %v", m["path"])
+		t.Errorf("folded args should retain path, got %v", m["path"])
 	}
 	if out[2].ToolCalls[0].Args != msgs[2].ToolCalls[0].Args {
-		t.Errorf("窗口内最新 write args 应保留原文")
+		t.Errorf("the newest write args inside the window should keep its original text")
 	}
 	if !strings.Contains(msgs[0].ToolCalls[0].Args, "old") {
-		t.Errorf("调用方输入被修改")
+		t.Errorf("caller input was modified")
 	}
 
-	// 更晚的失败 write 不触发折叠（前置正文仍有效）。
+	// a later failed write does not trigger folding (the preceding content is still effective).
 	failLater := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"v1"}`}}},
 		{Role: "tool", ToolCallID: "w1", Content: "ok", IsError: false},
@@ -93,10 +95,10 @@ func TestFoldStaleWriteEditArgs(t *testing.T) {
 		{Role: "tool", ToolCallID: "w2", Content: "err", IsError: true},
 	}
 	if got := foldStaleWriteEditArgs(failLater, 1); got[0].ToolCalls[0].Args != failLater[0].ToolCalls[0].Args {
-		t.Errorf("更晚的失败写入不应触发折叠更早 args")
+		t.Errorf("a later failed write should not trigger folding earlier args")
 	}
 
-	// 不同 path 不互折叠。
+	// different paths are not folded against each other.
 	diffPath := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"x"}`}}},
 		{Role: "tool", ToolCallID: "w1", Content: "ok"},
@@ -104,41 +106,41 @@ func TestFoldStaleWriteEditArgs(t *testing.T) {
 		{Role: "tool", ToolCallID: "w2", Content: "ok"},
 	}
 	if got := foldStaleWriteEditArgs(diffPath, 1); got[0].ToolCalls[0].Args != diffPath[0].ToolCalls[0].Args {
-		t.Errorf("不同 path 的 write 不应互相折叠")
+		t.Errorf("writes to different paths should not be folded against each other")
 	}
 
-	// 单条 write → 零拷贝。
+	// single write → zero-copy.
 	single := []miniagent.Message{{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"x"}`}}}}
 	if got := foldStaleWriteEditArgs(single, 0); &got[0] != &single[0] {
-		t.Errorf("单条 write 会话应原样返回")
+		t.Errorf("single-write session should return as-is")
 	}
-	// 全在保留窗口内 → 零拷贝。
+	// all inside the retention window → zero-copy.
 	if got := foldStaleWriteEditArgs(msgs, 10); &got[0] != &msgs[0] {
-		t.Errorf("全在窗口内应原样返回")
+		t.Errorf("all inside window should return as-is")
 	}
 }
 
-// dedupShellCommands（P9b）：规范化同义 command 去重，保留最后一次；不同命令不合并；
-// 无 shell 零拷贝；全窗口零拷贝；不改调用方输入。
+// dedupShellCommands (P9b): deduplicates synonymous commands by normalization, keeping the last occurrence;
+// different commands are not merged; no shell → zero-copy; full window → zero-copy; does not modify the caller's input.
 func TestDedupShellCommands(t *testing.T) {
 	msgs := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "s1", Name: "shell", Args: `{"command":"ls -la"}`}}},
 		{Role: "tool", ToolCallID: "s1", Content: "out1"},
-		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "s2", Name: "shell", Args: `{"command":"LS  -la"}`}}}, // 规范化同义
+		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "s2", Name: "shell", Args: `{"command":"LS  -la"}`}}}, // normalized synonym
 		{Role: "tool", ToolCallID: "s2", Content: "out2"},
 	}
 	out := dedupShellCommands(msgs, 1)
-	if !strings.Contains(out[0].ToolCalls[0].Args, "已被后续执行取代") {
-		t.Errorf("同义 shell command 的更早调用应折叠，got %q", out[0].ToolCalls[0].Args)
+	if !strings.Contains(out[0].ToolCalls[0].Args, "superseded by a later execution") {
+		t.Errorf("earlier synonymous shell command should be folded, got %q", out[0].ToolCalls[0].Args)
 	}
 	if out[2].ToolCalls[0].Args != msgs[2].ToolCalls[0].Args {
-		t.Errorf("窗口内最新 shell command 应保留原文")
+		t.Errorf("the newest shell command inside the window should keep its original text")
 	}
 	if !strings.Contains(msgs[0].ToolCalls[0].Args, "ls -la") {
-		t.Errorf("调用方输入被修改")
+		t.Errorf("caller input was modified")
 	}
 
-	// 不同命令不合并。
+	// different commands are not merged.
 	diff := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "s1", Name: "shell", Args: `{"command":"pwd"}`}}},
 		{Role: "tool", ToolCallID: "s1", Content: "/"},
@@ -146,42 +148,43 @@ func TestDedupShellCommands(t *testing.T) {
 		{Role: "tool", ToolCallID: "s2", Content: "f"},
 	}
 	if got := dedupShellCommands(diff, 1); got[0].ToolCalls[0].Args != diff[0].ToolCalls[0].Args {
-		t.Errorf("不同 shell 命令不应合并")
+		t.Errorf("different shell commands should not be merged")
 	}
 
-	// 无 shell → 零拷贝。
+	// no shell → zero-copy.
 	plain := []miniagent.Message{{Role: "user", Content: "q"}}
 	if got := dedupShellCommands(plain, 1); &got[0] != &plain[0] {
-		t.Errorf("无 shell 会话应原样返回")
+		t.Errorf("session without shell should return as-is")
 	}
-	// 全在保留窗口内 → 零拷贝。
+	// all inside the retention window → zero-copy.
 	if got := dedupShellCommands(msgs, 10); &got[0] != &msgs[0] {
-		t.Errorf("全在窗口内应原样返回")
+		t.Errorf("all inside window should return as-is")
 	}
 }
 
-// foldStaleReadResults（P11）：同 path 更晚成功 write/edit 触发折叠更早 read 结果；
-// 更晚失败不触发；不同 path 不触发；write 同样触发；保留窗口内不动；无 read/无写入零拷贝；不改调用方输入。
+// foldStaleReadResults (P11): a later successful write/edit to the same path triggers folding of earlier read results;
+// a later failure does not trigger; different paths do not trigger; write triggers it as well; messages inside
+// the retention window are untouched; no read / no write → zero-copy; does not modify the caller's input.
 func TestFoldStaleReadResults(t *testing.T) {
-	// read(a) → edit(a) 成功：旧 read 结果折叠。
+	// read(a) → edit(a) succeeds: old read result is folded.
 	msgs := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
 		{Role: "tool", ToolCallID: "r1", Content: "old content of a.go"},
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "e1", Name: "edit", Args: `{"path":"a.go","old_string":"x","new_string":"y"}`}}},
 		{Role: "tool", ToolCallID: "e1", Content: "ok", IsError: false},
 	}
-	out := foldStaleReadResults(msgs, 1) // 保留最近 1 条 assistant（idx2）
+	out := foldStaleReadResults(msgs, 1) // retain the most recent 1 assistant (idx2)
 	if out[1].Content == "old content of a.go" {
-		t.Errorf("edit 成功后旧 read 结果应折叠，got %q", out[1].Content)
+		t.Errorf("old read result should be folded after a successful edit, got %q", out[1].Content)
 	}
-	if !strings.Contains(out[1].Content, "已被后续编辑取代") || !strings.Contains(out[1].Content, "a.go") {
-		t.Errorf("折叠占位应含 path 与取代说明，got %q", out[1].Content)
+	if !strings.Contains(out[1].Content, "superseded by a later edit") || !strings.Contains(out[1].Content, "a.go") {
+		t.Errorf("folded placeholder should contain path and superseded note, got %q", out[1].Content)
 	}
 	if msgs[1].Content != "old content of a.go" {
-		t.Errorf("调用方输入被修改")
+		t.Errorf("caller input was modified")
 	}
 
-	// edit 失败：不折叠（文件未改，旧 read 仍有效）。
+	// edit fails: not folded (file unchanged, old read still effective).
 	failEdit := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
 		{Role: "tool", ToolCallID: "r1", Content: "content"},
@@ -189,10 +192,10 @@ func TestFoldStaleReadResults(t *testing.T) {
 		{Role: "tool", ToolCallID: "e1", Content: "err", IsError: true},
 	}
 	if got := foldStaleReadResults(failEdit, 1); got[1].Content != "content" {
-		t.Errorf("edit 失败时旧 read 不应折叠，got %q", got[1].Content)
+		t.Errorf("old read should not be folded when edit fails, got %q", got[1].Content)
 	}
 
-	// 不同 path：不折叠。
+	// different path: not folded.
 	diffPath := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
 		{Role: "tool", ToolCallID: "r1", Content: "a"},
@@ -200,41 +203,42 @@ func TestFoldStaleReadResults(t *testing.T) {
 		{Role: "tool", ToolCallID: "e1", Content: "ok"},
 	}
 	if got := foldStaleReadResults(diffPath, 1); got[1].Content != "a" {
-		t.Errorf("不同 path 的 edit 不应触发 read 折叠，got %q", got[1].Content)
+		t.Errorf("edit on a different path should not trigger read folding, got %q", got[1].Content)
 	}
 
-	// write 成功同样触发（整文件覆盖，旧 read 必 stale）。
+	// successful write triggers folding as well (whole-file overwrite, old read must be stale).
 	writeMsgs := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
 		{Role: "tool", ToolCallID: "r1", Content: "old"},
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"new"}`}}},
 		{Role: "tool", ToolCallID: "w1", Content: "ok"},
 	}
-	if out2 := foldStaleReadResults(writeMsgs, 1); !strings.Contains(out2[1].Content, "已被后续编辑取代") {
-		t.Errorf("write 成功后旧 read 也应折叠，got %q", out2[1].Content)
+	if out2 := foldStaleReadResults(writeMsgs, 1); !strings.Contains(out2[1].Content, "superseded by a later edit") {
+		t.Errorf("old read should also be folded after a successful write, got %q", out2[1].Content)
 	}
 
-	// 保留窗口内的 read 不动（keepN 覆盖 read 所在 assistant）。
+	// read inside the retention window is untouched (keepN covers the assistant where the read resides).
 	if got := foldStaleReadResults(msgs, 2); got[1].Content != "old content of a.go" {
-		t.Errorf("保留窗口内的 read 不应折叠，got %q", got[1].Content)
+		t.Errorf("read inside the retention window should not be folded, got %q", got[1].Content)
 	}
 
-	// 无 read → 零拷贝。
+	// no read → zero-copy.
 	noRead := []miniagent.Message{{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "w1", Name: "write", Args: `{"path":"a.go","content":"x"}`}}}}
 	if got := foldStaleReadResults(noRead, 1); &got[0] != &noRead[0] {
-		t.Errorf("无 read 会话应原样返回")
+		t.Errorf("session without read should return as-is")
 	}
-	// 无 write/edit → 零拷贝。
+	// no write/edit → zero-copy.
 	noWrite := []miniagent.Message{
 		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "r1", Name: "read", Args: `{"path":"a.go"}`}}},
 		{Role: "tool", ToolCallID: "r1", Content: "x"},
 	}
 	if got := foldStaleReadResults(noWrite, 1); &got[0] != &noWrite[0] {
-		t.Errorf("无 write/edit 会话应原样返回")
+		t.Errorf("session without write/edit should return as-is")
 	}
 }
 
-// applyContextStrips：Debug level 记录各 strip 阶段节省 token（P11 触发）；Info level 零输出。
+// applyContextStrips: at Debug level logs the tokens saved by each strip stage (P11 triggers);
+// at Info level zero output.
 func TestApplyContextStrips_Debug(t *testing.T) {
 	big := strings.Repeat("x", 4000)
 	msgs := []miniagent.Message{
@@ -246,22 +250,22 @@ func TestApplyContextStrips_Debug(t *testing.T) {
 		{Role: "assistant", Content: "done1"},
 		{Role: "assistant", Content: "done2"},
 	}
-	// Debug level：P11 应折叠 read r1（被 write w1 取代，窗口外），日志含 stage + saved_tokens + fit done。
+	// Debug level: P11 should fold read r1 (superseded by write w1, outside the window); the log contains stage + saved_tokens + fit done.
 	var buf bytes.Buffer
 	dbg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	applyContextStrips(context.Background(), msgs, 1, 0, 2, dbg, "", nil)
 	logs := buf.String()
 	if !strings.Contains(logs, "P11_foldRead") || !strings.Contains(logs, "saved_tokens") {
-		t.Errorf("Debug 日志应含 P11_foldRead 与 saved_tokens，got:\n%s", logs)
+		t.Errorf("Debug log should contain P11_foldRead and saved_tokens, got:\n%s", logs)
 	}
 	if !strings.Contains(logs, "fit done") {
-		t.Errorf("Debug 日志应含 fit done 总结")
+		t.Errorf("Debug log should contain the fit done summary")
 	}
-	// Info level：无 strip saved 日志（零开销）。
+	// Info level: no strip saved log (zero overhead).
 	var buf2 bytes.Buffer
 	info := slog.New(slog.NewTextHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	applyContextStrips(context.Background(), msgs, 1, 0, 2, info, "", nil)
 	if strings.Contains(buf2.String(), "strip saved") {
-		t.Errorf("Info level 不应输出 strip saved")
+		t.Errorf("Info level should not output strip saved")
 	}
 }

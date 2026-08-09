@@ -35,7 +35,7 @@ func TestResolve_DefaultsModel(t *testing.T) {
 	}
 }
 
-// CLI 传入非法 mode 必须报错，而非被静默当作 auto。
+// An invalid CLI mode must error, not be silently treated as auto.
 func TestResolve_InvalidCliModeErrors(t *testing.T) {
 	cfg, _ := LoadConfig(writeTmpConfig(t, validConfigBody()))
 	badMode := "invalid_mode"
@@ -44,7 +44,7 @@ func TestResolve_InvalidCliModeErrors(t *testing.T) {
 	}
 }
 
-// config defaults.mode 已通过 validateConfig 校验，Resolve 对 CLI 覆盖做二次枚举校验。
+// config defaults.mode has already been validated by validateConfig; Resolve re-validates the CLI override against the enum.
 func TestResolve_AutoModeAllowed(t *testing.T) {
 	cfg, _ := LoadConfig(writeTmpConfig(t, validConfigBody()))
 	autoMode := "auto"
@@ -57,7 +57,7 @@ func TestResolve_AutoModeAllowed(t *testing.T) {
 	}
 }
 
-// S1 删裸模式：Resolve(nil, ...) 必须报错（cfg 必须非 nil）。
+// S1 removed bare mode: Resolve(nil, ...) must error (cfg must be non-nil).
 func TestResolve_NilCfgErrors(t *testing.T) {
 	model := "glm"
 	if _, err := Resolve(nil, CLIOverrides{Model: &model}); err == nil {
@@ -79,7 +79,7 @@ func TestResolve_DurationFromString(t *testing.T) {
 }
 
 func TestResolve_BadDurationFromString(t *testing.T) {
-	// 配置中 duration 字符串非法（如缺单位）应上抛错误，而非静默回落。
+	// An invalid duration string in config (e.g. missing unit) should surface an error, not silently fall back.
 	bad := "30"
 	cfg := mkFullConfig("p", "m")
 	cfg.Run = RunConfig{MaxDuration: &bad}
@@ -88,7 +88,7 @@ func TestResolve_BadDurationFromString(t *testing.T) {
 	}
 }
 
-// S4：5 个策略化常量经 config run.* 解析后透传到 ResolvedRun（仅 config 来源，不经 CLI）。
+// S4: 5 strategized constants are parsed from config run.* and passed through to ResolvedRun (config-only source, not via CLI).
 func TestResolve_StrategyConstants(t *testing.T) {
 	mk := func(v int) *int { return &v }
 	cfg := mkFullConfig("p", "m")
@@ -123,25 +123,25 @@ func TestResolve_StrategyConstants(t *testing.T) {
 	}
 }
 
-// 新字段：summary_request 和 summarizer_prompt 在 config 中正确解析。
+// New fields: summary_request and summarizer_prompt are correctly parsed from config.
 func TestResolve_PromptFields(t *testing.T) {
 	cfg := mkFullConfig("p", "m")
-	cfg.Defaults.SummaryRequest = "自定义总结引导"
-	cfg.Defaults.SummarizerPrompt = "自定义压缩器"
+	cfg.Defaults.SummaryRequest = "custom summary guidance"
+	cfg.Defaults.SummarizerPrompt = "custom compactor"
 	r, err := Resolve(cfg, CLIOverrides{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if r.SummaryRequest != "自定义总结引导" {
-		t.Errorf("SummaryRequest = %q, want 自定义总结引导", r.SummaryRequest)
+	if r.SummaryRequest != "custom summary guidance" {
+		t.Errorf("SummaryRequest = %q, want custom summary guidance", r.SummaryRequest)
 	}
-	if r.SummarizerPrompt != "自定义压缩器" {
-		t.Errorf("SummarizerPrompt = %q, want 自定义压缩器", r.SummarizerPrompt)
+	if r.SummarizerPrompt != "custom compactor" {
+		t.Errorf("SummarizerPrompt = %q, want custom compactor", r.SummarizerPrompt)
 	}
 }
 
-// v3.2.3 新增的 4 个策略化常量曾漏装配进 ResolvedRun（resolveRun 未赋值），config 值静默失效；
-// 修复后须从 config 透传到 ResolvedRun，main 的 Set* 才能据此覆盖内置默认。
+// The 4 strategized constants added in v3.2.3 were once missed when wiring into ResolvedRun (resolveRun did not assign them),
+// so config values silently had no effect; after the fix they must pass through from config to ResolvedRun so main's Set* can override the built-in defaults.
 func TestResolve_StrategyConstantsLateWired(t *testing.T) {
 	mk := func(v int) *int { return &v }
 	cfg := mkFullConfig("p", "m")

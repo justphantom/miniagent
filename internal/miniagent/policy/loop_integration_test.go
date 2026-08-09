@@ -16,8 +16,9 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/policy"
 )
 
-// defaultHooks 复刻 main.go 的默认钩子组装（OnLLMError + OnBudget + ShapeToolResult），
-// 供依赖原核心内置策略（失败重试/用量估算+预算熔断/工具结果截断+落盘）的集成测试一键恢复默认行为。
+// defaultHooks replicates main.go's default hook assembly (OnLLMError + OnBudget + ShapeToolResult),
+// so integration tests relying on the original core built-in policies (failure retry / usage estimation +
+// budget circuit-break / tool-result truncation + persistence) can restore default behavior in one shot.
 func defaultHooks(cfg miniagent.LoopConfig, logger *slog.Logger) miniagent.LoopHooks {
 	return miniagent.LoopHooks{
 		OnLLMError:      policy.NewDefaultOnLLMError(logger, 0),
@@ -26,7 +27,7 @@ func defaultHooks(cfg miniagent.LoopConfig, logger *slog.Logger) miniagent.LoopH
 	}
 }
 
-// MaxTotalTokens：累计 token 超限即以 miniagent.ErrBudgetExceeded 终止（走 error 路径）。
+// MaxTotalTokens: once cumulative tokens exceed the limit it terminates with miniagent.ErrBudgetExceeded (via the error path).
 func TestRun_BudgetExceeded(t *testing.T) {
 	tool := miniagent.Tool{Name: "loop", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "x"} }}
 	bigUsage := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1000,"completion_tokens":100}}`
@@ -38,11 +39,11 @@ func TestRun_BudgetExceeded(t *testing.T) {
 		t.Fatalf("err = %v, want miniagent.ErrBudgetExceeded", err)
 	}
 	if res.Steps != 1 {
-		t.Errorf("Steps = %d, want 1（超限的那次调用计入）", res.Steps)
+		t.Errorf("Steps = %d, want 1 (the over-limit call is counted)", res.Steps)
 	}
 }
 
-// MaxTotalTokens<=0 不限：正常多步完成。
+// MaxTotalTokens<=0 means unlimited: normal multi-step completion.
 func TestRun_BudgetZeroUnlimited(t *testing.T) {
 	tool := miniagent.Tool{Name: "q", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "x"} }}
 	tr := &looptest.FakeTransport{Responses: []string{
@@ -59,16 +60,17 @@ func TestRun_BudgetZeroUnlimited(t *testing.T) {
 	}
 }
 
-// miniagent.Tool.ResultLimit 驱动历史裁剪：高限工具的长结果入历史时按其 limit 裁，
+// miniagent.Tool.ResultLimit drives history trimming: a high-limit tool's long result is trimmed to its limit when entering history,
 
-// policy.NewDefaultOnBudget 在 resp.Usage 全零时补本地估算 fallback（EstimateTokens 计请求侧）。
-// 估算原属核心内置，现外挂到默认钩子；本测试直接覆盖该工厂，保 fallback 行为不丢。
+// policy.NewDefaultOnBudget supplements a local estimation fallback when resp.Usage is all-zero (EstimateTokens counts the request side).
+// Estimation was originally core built-in and is now externalized into the default hook; this test covers that factory directly to
+// keep the fallback behavior from regressing.
 func TestNewDefaultOnBudget_EstimatesZeroUsage(t *testing.T) {
 	hook := policy.NewDefaultOnBudget(0, nil)
 	total := &miniagent.Usage{}
 	in := miniagent.BudgetInput{
 		ToSend: []miniagent.Message{{Role: miniagent.RoleUser, Content: "a real prompt"}},
-		Resp:   miniagent.Response{Usage: miniagent.Usage{}}, // 全零 → 触发本地估算
+		Resp:   miniagent.Response{Usage: miniagent.Usage{}}, // all-zero → triggers local estimation
 	}
 	if err := hook(context.Background(), 1, in, total); err != nil {
 		t.Fatalf("OnBudget: %v", err)
@@ -78,7 +80,7 @@ func TestNewDefaultOnBudget_EstimatesZeroUsage(t *testing.T) {
 	}
 }
 
-// P1-5-b：usage 全零时本地估算仍触发 MaxTotalTokens 预算熔断。
+// P1-5-b: with all-zero usage, local estimation still triggers the MaxTotalTokens budget circuit-break.
 func TestRun_ZeroUsageBudgetEnforced(t *testing.T) {
 	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
 	tr := &looptest.FakeTransport{Responses: []string{noUsage}}
@@ -90,8 +92,8 @@ func TestRun_ZeroUsageBudgetEnforced(t *testing.T) {
 	}
 }
 
-// miniagent.Tool.ResultLimit 驱动历史裁剪：高限工具的长结果入历史时按其 limit 裁，
-// 而非默认 2000。
+// miniagent.Tool.ResultLimit drives history trimming: a high-limit tool's long result is trimmed to its limit
+// when entering history, not the default 2000.
 func TestRun_ToolResultLimitUsedInHistory(t *testing.T) {
 	long := strings.Repeat("y", 9000)
 	tool := miniagent.Tool{
@@ -116,13 +118,13 @@ func TestRun_ToolResultLimitUsedInHistory(t *testing.T) {
 		if len(m.Content) > 8200 || len(m.Content) <= policy.MaxToolResultInHistory {
 			t.Errorf("tool content not trimmed by ResultLimit: len=%d (want (%d, 8200])", len(m.Content), policy.MaxToolResultInHistory)
 		}
-		if !strings.Contains(m.Content, "截断") {
+		if !strings.Contains(m.Content, "truncated") {
 			t.Errorf("trim marker missing: len=%d", len(m.Content))
 		}
 	}
 }
 
-// C-2：context 超限降级。首次 400(context_length) → 收紧历史 → 重试本步成功。
+// C-2: context-overflow downgrade. First 400(context_length) → tighten history → retry this step successfully.
 func TestRun_ContextLengthFallbackOnce(t *testing.T) {
 	tr := &looptest.FakeTransport{
 		Statuses:  []int{http.StatusBadRequest, http.StatusOK},
@@ -142,7 +144,7 @@ func TestRun_ContextLengthFallbackOnce(t *testing.T) {
 	}
 }
 
-// C-2：重试仍超限 → 只降级一次后上抛 miniagent.ErrContextLength，不无限重试。
+// C-2: retry still over the limit → downgrade only once then propagate miniagent.ErrContextLength, no infinite retry.
 func TestRun_ContextLengthFallbackStillTooLong(t *testing.T) {
 	body := `{"error":{"message":"maximum context length exceeded"}}`
 	tr := &looptest.FakeTransport{
@@ -160,7 +162,8 @@ func TestRun_ContextLengthFallbackStillTooLong(t *testing.T) {
 	}
 }
 
-// §P1-A：工具输出超 limit 且 ToolOutputDir 启用时，全文落盘、历史 Content 含路径提示、文件内容==原文。
+// §P1-A: when tool output exceeds the limit and ToolOutputDir is enabled, the full text is persisted to disk, the history Content
+// contains a path hint, and the file content == the original text.
 func TestRun_ToolOutputStoredOnTruncation(t *testing.T) {
 	big := strings.Repeat("x", 5000) // > policy.MaxToolResultInHistory(4000)
 	tool := miniagent.Tool{Name: "bigtool", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: big} }}
@@ -176,23 +179,24 @@ func TestRun_ToolOutputStoredOnTruncation(t *testing.T) {
 		t.Fatalf("miniagent.Run: %v", err)
 	}
 	toolMsg := looptest.LastToolMessage(t, res.NewMessages)
-	if !strings.Contains(toolMsg.Content, "已保存") || !strings.Contains(toolMsg.Content, dir) {
-		t.Errorf("tool content 应含路径提示（已保存 + 目录）: len=%d", len(toolMsg.Content))
+	if !strings.Contains(toolMsg.Content, "saved") || !strings.Contains(toolMsg.Content, dir) {
+		t.Errorf("tool content should contain a path hint (saved + directory): len=%d", len(toolMsg.Content))
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 {
-		t.Fatalf("应恰好落盘 1 个文件: entries=%d err=%v", len(entries), err)
+		t.Fatalf("should persist exactly 1 file: entries=%d err=%v", len(entries), err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
 	if err != nil {
 		t.Fatalf("read spill: %v", err)
 	}
 	if string(b) != big {
-		t.Errorf("落盘文件内容应 == 原文: got len=%d want=%d", len(b), len(big))
+		t.Errorf("persisted file content should == original text: got len=%d want=%d", len(b), len(big))
 	}
 }
 
-// §P1-A：ToolOutputDir 空（默认禁用）→ 全链路无落盘 IO，行为等同 policy.TrimForHistory 硬截断（回归保护）。
+// §P1-A: ToolOutputDir empty (disabled by default) → no persistence IO across the whole chain, behavior equals
+// policy.TrimForHistory hard truncation (regression guard).
 func TestRun_ToolOutputDisabledByDefault(t *testing.T) {
 	big := strings.Repeat("x", 5000)
 	tool := miniagent.Tool{Name: "bigtool", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: big} }}
@@ -207,18 +211,19 @@ func TestRun_ToolOutputDisabledByDefault(t *testing.T) {
 		t.Fatalf("miniagent.Run: %v", err)
 	}
 	toolMsg := looptest.LastToolMessage(t, res.NewMessages)
-	if strings.Contains(toolMsg.Content, "已保存") {
-		t.Errorf("禁用时不应含路径提示: %q", toolMsg.Content)
+	if strings.Contains(toolMsg.Content, "saved") {
+		t.Errorf("when disabled should not contain a path hint: %q", toolMsg.Content)
 	}
 	want := policy.TrimForHistory(big, 0, false)
 	if toolMsg.Content != want {
-		t.Errorf("禁用时应 == policy.TrimForHistory 硬截断: got len=%d want len=%d", len(toolMsg.Content), len(want))
+		t.Errorf("when disabled should == policy.TrimForHistory hard truncation: got len=%d want len=%d", len(toolMsg.Content), len(want))
 	}
 }
 
-// §P1-A：SplitTruncate=true 的工具，落盘后预览仍含尾部关键行（头1/4+尾3/4 语义不被 store 改写）。
+// §P1-A: for a SplitTruncate=true tool, the preview after persistence still contains the key tail line
+// (the head-1/4 + tail-3/4 semantics are not rewritten by the store).
 func TestRun_ToolOutputPreservesSplit(t *testing.T) {
-	head := strings.Repeat("head-line\n", 700) // ~7000 字符头部
+	head := strings.Repeat("head-line\n", 700) // ~7000-char head
 	tail := "FINAL_FAIL_LINE\n"
 	big := head + tail
 	tool := miniagent.Tool{Name: "shelltool", SplitTruncate: true, Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: big} }}
@@ -235,15 +240,16 @@ func TestRun_ToolOutputPreservesSplit(t *testing.T) {
 	}
 	toolMsg := looptest.LastToolMessage(t, res.NewMessages)
 	if !strings.Contains(toolMsg.Content, "FINAL_FAIL_LINE") {
-		t.Errorf("split 预览应保留尾部 FAIL 行: %q...(len %d)", toolMsg.Content[:min(60, len(toolMsg.Content))], len(toolMsg.Content))
+		t.Errorf("split preview should retain the tail FAIL line: %q...(len %d)", toolMsg.Content[:min(60, len(toolMsg.Content))], len(toolMsg.Content))
 	}
-	if !strings.Contains(toolMsg.Content, "已保存") {
-		t.Errorf("超限应触发落盘路径提示")
+	if !strings.Contains(toolMsg.Content, "saved") {
+		t.Errorf("over the limit should trigger a persistence path hint")
 	}
 }
 
-// 撞迭代上限的总结步走 OnBudget：累计超 MaxTotalTokens 应熔断（修复前总结步绕过 OnBudget 直接返回文本）。
-// 每步 tool usage 100+10=110；两步累计 220<250（主路径不熔断），总结步再 +110=330>250 触发熔断。
+// The summary step that hits the iteration limit goes through OnBudget: cumulative exceeding MaxTotalTokens should circuit-break
+// (before the fix the summary step bypassed OnBudget and returned text directly).
+// Per-step tool usage 100+10=110; two steps cumulative 220<250 (main path does not break), the summary step adds +110=330>250 triggering the break.
 func TestRun_SummaryStepEnforcesBudget(t *testing.T) {
 	tool := miniagent.Tool{Name: "loop", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "x"} }}
 	toolStep := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"loop","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`
@@ -253,12 +259,13 @@ func TestRun_SummaryStepEnforcesBudget(t *testing.T) {
 	cfg := miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, MaxIterations: 2, MaxTotalTokens: 250}
 	_, err := miniagent.Run(context.Background(), llm, cfg, "x", defaultHooks(cfg, nil), nil)
 	if !errors.Is(err, miniagent.ErrBudgetExceeded) {
-		t.Fatalf("err = %v, want miniagent.ErrBudgetExceeded（总结步应走 OnBudget 熔断）", err)
+		t.Fatalf("err = %v, want miniagent.ErrBudgetExceeded (summary step should circuit-break via OnBudget)", err)
 	}
 }
 
-// OnLLMError 恢复重试路径若触发 thinking 降级，miniagent.Run 应捕获 downgraded 并置位 ThinkingDowngraded
-// （修复：原重试调用 `resp, _, err = ...` 丢弃 downgraded，交互层下轮会重传原值再撞 400）。
+// OnLLMError recovery retry path: if it triggers a thinking downgrade, miniagent.Run must capture downgraded and set ThinkingDowngraded
+// (fix: the original retry call `resp, _, err = ...` discarded downgraded, so the interactive layer would resend the original value
+// next turn and hit 400 again).
 func TestRun_RetryPathCapturesDowngrade(t *testing.T) {
 	tr := &looptest.RecordingTransport{Plan: []looptest.TransportResp{
 		{Status: http.StatusBadRequest, Body: `{"error":{"message":"maximum context length exceeded"}}`},
@@ -276,24 +283,24 @@ func TestRun_RetryPathCapturesDowngrade(t *testing.T) {
 		t.Errorf("Text = %q, want recovered", res.Text)
 	}
 	if !res.ThinkingDowngraded {
-		t.Errorf("ThinkingDowngraded = false, want true（重试路径降级应被捕获）")
+		t.Errorf("ThinkingDowngraded = false, want true (retry-path downgrade should be captured)")
 	}
 	if tr.Calls != 3 {
-		t.Errorf("calls = %d, want 3（ctx-len + thinking-unsupported + ok）", tr.Calls)
+		t.Errorf("calls = %d, want 3 (ctx-len + thinking-unsupported + ok)", tr.Calls)
 	}
-	// 重试首次仍带 thinking（降级发生在重试内部），降级后那次请求不带。
+	// The first retry still carries thinking (the downgrade happens inside the retry); the request after the downgrade does not.
 	if !strings.Contains(tr.Bodies[1], "reasoning_effort") {
-		t.Errorf("重试首次应仍带 thinking: %s", tr.Bodies[1])
+		t.Errorf("first retry should still carry thinking: %s", tr.Bodies[1])
 	}
 	if strings.Contains(tr.Bodies[2], "reasoning_effort") {
-		t.Errorf("降级后应去 thinking: %s", tr.Bodies[2])
+		t.Errorf("after downgrade thinking should be removed: %s", tr.Bodies[2])
 	}
 }
 
-// P1-5：usage 全零（端点不返回 usage）时 Run 用本地估算 fallback 并继续运行，同时 warn 暴露。
-// 测的是 policy.NewDefaultOnBudget 的零 usage 本地估算 + warn 日志。
+// P1-5: when usage is all-zero (endpoint returns no usage), Run uses the local estimation fallback and keeps running, while exposing a warn.
+// This tests policy.NewDefaultOnBudget's zero-usage local estimation + warn log.
 func TestRun_ZeroUsageWarns(t *testing.T) {
-	// 响应不含 usage 字段 → looptest.ParseChatResponse 得零值 Usage（流式端点常见的现实情形）。
+	// Response has no usage field → looptest.ParseChatResponse yields a zero Usage (a realistic case common with streaming endpoints).
 	noUsage := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
 	tr := &looptest.FakeTransport{Responses: []string{noUsage}}
 	llm := looptest.NewFakeLLM(tr)

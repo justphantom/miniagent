@@ -18,7 +18,7 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// warnProviderInsecureURLs 对 provider 使用的 http（非 loopback）URL 发出明文传 key 警告。
+// warnProviderInsecureURLs warns about plaintext key transmission for http (non-loopback) URLs used by the provider.
 func warnProviderInsecureURLs(p config.ProviderConfig) {
 	warnInsecureURL(p.ChatURL)
 	if p.ModelsURL != "" {
@@ -32,8 +32,8 @@ func warnProvidersInsecureURLs(providers []config.ProviderConfig) {
 	}
 }
 
-// httpTimeoutFromConfig 解析 config 中的 run.http_timeout；未配置返回 0。复用 config.ParseDuration
-// 统一 duration 校验语义与错误格式（list-models 路径绕过 Resolve，故此处单独解析）。
+// httpTimeoutFromConfig parses run.http_timeout from config; returns 0 when not configured. Reuses config.ParseDuration
+// to unify duration validation semantics and error format (the list-models path bypasses Resolve, so it is parsed separately here).
 func httpTimeoutFromConfig(cfg *config.Config) (time.Duration, error) {
 	d, err := config.ParseDuration(cfg.Run.HTTPTimeout, "run.http_timeout")
 	if err != nil || d == nil {
@@ -42,8 +42,8 @@ func httpTimeoutFromConfig(cfg *config.Config) (time.Duration, error) {
 	return *d, nil
 }
 
-// listAllModels 按 provider 解析 key（provider.Key > $MINIAGENT_API_KEY）并复用统一
-// transport/timeout，聚合模型列表。
+// listAllModels resolves the key per provider (provider.Key > $MINIAGENT_API_KEY) and reuses a unified
+// transport/timeout to aggregate the model list.
 func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]config.ModelRef, error) {
 	keyFor := func(p config.ProviderConfig) string {
 		if p.Key != "" {
@@ -58,8 +58,8 @@ func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpT
 	return openai.ListAllModels(ctx, providers, keyFor, httpClient, logger)
 }
 
-// runListModels 实现 -list-models 早退路径：逐行输出 NDJSON model 事件（provider/model
-// 分离字段）。providerFilter 非空时仅列出该 provider。部分失败：成功条目照常输出，退出码 1。
+// runListModels implements the -list-models early-exit path: outputs NDJSON model events line by line (provider/model
+// as separate fields). When providerFilter is non-empty only that provider is listed. Partial failure: successful entries are still output, exit code 1.
 func runListModels(ctx context.Context, cfg *config.Config, providerFilter string, logger *slog.Logger) {
 	listHTTPTimeout, err := httpTimeoutFromConfig(cfg)
 	if err != nil {
@@ -84,7 +84,7 @@ func runListModels(ctx context.Context, cfg *config.Config, providerFilter strin
 		}
 	}
 	if err != nil {
-		// 信号取消（SIGINT/SIGTERM）走码 130 干净退出，不报错——与主 Run 路径（main.go）一致。
+		// Signal cancellation (SIGINT/SIGTERM) takes code 130 to exit cleanly, no error — consistent with the main Run path (main.go).
 		if errors.Is(err, context.Canceled) {
 			os.Exit(130)
 		}
@@ -93,7 +93,7 @@ func runListModels(ctx context.Context, cfg *config.Config, providerFilter strin
 	}
 }
 
-// warnInsecureURL：http（非 loopback）时 API key 明文上链，stderr 警告。不强制拒绝。
+// warnInsecureURL: when http (non-loopback) the API key is sent in plaintext over the wire; warn on stderr. Does not forcibly reject.
 func warnInsecureURL(rawURL string) {
 	u, err := url.Parse(strings.TrimRight(rawURL, "/"))
 	if err != nil || u.Scheme != "http" {
@@ -109,10 +109,10 @@ func warnInsecureURL(rawURL string) {
 	fmt.Fprintf(os.Stderr, "miniagent: warning: endpoint %s uses plain http, API key sent unencrypted\n", u.Redacted())
 }
 
-// buildLLM 构造 ChatClient（带总 Timeout，非流式 + models）与 StreamClient（无 Timeout，流式）。
-// 两者共享同一 *http.Transport（代理/dial/TLS 超时）；chat 的 httpTimeout 兜底防单次调用挂死（#3），
-// stream 无 Timeout 避免 body 读取被砍（P2-5/P1-A，#2）——P4 拆分后由各自 client 持有。
-// httpTimeout<=0 用默认 120s。
+// buildLLM constructs a ChatClient (with overall Timeout, non-streaming + models) and a StreamClient (no Timeout, streaming).
+// Both share the same *http.Transport (proxy/dial/TLS timeout); chat's httpTimeout is a fallback preventing a single call from hanging (#3),
+// stream has no Timeout to avoid the body read being cut (P2-5/P1-A, #2) — after the P4 split each is owned by its own client.
+// httpTimeout<=0 uses the default 120s.
 func buildLLM(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) (*openai.ChatClient, *openai.StreamClient) {
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
@@ -133,7 +133,7 @@ func buildLLM(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpT
 	return chat, stream
 }
 
-// buildChatClient 为指定 provider 构造非流式 ChatClient（用于 compaction 等仅需 Do 的场景）。
+// buildChatClient constructs a non-streaming ChatClient for the specified provider (used by scenarios that only need Do, such as compaction).
 func buildChatClient(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) *openai.ChatClient {
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
@@ -146,22 +146,22 @@ func buildChatClient(apiKey string, p config.ProviderConfig, logger *slog.Logger
 	return chat
 }
 
-// newHTTPTransport 返回复用的 *http.Transport，配置代理、dial、TLS、响应头超时。
+// newHTTPTransport returns the reused *http.Transport, configuring proxy, dial, TLS, and response-header timeouts.
 func newHTTPTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:       http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		// 曾为 30s：慢端点（如 agnes）常在此砍断请求，致 compaction 摘要等长输入场景失败。
-		// 放宽到 300s；副作用是任意 provider 的慢请求都会挂更久（与 http.Client.Timeout 共同生效）。
-		// 注：300s 实际只对 stream 路径生效（stream 无 Client.Timeout）；chat/compaction 的响应头
-		// 等待受各自 Client.Timeout(120s) 上限约束，300s 对它们是冗余上界（仅放宽了旧 30s 的砍断）。
+		// Was 30s: slow endpoints (e.g. agnes) often got requests cut here, causing long-input scenarios like compaction summarization to fail.
+		// Relaxed to 300s; the side effect is that any provider's slow request hangs longer (takes effect together with http.Client.Timeout).
+		// Note: 300s actually only takes effect on the stream path (stream has no Client.Timeout); chat/compaction response-header
+		// waiting is capped by each Client.Timeout(120s), so 300s is a redundant upper bound for them (only relaxes the old 30s cutoff).
 		ResponseHeaderTimeout: 300 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 }
 
-// newHTTPClient 返回带指定总 timeout 和 transport 的 *http.Client。
+// newHTTPClient returns a *http.Client with the specified overall timeout and transport.
 func newHTTPClient(timeout time.Duration, transport *http.Transport) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: transport}
 }

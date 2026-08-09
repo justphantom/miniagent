@@ -25,26 +25,26 @@ type codemapArgs struct {
 	Depth int    `json:"depth,omitempty"`
 }
 
-// CodemapTool 以缩进树形文本返回目录结构概览（目录标注子条目数），填补
-// glob（扁平列表）与 read（单文件全文）之间的结构感知缺口。
-// 跳过 .git 与符号链接（防递归误入）；depth<=0 不限深度（仍受条目上限约束）。
-// timeout<=0 用默认 fileOpTimeout。
+// CodemapTool returns a directory-structure overview as an indented tree (directories annotated with child counts),
+// filling the structure-aware gap between glob (flat list) and read (single-file full text).
+// Skips .git and symlinks (prevents accidental recursion into them); depth<=0 means unlimited depth (still capped
+// by the entry limit). timeout<=0 uses the default fileOpTimeout.
 func CodemapTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
 	}
 	return miniagent.Tool{
 		Name: "codemap",
-		Description: "返回目录树概览：缩进表示层级（每层 2 空格），目录标注直接子条目数。跳过 .git 与符号链接。条目上限 " +
-			strconv.Itoa(maxCodemapEntries) + "。用于低成本了解仓库布局；要看文件内容用 read，按文件名过滤用 glob。",
+		Description: "Returns a directory-tree overview: indentation denotes hierarchy (2 spaces per level), directories annotate the direct child count. Skips .git and symlinks. Entry limit " +
+			strconv.Itoa(maxCodemapEntries) + ". Use it for a low-cost overview of the repository layout; to view file contents use read, to filter by file name use glob.",
 		Parameters: object(map[string]any{
-			"path":  map[string]any{"type": "string", "description": "根目录，相对 workdir 或绝对，默认 workdir"},
-			"depth": map[string]any{"type": "integer", "description": "最大递归深度，默认 " + strconv.Itoa(defaultCodemapDepth) + "（缺省/0 同义）；<0 不限（仍受条目上限约束）"},
+			"path":  map[string]any{"type": "string", "description": "Root directory, relative to workdir or absolute; defaults to workdir"},
+			"depth": map[string]any{"type": "integer", "description": "Maximum recursion depth, default " + strconv.Itoa(defaultCodemapDepth) + " (omitted/0 are equivalent); <0 means unlimited (still capped by the entry limit)"},
 		}),
 		ResultLimit:   policy.MaxToolResultInHistory,
-		SplitTruncate: true, // 条目上限提示在尾部，前截断会丢失
+		SplitTruncate: true, // the entry-limit hint is at the tail; front-truncation would lose it
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
-			return runWithTimeout(ctx, timeout, "遍历", func(rctx context.Context) miniagent.ToolResult { return runCodemap(rctx, workspaceRoot, args) })
+			return runWithTimeout(ctx, timeout, "traverse", func(rctx context.Context) miniagent.ToolResult { return runCodemap(rctx, workspaceRoot, args) })
 		},
 	}
 }
@@ -52,7 +52,7 @@ func CodemapTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 func runCodemap(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
 	var a codemapArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to parse args: %v (received %q)", err, args)}
 	}
 	if a.Depth == 0 {
 		a.Depth = defaultCodemapDepth
@@ -60,27 +60,28 @@ func runCodemap(ctx context.Context, workspaceRoot, args string) miniagent.ToolR
 	root := resolveToolPath(workspaceRoot, a.Path)
 	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
 		if err == nil {
-			err = errors.New("不是目录")
+				err = errors.New("not a directory")
 		}
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("遍历 %q 失败：%v", a.Path, err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to traverse %q: %v", a.Path, err)}
 	}
 	lines, truncated, err := codemapWalk(ctx, root, a.Depth)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("遍历 %q 失败：%v", a.Path, err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to traverse %q: %v", a.Path, err)}
 	}
 	if len(lines) == 0 {
-		return miniagent.ToolResult{Output: "（空目录）"}
+		return miniagent.ToolResult{Output: "(empty directory)"}
 	}
 	out := strings.Join(lines, "\n")
 	if truncated {
-		out += fmt.Sprintf("\n…（超过 %d 条，已停止收集）", maxCodemapEntries)
+		out += fmt.Sprintf("\n… (over %d entries, collection stopped)", maxCodemapEntries)
 	}
 	return miniagent.ToolResult{Output: out}
 }
 
-// codemapWalk 遍历 root 生成树形行。目录名带 "/" 后缀并标注直接子条目数
-// （.git/符号链接不计入）；超 depth 的目录只列名不进子树，其计数标注为 "?"。
-// 条目数（含目录本身）达 maxCodemapEntries 即 SkipAll。
+// codemapWalk walks root producing tree lines. Directory names get a "/" suffix and are annotated with the direct
+// child count (.git/symlinks are not counted); directories beyond depth are listed by name only without expanding
+// their subtree, and their count is annotated as "?".
+// Once the entry count (including directories themselves) reaches maxCodemapEntries it triggers SkipAll.
 func codemapWalk(ctx context.Context, root string, maxDepth int) ([]string, bool, error) {
 	var lines []string
 	truncated := false
@@ -89,11 +90,11 @@ func codemapWalk(ctx context.Context, root string, maxDepth int) ([]string, bool
 			return err
 		}
 		if walkErr != nil {
-			return nil //nolint:nilerr // 不可访问的子树跳过，保留可访问部分（与 grep 一致）
+			return nil //nolint:nilerr // skip inaccessible subtrees and keep the accessible parts (consistent with grep)
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			return nil //nolint:nilerr // Rel 对已遍历路径仅拦截器路径失败，跳过该条目即可
+			return nil //nolint:nilerr // Rel only fails for interceptor paths of already-traversed paths; just skip this entry
 		}
 		if rel == "." {
 			return nil
@@ -115,7 +116,7 @@ func codemapWalk(ctx context.Context, root string, maxDepth int) ([]string, bool
 			return filepath.SkipDir
 		}
 		if maxDepth > 0 && depth >= maxDepth {
-			// 深度边界：子树不展开，计数不可得，标注 "?" 避免谎报。
+			// depth boundary: the subtree is not expanded and the count is unknown; annotate "?" to avoid misreporting.
 			lines = append(lines, indent+d.Name()+"/ (? items)")
 			return filepath.SkipDir
 		}
@@ -130,8 +131,9 @@ func codemapWalk(ctx context.Context, root string, maxDepth int) ([]string, bool
 	return lines, truncated, err
 }
 
-// countDirItems 数 dir 的直接子条目（跳过 .git 与符号链接，与遍历口径一致）。
-// ok=false 表示读取失败（权限等）：调用方据此标注 "? items" 而非谎报 0，与深度边界标注一致。
+// countDirItems counts the direct child entries of dir (skipping .git and symlinks, consistent with the walk policy).
+// ok=false means the read failed (permissions, etc.): the caller uses this to annotate "? items" instead of falsely
+// reporting 0, consistent with the depth-boundary annotation.
 func countDirItems(dir string) (int, bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

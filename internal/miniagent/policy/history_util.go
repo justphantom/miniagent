@@ -9,23 +9,27 @@ import (
 	"github.com/justphantom/miniagent/internal/text"
 )
 
-// 以下 4 个 token 估算常量是核心 token 估算（EstimateTokens/schemaTokens）的参数，属核心；
-// 从 context.go 迁出以使压缩子包可整体外迁。SystemOverheadTokens 导出供压缩的 estimateRoundTokens 复用。
+// The following 4 token estimation constants are parameters of the core token estimation
+// (EstimateTokens/schemaTokens) and belong to core. Moved out of context.go so the compaction
+// subpackage can be migrated wholesale. SystemOverheadTokens is exported for compaction's estimateRoundTokens to reuse.
 const SystemOverheadTokens = 400
 
-// EnvelopePerMsgTokens / EnvelopePerToolCallTokens 是请求信封的线性化 token 估算（随消息数与 tool_call 数增长）。
-// 导出供 compaction.estimateMessageTokensLocal 复用同一口径（含信封边际），与 SystemOverheadTokens 同理。
+// EnvelopePerMsgTokens / EnvelopePerToolCallTokens are linear token estimates for the request envelope
+// (grow with the number of messages and tool_calls). Exported for compaction.estimateMessageTokensLocal
+// to reuse the same metric (including envelope margin), same rationale as SystemOverheadTokens.
 const (
 	EnvelopePerMsgTokens      = 4
 	EnvelopePerToolCallTokens = 20
 )
 
-// perToolSchemaTokens 粗估单个工具 schema 入请求的 token 数（schemaTokens 序列化失败的 flat 兜底）。
+// perToolSchemaTokens roughly estimates the number of tokens a single tool schema contributes to the
+// request (a flat fallback used when schemaTokens serialization fails).
 const perToolSchemaTokens = 60
 
-// EstimateTokens 估算一次请求的 token 数，仅用于历史裁剪决策。启发式：CJK ≈ 1 token/2 字符，
-// 其他 ≈ 1 token/4 字符。除 msgs 内容外，计入 system prompt 文本 + 请求信封 + 工具 schema。
-// 导出供压缩子包（compaction）复用同一估算口径（依赖 miniagent.Message/miniagent.Tool 领域类型，故留 core 导出）。
+// EstimateTokens estimates the token count for a single request, used only for history trim decisions.
+// Heuristic: CJK ≈ 1 token/2 chars, others ≈ 1 token/4 chars. Beyond the msgs content, it also accounts
+// for the system prompt text + request envelope + tool schemas. Exported for the compaction subpackage
+// to reuse the same estimation metric (depends on the miniagent.Message/miniagent.Tool domain types, hence kept as a core export).
 func EstimateTokens(msgs []miniagent.Message, system string, tools []miniagent.Tool) int {
 	var nonCJK, cjk int
 	var toolCalls int
@@ -53,9 +57,11 @@ func EstimateTokens(msgs []miniagent.Message, system string, tools []miniagent.T
 		schemaTokens(tools)
 }
 
-// schemaTokens 按 tools 实际 JSON schema 体积估算固定 token 开销；序列化失败回落 flat 估算。
-// 不缓存：tools 是固定小集合（内置工具 + 脚本），marshal 开销可忽略；按 slice 指针身份缓存会在跨 Run
-// GC 地址复用时撞键（不同内容、同长度的 slice 复用同一首元素地址）返回陈旧值，得不偿失。
+// schemaTokens estimates the fixed token overhead based on the actual JSON schema size of tools;
+// on serialization failure it falls back to a flat estimate. Not cached: tools are a fixed small set
+// (built-in tools + scripts), so marshal cost is negligible; caching keyed by slice pointer identity
+// would, across Runs, collide under GC address reuse (different-content slices of the same length
+// reuse the same first-element address) and return stale values — not worth it.
 func schemaTokens(tools []miniagent.Tool) int {
 	if len(tools) == 0 {
 		return 0
@@ -63,7 +69,7 @@ func schemaTokens(tools []miniagent.Tool) int {
 	return schemaTokensCompute(tools)
 }
 
-// schemaTokensCompute 是 schemaTokens 的未缓存实现。
+// schemaTokensCompute is the uncached implementation of schemaTokens.
 func schemaTokensCompute(tools []miniagent.Tool) int {
 	var nonCJK, cjk int
 	for _, t := range tools {
@@ -90,7 +96,8 @@ func schemaTokensCompute(tools []miniagent.Tool) int {
 	return nonCJK/4 + cjk/2
 }
 
-// estimateResponseTokens 基于响应文本/思考链/工具参数做本地 token 估算，供零 usage 预算熔断 fallback。
+// estimateResponseTokens performs a local token estimate based on the response text/reasoning/tool
+// args, used as a fallback for budget circuit-break when usage is zero.
 func estimateResponseTokens(resp miniagent.Response) int {
 	var nonCJK, cjk int
 	add := func(s string) {
@@ -111,12 +118,14 @@ func estimateResponseTokens(resp miniagent.Response) int {
 	return nonCJK/4 + cjk/2
 }
 
-// contextTrimToolChars 是 context 超限时把每条 tool 结果 content 压到的字符上限。
-// 运行时经 Limits.ContextTrimToolChars 覆盖（<=0 用此默认），由 NewDefaultOnLLMError 注入。
+// contextTrimToolChars is the upper limit (in characters) that each tool result content is compressed
+// to when context is exceeded. Overridden at runtime via Limits.ContextTrimToolChars (<=0 uses this
+// default), injected by NewDefaultOnLLMError.
 const contextTrimToolChars = 2000
 
-// trimHistoryForContext 在端点返回 context_length_exceeded 时收紧历史，供 Run 单次重试。
-// 不删消息：删 tool 消息会破坏 assistant.tool_calls / tool 配对。
+// trimHistoryForContext tightens history when the endpoint returns context_length_exceeded, allowing
+// Run a single retry. No messages are deleted: deleting tool messages would break the
+// assistant.tool_calls / tool pairing.
 func trimHistoryForContext(msgs []miniagent.Message, contextTrim int) []miniagent.Message {
 	if contextTrim <= 0 {
 		contextTrim = contextTrimToolChars

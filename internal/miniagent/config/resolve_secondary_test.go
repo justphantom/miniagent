@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// compaction 成对设置时取自身配置（可跨 provider）。
+// When compaction is set as a pair it takes its own config (may cross providers).
 func TestResolve_SecondaryIndependentPairs(t *testing.T) {
 	cfg := mkFullConfig("main", "glm",
 		ProviderConfig{Name: "main", ChatURL: "https://a/v1/chat/completions"},
@@ -20,8 +20,8 @@ func TestResolve_SecondaryIndependentPairs(t *testing.T) {
 	}
 }
 
-// compaction 整段留空时整体回落 defaults 对；即使 CLI 覆盖了主会话，回落目标仍是
-// config defaults（成对规则：不允许 CLI 主会话与二级交叉）。
+// When the compaction section is entirely empty it falls back to the defaults pair; even if CLI overrides the main session,
+// the fallback target is still the config defaults (pair rule: no cross between the CLI main session and the secondary).
 func TestResolve_SecondaryFallsBackToDefaultsPair(t *testing.T) {
 	cfg := mkFullConfig("main", "glm",
 		ProviderConfig{Name: "main", ChatURL: "https://a/v1/chat/completions"},
@@ -38,11 +38,11 @@ func TestResolve_SecondaryFallsBackToDefaultsPair(t *testing.T) {
 		t.Errorf("main = %s/%s, want other/glm-pro", r.Provider.Name, r.ModelID)
 	}
 	if r.CompactionProvider.Name != "main" || r.CompactionModelID != "glm" {
-		t.Errorf("compaction = %s/%s, want 回落 defaults 对 main/glm", r.CompactionProvider.Name, r.CompactionModelID)
+		t.Errorf("compaction = %s/%s, want fallback defaults pair main/glm", r.CompactionProvider.Name, r.CompactionModelID)
 	}
 }
 
-// compaction.provider 指向未声明 provider 时报错（Resolve 对手工构造 Config 二次校验）。
+// When compaction.provider points to an undeclared provider it errors (Resolve re-validates a hand-constructed Config).
 func TestResolve_CompactionUnknownProviderErrors(t *testing.T) {
 	cfg := mkFullConfig("main", "glm")
 	cfg.Compaction = CompactionConfig{Provider: "unknown", Model: "glm-flash"}
@@ -51,11 +51,11 @@ func TestResolve_CompactionUnknownProviderErrors(t *testing.T) {
 	}
 }
 
-// 成对规则：compaction 只设 provider 或只设 model 均报错（同空才回落 defaults）。
+// Pair rule: setting only provider or only model for compaction errors (only both-empty falls back to defaults).
 func TestResolve_SecondaryHalfSetErrors(t *testing.T) {
 	cases := map[string]func(*Config){
-		"compaction 仅 provider": func(c *Config) { c.Compaction = CompactionConfig{Provider: "main"} },
-		"compaction 仅 model":    func(c *Config) { c.Compaction = CompactionConfig{Model: "m"} },
+		"compaction provider only": func(c *Config) { c.Compaction = CompactionConfig{Provider: "main"} },
+		"compaction model only":    func(c *Config) { c.Compaction = CompactionConfig{Model: "m"} },
 	}
 	for name, mutate := range cases {
 		cfg := mkFullConfig("main", "glm")
@@ -66,7 +66,7 @@ func TestResolve_SecondaryHalfSetErrors(t *testing.T) {
 	}
 }
 
-// 成对规则：CLI -provider/-model 只传其一即报错。
+// Pair rule: passing only one of CLI -provider/-model errors.
 func TestResolve_CliPairRequired(t *testing.T) {
 	p, m := "main", "glm-pro"
 	if _, err := Resolve(mkFullConfig("main", "glm"), CLIOverrides{Provider: &p}); err == nil {
@@ -77,7 +77,7 @@ func TestResolve_CliPairRequired(t *testing.T) {
 	}
 }
 
-// CLI 成对覆盖主会话；二级仍取 config（自身对或 defaults 对），不受 CLI 影响。
+// CLI overrides the main session as a pair; the secondary still takes config (its own pair or the defaults pair), unaffected by CLI.
 func TestResolve_CliPairOverride(t *testing.T) {
 	cfg := mkFullConfig("main", "glm",
 		ProviderConfig{Name: "main", ChatURL: "https://a/v1/chat/completions"},
@@ -97,7 +97,7 @@ func TestResolve_CliPairOverride(t *testing.T) {
 	}
 }
 
-// CLI 对中 provider 未声明时报错。
+// When the provider in the CLI pair is undeclared it errors.
 func TestResolve_CliUnknownProviderErrors(t *testing.T) {
 	bad, m := "nope", "glm"
 	if _, err := Resolve(mkFullConfig("main", "glm"), CLIOverrides{Provider: &bad, Model: &m}); err == nil {

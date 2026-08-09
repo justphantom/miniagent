@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// edits 数组多处不同 old_string 顺序 apply：全部成功，内容正确。
+// edits array with several distinct old_strings applied in order: all succeed, content is correct.
 func TestEdit_EditsArray_SequentialApply(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -26,7 +26,7 @@ func TestEdit_EditsArray_SequentialApply(t *testing.T) {
 	}
 }
 
-// edits 中途某处 old_string 未匹配 → 整体回滚，文件不变。
+// If some old_string in the middle of edits does not match -> the whole transaction rolls back, file unchanged.
 func TestEdit_EditsArray_RollbackOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -44,7 +44,7 @@ func TestEdit_EditsArray_RollbackOnFailure(t *testing.T) {
 	}
 }
 
-// edits 中 replace_all 与唯一匹配混用：第一处全替后，第二处基于新内容匹配。
+// Mixing replace_all with a unique match in edits: the first segment replaces all, then the second matches against the new content.
 func TestEdit_EditsArray_ReplaceAllMixed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -61,7 +61,7 @@ func TestEdit_EditsArray_ReplaceAllMixed(t *testing.T) {
 	}
 }
 
-// S3 向后兼容：单段 old_string/new_string 仍可用（不传 edits）。
+// S3 backward compatibility: single-segment old_string/new_string still works (no edits passed).
 func TestEdit_SingleString_BackwardCompat(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -78,7 +78,7 @@ func TestEdit_SingleString_BackwardCompat(t *testing.T) {
 	}
 }
 
-// S3：edits 与 old_string/new_string 同传应报错（互斥）。
+// S3: passing both edits and old_string/new_string should error (mutually exclusive).
 func TestEdit_EditsAndSingleStringMutuallyExclusive(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -95,7 +95,7 @@ func TestEdit_EditsAndSingleStringMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// pathLocks 同路径 acquire 互斥串行：并发 acquire 同一路径时，任一时刻至多一个持锁。
+// pathLocks serializes same-path acquire: when concurrently acquiring the same path, at most one holds the lock at any time.
 func TestPathLocks_SamePathSerializes(t *testing.T) {
 	var l pathLocks
 	var inUse, maxInUse atomic.Int32
@@ -115,12 +115,12 @@ func TestPathLocks_SamePathSerializes(t *testing.T) {
 	}
 	wg.Wait()
 	if maxInUse.Load() > 1 {
-		t.Fatalf("同路径 acquire 应串行，最大并发 = %d（want <=1）", maxInUse.Load())
+		t.Fatalf("same-path acquire should serialize, max concurrency = %d (want <=1)", maxInUse.Load())
 	}
 }
 
-// 并行同文件 edit（不同 old_string）不应丢更新：持锁串行化使两处替换都落盘。
-// 回归：此前 A/B 各 read 旧内容→各自写，后写覆盖先写，丢一处。
+// Parallel edits to the same file (different old_strings) should not lose updates: lock-based serialization makes both replacements land on disk.
+// Regression: previously A/B each read the old content -> each wrote, the later write overwrote the earlier one, losing one edit.
 func TestEdit_ParallelSameFileNoLostUpdate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -134,6 +134,6 @@ func TestEdit_ParallelSameFileNoLostUpdate(t *testing.T) {
 	wg.Wait()
 	got, _ := os.ReadFile(path)
 	if string(got) != "X\nY\n" {
-		t.Errorf("并行同文件 edit 应两处都落盘（不丢更新）: %q", string(got))
+		t.Errorf("parallel same-file edit should land both replacements (no lost update): %q", string(got))
 	}
 }

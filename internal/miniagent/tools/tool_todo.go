@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-// TodoStatus 任务状态。
+// TodoStatus is the task status.
 type TodoStatus string
 
 const (
@@ -19,12 +19,12 @@ const (
 	TodoCompleted  TodoStatus = "completed"
 )
 
-// validTodoStatus 校验 status 枚举（空串合法=不改）。
+// validTodoStatus validates the status enum (empty string is valid = no change).
 func validTodoStatus(s TodoStatus) bool {
 	return s == "" || s == TodoPending || s == TodoInProgress || s == TodoCompleted
 }
 
-// TodoItem 单条任务。
+// TodoItem is a single task.
 type TodoItem struct {
 	ID          int        `json:"id"`
 	Subject     string     `json:"subject"`
@@ -32,15 +32,16 @@ type TodoItem struct {
 	Status      TodoStatus `json:"status"`
 }
 
-// TodoList 任务列表（runToolsParallel 并行安全）：单 Run 内存，跨 step 共享、跨 Run 重置
-// （每轮 buildTools 新建）。状态在闭包、不进 transcript，与压缩解耦；LLM 经 todo_list 读最新态。
+// TodoList is the task list (safe for runToolsParallel): in-memory for a single Run, shared across steps,
+// reset across Runs (rebuilt each turn via buildTools). State lives in the closure, never enters the transcript,
+// decoupled from compaction; the LLM reads the latest state via todo_list.
 type TodoList struct {
 	mu    sync.Mutex
 	items []*TodoItem
-	next  int // 自增 ID
+	next  int // auto-increment ID
 }
 
-// Create 新建 pending 任务，返回新 item 副本。
+// Create creates a new pending task and returns a copy of the new item.
 func (l *TodoList) Create(subject, description string) TodoItem {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -50,7 +51,8 @@ func (l *TodoList) Create(subject, description string) TodoItem {
 	return *it
 }
 
-// Update 更新 id 任务（字段空跳过），返回更新后 item 副本；id 不存在 → ok=false。
+// Update updates the task with the given id (empty fields are skipped) and returns a copy of the
+// updated item; if the id does not exist → ok=false.
 func (l *TodoList) Update(id int, status TodoStatus, subject, description string) (TodoItem, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -71,7 +73,7 @@ func (l *TodoList) Update(id int, status TodoStatus, subject, description string
 	return TodoItem{}, false
 }
 
-// List 返回所有任务副本（按 ID 升序）。
+// List returns copies of all tasks (ascending by ID).
 func (l *TodoList) List() []TodoItem {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -83,15 +85,16 @@ func (l *TodoList) List() []TodoItem {
 	return out
 }
 
-// TodoTools 返回 create/update/list 三工具，共享 l（单 Run 内存）。
-// 工具结果进 transcript（短文本、非 read/shell/write/edit，strip 阶段不碰，完整保留供后续步 LLM 读）。
+// TodoTools returns the three tools create/update/list, sharing l (in-memory for a single Run).
+// Tool results enter the transcript (short text, not read/shell/write/edit, untouched by the strip stage,
+// fully preserved for subsequent steps' LLM to read).
 func TodoTools(l *TodoList) []miniagent.Tool {
 	create := miniagent.Tool{
 		Name:        "todo_create",
-		Description: "新建一条任务（status=pending）。多步任务用它跟踪进度。",
+		Description: "Create a new task (status=pending). Use it to track progress on multi-step tasks.",
 		Parameters: object(map[string]any{
-			"subject":     map[string]any{"type": "string", "description": "任务标题（简短祈使句）"},
-			"description": map[string]any{"type": "string", "description": "任务详情（可选）"},
+			"subject":     map[string]any{"type": "string", "description": "Task title (short imperative sentence)"},
+			"description": map[string]any{"type": "string", "description": "Task details (optional)"},
 		}, "subject"),
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			var a struct {
@@ -99,10 +102,10 @@ func TodoTools(l *TodoList) []miniagent.Tool {
 				Description string `json:"description"`
 			}
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
+				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("parameter parse failed: %v (received %q)", err, args)}
 			}
 			if strings.TrimSpace(a.Subject) == "" {
-				return miniagent.ToolResult{IsError: true, Output: "subject 必填"}
+				return miniagent.ToolResult{IsError: true, Output: "subject is required"}
 			}
 			it := l.Create(strings.TrimSpace(a.Subject), strings.TrimSpace(a.Description))
 			b, _ := json.Marshal(it)
@@ -112,12 +115,12 @@ func TodoTools(l *TodoList) []miniagent.Tool {
 
 	update := miniagent.Tool{
 		Name:        "todo_update",
-		Description: "更新任务（id 必填；status: pending|in_progress|completed；subject/description 可选，空跳过）。",
+		Description: "Update a task (id required; status: pending|in_progress|completed; subject/description optional, empty skipped).",
 		Parameters: object(map[string]any{
-			"id":          map[string]any{"type": "integer", "description": "任务 id"},
-			"status":      map[string]any{"type": "string", "description": "新状态：pending|in_progress|completed"},
-			"subject":     map[string]any{"type": "string", "description": "新标题（可选）"},
-			"description": map[string]any{"type": "string", "description": "新详情（可选）"},
+			"id":          map[string]any{"type": "integer", "description": "Task id"},
+			"status":      map[string]any{"type": "string", "description": "New status: pending|in_progress|completed"},
+			"subject":     map[string]any{"type": "string", "description": "New title (optional)"},
+			"description": map[string]any{"type": "string", "description": "New details (optional)"},
 		}, "id"),
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			var a struct {
@@ -127,18 +130,18 @@ func TodoTools(l *TodoList) []miniagent.Tool {
 				Description string `json:"description"`
 			}
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
+				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("parameter parse failed: %v (received %q)", err, args)}
 			}
 			if a.ID == 0 {
-				return miniagent.ToolResult{IsError: true, Output: "id 必填"}
+				return miniagent.ToolResult{IsError: true, Output: "id is required"}
 			}
 			status := TodoStatus(a.Status)
 			if !validTodoStatus(status) {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("status %q 非法（pending|in_progress|completed）", a.Status)}
+				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("status %q is invalid (pending|in_progress|completed)", a.Status)}
 			}
 			it, ok := l.Update(a.ID, status, strings.TrimSpace(a.Subject), strings.TrimSpace(a.Description))
 			if !ok {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("任务 id %d 不存在", a.ID)}
+				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("task id %d does not exist", a.ID)}
 			}
 			b, _ := json.Marshal(it)
 			return miniagent.ToolResult{Output: string(b)}
@@ -147,12 +150,12 @@ func TodoTools(l *TodoList) []miniagent.Tool {
 
 	list := miniagent.Tool{
 		Name:        "todo_list",
-		Description: "列出所有任务及状态（#id [status] subject）。多步任务用它回顾进度。",
+		Description: "List all tasks and their statuses (#id [status] subject). Use it to review progress on multi-step tasks.",
 		Parameters:  object(map[string]any{}),
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			items := l.List()
 			if len(items) == 0 {
-				return miniagent.ToolResult{Output: "（无任务）"}
+				return miniagent.ToolResult{Output: "(no tasks)"}
 			}
 			var b strings.Builder
 			for _, it := range items {

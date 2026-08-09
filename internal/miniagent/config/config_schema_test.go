@@ -7,9 +7,9 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// validateConfig 拒绝 miniagent.ThinkingMapping.Field 指向保留 payload key：testBuildChatBody 用
-// payload[field]=val 写思考级别（wire.go），命中保留 key（如 max_tokens）会 clobber
-// 标准字段（审查 v3 P3）。
+// validateConfig rejects miniagent.ThinkingMapping.Field pointing to a reserved payload key: testBuildChatBody writes
+// the thinking level via payload[field]=val (wire.go), and hitting a reserved key (e.g. max_tokens) would clobber
+// a standard field (review v3 P3).
 func TestValidateConfig_ThinkingFieldBlacklisted(t *testing.T) {
 	for _, bad := range []string{"max_tokens", "tools", "messages", "temperature", "model"} {
 		cfg := &Config{
@@ -24,13 +24,13 @@ func TestValidateConfig_ThinkingFieldBlacklisted(t *testing.T) {
 			t.Errorf("field %q: expected error, got nil", bad)
 			continue
 		}
-		if !strings.Contains(err.Error(), bad) || !strings.Contains(err.Error(), "保留") {
+		if !strings.Contains(err.Error(), bad) || !strings.Contains(err.Error(), "reserved") {
 			t.Errorf("field %q: error should mention reserved key, got: %v", bad, err)
 		}
 	}
 }
 
-// 非保留 key（reasoning/thinking/extended_thinking/reasoning_effort）通过（不在 thinkingFieldBlacklist 中）。
+// Non-reserved keys (reasoning/thinking/extended_thinking/reasoning_effort) pass (not in thinkingFieldBlacklist).
 func TestValidateConfig_ThinkingFieldValid(t *testing.T) {
 	for _, ok := range []string{"reasoning", "thinking", "extended_thinking", "reasoning_effort"} {
 		cfg := mkFullConfig("main", "m", ProviderConfig{

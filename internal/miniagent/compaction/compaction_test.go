@@ -14,8 +14,8 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// testBudget 用 llm 构造 ContextBudget：Summarize 回调调 summarizeMiddle（maxChars=内置上限）。
-// Model/CompactionModel/System/Tools 留零值（这些测试不关心 token 估算窗口，直接调 compactWithSummary）。
+// testBudget builds ContextBudget from llm: Summarize callback calls summarizeMiddle (maxChars=built-in upper bound).
+// Model/CompactionModel/System/Tools left zero (these tests don't care about token estimation window, call compactWithSummary directly).
 func testBudget(llm *openai.ChatClient) ContextBudget {
 	return ContextBudget{
 		Model: "m",
@@ -25,12 +25,12 @@ func testBudget(llm *openai.ChatClient) ContextBudget {
 	}
 }
 
-// jointTailBudget：CW<=0 回落 preserveRecentTokens(=0)；否则 min(CW×4/5 − reqOverhead − headAdj − summaryEstimate, userCap)。
-// headAdj 在默认路径下旧 summary 不进 out → 0。reqOverhead=EstimateTokens(nil,"",nil)=SystemOverhead=400；
-// head="q" 非summary → estimateRoundTokens=4；summaryEstimate=summaryMaxChars/2+Envelope=2504。
+// jointTailBudget: CW<=0 falls back to preserveRecentTokens(=0); otherwise min(CW×4/5 − reqOverhead − headAdj − summaryEstimate, userCap).
+// headAdj is 0 on default path since old summary doesn't enter out. reqOverhead=EstimateTokens(nil,"",nil)=SystemOverhead=400;
+// head="q" is non-summary → estimateRoundTokens=4; summaryEstimate=summaryMaxChars/2+Envelope=2504.
 func TestJointTailBudget(t *testing.T) {
-	head := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}                                   // 首轮非 summary
-	headSum := []miniagent.Message{{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "旧摘要"}} // UPDATE 路径 head
+	head := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}                                   // first round non-summary
+	headSum := []miniagent.Message{{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "old summary"}} // UPDATE path head
 	mk := func(cw int) ContextBudget { return ContextBudget{ContextWindow: cw, System: "", Tools: nil} }
 	cases := []struct {
 		name string
@@ -38,12 +38,12 @@ func TestJointTailBudget(t *testing.T) {
 		head []miniagent.Message
 		want int
 	}{
-		{"CW<=0 无窗口回落 0", mk(0), head, 0},                      // preserveRecentTokens(CW<=0)=0
-		{"大CW 128k 取 userCap 8000", mk(128000), head, 8000},    // avail 99492 > cap 8000
-		{"大CW 128k UPDATE head 不扣", mk(128000), headSum, 8000}, // headAdj=0 但 cap 主导
-		{"中CW 5120 扣 head", mk(5120), head, 1188},              // 4096-400-4-2504=1188 < cap 2000
-		{"中CW 5120 UPDATE 不扣 head", mk(5120), headSum, 1192},   // 4096-400-0-2504=1192
-		{"小CW 2048 avail<=0 归零", mk(2048), head, 0},            // 1638-400-4-2504<0 → 0
+		{"CW<=0 no window fall back to 0", mk(0), head, 0},                      // preserveRecentTokens(CW<=0)=0
+		{"large CW 128k takes userCap 8000", mk(128000), head, 8000},    // avail 99492 > cap 8000
+		{"large CW 128k UPDATE head no deduction", mk(128000), headSum, 8000}, // headAdj=0 but cap dominates
+		{"medium CW 5120 deduct head", mk(5120), head, 1188},              // 4096-400-4-2504=1188 < cap 2000
+		{"medium CW 5120 UPDATE no head deduction", mk(5120), headSum, 1192},   // 4096-400-0-2504=1192
+		{"small CW 2048 avail<=0 zeroed", mk(2048), head, 0},            // 1638-400-4-2504<0 → 0
 	}
 	for _, c := range cases {
 		if got := jointTailBudget(c.bud, c.head); got != c.want {
@@ -52,9 +52,9 @@ func TestJointTailBudget(t *testing.T) {
 	}
 }
 
-// FitHistory 联合预算（§B）：CW=5120 + summaryMaxChars=5000 的中等窗口，当前（独立 tail 预算）会
-// head+summary+tail 超窗 trim 后仍超 → 终止 error；联合预算让 tail 让步 → out est< CW×4/5，err==nil。
-// 20 轮 × 600 中文字（≈6480 token > 门控 4096 触发摘要），假摘要回调返回满 5000 字。
+// FitHistory joint budget (§B): CW=5120 + summaryMaxChars=5000 medium window, current (independent tail budget)
+// head+summary+tail exceeds window, still exceeds after trim → terminate error; joint budget lets tail yield → out est< CW×4/5, err==nil.
+// 20 rounds × 600 Chinese chars (≈6480 token > gate 4096 triggers summary), fake summary callback returns full 5000 chars.
 func TestFitHistory_JointBudgetSavesMidWindow(t *testing.T) {
 	bigSummary := strings.Repeat("摘", 5000)
 	budget := ContextBudget{
@@ -71,15 +71,15 @@ func TestFitHistory_JointBudgetSavesMidWindow(t *testing.T) {
 	}
 	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
-		t.Fatalf("CW=5120 联合预算下应不终止，err=%v（out=%d msgs，summarized=%v）", err, len(out), summarized)
+		t.Fatalf("CW=5120 joint budget should not terminate, err=%v (out=%d msgs, summarized=%v)", err, len(out), summarized)
 	}
 	if !summarized {
-		t.Fatal("期望触发摘要压缩")
+		t.Fatal("expected summary compaction to trigger")
 	}
 }
 
-// FitHistory 压缩：tail 保留原文 reasoning（改 Commit 语义后压缩分支不 strip out），committed=true。
-// 改前 applyContextStrips(out) 清非最近 1 条 reasoning，tail 多条 assistant 只剩最新 1 条；改后全保留。
+// FitHistory compaction: tail keeps original reasoning (after Commit semantics change, compaction branch does not strip out), committed=true.
+// Before the change applyContextStrips(out) cleared all but the most recent 1 reasoning; now all are preserved.
 func TestFitHistory_PreservesTailReasoningOnCompaction(t *testing.T) {
 	bigSummary := strings.Repeat("摘", 5000)
 	budget := ContextBudget{
@@ -95,9 +95,9 @@ func TestFitHistory_PreservesTailReasoningOnCompaction(t *testing.T) {
 	for range 20 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: strings.Repeat("历", 600)})
 	}
-	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R1", Reasoning: "思考1"})
+	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R1", Reasoning: "thinking1"})
 	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q1"})
-	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R2", Reasoning: "思考2"})
+	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R2", Reasoning: "thinking2"})
 	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q2"})
 	out, _, _, committed, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
@@ -110,14 +110,14 @@ func TestFitHistory_PreservesTailReasoningOnCompaction(t *testing.T) {
 		}
 	}
 	if reasoningCnt < 2 {
-		t.Errorf("压缩 tail 应保留 ≥2 条原文 reasoning（改前 strip 清非最近 1 条），实际 %d", reasoningCnt)
+		t.Errorf("compaction tail should preserve >=2 original reasoning entries (before the change strip cleared all but the most recent 1), actual %d", reasoningCnt)
 	}
 	if !committed {
-		t.Error("压缩应 committed=true")
+		t.Error("compaction should set committed=true")
 	}
 }
 
-// FitHistory 非压缩：committed=false（strip 仅本轮 View，transcript 保留原文不替换）。
+// FitHistory non-compaction: committed=false (strip is per-round View only, transcript retains original and is not replaced).
 func TestFitHistory_NonCompactNotCommitted(t *testing.T) {
 	budget := ContextBudget{
 		ContextWindow: 128000,
@@ -132,22 +132,22 @@ func TestFitHistory_NonCompactNotCommitted(t *testing.T) {
 		t.Fatalf("FitHistory: %v", err)
 	}
 	if committed {
-		t.Error("非压缩应 committed=false（strip 仅本轮 View，不替换 transcript）")
+		t.Error("non-compaction should be committed=false (strip is per-round View only, does not replace transcript)")
 	}
 }
 
-// deriveSummaryMaxChars（方向 A）：configured>0 覆盖；cw<=0 回落 5000；否则 min(5000, cw/5)。
+// deriveSummaryMaxChars (direction A): configured>0 overrides; cw<=0 falls back to 5000; otherwise min(5000, cw/5).
 func TestDeriveSummaryMaxChars(t *testing.T) {
 	cases := []struct {
 		cw, configured, want int
 	}{
-		{4096, 0, 819},     // 小窗口缩放
-		{2048, 0, 409},     // 更小窗口
-		{24999, 0, 4999},   // 刚 below 内置上限
-		{25000, 0, 5000},   // 边界 cw/5=5000 不<5000 → 内置
-		{40000, 0, 5000},   // 大窗口 clamp 内置
-		{0, 0, 5000},       // 无窗口回落内置
-		{4096, 3000, 3000}, // 用户显式覆盖
+		{4096, 0, 819},     // small window scales
+		{2048, 0, 409},     // even smaller window
+		{24999, 0, 4999},   // just below built-in upper bound
+		{25000, 0, 5000},   // boundary cw/5=5000 not <5000 -> built-in
+		{40000, 0, 5000},   // large window clamps to built-in
+		{0, 0, 5000},       // no window falls back to built-in
+		{4096, 3000, 3000}, // user explicit override
 	}
 	for _, c := range cases {
 		if got := deriveSummaryMaxChars(c.cw, c.configured); got != c.want {
@@ -156,15 +156,15 @@ func TestDeriveSummaryMaxChars(t *testing.T) {
 	}
 }
 
-// NewCompaction：不设 SummaryMaxChars 时，maxChars 随 ContextWindow 缩放派生（方向 A），maxSummaryTokens 自动联动。
-// CW=4096 → maxChars=819 → maxSummaryTokens=819/2=409。20 轮 × 600 中文字触发摘要；忽略 before 可能的终止 error，
-// 只验摘要请求携带的派生 max_tokens（A+B 下 CW=4096 实测不终止，但断言不依赖此）。
+// NewCompaction: when SummaryMaxChars is unset, maxChars scales with ContextWindow (direction A), maxSummaryTokens auto-follows.
+// CW=4096 -> maxChars=819 -> maxSummaryTokens=819/2=409. 20 rounds x 600 CJK chars triggers summary; ignore before's possible terminate error,
+// only verify the summary request carries the derived max_tokens (under A+B CW=4096 does not terminate in practice, but assertion does not depend on this).
 func TestNewCompaction_ScalesSummaryMaxCharsByWindow(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
+	tr := &fakeTransport{responses: []string{textResponse("summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	before, _ := NewCompaction(CompactionOptions{
 		Chat:          llm,
-		ContextWindow: 4096, // 不设 SummaryMaxChars → 派生 819 → maxSummaryTokens 409
+		ContextWindow: 4096, // SummaryMaxChars unset -> derives 819 -> maxSummaryTokens 409
 	})
 	var msgs []miniagent.Message
 	for range 20 {
@@ -172,30 +172,30 @@ func TestNewCompaction_ScalesSummaryMaxCharsByWindow(t *testing.T) {
 	}
 	_, _ = before(context.Background(), miniagent.StepInput{Step: 1, Msgs: msgs})
 	if tr.calls == 0 {
-		t.Fatal("期望触发摘要 LLM 调用")
+		t.Fatal("expected summary LLM call to be triggered")
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":409`) {
-		t.Errorf("期望 max_tokens=819/2=409（summaryMaxChars 随 CW 缩放派生），实际: %s", tr.lastBody)
+		t.Errorf("expected max_tokens=819/2=409 (summaryMaxChars scales with CW), actual: %s", tr.lastBody)
 	}
 }
 
-// compactWithSummary 摘要前对 middle 全压 strip：捕获 Summarize 收到的 middle，断言 reasoning 已清 + read 已 dedup + 配对完整。
+// compactWithSummary strips middle fully before summarizing: captures the middle received by Summarize, asserts reasoning cleared + read deduped + pairing intact.
 func TestCompactWithSummary_StripsMiddleBeforeSummarize(t *testing.T) {
 	var captured []miniagent.Message
 	budget := ContextBudget{
 		Model: "m",
 		Summarize: func(ctx context.Context, model, sys, prev string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			captured = middle
-			return "摘要", miniagent.Usage{}, nil
+			return "summary", miniagent.Usage{}, nil
 		},
 	}
-	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "head 首轮"}}
+	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "head first round"}}
 	for i := range 6 {
 		id := "c" + strconv.Itoa(i)
 		msgs = append(msgs, miniagent.Message{
 			Role:      miniagent.RoleAssistant,
-			Content:   "看文件",
-			Reasoning: strings.Repeat("思", 800),
+			Content:   "read file",
+			Reasoning: strings.Repeat("z", 800),
 			ToolCalls: []miniagent.ToolCall{{ID: id, Name: "read", Args: `{"path":"/f.go","offset":1}`}},
 		})
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleTool, ToolCallID: id, Content: strings.Repeat("x", 800)})
@@ -209,30 +209,30 @@ func TestCompactWithSummary_StripsMiddleBeforeSummarize(t *testing.T) {
 	}
 	for _, m := range captured {
 		if m.Role == miniagent.RoleAssistant && m.Reasoning != "" {
-			t.Errorf("middle 进摘要前 reasoning 应被全压清，仍存 %d 字", len([]rune(m.Reasoning)))
+			t.Errorf("middle reasoning should be fully cleared before summarizing, still has %d runes", len([]rune(m.Reasoning)))
 		}
 	}
-	// dedup（P6）现生效（windowStartOf(0)=len 全窗口外）：6 条同 path/offset read 留时间序最后，前几个占位。
+	// dedup (P6) now takes effect (windowStartOf(0)=len, fully outside window): of 6 reads with same path/offset, keep the last in time order, earlier ones become placeholders.
 	deduped := 0
 	for _, m := range captured {
-		if m.Role == miniagent.RoleTool && strings.Contains(m.Content, "已被更新的读取取代") {
+		if m.Role == miniagent.RoleTool && strings.Contains(m.Content, "superseded by a more recent read") {
 			deduped++
 		}
 	}
 	if deduped == 0 {
-		t.Errorf("期望同 path/offset read 被 dedup 占位，实际 captured tool 无占位")
+		t.Errorf("expected same path/offset reads to be deduped to placeholders, but captured tool has none")
 	}
-	// reasoning 清（~2400 token）+ read dedup（6→1）后体积应 < 1500。
+	// After reasoning cleared (~2400 tokens) + read dedup (6->1), size should be < 1500.
 	capturedTokens := policy.EstimateTokens(captured, "", nil)
 	if capturedTokens > 1500 {
-		t.Errorf("middle strip 后摘要体积应 < 1500（reasoning 清 + read dedup），实际 %d", capturedTokens)
+		t.Errorf("middle size after strip should be < 1500 (reasoning cleared + read dedup), actual %d", capturedTokens)
 	}
 	if err := session.ValidateToolPairing(out); err != nil {
-		t.Errorf("strip 后配对断裂: %v", err)
+		t.Errorf("pairing broken after strip: %v", err)
 	}
 }
 
-// windowStartOf：keepN<=0 → len(msgs)（全窗口外=全压）；keepN 条 assistant 存在 → 第 keepN 条（从后）index；不足 → 0。
+// windowStartOf: keepN<=0 -> len(msgs) (fully outside window = all stripped); keepN assistant entries exist -> index of the keepN-th (from end); fewer -> 0.
 func TestWindowStartOf(t *testing.T) {
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser},
@@ -240,13 +240,13 @@ func TestWindowStartOf(t *testing.T) {
 		{Role: miniagent.RoleUser},
 		{Role: miniagent.RoleAssistant},
 		{Role: miniagent.RoleUser},
-	} // assistant at 1,3；len=5
+	} // assistant at 1,3; len=5
 	cases := []struct{ keepN, want int }{
-		{0, 5},  // 全窗口外（全压）
-		{-1, 5}, // 同上
-		{1, 3},  // 最近 1 条 assistant=index3
-		{2, 1},  // 最近 2 条=index1
-		{3, 0},  // 不足（仅 2 assistant）→ 0（全窗口内=全保留）
+		{0, 5},  // fully outside window (all stripped)
+		{-1, 5}, // same
+		{1, 3},  // most recent 1 assistant=index3
+		{2, 1},  // most recent 2=index1
+		{3, 0},  // fewer than 3 assistant (only 2) -> 0 (fully inside window = all kept)
 	}
 	for _, c := range cases {
 		if got := windowStartOf(msgs, c.keepN); got != c.want {
@@ -255,7 +255,7 @@ func TestWindowStartOf(t *testing.T) {
 	}
 }
 
-// applyCompactionBarrier：有 summary → 返回最新 summary 及之后；无 → 原样。
+// applyCompactionBarrier: has summary -> return latest summary and after; none -> as-is.
 func TestApplyCompactionBarrier(t *testing.T) {
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Content: "old1"},
@@ -274,10 +274,10 @@ func TestApplyCompactionBarrier(t *testing.T) {
 	}
 }
 
-// compactWithSummary：中段摘要为 miniagent.KindSummary，结构（最早 1 轮 + summary + 最近 N 轮）正确，
-// 且 summary 可并入 newMsgs（持久化语义；生产路径为 loop.go mergePersisted）。
+// compactWithSummary: middle summarized into miniagent.KindSummary, structure (earliest 1 round + summary + most-recent N rounds) correct,
+// and summary can be merged into newMsgs (persistence semantics; production path is loop.go mergePersisted).
 func TestCompactWithSummary_Success(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("压缩摘要")}}
+	tr := &fakeTransport{responses: []string{textResponse("compacted summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
@@ -294,11 +294,11 @@ func TestCompactWithSummary_Success(t *testing.T) {
 	if err := session.ValidateToolPairing(out); err != nil {
 		t.Errorf("result pairing broken: %v", err)
 	}
-	// 最早 1 轮 + summary + 最近 3 轮
+	// Earliest 1 round + summary + most-recent 3 rounds
 	if len(out) != 1+1+3 {
 		t.Errorf("out len = %d, want 5", len(out))
 	}
-	if out[1].Kind != miniagent.KindSummary || !strings.Contains(out[1].Content, "压缩摘要") {
+	if out[1].Kind != miniagent.KindSummary || !strings.Contains(out[1].Content, "compacted summary") {
 		t.Errorf("summary slot wrong: %+v", out[1])
 	}
 	newMsgs = append([]miniagent.Message{summary}, newMsgs...)
@@ -307,13 +307,13 @@ func TestCompactWithSummary_Success(t *testing.T) {
 	}
 }
 
-// 中段配对断裂（孤立 tool 消息）→ 不摘要，返回 error（调用方回落有损）。
+// Middle pairing break (orphan tool message) -> not summarized, returns error (caller falls back to lossy).
 func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Content: "first"},
-		{Role: miniagent.RoleTool, ToolCallID: "orphan", Content: "x"}, // 断裂
+		{Role: miniagent.RoleTool, ToolCallID: "orphan", Content: "x"}, // broken pairing
 		{Role: miniagent.RoleUser, Content: "u2"},
 		{Role: miniagent.RoleUser, Content: "u3"},
 		{Role: miniagent.RoleUser, Content: "u4"},
@@ -323,7 +323,7 @@ func TestCompactWithSummary_PairingBreakErrors(t *testing.T) {
 	}
 }
 
-// 无中段可摘（轮数 ≤ 1+keepRecent）→ summary.Kind==""，不发 LLM 请求，msgs 原样。
+// No middle to summarize (rounds <= 1+keepRecent) -> summary.Kind=="", no LLM call, msgs unchanged.
 func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("should-not-call")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -340,7 +340,7 @@ func TestCompactWithSummary_NoMiddleNoop(t *testing.T) {
 	}
 }
 
-// summarizeMiddle 的 LLM 错误上抛（不吞）。
+// summarizeMiddle LLM error propagates (not swallowed).
 func TestSummarizeMiddle_LLMError(t *testing.T) {
 	tr := &fakeTransport{statuses: []int{http.StatusInternalServerError}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
@@ -349,9 +349,9 @@ func TestSummarizeMiddle_LLMError(t *testing.T) {
 	}
 }
 
-// P2 摘要 token 入预算：summarizeMiddle 回传 LLM usage，供上游累加进 MaxTotalTokens 预算。
+// P2 summary tokens enter budget: summarizeMiddle returns LLM usage for upstream accumulation into MaxTotalTokens budget.
 func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
-	body := `{"choices":[{"message":{"role":"assistant","content":"摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
+	body := `{"choices":[{"message":{"role":"assistant","content":"summary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
@@ -363,29 +363,29 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 	}
 }
 
-// P3-1：摘要请求设置 MaxTokens=summaryMaxTokens（默认从 summaryMaxChars 派生 = summaryMaxChars/2）。
+// P3-1: summary request sets MaxTokens=summaryMaxTokens (derived by default from summaryMaxChars = summaryMaxChars/2).
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
+	tr := &fakeTransport{responses: []string{textResponse("summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
-	// 引用常量而非魔法数：summaryMaxTokens 现派生自 summaryMaxChars/2，未来 chars 变化自动跟随。
+	// Reference constant rather than magic number: summaryMaxTokens now derived from summaryMaxChars/2, auto-follows future chars changes.
 	if !strings.Contains(tr.lastBody, `"max_tokens":`+strconv.Itoa(summaryMaxTokens)) {
-		t.Errorf("摘要请求未设置 max_tokens=%d: %s", summaryMaxTokens, tr.lastBody)
+		t.Errorf("summary request did not set max_tokens=%d: %s", summaryMaxTokens, tr.lastBody)
 	}
 }
 
-// deriveSummaryMaxTokens：configured>0 覆盖；否则从 maxChars 派生（chars/2，CJK 最密口径）；maxChars<2 回落兜底常量。
+// deriveSummaryMaxTokens: configured>0 overrides; otherwise derived from maxChars (chars/2, densest CJK calibration); maxChars<2 falls back to fallback constant.
 func TestDeriveSummaryMaxTokens(t *testing.T) {
 	cases := []struct {
 		maxChars, configured, want int
 	}{
-		{5000, 0, 2500},          // 默认派生（summaryMaxChars/2）
-		{5000, 512, 512},         // 用户显式覆盖
-		{8000, 0, 4000},          // 只配 chars → token 跟随
-		{0, 0, summaryMaxTokens}, // maxChars<=0 防御兜底
-		{1, 0, summaryMaxTokens}, // maxChars<2 兜底
+		{5000, 0, 2500},          // default derived (summaryMaxChars/2)
+		{5000, 512, 512},         // explicit user override
+		{8000, 0, 4000},          // only chars configured -> token follows
+		{0, 0, summaryMaxTokens}, // maxChars<=0 defensive fallback
+		{1, 0, summaryMaxTokens}, // maxChars<2 fallback
 	}
 	for _, c := range cases {
 		if got := deriveSummaryMaxTokens(c.maxChars, c.configured); got != c.want {
@@ -394,35 +394,35 @@ func TestDeriveSummaryMaxTokens(t *testing.T) {
 	}
 }
 
-// NewCompaction：只配 SummaryMaxChars（不配 token）→ 摘要请求 max_tokens 由 chars 派生（chars/2）。
-// 验证「配 chars → token 自动跟随」端到端契约。CW=1 使历史必超 4/5 门控触发摘要；压缩后仍 >0 token
-// 会命中 FitHistory 终止保护（返回 error）——但摘要 LLM 调用已先于终止发生，tr.lastBody 已记录，故忽略该 error。
+// NewCompaction: only SummaryMaxChars configured (no token) -> summary request max_tokens derived from chars (chars/2).
+// Verifies the "configure chars -> token auto-follows" end-to-end contract. CW=1 forces history to exceed 4/5 gate triggering summary; >0 tokens post-compaction
+// will hit FitHistory termination guard (returns error) — but the summary LLM call already happened before termination, tr.lastBody is already recorded, so the error is ignored.
 func TestNewCompaction_DerivesMaxTokensFromChars(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("摘要")}}
+	tr := &fakeTransport{responses: []string{textResponse("summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	before, after := NewCompaction(CompactionOptions{
 		Chat:            llm,
 		ContextWindow:   1,
-		SummaryMaxChars: 8000, // 不设 SummaryMaxTokens → 应派生 8000/2=4000
+		SummaryMaxChars: 8000, // SummaryMaxTokens unset -> derived 8000/2=4000
 	})
 	if after != nil {
-		t.Fatalf("after 应为 nil（溢出检测已并入 before），实际非 nil")
+		t.Fatalf("after should be nil (overflow detection merged into before), got non-nil")
 	}
 	var msgs []miniagent.Message
 	for i := range 10 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
-	// CW=1 触发摘要后命中终止保护：忽略 error，靠 tr.calls/lastBody 验证派生。
+	// CW=1 triggers summary then hits termination guard: ignore error, verify derivation via tr.calls/lastBody.
 	_, _ = before(context.Background(), miniagent.StepInput{Step: 1, Msgs: msgs})
 	if tr.calls == 0 {
-		t.Fatal("期望触发摘要 LLM 调用")
+		t.Fatal("expected summary LLM call to be triggered")
 	}
 	if !strings.Contains(tr.lastBody, `"max_tokens":4000`) {
-		t.Errorf("期望 max_tokens=8000/2=4000（chars 派生），实际: %s", tr.lastBody)
+		t.Errorf("expected max_tokens=8000/2=4000 (chars-derived), got: %s", tr.lastBody)
 	}
 }
 
-// compactWithSummary 应把 budget.CompactionModel 透传给 Summarize 回调。
+// compactWithSummary should propagate budget.CompactionModel to the Summarize callback.
 func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
 	var gotModel string
@@ -446,41 +446,41 @@ func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
 	}
 }
 
-// §P0-A：buildSummarizerSystem 三模式。CREATE：含模板 6 段、不含 <previous-summary>。
+// §P0-A: buildSummarizerSystem three modes. CREATE: contains template 6 sections, no <previous-summary>.
 func TestBuildSummarizerSystem_CreateMode(t *testing.T) {
 	got := buildSummarizerSystem("", "", "", "", "", 5000)
-	for _, want := range []string{"## 目标", "## 关键细节", "## 进展状态", "## 下一步", "## 相关文件"} {
+	for _, want := range []string{"## Goal", "## Key Details", "## Progress", "## Next Step", "## Relevant Files"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("CREATE 模式应含模板段 %q：\n%s", want, got)
+			t.Errorf("CREATE mode should contain template section %q:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "<previous-summary>") {
-		t.Errorf("CREATE 模式不应含 <previous-summary>：%s", got)
+		t.Errorf("CREATE mode should not contain <previous-summary>: %s", got)
 	}
 }
 
-// §P0-A：UPDATE：含 <previous-summary> 块包裹旧摘要 + update 指令 + 模板 6 段。
+// §P0-A: UPDATE: contains <previous-summary> block wrapping old summary + update instruction + template 6 sections.
 func TestBuildSummarizerSystem_UpdateMode(t *testing.T) {
-	got := buildSummarizerSystem("", "旧锚点", "", "", "", 5000)
-	for _, want := range []string{"<previous-summary>\n旧锚点\n</previous-summary>", "更新已有的锚定摘要", "## 目标", "## 相关文件"} {
+	got := buildSummarizerSystem("", "old-anchor", "", "", "", 5000)
+	for _, want := range []string{"<previous-summary>\nold-anchor\n</previous-summary>", "update the existing anchored summary", "## Goal", "## Relevant Files"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("UPDATE 模式应含 %q：\n%s", want, got)
+			t.Errorf("UPDATE mode should contain %q:\n%s", want, got)
 		}
 	}
 }
 
-// §P0-A：override：summarizerPrompt 非空 → 全量接管，{max_chars} 占位符替换，不含模板/previous-summary。
+// §P0-A: override: summarizerPrompt non-empty -> full takeover, {max_chars} placeholder replaced, no template/previous-summary.
 func TestBuildSummarizerSystem_Override(t *testing.T) {
-	got := buildSummarizerSystem("自定义{max_chars}", "旧", "", "", "", 5000)
-	if got != "自定义5000" {
-		t.Errorf("override = %q, want 自定义5000", got)
+	got := buildSummarizerSystem("custom{max_chars}", "old", "", "", "", 5000)
+	if got != "custom5000" {
+		t.Errorf("override = %q, want custom5000", got)
 	}
-	if strings.Contains(got, "<previous-summary>") || strings.Contains(got, "## 目标") {
-		t.Errorf("override 不应含模板/previous-summary：%s", got)
+	if strings.Contains(got, "<previous-summary>") || strings.Contains(got, "## Goal") {
+		t.Errorf("override should not contain template/previous-summary: %s", got)
 	}
 }
 
-// §P0-A：stripSummaryPrefix 表驱动（前缀仅展示层，识别必须用 Kind==miniagent.KindSummary）。
+// §P0-A: stripSummaryPrefix table-driven (prefix is presentation-only, identification must use Kind==miniagent.KindSummary).
 func TestStripSummaryPrefix(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -497,8 +497,8 @@ func TestStripSummaryPrefix(t *testing.T) {
 	}
 }
 
-// §P0-A：默认路径（SummarizerPrompt=""）检测到 head 是旧 miniagent.KindSummary 时，抽 prevSummary、
-// 不并入 middle、head 置空。旧摘要文本经 previousSummary 下传（UPDATE 模式）。
+// §P0-A: default path (SummarizerPrompt="") detects head is an old miniagent.KindSummary, extracts prevSummary,
+// does not merge into middle, sets head to empty. Old summary text passed down via previousSummary (UPDATE mode).
 func TestCompactWithSummary_UpdateModeExtractsPrevSummary(t *testing.T) {
 	var gotPrev string
 	var gotMiddle []miniagent.Message
@@ -507,79 +507,79 @@ func TestCompactWithSummary_UpdateModeExtractsPrevSummary(t *testing.T) {
 		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotPrev = prevSummary
 			gotMiddle = middle
-			return "新摘要", miniagent.Usage{}, nil
+			return "new-summary", miniagent.Usage{}, nil
 		},
 	}
 	msgs := []miniagent.Message{
-		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + "old-sum"},
 		{Role: miniagent.RoleUser, Content: "real0"},
 		{Role: miniagent.RoleUser, Content: "real1"},
 		{Role: miniagent.RoleUser, Content: "real2"},
 		{Role: miniagent.RoleUser, Content: "real3"},
 		{Role: miniagent.RoleUser, Content: "real4"},
-		{Role: miniagent.RoleUser, Content: "本轮"},
+		{Role: miniagent.RoleUser, Content: "this-turn"},
 	}
 	out, summary, _, err := compactWithSummary(context.Background(), budget, msgs, 3)
 	if err != nil || summary.Kind != miniagent.KindSummary {
 		t.Fatalf("compactWithSummary: kind=%v err=%v", summary.Kind, err)
 	}
-	if gotPrev != "旧摘" {
-		t.Errorf("previousSummary = %q, want 旧摘", gotPrev)
+	if gotPrev != "old-sum" {
+		t.Errorf("previousSummary = %q, want old-sum", gotPrev)
 	}
 	for _, m := range gotMiddle {
 		if m.Kind == miniagent.KindSummary {
-			t.Errorf("默认路径 middle 不应含 miniagent.KindSummary（旧摘要应作 prevSummary 下传）：%+v", gotMiddle)
+			t.Errorf("default path middle should not contain miniagent.KindSummary (old summary should be passed down as prevSummary): %+v", gotMiddle)
 		}
 	}
-	// head 置空：out = summaryMsg + tail（3），首条为新 summary。
+	// head set to empty: out = summaryMsg + tail (3), first is new summary.
 	if len(out) != 1+3 || out[0].Kind != miniagent.KindSummary {
-		t.Errorf("out 应为 summary+tail（head 已置空）：%+v", out)
+		t.Errorf("out should be summary+tail (head set to empty): %+v", out)
 	}
 }
 
-// §P0-A：override 路径（SummarizerPrompt!=""）维持旧行为——旧 miniagent.KindSummary 并入 middle，
-// previousSummary 传空。
+// §P0-A: override path (SummarizerPrompt!="") maintains old behavior — old miniagent.KindSummary merged into middle,
+// previousSummary passed empty.
 func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
 	var gotPrev string
 	var gotMiddle []miniagent.Message
 	budget := ContextBudget{
 		Model:            "m",
-		SummarizerPrompt: "自定义{max_chars}",
+		SummarizerPrompt: "custom{max_chars}",
 		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			gotPrev = prevSummary
 			gotMiddle = middle
-			return "新摘要", miniagent.Usage{}, nil
+			return "new-summary", miniagent.Usage{}, nil
 		},
 	}
 	msgs := []miniagent.Message{
-		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + "旧摘"},
+		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + "old-sum"},
 		{Role: miniagent.RoleUser, Content: "real0"},
 		{Role: miniagent.RoleUser, Content: "real1"},
 		{Role: miniagent.RoleUser, Content: "real2"},
 		{Role: miniagent.RoleUser, Content: "real3"},
 		{Role: miniagent.RoleUser, Content: "real4"},
-		{Role: miniagent.RoleUser, Content: "本轮"},
+		{Role: miniagent.RoleUser, Content: "this-turn"},
 	}
 	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
 		t.Fatalf("compactWithSummary: %v", err)
 	}
 	if gotPrev != "" {
-		t.Errorf("override 路径 previousSummary 应为空，got %q", gotPrev)
+		t.Errorf("override path previousSummary should be empty, got %q", gotPrev)
 	}
-	if len(gotMiddle) == 0 || gotMiddle[0].Kind != miniagent.KindSummary || !strings.Contains(gotMiddle[0].Content, "旧摘") {
-		t.Errorf("override 路径 middle 首条应为旧 miniagent.KindSummary（旧行为）：%+v", gotMiddle)
+	if len(gotMiddle) == 0 || gotMiddle[0].Kind != miniagent.KindSummary || !strings.Contains(gotMiddle[0].Content, "old-sum") {
+		t.Errorf("override path middle first should be old miniagent.KindSummary (old behavior): %+v", gotMiddle)
 	}
 }
 
-// §P0-A：summarizeMiddle UPDATE 模式把 previous-summary 写进请求 system。
+// §P0-A: summarizeMiddle UPDATE mode writes previous-summary into request system.
 func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("更新摘要")}}
+	tr := &fakeTransport{responses: []string{textResponse("updated-summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "旧锚点", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
+	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "old-anchor", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
 	}
-	// lastBody 是 JSON-marshaled 请求体，< > 被转义成 < >；断言用未转义的标签名 + 旧锚点文本。
-	if !strings.Contains(tr.lastBody, "previous-summary") || !strings.Contains(tr.lastBody, "旧锚点") {
-		t.Errorf("UPDATE 模式请求应含 previous-summary 块 + 旧锚点：%s", tr.lastBody)
+	// lastBody is JSON-marshaled request body, < > are escaped to &lt; &gt;; assert with unescaped tag name + old-anchor text.
+	if !strings.Contains(tr.lastBody, "previous-summary") || !strings.Contains(tr.lastBody, "old-anchor") {
+		t.Errorf("UPDATE mode request should contain previous-summary block + old-anchor: %s", tr.lastBody)
 	}
 }

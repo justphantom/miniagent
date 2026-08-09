@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 )
 
-// §P1-A sanitizeFileSegment：压成文件名安全段。
+// §P1-A sanitizeFileSegment: compresses into a filename-safe segment.
 func TestSanitizeFileSegment(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"synth_1_2", "synth_1_2"},
@@ -26,17 +26,17 @@ func TestSanitizeFileSegment(t *testing.T) {
 	}
 }
 
-// §P1-A bound 表驱动：fits（无落盘）、overflows（落盘+路径提示）、readonly（best-effort 回落预览）。
+// §P1-A bound table-driven: fits (no spill), overflows (spill + path hint), readonly (best-effort fallback preview).
 func TestBound_Table(t *testing.T) {
 	t.Run("fits_no_spill", func(t *testing.T) {
 		dir := t.TempDir()
 		s := newToolOutputStore(dir, 0, nil)
 		got := s.bound(1, "c1", "short", "short", false)
 		if got != "short" {
-			t.Errorf("truncated=false 应原样返回 preview: got %q", got)
+			t.Errorf("truncated=false should return preview as-is: got %q", got)
 		}
 		if files, _ := os.ReadDir(dir); len(files) != 0 {
-			t.Errorf("truncated=false 不应落盘: %d files", len(files))
+			t.Errorf("truncated=false should not spill to disk: %d files", len(files))
 		}
 	})
 
@@ -47,31 +47,31 @@ func TestBound_Table(t *testing.T) {
 		preview := "head-preview"
 		got := s.bound(2, "call-1", full, preview, true)
 		if !strings.Contains(got, preview) {
-			t.Errorf("返回应含 preview: %q", got)
+			t.Errorf("return should contain preview: %q", got)
 		}
-		if !strings.Contains(got, "已保存") || !strings.Contains(got, dir) {
-			t.Errorf("返回应含路径提示 + 目录: %q", got)
+		if !strings.Contains(got, "saved") || !strings.Contains(got, dir) {
+			t.Errorf("return should contain path hint + directory: %q", got)
 		}
-		// 落盘文件存在且内容 == 全文。
+		// Spilled file exists and content == full text.
 		entries, _ := os.ReadDir(dir)
 		if len(entries) != 1 {
-			t.Fatalf("应恰好落盘 1 个文件: %d", len(entries))
+			t.Fatalf("should spill exactly 1 file: %d", len(entries))
 		}
 		b, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
 		if err != nil {
 			t.Fatalf("read spill file: %v", err)
 		}
 		if string(b) != full {
-			t.Errorf("落盘内容应 == 全文: len got=%d want=%d", len(b), len(full))
+			t.Errorf("spilled content should == full text: len got=%d want=%d", len(b), len(full))
 		}
 	})
 
 	t.Run("readonly_dir_falls_back", func(t *testing.T) {
 		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-			t.Skip("readonly 权限测试仅在非 root 的 POSIX 环境可靠")
+			t.Skip("readonly permission test is reliable only in non-root POSIX environments")
 		}
 		dir := t.TempDir()
-		// 用一个不存在的子目录 + 只读父目录，使 MkdirAll 失败。
+		// Use a non-existent subdir + readonly parent to make MkdirAll fail.
 		rd := filepath.Join(dir, "ro")
 		if err := os.MkdirAll(rd, 0o500); err != nil {
 			t.Fatalf("mkdir ro: %v", err)
@@ -80,45 +80,45 @@ func TestBound_Table(t *testing.T) {
 		s := newToolOutputStore(target, 0, nil)
 		full := strings.Repeat("y", 5000)
 		got := s.bound(1, "c", full, "preview", true)
-		if strings.Contains(got, "已保存") {
-			t.Errorf("只读目录应 best-effort 回落不带 marker: %q", got)
+		if strings.Contains(got, "saved") {
+			t.Errorf("readonly dir should best-effort fallback without marker: %q", got)
 		}
 	})
 }
 
-// §P1-A bound 字节封顶（review Finding 1）：超 1 MiB 的 CJK 输出须在 rune 边界截断（合法 UTF-8），
-// marker 诚实标注「部分已截断」（不声称完整）。
+// §P1-A bound byte cap (review Finding 1): CJK output exceeding 1 MiB must be truncated at rune boundaries (valid UTF-8),
+// the marker honestly annotates "partially truncated" (does not claim completeness).
 func TestBound_ByteCapRuneBoundary(t *testing.T) {
 	dir := t.TempDir()
 	s := newToolOutputStore(dir, 0, nil)
-	big := strings.Repeat("中", 350*1024) // 3 字节/rune × 350k ≈ 1.05 MiB > toolOutputMaxBytes
+	big := strings.Repeat("中", 350*1024) // 3 bytes/rune × 350k ≈ 1.05 MiB > toolOutputMaxBytes
 	got := s.bound(1, "c", big, "preview", true)
-	if !strings.Contains(got, "部分已截断") {
-		t.Errorf("byte cap 触发时 marker 应含「部分已截断」: %q", got)
+	if !strings.Contains(got, "partially truncated") {
+		t.Errorf(`when byte cap triggered, marker should contain "partially truncated": %q`, got)
 	}
-	if strings.Contains(got, "完整输出已保存") {
-		t.Errorf("byte cap 触发时不应声称「完整」: %q", got)
+	if strings.Contains(got, "full output saved") {
+		t.Errorf(`when byte cap triggered, should not claim "complete": %q`, got)
 	}
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 {
-		t.Fatalf("应落盘 1 文件: %d", len(entries))
+		t.Fatalf("should spill 1 file: %d", len(entries))
 	}
 	b, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
 	if err != nil {
 		t.Fatalf("read spill: %v", err)
 	}
 	if !utf8.Valid(b) {
-		t.Errorf("落盘文件应是合法 UTF-8（rune 边界截断）: invalid, len=%d", len(b))
+		t.Errorf("spilled file should be valid UTF-8 (truncated at rune boundary): invalid, len=%d", len(b))
 	}
 	if len(b) >= len(big) {
-		t.Errorf("超 1 MiB 应被截断: got len=%d, orig=%d", len(b), len(big))
+		t.Errorf("output exceeding 1 MiB should be truncated: got len=%d, orig=%d", len(b), len(big))
 	}
 	if len(b) > toolOutputMaxBytes {
-		t.Errorf("截断后不应超 toolOutputMaxBytes: len=%d", len(b))
+		t.Errorf("after truncation should not exceed toolOutputMaxBytes: len=%d", len(b))
 	}
 }
 
-// §P1-A cleanup：仅删 mtime < now-retention 的 tool_*.txt。
+// §P1-A cleanup: deletes only tool_*.txt whose mtime < now-retention.
 func TestToolOutputStore_Cleanup(t *testing.T) {
 	dir := t.TempDir()
 	old := filepath.Join(dir, "tool_old.txt")
@@ -142,12 +142,12 @@ func TestToolOutputStore_Cleanup(t *testing.T) {
 	s.cleanup()
 
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Errorf("old (mtime -8d) 应被删除: stat err=%v", err)
+		t.Errorf("old (mtime -8d) should be deleted: stat err=%v", err)
 	}
 	if _, err := os.Stat(newf); err != nil {
-		t.Errorf("new (mtime now) 应保留: %v", err)
+		t.Errorf("new (mtime now) should be retained: %v", err)
 	}
 	if _, err := os.Stat(other); err != nil {
-		t.Errorf("非 tool_*.txt 不应被清理: %v", err)
+		t.Errorf("non tool_*.txt should not be cleaned: %v", err)
 	}
 }

@@ -11,7 +11,7 @@ import (
 
 )
 
-// 相对路径落在 workdir 子树内，应通过。
+// A relative path falling inside the workdir subtree should pass.
 func TestCheckConfine_RelativeInside(t *testing.T) {
 	root := t.TempDir()
 	if err := checkConfine(root, "sub/file.txt"); err != nil {
@@ -19,7 +19,7 @@ func TestCheckConfine_RelativeInside(t *testing.T) {
 	}
 }
 
-// 绝对路径落在 workdir 子树内，应通过。
+// An absolute path falling inside the workdir subtree should pass.
 func TestCheckConfine_AbsoluteInside(t *testing.T) {
 	root := t.TempDir()
 	if err := checkConfine(root, filepath.Join(root, "sub", "file.txt")); err != nil {
@@ -27,7 +27,7 @@ func TestCheckConfine_AbsoluteInside(t *testing.T) {
 	}
 }
 
-// 路径越出 workdir 须拒绝。
+// A path escaping workdir must be rejected.
 func TestCheckConfine_OutsideRejected(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")
@@ -36,7 +36,7 @@ func TestCheckConfine_OutsideRejected(t *testing.T) {
 	}
 }
 
-// path="." 或 workdir 本身须拒绝，防止覆盖整个 workdir。
+// path="." or workdir itself must be rejected, to prevent overwriting the entire workdir.
 func TestCheckConfine_RootItselfRejected(t *testing.T) {
 	root := t.TempDir()
 	if err := checkConfine(root, "."); err == nil {
@@ -47,7 +47,7 @@ func TestCheckConfine_RootItselfRejected(t *testing.T) {
 	}
 }
 
-// 已存在路径分量含符号链接时须拒绝。
+// Existing path components containing symlinks must be rejected.
 func TestCheckConfine_SymlinkComponentRejected(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -55,12 +55,12 @@ func TestCheckConfine_SymlinkComponentRejected(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	if err := checkConfine(root, "linkdir/file.txt"); err == nil || !strings.Contains(err.Error(), "符号链接") {
+	if err := checkConfine(root, "linkdir/file.txt"); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("expected symlink component to be rejected, got: %v", err)
 	}
 }
 
-// 不存在子目录允许通过（后续由工具创建）。
+// Non-existent subdirectories are allowed (created later by the tool).
 func TestCheckConfine_NonExistentSubdirAllowed(t *testing.T) {
 	root := t.TempDir()
 	if err := checkConfine(root, "not-yet/exists.txt"); err != nil {
@@ -68,7 +68,7 @@ func TestCheckConfine_NonExistentSubdirAllowed(t *testing.T) {
 	}
 }
 
-// confineWrap 包装的 write 工具在路径含符号链接时拒绝，不执行原工具。
+// A write tool wrapped by confineWrap rejects paths containing symlinks and does not execute the original tool.
 func TestConfineWrap_BlocksSymlinkPath(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -84,16 +84,16 @@ func TestConfineWrap_BlocksSymlinkPath(t *testing.T) {
 	tool := tools.WriteFileTool(root, 0)
 	wrapped := confineWrap(tool, root)
 	r := wrapped.Call(context.Background(), `{"path":"linkdir/pwned.txt","content":"x"}`)
-	if !r.IsError || !strings.Contains(r.Output, "符号链接") {
+	if !r.IsError || !strings.Contains(r.Output, "symlink") {
 		t.Errorf("expected confineWrap to reject symlink path, got: %+v", r)
 	}
-	// 目标文件不应被创建/覆盖。
+	// The target file should not be created/overwritten.
 	if _, err := os.Stat(filepath.Join(outside, "pwned.txt")); err == nil {
 		t.Error("symlink target was written outside workdir")
 	}
 }
 
-// confineWrap 正常路径仍允许写入。
+// confineWrap still allows writing on regular paths.
 func TestConfineWrap_AllowsRegularPath(t *testing.T) {
 	root := t.TempDir()
 	tool := tools.WriteFileTool(root, 0)
@@ -108,25 +108,25 @@ func TestConfineWrap_AllowsRegularPath(t *testing.T) {
 	}
 }
 
-// confineWrap 对缺省/空 path 直通 orig：各工具自校验 path（write 空路径报错），
-// 不会产生未约束的成功写入。回归守卫：此前对空 path 一律拒绝曾误伤 grep/glob。
+// confineWrap passes default/empty path through to orig: each tool self-validates path (write rejects an empty path),
+// no unconstrained successful write is produced. Regression guard: previously rejecting all empty paths once hurt grep/glob.
 func TestConfineWrap_EmptyPathFallsThroughToOrig(t *testing.T) {
 	root := t.TempDir()
 	wrapped := confineWrap(tools.WriteFileTool(root, 0), root)
-	// 非 JSON / 缺 path / 空 path：均应由 orig(write) 报错，不得成功写入。
+	// Non-JSON / missing path / empty path: all should be rejected by orig(write), no successful write allowed.
 	for _, args := range []string{`not-json`, `{"content":"x"}`, `{"path":""}`} {
 		r := wrapped.Call(context.Background(), args)
 		if !r.IsError {
 			t.Errorf("args %q: want orig to reject, got success: %+v", args, r)
 		}
 	}
-	// root 内不应出现任何被写入的文件（安全属性：无未约束写入）。
+	// No files should appear in root (security property: no unconstrained write).
 	if ents, _ := os.ReadDir(root); len(ents) != 0 {
 		t.Errorf("expected empty root after rejected writes, got %+v", ents)
 	}
 }
 
-// 回归：grep 的 path 可选（默认 workdir），confineWrap 不得因无 path 拒绝。
+// Regression: grep path is optional (defaults to workdir), confineWrap must not reject due to missing path.
 func TestConfineWrap_GrepWithoutPathWorks(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello foo bar"), 0o600); err != nil {
@@ -142,25 +142,25 @@ func TestConfineWrap_GrepWithoutPathWorks(t *testing.T) {
 	}
 }
 
-// 回归：confinement 仍生效——显式 path 越出 workdir（绝对路径或 ..）必须被拒。
+// Regression: confinement still holds — an explicit path escaping workdir (absolute path or ..) must be rejected.
 func TestConfineWrap_ConfinesEscapePath(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
-	// write 带 .. 越界
+	// write with .. out of bounds
 	wrapped := confineWrap(tools.WriteFileTool(root, 0), root)
 	r := wrapped.Call(context.Background(), `{"path":"../escape.txt","content":"x"}`)
-	if !r.IsError || !strings.Contains(r.Output, "越出 workdir") {
+	if !r.IsError || !strings.Contains(r.Output, "escapes workdir") {
 		t.Errorf("write escaping workdir should be rejected: %+v", r)
 	}
-	// grep 带绝对路径越界（grep 用 workspaceRoot 仍需 confine 防绝对路径逃逸）
+	// grep with an absolute path escaping bounds (grep uses workspaceRoot but still needs confine to prevent absolute path escape)
 	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root)
 	r = grep.Call(context.Background(), fmt.Sprintf(`{"pattern":"x","path":%q}`, outside))
-	if !r.IsError || !strings.Contains(r.Output, "越出 workdir") {
+	if !r.IsError || !strings.Contains(r.Output, "escapes workdir") {
 		t.Errorf("grep escaping workdir should be rejected: %+v", r)
 	}
 }
 
-// checkConfine：.. 越界拒；已存在路径分量含符号链接亦拒（缩小 TOCTOU 窗口）。
+// checkConfine: .. out-of-bounds rejected; an existing path component containing a symlink is also rejected (narrowing the TOCTOU window).
 func TestCheckConfine(t *testing.T) {
 	dir := t.TempDir()
 	inner := filepath.Join(dir, "inner.txt")
@@ -181,15 +181,15 @@ func TestCheckConfine(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	// 已存在分量是符号链接时拒绝，防止 IO 落到 workdir 外（default 模式仍是薄软约束，
-	// 真隔离仍靠 OS；但不再主动放行明显的软链越界）。
+	// When an existing component is a symlink, reject it, to prevent IO landing outside workdir (default mode is still a thin
+	// soft constraint; true isolation still relies on the OS; but obvious symlink escapes are no longer actively allowed).
 	if err := checkConfine(dir, "link"); err == nil {
 		t.Error("existing symlink component should be rejected")
 	}
 }
 
-// checkConfine 拒绝 path="." 或等于 workdir 绝对路径：rename 覆盖目录会 EISDIR
-// （错误含糊），且 MkdirAll/Rename 真生效将摧毁整个 workdir（审查 P3-8）。
+// checkConfine rejects path="." or the workdir absolute path itself: rename over a directory would EISDIR
+// (ambiguous error), and if MkdirAll/Rename actually took effect it would destroy the entire workdir (review P3-8).
 func TestCheckConfine_RejectsWorkdirRoot(t *testing.T) {
 	dir := t.TempDir()
 	if err := checkConfine(dir, "."); err == nil {

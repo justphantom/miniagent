@@ -10,8 +10,8 @@ import (
 func iptr(v int) *int       { return &v }
 func sptr(s string) *string { return &s }
 
-// layeredCfg 构造三层都设了模型参数的 config：run(global) < provider < model(m1)；
-// m2 无模型级（回落供应商级）；thinking.map 含 off/fast/medium/slow。
+// layeredCfg builds a config with model parameters set at all three layers: run(global) < provider < model(m1);
+// m2 has no model-level config (falls back to provider-level); thinking.map contains off/fast/medium/slow.
 func layeredCfg() *Config {
 	return &Config{
 		Providers: []ProviderConfig{{
@@ -33,7 +33,7 @@ func layeredCfg() *Config {
 	}
 }
 
-// max_tokens/context_window：model > provider > global；model 未声明也回落供应商级。
+// max_tokens/context_window: model > provider > global; an undeclared model also falls back to provider-level.
 func TestResolve_ModelParamsLayered(t *testing.T) {
 	cfg := layeredCfg()
 	r, err := Resolve(cfg, CLIOverrides{})
@@ -47,18 +47,18 @@ func TestResolve_ModelParamsLayered(t *testing.T) {
 		t.Errorf("m1 ContextWindow=%v want 200000 (model)", r.ContextWindow)
 	}
 
-	cfg.Defaults.Model = "m2" // 无模型级 → 供应商级
+	cfg.Defaults.Model = "m2" // no model-level → provider-level
 	if r2, err := Resolve(cfg, CLIOverrides{}); err != nil || r2.MaxTokens == nil || *r2.MaxTokens != 2000 {
 		t.Errorf("m2 MaxTokens=%v want 2000 (provider), err=%v", r2.MaxTokens, err)
 	}
 
-	cfg.Defaults.Model = "m3" // provider 未声明该 model → 仍回落供应商级
+	cfg.Defaults.Model = "m3" // provider does not declare this model → still falls back to provider-level
 	if r3, err := Resolve(cfg, CLIOverrides{}); err != nil || r3.MaxTokens == nil || *r3.MaxTokens != 2000 {
 		t.Errorf("m3 MaxTokens=%v want 2000 (provider, undeclared model), err=%v", r3.MaxTokens, err)
 	}
 }
 
-// provider/model 均无 → 全局 run。
+// Neither provider nor model declares → global run.
 func TestResolve_ModelParamsFallthroughGlobal(t *testing.T) {
 	cfg := &Config{
 		Providers:     []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions", Models: []ModelConfig{{Name: "m"}}}},
@@ -78,7 +78,7 @@ func TestResolve_ModelParamsFallthroughGlobal(t *testing.T) {
 	}
 }
 
-// http_timeout 仅 provider > global（无 model 层）。
+// http_timeout is provider > global only (no model layer).
 func TestResolve_HTTPTimeoutProviderOverGlobal(t *testing.T) {
 	cfg := layeredCfg()
 	r, err := Resolve(cfg, CLIOverrides{})
@@ -88,41 +88,41 @@ func TestResolve_HTTPTimeoutProviderOverGlobal(t *testing.T) {
 	if r.HTTPTimeout == nil || *r.HTTPTimeout != 100*time.Second {
 		t.Errorf("HTTPTimeout=%v want 100s (provider)", r.HTTPTimeout)
 	}
-	cfg.Providers[0].HTTPTimeout = nil // provider 无 → global
+	cfg.Providers[0].HTTPTimeout = nil // provider unset → global
 	if r2, _ := Resolve(cfg, CLIOverrides{}); r2.HTTPTimeout == nil || *r2.HTTPTimeout != 200*time.Second {
 		t.Errorf("HTTPTimeout=%v want 200s (global)", r2.HTTPTimeout)
 	}
 }
 
-// thinking level：cli > model > provider > defaults。
+// thinking level: cli > model > provider > defaults.
 func TestResolve_ThinkingLayered(t *testing.T) {
 	cfg := layeredCfg()
 	if r, _ := Resolve(cfg, CLIOverrides{}); r.Thinking != "fast" {
 		t.Errorf("m1 Thinking=%q want fast (model)", r.Thinking)
 	}
-	cfg.Defaults.Model = "m2" // 无模型级 → provider(medium)
+	cfg.Defaults.Model = "m2" // no model-level → provider(medium)
 	if r, _ := Resolve(cfg, CLIOverrides{}); r.Thinking != "medium" {
 		t.Errorf("m2 Thinking=%q want medium (provider)", r.Thinking)
 	}
-	cfg.Providers[0].ThinkingLevel = nil // provider 无 level → defaults(slow)
+	cfg.Providers[0].ThinkingLevel = nil // provider has no level → defaults(slow)
 	if r, _ := Resolve(cfg, CLIOverrides{}); r.Thinking != "slow" {
 		t.Errorf("m2 Thinking=%q want slow (defaults)", r.Thinking)
 	}
-	cli := "slow" // cli 覆盖一切
+	cli := "slow" // cli overrides everything
 	cfg.Defaults.Model = "m1"
 	if r, _ := Resolve(cfg, CLIOverrides{Thinking: &cli}); r.Thinking != "slow" {
 		t.Errorf("cli Thinking=%q want slow (cli)", r.Thinking)
 	}
 }
 
-// 模型级/供应商级 thinking level 须经 provider.thinking.map；非法 level 在 Resolve 报错。
+// Model-level/provider-level thinking level must go through provider.thinking.map; an invalid level errors at Resolve.
 func TestResolve_ThinkingLevelScoped(t *testing.T) {
 	cfg := &Config{
 		Providers: []ProviderConfig{{
 			Name:          "p",
 			ChatURL:       "https://a/v1/chat/completions",
 			Thinking:      &miniagent.ThinkingMapping{Field: "x-effort", Map: map[string]string{"fast": "low"}},
-			ThinkingLevel: sptr("bogus"), // 不在 map
+			ThinkingLevel: sptr("bogus"), // not in map
 			Models:        []ModelConfig{{Name: "m"}},
 		}},
 		Defaults:   DefaultsConfig{Provider: "p", Model: "m"},

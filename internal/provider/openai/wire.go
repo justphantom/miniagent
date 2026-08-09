@@ -1,13 +1,14 @@
-// Package openai 是 OpenAI 兼容 Chat Completions 的 provider 实现：请求序列化（wire）、
-// 非流式 client（ChatClient）、流式 client（StreamClient）、SSE 解析（stream_parse）、
-// models 列表与重试/退避（retry）。它是 core LLM/Doer 接口的默认实现——core 循环据此与
-// 具体供应商解耦，自定义 provider 实现 miniagent.LLM 即可替换，核心零改动。
+// Package openai is the OpenAI-compatible Chat Completions provider implementation: request serialization (wire),
+// non-streaming client (ChatClient), streaming client (StreamClient), SSE parsing (stream_parse),
+// models list and retry/backoff (retry). It is the default implementation of the core LLM/Doer interface — the core
+// loop is decoupled from specific vendors through it; a custom provider only needs to implement miniagent.LLM to replace it,
+// with zero changes to the core.
 //
-// wire.go 是 OpenAI Chat Completions schema 的序列化层。
-// chatMessage / chatToolCall 与 miniagent.Message / miniagent.ToolCall 字段刻意重复：
-// 上层 domain 类型不绑死特定厂商的 JSON 形状（嵌套 function 对象、snake_case
-// 字段名），新增字段时需同步两处并保持与 OpenAI API 字段顺序、命名一致。
-// chatMessage 不含 Kind：session 层标记不泄漏给 LLM（buildChatBody 独立构造）。
+// wire.go is the serialization layer for the OpenAI Chat Completions schema.
+// chatMessage / chatToolCall deliberately duplicate fields from miniagent.Message / miniagent.ToolCall:
+// upper-layer domain types are not locked to a specific vendor's JSON shape (nested function objects, snake_case
+// field names); when adding new fields you must keep both in sync and consistent with the OpenAI API field order and naming.
+// chatMessage has no Kind: session-layer markers do not leak to the LLM (built independently by buildChatBody).
 package openai
 
 import (
@@ -35,14 +36,15 @@ type chatToolCall struct {
 	} `json:"function"`
 }
 
-// maxRequestBodyBytes 是 chat completion 请求体的字节上限，与响应上限对齐。
-// 超过此值的请求直接拒绝，避免超大请求 OOM/烧钱。
+// maxRequestBodyBytes is the byte upper limit for the chat completion request body, aligned with the response upper limit.
+// Requests exceeding this value are rejected outright to avoid oversized-request OOM/burning money.
 const maxRequestBodyBytes = 4 << 20
 
-// estimateRequestBodySize 粗略估算 buildChatBody 将生成的 JSON 字节数，用于 marshal 前
-// 拦截超大请求，避免 OOM。按字符串总长度的 1.3 倍 + 固定信封开销估算，偏保守。
+// estimateRequestBodySize roughly estimates the number of JSON bytes that buildChatBody will produce, used to intercept
+// oversized requests before marshal to avoid OOM. Estimated as 1.3x the total string length + a fixed envelope overhead,
+// conservatively biased.
 func estimateRequestBodySize(req miniagent.Request) int64 {
-	size := int64(256) // 模型、max_tokens、stream、stream_options、tools 等固定字段开销
+	size := int64(256) // fixed-field overhead for model, max_tokens, stream, stream_options, tools, etc.
 	size += int64(len(req.System))
 	for _, m := range req.Messages {
 		size += int64(len(m.Role) + len(m.Content) + len(m.Reasoning) + len(m.ToolCallID))
@@ -52,7 +54,7 @@ func estimateRequestBodySize(req miniagent.Request) int64 {
 	}
 	for _, t := range req.Tools {
 		size += int64(len(t.Name) + len(t.Description))
-		// parameters 已是不定类型，这里只按最小估计；真正大的是 messages。
+		// parameters is already an arbitrary type; only a minimal estimate here — messages are what really get large.
 		size += 64
 	}
 	return size * 13 / 10
@@ -61,14 +63,14 @@ func estimateRequestBodySize(req miniagent.Request) int64 {
 func buildChatBody(req miniagent.Request) ([]byte, error) {
 	size := estimateRequestBodySize(req)
 	if size > maxRequestBodyBytes {
-		return nil, fmt.Errorf("请求预估 %d 字节超过上限 %d", size, maxRequestBodyBytes)
+		return nil, fmt.Errorf("estimated request %d bytes exceeds upper limit %d", size, maxRequestBodyBytes)
 	}
 	msgs := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
 		msgs = append(msgs, chatMessage{Role: miniagent.RoleSystem, Content: req.System})
 	}
 	for _, m := range req.Messages {
-		// 回灌 reasoning：assistant 的思考链以 reasoning_content 发回（DeepSeek 兼容）。
+		// Re-feed reasoning: the assistant's chain of thought is sent back as reasoning_content (DeepSeek-compatible).
 		cm := chatMessage{Role: m.Role, Content: m.Content, ReasoningContent: m.Reasoning, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			ctc := chatToolCall{ID: tc.ID, Type: "function"}
@@ -85,8 +87,8 @@ func buildChatBody(req miniagent.Request) ([]byte, error) {
 	if req.MaxTokens > 0 {
 		payload["max_tokens"] = req.MaxTokens
 	}
-	// 思考级别（钉死）：必经 provider.Thinking（field+map），req.Thinking==nil → 不发（defensive，
-	// config 路径 validate 保证 defaults.thinking≠off 时 provider 必声明）。空/ThinkingOff 不写入。
+	// Thinking level (pinned): must go through provider.Thinking (field+map); req.Thinking==nil → not sent (defensive:
+	// the config validation path guarantees that when defaults.thinking≠off the provider must declare it). Empty/ThinkingOff not written.
 	if req.ThinkingLevel != "" && req.ThinkingLevel != miniagent.ThinkingOff && req.Thinking != nil {
 		field, val := req.Thinking.Field, req.ThinkingLevel
 		if mapped, ok := req.Thinking.Map[req.ThinkingLevel]; ok {
@@ -95,7 +97,7 @@ func buildChatBody(req miniagent.Request) ([]byte, error) {
 		payload[field] = val
 	}
 	if req.Stream {
-		// stream_options.include_usage：让末 chunk 携带 usage（计费/熔断仍以它为准）。
+		// stream_options.include_usage: lets the final chunk carry usage (billing/circuit-breaking still rely on it).
 		payload["stream"] = true
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
@@ -118,13 +120,13 @@ func buildChatBody(req miniagent.Request) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(body)) > maxRequestBodyBytes {
-		return nil, fmt.Errorf("请求体 %d 字节超过上限 %d", len(body), maxRequestBodyBytes)
+		return nil, fmt.Errorf("request body %d bytes exceeds upper limit %d", len(body), maxRequestBodyBytes)
 	}
 	return body, nil
 }
 
-// chatCompletionResponse 只摘出循环需要的字段：首条 choice 的 message
-// （content + tool_calls）、finish_reason、usage。
+// chatCompletionResponse only extracts the fields the loop needs: the message of the first choice
+// (content + tool_calls), finish_reason, usage.
 type chatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
@@ -155,13 +157,13 @@ func parseChatResponse(raw []byte) (miniagent.Response, error) {
 	}
 	out := miniagent.Response{}
 	if len(v.Choices) == 0 {
-		// 空 choices 是端点异常（内容过滤/代理故障），静默零值会让上层把
-		// 它当作"成功的空回答"（退出码 0、text 为空），必须报错。
+		// Empty choices means an endpoint anomaly (content filtering/proxy failure); a silent zero value would make the upper
+		// layer treat it as a "successful empty answer" (exit code 0, empty text), so it must be reported as an error.
 		return miniagent.Response{}, errors.New("llm response has no choices")
 	}
 	ch := v.Choices[0]
 	out.Text = ch.Message.Content
-	// 双兼容：DeepSeek 系用 reasoning_content，OpenAI o 系用 reasoning；前者优先。
+	// Dual compatibility: DeepSeek family uses reasoning_content, OpenAI o-series uses reasoning; the former takes precedence.
 	out.Reasoning = ch.Message.ReasoningContent
 	if out.Reasoning == "" {
 		out.Reasoning = ch.Message.Reasoning

@@ -16,7 +16,7 @@ func TestReadFile_RelativePath(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	// 默认输出带行号（edit 依赖行号定位）。
+	// Output carries line numbers by default (edit relies on line numbers to locate).
 	if !strings.Contains(res.Output, "1 │ hello world") {
 		t.Errorf("Output = %q", res.Output)
 	}
@@ -56,9 +56,9 @@ func TestReadFile_Truncates(t *testing.T) {
 	}
 }
 
-// P2-3：read 用 Lstat 判定文件类型，对最终路径分量是符号链接直接拒（与 edit/openNoFollow
-// 对齐）。旧 Stat 会跟随软链读 target，与「拒绝符号链接」描述不符。中间目录 symlink
-// 仍跟随（read 无路径约束，仅最终分量由 Lstat/O_NOFOLLOW 兜底）。
+// P2-3: read uses Lstat to decide the file type and directly rejects a symlink as the final path component (aligned with
+// edit/openNoFollow). The old Stat would follow the symlink to read the target, contradicting the "reject symlinks" description.
+// Intermediate directory symlinks are still followed (read has no path constraints; only the final component is guarded by Lstat/O_NOFOLLOW).
 func TestReadFile_SymlinkFinalComponentRejected(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -74,16 +74,16 @@ func TestReadFile_SymlinkFinalComponentRejected(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected symlink final component to be rejected")
 	}
-	if !strings.Contains(res.Output, "普通文件") {
+	if !strings.Contains(res.Output, "regular file") {
 		t.Errorf("Output = %q", res.Output)
 	}
-	// target 内容不应被读出（防软链读绕过到 workdir 外）。
+	// The target content should not be read out (prevents a symlink read from escaping outside workdir).
 	if strings.Contains(res.Output, "via symlink") {
 		t.Errorf("symlink target content leaked: %q", res.Output)
 	}
 }
 
-// workdir 为空：read 用相对路径仍能工作（依赖调用方进程 cwd）。
+// Empty workdir: read with a relative path still works (relies on the caller process's cwd).
 func TestReadFile_EmptyWorkdir(t *testing.T) {
 	dir := writeTemp(t, "cwd.txt", "from-cwd")
 	res := ReadFileTool("", 0, 0).Call(context.Background(), `{"path":"`+filepath.Join(dir, "cwd.txt")+`"}`)
@@ -95,7 +95,7 @@ func TestReadFile_EmptyWorkdir(t *testing.T) {
 	}
 }
 
-// offset 超过文件行数应作为 IsError 返回（而非静默空输出）。
+// offset exceeding the file's line count should be returned as IsError (rather than silently empty output).
 func TestReadFile_OffsetOutOfBoundsIsError(t *testing.T) {
 	dir := writeTemp(t, "small.txt", "only one line")
 	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"small.txt","offset":42}`)
@@ -107,7 +107,7 @@ func TestReadFile_OffsetOutOfBoundsIsError(t *testing.T) {
 	}
 }
 
-// 空文件不应输出"1 │ "伪空行，直接返回空串。
+// An empty file should not emit a spurious empty line "1 │ "; it returns an empty string directly.
 func TestReadFile_EmptyFileReturnsBlank(t *testing.T) {
 	dir := writeTemp(t, "empty.txt", "")
 	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"empty.txt"}`)
@@ -119,7 +119,7 @@ func TestReadFile_EmptyFileReturnsBlank(t *testing.T) {
 	}
 }
 
-// 非 regular 文件（FIFO/设备/socket）必须拒绝，否则 FIFO 会无限阻塞 open。
+// Non-regular files (FIFO/device/socket) must be rejected, otherwise a FIFO would block open indefinitely.
 func TestReadFile_RejectsNonRegular(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "fifo")
@@ -132,12 +132,12 @@ func TestReadFile_RejectsNonRegular(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected FIFO to be rejected")
 	}
-	if !strings.Contains(res.Output, "普通文件") {
+	if !strings.Contains(res.Output, "regular file") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
 
-// /dev/null 是 character device，应拒绝（而非返回空内容）。
+// /dev/null is a character device and should be rejected (rather than returning empty content).
 func TestReadFile_RejectsDevice(t *testing.T) {
 	if _, err := os.Stat("/dev/null"); err != nil {
 		t.Skipf("/dev/null unavailable: %v", err)
@@ -146,12 +146,12 @@ func TestReadFile_RejectsDevice(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected device file to be rejected")
 	}
-	if !strings.Contains(res.Output, "普通文件") {
+	if !strings.Contains(res.Output, "regular file") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
 
-// 二进制内容（含 NUL）必须拒绝，避免乱码污染 LLM 上下文。
+// Binary content (containing NUL) must be rejected to avoid garbled output polluting the LLM context.
 func TestReadFile_RejectsBinary(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin.dat")
@@ -162,15 +162,15 @@ func TestReadFile_RejectsBinary(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected binary to be rejected")
 	}
-	if !strings.Contains(res.Output, "二进制") {
+	if !strings.Contains(res.Output, "binary") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
 
-// NUL 出现在 8 KiB 扫描窗口之外（>8192 字节）的纯文本应正常读取。
+// Pure text whose NUL appears outside the 8 KiB scan window (>8192 bytes) should be read normally.
 func TestReadFile_TextWithLateNULPasses(t *testing.T) {
 	dir := t.TempDir()
-	// 9000 字节纯文本 + 末尾一个 NUL：扫描窗口只看前 8192，应放行。
+	// 9000 bytes of pure text + a trailing NUL: the scan window only looks at the first 8192, so it should pass.
 	content := strings.Repeat("a", 9000) + "\x00"
 	bin := filepath.Join(dir, "late.txt")
 	if err := os.WriteFile(bin, []byte(content), 0o600); err != nil {

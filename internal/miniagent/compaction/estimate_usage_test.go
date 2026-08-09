@@ -15,10 +15,10 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// uPtr 是构造 *miniagent.Usage 的小工具（避免每处都写零时变量取址）。
+// uPtr is a small helper to construct *miniagent.Usage (avoids writing a temp variable to take its address everywhere).
 func uPtr(in, out int) *miniagent.Usage { return &miniagent.Usage{InputTokens: in, OutputTokens: out} }
 
-// §P0-B lastApplicableUsageIndex 表驱动：覆盖 B.5 的 8 个用例（含防陈旧核心 + 二次压缩防护）。
+// §P0-B lastApplicableUsageIndex table-driven: covers the 8 cases of B.5 (including anti-staleness core + double-compaction guard).
 func TestLastApplicableUsageIndex(t *testing.T) {
 	asst := func(ts int64, u *miniagent.Usage) miniagent.Message {
 		return miniagent.Message{Role: miniagent.RoleAssistant, Ts: ts, Usage: u}
@@ -35,13 +35,13 @@ func TestLastApplicableUsageIndex(t *testing.T) {
 		{"single_anchor", []miniagent.Message{asst(1, uPtr(100, 50))}, 0},
 		{"last_of_two", []miniagent.Message{asst(1, uPtr(100, 50)), {Role: miniagent.RoleUser, Ts: 2}, asst(3, uPtr(200, 80))}, 2},
 		{
-			// 防陈旧核心：summary(Ts=3) 使 idx1 的 assistant(Ts=2) 失效，idx3(Ts=4) 新于 summary 重新可用。
+			// Anti-staleness core: summary(Ts=3) invalidates the assistant(Ts=2) at idx1; idx3(Ts=4) is newer than the summary and becomes applicable again.
 			"summary_invalidates_then_refreshed",
 			[]miniagent.Message{{Role: miniagent.RoleUser, Ts: 1}, asst(2, uPtr(9000, 100)), {Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Ts: 3}, asst(4, uPtr(200, 80))},
 			3,
 		},
 		{
-			// 二次压缩防护：summary 后无新 usage（仅 tool），全陈旧 → 回落。
+			// Double-compaction guard: after the summary there is no new usage (only tool), everything is stale -> fallback.
 			"summary_no_new_usage",
 			[]miniagent.Message{{Role: miniagent.RoleUser, Ts: 1}, asst(2, uPtr(9000, 100)), {Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Ts: 3}, {Role: miniagent.RoleTool, ToolCallID: "x", Ts: 3}},
 			-1,
@@ -56,52 +56,52 @@ func TestLastApplicableUsageIndex(t *testing.T) {
 	}
 }
 
-// §P0-B estimateTokensFromUsage：无锚点 ok=false；锚点末尾 tokens=Input+Output；锚点+trailing 含 CJK。
+// §P0-B estimateTokensFromUsage: no anchor -> ok=false; tokens at the end of the anchor = Input+Output; anchor+trailing includes CJK.
 func TestEstimateTokensFromUsage(t *testing.T) {
 	if _, ok := estimateTokensFromUsage([]miniagent.Message{{Role: miniagent.RoleUser, Content: "x"}}); ok {
-		t.Error("无 assistant usage 应 ok=false")
+		t.Error("no assistant usage should give ok=false")
 	}
-	// 锚点在末尾，无 trailing → tokens = Input+Output。
+	// The anchor is at the end, no trailing -> tokens = Input+Output.
 	tokens, ok := estimateTokensFromUsage([]miniagent.Message{
 		{Role: miniagent.RoleUser, Content: "ignored"},
 		{Role: miniagent.RoleAssistant, Ts: 1, Usage: uPtr(1000, 200)},
 	})
 	if !ok || tokens != 1200 {
-		t.Errorf("锚点末尾: tokens=%d ok=%v, want 1200/true", tokens, ok)
+		t.Errorf("anchor at end: tokens=%d ok=%v, want 1200/true", tokens, ok)
 	}
-	// 锚点 + trailing：tokens = Input+Output + trailing 本地估算。"中文测试"=4 CJK → 4/2=2。
+	// Anchor + trailing: tokens = Input+Output + local estimate of trailing. "中文测试"=4 CJK -> 4/2=2.
 	tokens, ok = estimateTokensFromUsage([]miniagent.Message{
 		{Role: miniagent.RoleAssistant, Ts: 1, Usage: uPtr(500, 100)},
 		{Role: miniagent.RoleUser, Content: "中文测试"},
 	})
 	if !ok {
-		t.Error("锚点+trailing 应 ok=true")
+		t.Error("anchor+trailing should give ok=true")
 	}
-	if tokens != 606 { // 600 + 2(CJK) + 4(trailing msg envelope，bug 5 补信封边际)
-		t.Errorf("锚点+trailing(CJK): tokens=%d, want 606", tokens)
+	if tokens != 606 { // 600 + 2(CJK) + 4(trailing msg envelope, bug 5 adds envelope margin)
+		t.Errorf("anchor+trailing(CJK): tokens=%d, want 606", tokens)
 	}
 }
 
-// §P0-B estimateThreshold：无 usage 或 kill-switch=false 回落 policy.EstimateTokens；有 usage 且开关开用真实值。
+// §P0-B estimateThreshold: no usage or kill-switch=false falls back to policy.EstimateTokens; with usage and the switch on, uses the real value.
 func TestEstimateThreshold_Fallback(t *testing.T) {
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "hello world"}}
 	want := policy.EstimateTokens(msgs, "sys", nil)
 	if got := estimateThreshold(msgs, "sys", nil, true); got != want {
-		t.Errorf("无 usage 回落: estimateThreshold=%d, want policy.EstimateTokens=%d", got, want)
+		t.Errorf("no usage fallback: estimateThreshold=%d, want policy.EstimateTokens=%d", got, want)
 	}
-	// kill-switch=false 也回落 policy.EstimateTokens（即使有 usage）。
+	// kill-switch=false also falls back to policy.EstimateTokens (even with usage).
 	msgs2 := []miniagent.Message{{Role: miniagent.RoleAssistant, Ts: 1, Usage: uPtr(100, 50)}}
 	want2 := policy.EstimateTokens(msgs2, "sys", nil)
 	if got := estimateThreshold(msgs2, "sys", nil, false); got != want2 {
 		t.Errorf("kill-switch=false: estimateThreshold=%d, want policy.EstimateTokens=%d", got, want2)
 	}
 	if got := estimateThreshold(msgs2, "sys", nil, true); got != 150 {
-		t.Errorf("kill-switch=true 有 usage: estimateThreshold=%d, want 150 (100+50)", got)
+		t.Errorf("kill-switch=true with usage: estimateThreshold=%d, want 150 (100+50)", got)
 	}
 }
 
-// §P0-B session 往返：带 miniagent.Usage+Ts 的 assistant 行写 jsonl 再 session.LoadSession 字段完整还原；
-// 缺字段的旧 fixture 仍能加载且 miniagent.Usage==nil。
+// §P0-B session round-trip: an assistant line with miniagent.Usage+Ts written to jsonl is fully restored by session.LoadSession;
+// an old fixture missing those fields can still be loaded with miniagent.Usage==nil.
 func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	msgs := []miniagent.Message{
@@ -119,13 +119,13 @@ func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 		t.Fatalf("loaded len=%d, want 2", len(loaded))
 	}
 	if loaded[1].Usage == nil || loaded[1].Usage.InputTokens != 123 || loaded[1].Usage.OutputTokens != 45 {
-		t.Errorf("miniagent.Usage 未还原: %+v", loaded[1].Usage)
+		t.Errorf("miniagent.Usage not restored: %+v", loaded[1].Usage)
 	}
 	if loaded[1].Ts != 999 {
-		t.Errorf("Ts 未还原: got %d, want 999", loaded[1].Ts)
+		t.Errorf("Ts not restored: got %d, want 999", loaded[1].Ts)
 	}
 
-	// 旧 fixture（无 usage/ts 字段）仍能加载，miniagent.Usage==nil、Ts==0。
+	// Old fixture (no usage/ts fields) can still be loaded, miniagent.Usage==nil, Ts==0.
 	path2 := filepath.Join(t.TempDir(), "old.jsonl")
 	old := `{"type":"session","id":"old"}
 {"type":"message","role":"user","content":"hi"}
@@ -135,27 +135,28 @@ func TestSessionRoundTrip_UsageAndTs(t *testing.T) {
 	}
 	_, loaded2, err := session.LoadSession(path2)
 	if err != nil {
-		t.Fatalf("旧 fixture session.LoadSession: %v", err)
+		t.Fatalf("old fixture session.LoadSession: %v", err)
 	}
 	for i, m := range loaded2 {
 		if m.Usage != nil {
-			t.Errorf("旧 fixture msg %d 应 miniagent.Usage==nil: %+v", i, m.Usage)
+			t.Errorf("old fixture msg %d should have miniagent.Usage==nil: %+v", i, m.Usage)
 		}
 	}
 }
 
-// §P0-B 集成：本地估算超窗但末尾 assistant 真实 usage 未超窗时，FitHistory（UseRealUsage=true）
-// 不触发摘要压缩（Summarize 不被调），applyContextStrips 早返——补 policy.EstimateTokens 对缓存零感知盲区。
+// §P0-B integration: when the local estimate exceeds the window but the trailing assistant's real usage
+// does not exceed it, FitHistory (UseRealUsage=true) does not trigger summary compaction (Summarize is not called),
+// applyContextStrips returns early -- covering the blind spot where policy.EstimateTokens has zero awareness of caching.
 func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("不应被调")}}
+	tr := &fakeTransport{responses: []string{textResponse("should not be called")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
-	// user 巨大内容使本地 policy.EstimateTokens 远超窗；末尾 assistant 真实 usage 仅 150（未超窗）。
+	// Huge user content makes the local policy.EstimateTokens far exceed the window; the trailing assistant's real usage is only 150 (not over the window).
 	msgs := []miniagent.Message{
-		{Role: miniagent.RoleUser, Content: strings.Repeat("x", 8000)}, // ~2000 token 本地估算
+		{Role: miniagent.RoleUser, Content: strings.Repeat("x", 8000)}, // ~2000 tokens local estimate
 		{Role: miniagent.RoleAssistant, Ts: 1, Usage: uPtr(100, 50), Content: "a"},
 	}
 	budget := ContextBudget{
-		ContextWindow: 1000, // 4/5=800：本地 ~2000 超窗、真实 150 未超
+		ContextWindow: 1000, // 4/5=800: local ~2000 over window, real 150 not over
 		UseRealUsage:  true,
 		Summarize:     testBudget(llm).Summarize,
 	}
@@ -165,23 +166,25 @@ func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
 		t.Fatalf("FitHistory: %v", err)
 	}
 	if summarized {
-		t.Error("真实 usage 未超窗时不应触发摘要压缩（summarized=true）")
+		t.Error("real usage not over the window should not trigger summary compaction (summarized=true)")
 	}
 	if tr.calls != 0 {
-		t.Errorf("Summarize 不应被调用: calls=%d", tr.calls)
+		t.Errorf("Summarize should not be called: calls=%d", tr.calls)
 	}
-	// 对照：kill-switch=false（回落本地估算）会判超窗进入 compactWithSummary（2 轮 <= 1+keepRecent，
-	// 无中段 noop），但 trimRecentRounds 后仍超 → 返回 error。这里只验证 true 路径不误压。
+	// Contrast: kill-switch=false (falls back to local estimate) judges it over the window and enters
+	// compactWithSummary (2 rounds <= 1+keepRecent, no middle noop), but after trimRecentRounds it is still over
+	// -> returns an error. Here only verifies the true path does not over-compress.
 	_ = out
 }
 
-// §P0-B 防陈旧/二次压缩防护（提案 B.5 用例5）：第一次摘要后 summaryMsg 带新 Ts 使旧 assistant usage 失效，
-// 第二次 FitHistory 不再因陈旧大 usage 二次压缩。守护 compactWithSummary 的 summaryMsg Ts:text.NowMs() 触发点
-// （review Finding 3：移除该 Ts 会使第二轮用陈旧 usage 再次摘要，此测试失败）。
+// §P0-B anti-staleness/double-compaction guard (proposal B.5 case 5): after the first summary, the summaryMsg
+// carries a new Ts that invalidates the old assistant usage, so the second FitHistory does not compress again
+// due to the stale large usage. Guards the compactWithSummary summaryMsg Ts:text.NowMs() trigger point
+// (review Finding 3: removing that Ts would cause the second round to summarize again using stale usage, failing this test).
 func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 	calls := 0
 	budget := ContextBudget{
-		ContextWindow: 2000, // 4/5=1600；preserveRecentTokens=floor(2000/4)=500→clamp 2000
+		ContextWindow: 2000, // 4/5=1600; preserveRecentTokens=floor(2000/4)=500 -> clamp 2000
 		KeepRecent:    4,
 		UseRealUsage:  true,
 		Summarize: func(_ context.Context, _, _, _ string, _ []miniagent.Message) (string, miniagent.Usage, error) {
@@ -196,17 +199,17 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 		{Role: miniagent.RoleUser, Content: "u3"},
 		{Role: miniagent.RoleUser, Content: "u4"},
 		{Role: miniagent.RoleUser, Content: "u5"},
-		{Role: miniagent.RoleAssistant, Content: "recent", Ts: 100, Usage: uPtr(9000, 100)}, // 陈旧大 usage
+		{Role: miniagent.RoleAssistant, Content: "recent", Ts: 100, Usage: uPtr(9000, 100)}, // stale large usage
 	}
-	// 第一次：陈旧大 usage（9100）超 1600 阈值 → 摘要。
+	// First pass: stale large usage (9100) exceeds the 1600 threshold -> summarize.
 	out1, _, summarized1, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("1st FitHistory: %v", err)
 	}
 	if !summarized1 {
-		t.Fatal("1st 应摘要（陈旧大 usage 超阈值）")
+		t.Fatal("1st pass should summarize (stale large usage over threshold)")
 	}
-	// 模拟下一步：在 out1（含带新 Ts 的 summary）后追加轮次，使第二轮有足够轮次可摘要。
+	// Simulate the next step: after out1 (which contains the summary with a new Ts), append rounds so the second pass has enough rounds to summarize.
 	msgs2 := append([]miniagent.Message{}, out1...)
 	msgs2 = append(msgs2, miniagent.Message{Role: miniagent.RoleUser, Content: "u6"}, miniagent.Message{Role: miniagent.RoleUser, Content: "u7"})
 	_, _, summarized2, _, _, err := FitHistory(context.Background(), msgs2, budget, nil)
@@ -214,9 +217,9 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 		t.Fatalf("2nd FitHistory: %v", err)
 	}
 	if summarized2 {
-		t.Error("防陈旧：summary 新 Ts 应使旧 usage 失效，第二轮不应再次摘要")
+		t.Error("anti-staleness: the summary's new Ts should invalidate the old usage, the second pass should not summarize again")
 	}
 	if calls != 1 {
-		t.Errorf("Summarize 应只调一次（防二次压缩），got calls=%d", calls)
+		t.Errorf("Summarize should be called only once (double-compaction guard), got calls=%d", calls)
 	}
 }

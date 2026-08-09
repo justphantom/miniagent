@@ -55,7 +55,7 @@ func TestWriteFile_FileMode0644(t *testing.T) {
 	}
 }
 
-// 写超过 10MiB 上限：参数校验阶段拒绝，不进入 IO。
+// Writing beyond the 10MiB limit: rejected at the argument-validation stage, never entering IO.
 func TestWriteFile_RejectsOversized(t *testing.T) {
 	dir := t.TempDir()
 	big := strings.Repeat("a", maxWriteFileBytes+1)
@@ -93,7 +93,7 @@ func TestEditFile_MultipleMatchesFails(t *testing.T) {
 	}
 }
 
-// B-3：replace_all=true 替换全部匹配处。
+// B-3: replace_all=true replaces every match.
 func TestEditFile_ReplaceAll(t *testing.T) {
 	dir := writeTemp(t, "e.txt", "xx yy xx")
 	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"e.txt","old_string":"xx","new_string":"z","replace_all":true}`)
@@ -106,7 +106,7 @@ func TestEditFile_ReplaceAll(t *testing.T) {
 	}
 }
 
-// replace_all=true 但无匹配仍报错。
+// replace_all=true with no matches still errors.
 func TestEditFile_ReplaceAllZeroMatchFails(t *testing.T) {
 	dir := writeTemp(t, "e.txt", "hello")
 	res := EditFileTool(dir, 0).Call(context.Background(), `{"path":"e.txt","old_string":"zz","new_string":"z","replace_all":true}`)
@@ -115,7 +115,7 @@ func TestEditFile_ReplaceAllZeroMatchFails(t *testing.T) {
 	}
 }
 
-// edit 通过 openNoFollow 拒绝最终路径是符号链接的情形。
+// edit rejects a symlink as the final path via openNoFollow.
 func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -135,8 +135,8 @@ func TestEditFile_SymlinkEscapeRejected(t *testing.T) {
 	}
 }
 
-// edit 同样必须拒绝非 regular 文件：FIFO 会让 openNoFollow 永久阻塞（edit 无
-// 内置超时），进而占满并行信号量使整个 Run 挂死。
+// edit must also reject non-regular files: a FIFO would make openNoFollow block permanently (edit has no
+// built-in timeout), which then exhausts the parallelism semaphore and hangs the whole Run.
 func TestEditFile_RejectsNonRegular(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "fifo")
@@ -149,12 +149,12 @@ func TestEditFile_RejectsNonRegular(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected FIFO to be rejected")
 	}
-	if !strings.Contains(res.Output, "普通文件") {
+	if !strings.Contains(res.Output, "regular file") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
 
-// 已取消的 ctx 应让文件工具立即返回，不进入 IO。
+// A already-cancelled ctx should make the file tools return immediately, without entering IO.
 func TestFileTools_RespectCancelledCtx(t *testing.T) {
 	dir := writeTemp(t, "x.txt", "hello")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -175,7 +175,7 @@ func TestFileTools_RespectCancelledCtx(t *testing.T) {
 		if !res.IsError {
 			t.Errorf("%s: expected error on cancelled ctx", name)
 		}
-		if !strings.Contains(res.Output, "已取消") {
+		if !strings.Contains(res.Output, "cancelled") {
 			t.Errorf("%s: error = %q", name, res.Output)
 		}
 	}

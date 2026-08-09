@@ -41,7 +41,7 @@ func TestBuildChatBody_ThinkingMappingOverrides(t *testing.T) {
 	}
 }
 
-// 400 含 thinking 特征 → callLLMWithDowngrade 去 thinking 重试一次（审查 v2 #7）。
+// A 400 carrying the thinking signature → callLLMWithDowngrade retries once with thinking dropped (review v2 #7).
 func TestCallLLM_Thinking400Downgrade(t *testing.T) {
 	tr := &recordingTransport{plan: []transportResp{
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
@@ -66,7 +66,7 @@ func TestCallLLM_Thinking400Downgrade(t *testing.T) {
 	}
 }
 
-// 非 thinking 的 400 不触发降级（无 thinking 发送时直接上抛）。
+// A non-thinking 400 does not trigger a downgrade (when no thinking was sent, it propagates directly).
 func TestCallLLM_Plain400NoDowngrade(t *testing.T) {
 	tr := &recordingTransport{plan: []transportResp{
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
@@ -81,14 +81,15 @@ func TestCallLLM_Plain400NoDowngrade(t *testing.T) {
 	}
 }
 
-// 总结步触发 thinking 降级时 Result.ThinkingDowngraded 应置位（与主路径/C 重试同款；
-// 修复前闭包 `resp2, _, err2` 忽略 downgraded，致交互层下轮重传原 thinking 再撞 400）。
+// When the summary step triggers a thinking downgrade, Result.ThinkingDowngraded should be set (same as the
+// main path / C retry; before the fix the closure `resp2, _, err2` discarded downgraded, so the interaction
+// layer resent the original thinking next turn and hit 400 again).
 func TestRun_SummaryStepCapturesDowngrade(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &recordingTransport{plan: []transportResp{
 		{status: http.StatusOK, body: toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"})},
 		{status: http.StatusBadRequest, body: `{"error":{"message":"unknown parameter: reasoning_effort"}}`},
-		{status: http.StatusOK, body: textResponse("总结完成")},
+		{status: http.StatusOK, body: textResponse("summary done")},
 	}}
 	llm := testClients(tr)
 	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1, ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}}
@@ -96,13 +97,13 @@ func TestRun_SummaryStepCapturesDowngrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Text != "总结完成" {
-		t.Errorf("Text = %q, want 总结完成", res.Text)
+	if res.Text != "summary done" {
+		t.Errorf("Text = %q, want summary done", res.Text)
 	}
 	if !res.ThinkingDowngraded {
-		t.Errorf("ThinkingDowngraded = false, want true（总结步降级应被捕获）")
+		t.Errorf("ThinkingDowngraded = false, want true (summary-step downgrade should be captured)")
 	}
 	if tr.calls != 3 {
-		t.Errorf("calls = %d, want 3（step1 tool + 总结 thinking 400 + 总结降级 ok）", tr.calls)
+		t.Errorf("calls = %d, want 3 (step1 tool + summary thinking 400 + summary downgrade ok)", tr.calls)
 	}
 }

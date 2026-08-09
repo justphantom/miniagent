@@ -14,12 +14,12 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// 重试相关：用 httptest.Server + atomic 计数精确控制每次响应。
-// 重试基线 retryBaseDelay=500ms 会让重试测试累积耗时，所有用例都用
-// Retry-After: 0 或 server 立即返回，使退避降到 500ms 量级。
+// Retry tests: use httptest.Server + atomic counters to precisely control each response.
+// The retry baseline retryBaseDelay=500ms would cause cumulative delays in retry tests, so all cases use
+// Retry-After: 0 or have the server return immediately, keeping backoff at the 500ms scale.
 
-// retryServer 第 N 次（0-based）请求按 plan 返回 status/body/headers。
-// plan 用尽后返回 200 OK 空体。
+// retryServer returns status/body/headers from plan for the Nth (0-based) request.
+// After plan is exhausted it returns 200 OK with an empty body.
 func retryServer(t *testing.T, plan []struct {
 	status  int
 	body    string
@@ -49,7 +49,7 @@ func textResponseJSON(text string) string {
 	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
 }
 
-// 429 一次后 200：重试一次拿到结果，调用数=2。
+// 429 once then 200: retry once and get the result; call count = 2.
 func TestChatClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
@@ -71,7 +71,7 @@ func TestChatClient_Do_RetriesOn429ThenSucceeds(t *testing.T) {
 	}
 }
 
-// 503 三次：重试 maxRetries 次后仍失败，错误上抛，调用数=1+maxRetries。
+// 503 three times: still failing after maxRetries retries, error propagates; call count = 1 + maxRetries.
 func TestChatClient_Do_RetriesExhaustedOn503(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
@@ -90,7 +90,7 @@ func TestChatClient_Do_RetriesExhaustedOn503(t *testing.T) {
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v", err)
 	}
-	// 重试用尽后错误信息应含"已重试 N 次"上下文，便于排错。
+	// After retries are exhausted the error message should contain "after N retries" context for debugging.
 	if !strings.Contains(err.Error(), "after 2 retries") {
 		t.Errorf("err should mention retry count: %v", err)
 	}
@@ -99,8 +99,8 @@ func TestChatClient_Do_RetriesExhaustedOn503(t *testing.T) {
 	}
 }
 
-// 500（Internal Server Error）也应重试——主流 LLM SDK 一致行为。
-// 这里验证：500 一次后第二次 200，能成功重试拿到结果。
+// 500 (Internal Server Error) should also be retried — consistent with mainstream LLM SDK behavior.
+// Here we verify: one 500 then 200 on the second attempt can successfully retry and get the result.
 func TestChatClient_Do_RetriesOn500(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
@@ -122,7 +122,7 @@ func TestChatClient_Do_RetriesOn500(t *testing.T) {
 	}
 }
 
-// 400 立即返回不重试。
+// 400 returns immediately with no retry.
 func TestChatClient_Do_NoRetryOn400(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
@@ -141,7 +141,7 @@ func TestChatClient_Do_NoRetryOn400(t *testing.T) {
 	}
 }
 
-// Retry-After 秒数被尊重：服务器要求等 1s，Do 应等约 1s 后再重试。
+// Retry-After seconds are honored: server asks to wait 1s, Do should wait about 1s before retrying.
 func TestChatClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int
@@ -165,9 +165,9 @@ func TestChatClient_Do_RespectsRetryAfterSeconds(t *testing.T) {
 	}
 }
 
-// ctx 取消中断重试循环，不继续烧请求。
+// ctx cancel interrupts the retry loop, not continuing to burn requests.
 func TestChatClient_Do_RetryCancelledByCtx(t *testing.T) {
-	// 用一个永远 503 + Retry-After: 60 的服务器，ctx 1ms 取消必然落到退避段。
+	// Use a server that always returns 503 + Retry-After: 60; with ctx cancelled at 1ms it must land in the backoff window.
 	srv, calls := retryServer(t, []struct {
 		status  int
 		body    string
@@ -184,17 +184,17 @@ func TestChatClient_Do_RetryCancelledByCtx(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	// 至少发起了一次请求；重试循环被 ctx 打断。
+	// At least one request was issued; the retry loop was interrupted by ctx.
 	if got := atomic.LoadInt32(calls); got < 1 {
 		t.Errorf("calls = %d, want >= 1", got)
 	}
 }
 
-// 网络错误（服务器关闭连接）也触发重试。
+// Network errors (server closing the connection) also trigger a retry.
 func TestChatClient_Do_RetriesOnNetworkError(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// hijack 后立即关闭连接，client.Do 返回 io.ErrUnexpectedEOF 类错误。
+		// After hijacking, close the connection immediately; client.Do returns an io.ErrUnexpectedEOF-like error.
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			t.Skip("server does not support hijack")
@@ -209,15 +209,15 @@ func TestChatClient_Do_RetriesOnNetworkError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	// 重试至少触发 2 次（初试 + 至少 1 次重试）。
+	// Retry is triggered at least twice (initial attempt + at least 1 retry).
 	if got := calls.Load(); got < 2 {
 		t.Errorf("calls = %d, want >= 2 (network retry)", got)
 	}
 }
 
-// parseRetryAfter 必须区分"未提供"（-1，走 backoff）与"显式 0"（0，立即重试），
-// 否则合法的 Retry-After: 0 会被误当作未提供而退回退避，违背服务端意图。
-// P3-3：HTTP-date 已成过去时语义等同立即重试，返回 0（而非 -1 走 backoff）。
+// parseRetryAfter must distinguish "not provided" (-1, use backoff) from "explicit 0" (0, retry immediately);
+// otherwise a legitimate Retry-After: 0 would be mistaken for not provided and fall back to backoff, violating server intent.
+// P3-3: an HTTP-date already in the past is semantically equivalent to retrying immediately, returning 0 (rather than -1 to use backoff).
 func TestParseRetryAfter(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -228,7 +228,7 @@ func TestParseRetryAfter(t *testing.T) {
 		{"explicit-zero", "0", 0},
 		{"seconds", "2", 2 * time.Second},
 		{"garbage", "not-a-date", -1},
-		// P3-3：过去的 HTTP-date → 0（立即可重试），而非 -1（走 backoff 退火）。
+		// P3-3: past HTTP-date → 0 (retry immediately), rather than -1 (use backoff).
 		{"past-http-date", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), 0},
 	}
 	for _, c := range cases {
@@ -242,7 +242,7 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 }
 
-// P2-4：DoStream pre-delta 阶段 503 重试一次后拿到 200 SSE 流，成功聚合（pre-delta 失败可重试）。
+// P2-4: DoStream pre-delta phase returns 503 once then a 200 SSE stream, successfully aggregated (pre-delta failures can be retried).
 func TestStreamClient_DoStream_RetriesOn503ThenSucceeds(t *testing.T) {
 	const okSSE = `data: {"choices":[{"delta":{"content":"recovered"}}]}
 data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
@@ -269,7 +269,7 @@ data: [DONE]
 	}
 }
 
-// P2-4：DoStream pre-delta 503 持续，重试用尽后上抛含 "503" 与 "after N retries" 的错误。
+// P2-4: DoStream pre-delta 503 keeps failing; after retries are exhausted the error contains "503" and "after N retries".
 func TestStreamClient_DoStream_RetriesExhaustedOn503(t *testing.T) {
 	srv, calls := retryServer(t, []struct {
 		status  int

@@ -2,9 +2,10 @@ package miniagent
 
 import "regexp"
 
-// overflowPatterns 是编译好的多厂商 context 超限错误正则集合（移植 pi overflow.ts:37-63 的 24 条，
-// §P1-C）。包级 var，init 期一次性编译。Go RE2 语法支持 (?:...)、\d、[\d,]+、?、*、+，
-// 与 JS 原版语义等价；统一加 (?i) case-insensitive 标志（等价 JS /i）。
+// overflowPatterns is the compiled set of multi-vendor context-overflow error regexes (ported from pi
+// overflow.ts:37-63, 24 patterns, §P1-C). Package-level var, compiled once at init. Go RE2 syntax supports
+// (?:...), \d, [\d,]+, ?, *, +, semantically equivalent to the original JS; a (?i) case-insensitive flag is
+// added uniformly (equivalent to JS /i).
 var overflowPatterns = compilePatterns(
 	`prompt is too long`,
 	`request_too_large`,
@@ -32,10 +33,12 @@ var overflowPatterns = compilePatterns(
 	`token limit exceeded`,
 )
 
-// nonOverflowPatterns 是排除正则（移植 pi overflow.ts:74-78，§P1-C），防 throttling/rate-limit
-// 被通用「too many tokens」误命中（典型 Bedrock「ThrottlingException: Too many tokens」）。
-// 注：pi 原版仅 `^(Throttling error|Service unavailable):` 不足以排除 Bedrock 的「ThrottlingException」，
-// 故补 `throttling`（throttling 恒非 context 超限），对齐 §P1-C C.5 反例「must be false」的意图。
+// nonOverflowPatterns holds the exclusion regexes (ported from pi overflow.ts:74-78, §P1-C), preventing
+// throttling/rate-limit responses from being mismatched by the generic "too many tokens" rule (typically
+// Bedrock "ThrottlingException: Too many tokens").
+// Note: the pi original only had `^(Throttling error|Service unavailable):`, which is not enough to exclude
+// Bedrock's "ThrottlingException", so `throttling` is added (throttling is never a context overflow), aligning
+// with the §P1-C C.5 counter-example intent of "must be false".
 var nonOverflowPatterns = compilePatterns(
 	`^(Throttling error|Service unavailable):`,
 	`throttling`,
@@ -43,8 +46,8 @@ var nonOverflowPatterns = compilePatterns(
 	`too many requests`,
 )
 
-// compilePatterns 批量编译正则并统一加 case-insensitive 标志（等价 JS /i）。
-// MustCompile 使模式写错在 init 期 fail-fast。
+// compilePatterns compiles the regexes in bulk and adds the case-insensitive flag uniformly (equivalent to JS /i).
+// MustCompile makes a malformed pattern fail-fast at init.
 func compilePatterns(patterns ...string) []*regexp.Regexp {
 	out := make([]*regexp.Regexp, len(patterns))
 	for i, p := range patterns {
@@ -53,10 +56,12 @@ func compilePatterns(patterns ...string) []*regexp.Regexp {
 	return out
 }
 
-// IsContextLengthError 识别 context 超限的错误响应体（§P1-C：从 4 个 marker 升级为 24 正则 + 4 排除）。
-// 先经 nonOverflowPatterns 排除 throttling/rate-limit，再经 overflowPatterns 命中。
-// 签名 (raw []byte) bool 保持不变 → client.go/stream.go 两调用点零签名改动，仅状态门从仅 400 放宽到 400||413。
-// 误判的最坏后果 = 一次无谓收紧重试，与旧版语义一致。
+// IsContextLengthError identifies context-overflow error response bodies (§P1-C: upgraded from 4 markers to
+// 24 regexes + 4 exclusions). It first runs nonOverflowPatterns to exclude throttling/rate-limit, then runs
+// overflowPatterns for a match.
+// The signature (raw []byte) bool is unchanged → the two call sites in client.go/stream.go need zero signature
+// changes; only the status gate is relaxed from 400-only to 400||413.
+// The worst case of a misjudgment = one pointless tightening retry, consistent with the old semantics.
 func IsContextLengthError(raw []byte) bool {
 	s := string(raw)
 	for _, p := range nonOverflowPatterns {

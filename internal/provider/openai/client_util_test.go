@@ -6,7 +6,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// §P1-C isContextLengthError：多厂商超限措辞正例 + throttling/空/限流反例。
+// §P1-C isContextLengthError: positive cases of multi-vendor context-length-exceeded wording + throttling/empty/rate-limit negatives.
 func TestIsContextLengthError(t *testing.T) {
 	positives := []string{
 		"This model's maximum context length is 200000 tokens",
@@ -27,13 +27,13 @@ func TestIsContextLengthError(t *testing.T) {
 	}
 	for _, body := range positives {
 		if !miniagent.IsContextLengthError([]byte(body)) {
-			t.Errorf("正例应判 true: %q", body)
+			t.Errorf("positive case should be true: %q", body)
 		}
 	}
 
 	negatives := []string{
-		"", // 空 body 不误判
-		"ThrottlingException: Too many tokens, please wait", // Bedrock 限流，非超限
+		"", // empty body must not be misclassified
+		"ThrottlingException: Too many tokens, please wait", // Bedrock rate limit, not context-length
 		"rate limit exceeded",
 		"too many requests, slow down",
 		"Service unavailable: maintenance",
@@ -41,7 +41,7 @@ func TestIsContextLengthError(t *testing.T) {
 	}
 	for _, body := range negatives {
 		if miniagent.IsContextLengthError([]byte(body)) {
-			t.Errorf("反例应判 false: %q", body)
+			t.Errorf("negative case should be false: %q", body)
 		}
 	}
 }

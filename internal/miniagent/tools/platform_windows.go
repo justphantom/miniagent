@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-// setPGID 在 Windows 上把子进程放入新进程组，以便超时 kill 能传递到整个子进程树。
+// setPGID on Windows places the child in a new process group so the timeout kill can propagate to the whole child process tree.
 func setPGID(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -17,7 +17,7 @@ func setPGID(cmd *exec.Cmd) {
 	cmd.SysProcAttr.CreationFlags = syscall.CREATE_NEW_PROCESS_GROUP
 }
 
-// killProcessGroup 终止子进程及其后代。
+// killProcessGroup terminates the child process and its descendants.
 func killProcessGroup(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
@@ -27,10 +27,10 @@ func killProcessGroup(cmd *exec.Cmd) {
 	_ = cmd.Process.Kill()
 }
 
-// openNoFollow 在 Windows 上回退为 Lstat+OpenFile 并拒绝最终分量为符号链接。
-// 注意：Windows 无 O_NOFOLLOW 等价 syscall，Lstat→OpenFile 间存在理论 TOCTOU（攻击者此时把 path
-// 替换为 symlink）。主平台 Linux/macOS 用 O_NOFOLLOW 单次 syscall 无此问题；Windows 是次要 fallback
-// 平台，此处接受该限制。彻底修复需 FILE_FLAG_OPEN_REPARSE_POINT + reparse point 检查（成本高、场景窄，未实现）。
+// openNoFollow on Windows falls back to Lstat+OpenFile and rejects a symlink as the final path component.
+// Note: Windows has no O_NOFOLLOW-equivalent syscall, so there is a theoretical TOCTOU between Lstat and OpenFile (an attacker swaps path
+// for a symlink in between). The main platforms Linux/macOS use a single O_NOFOLLOW syscall with no such issue; Windows is a secondary fallback
+// platform, and this limitation is accepted here. A complete fix requires FILE_FLAG_OPEN_REPARSE_POINT + a reparse-point check (high cost, narrow scenario, not implemented).
 func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 	fi, err := os.Lstat(path)
 	if err == nil && fi.Mode()&os.ModeSymlink != 0 {

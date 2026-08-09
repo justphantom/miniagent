@@ -9,7 +9,7 @@ import (
 )
 
 func TestRun_AssistantTextPreservedWithToolCalls(t *testing.T) {
-	resp := `{"choices":[{"message":{"role":"assistant","content":"先查一下","tool_calls":[{"id":"1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	resp := `{"choices":[{"message":{"role":"assistant","content":"let me check first","tool_calls":[{"id":"1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 	tr := &fakeTransport{responses: []string{resp, textResponse("done")}}
 	llm := testClients(tr)
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{{Name: "read", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "ok"} }}}}, "x", LoopHooks{}, nil)
@@ -24,10 +24,10 @@ func TestRun_AssistantTextPreservedWithToolCalls(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("未找到带 tool_calls 的 assistant 消息")
+		t.Fatal("no assistant message with tool_calls found")
 	}
-	if asst != "先查一下" {
-		t.Errorf("assistant 含 tool_calls 时 Content = %q, want %q（resp.Text 不应丢失，R4-2）", asst, "先查一下")
+	if asst != "let me check first" {
+		t.Errorf("assistant Content with tool_calls = %q, want %q (resp.Text must not be lost, R4-2)", asst, "let me check first")
 	}
 }
 
@@ -78,7 +78,7 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	if !called {
 		t.Error("tool not called")
 	}
-	// 只通知一次 tool_use（终态文本由 Result 携带）。
+	// tool_use is notified only once (the terminal text is carried by Result).
 	if len(uses) != 1 || uses[0] != "echo" {
 		t.Errorf("uses = %v", uses)
 	}
@@ -125,7 +125,7 @@ func TestRun_ToolPanicRecovered(t *testing.T) {
 }
 
 func TestRun_LLMErrorPropagates(t *testing.T) {
-	// 3 次 503：重试 testMaxRetries 次后仍失败，最终把错误上抛。
+	// Three 503s: after retrying testMaxRetries times it still fails, and the error propagates up.
 	tr := &fakeTransport{statuses: []int{
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
@@ -147,9 +147,9 @@ func TestRun_NilClientErrors(t *testing.T) {
 	}
 }
 
-// 一步内的多个 tool_call 并发用例见 loop_concurrency_test.go。
+// For concurrent multi tool_call within a single step, see loop_concurrency_test.go.
 
-// 多步 ReAct：第一步工具结果回灌，第二步拿到最终文本。
+// Multi-step ReAct: step 1 tool result is fed back, step 2 produces the final text.
 func TestRun_MultiStepReAct(t *testing.T) {
 	tool := Tool{Name: "query", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "data-42"} }}
 	tr := &fakeTransport{responses: []string{
@@ -170,7 +170,8 @@ func TestRun_MultiStepReAct(t *testing.T) {
 	}
 }
 
-// P2-2：端点不支持 thinking 时，跨步仅首步降级一次；后续步直接走无 thinking，不再撞 400。
+// P2-2: when the endpoint does not support thinking, the downgrade happens only once on the first step
+// across steps; subsequent steps go straight through without thinking and no longer hit 400.
 func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
 	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	thinkErr := `{"error":{"message":"unknown parameter: reasoning_effort"}}`
@@ -186,27 +187,30 @@ func TestRun_ThinkingDowngradePersistsAcrossSteps(t *testing.T) {
 	if res.Text != "done" {
 		t.Errorf("Text = %q, want done", res.Text)
 	}
-	// 无降级固化时 step2 会重发 thinking → 多一次 400 + 重试（共 4 次）；固化后共 3 次。
+	// Without downgrade persistence, step 2 would resend thinking → one extra 400 + retry (4 calls total);
+	// with persistence the total is 3.
 	if len(tr.bodies) != 3 {
-		t.Fatalf("calls = %d, want 3 (降级仅首步一次，step2 应直发无 thinking)", len(tr.bodies))
+		t.Fatalf("calls = %d, want 3 (downgrade happens only on the first step; step 2 should send without thinking)", len(tr.bodies))
 	}
 	for i, b := range tr.bodies {
 		has := strings.Contains(b, "reasoning_effort")
 		if i == 0 && !has {
-			t.Errorf("body[%d] 应带 thinking（首次探测）: %s", i, b)
+			t.Errorf("body[%d] should carry thinking (first probe): %s", i, b)
 		}
 		if i != 0 && has {
-			t.Errorf("body[%d] 不应带 thinking（降级应已固化）: %s", i, b)
+			t.Errorf("body[%d] should not carry thinking (downgrade should have persisted): %s", i, b)
 		}
 	}
-	// Fix 5：降级发生 → result.ThinkingDowngraded=true（交互层据此清 baseCfg，审查 P2 跨轮固化）。
+	// Fix 5: a downgrade occurred → result.ThinkingDowngraded=true (the interaction layer clears baseCfg
+	// accordingly; see review P2 cross-turn persistence).
 	if !res.ThinkingDowngraded {
 		t.Errorf("ThinkingDowngraded should be true after a downgrade occurred")
 	}
 }
 
-// 极简模式（BeforeLLM=nil）：核心不做任何上下文管理——巨大历史原样发送，不压缩、Compacted=false。
-// 这是「核心极简 + 压缩外挂」的契约证明：不挂 NewCompaction 即得无压缩 agent。
+// Minimal mode (BeforeLLM=nil): the core does no context management — huge history is sent verbatim, with
+// no compaction and Compacted=false. This is the contract proof of "minimal core + compaction as a plugin":
+// attaching no NewCompaction yields an agent without compaction.
 func TestRun_NilBeforeLLMIsMinimalNoCompaction(t *testing.T) {
 	big := strings.Repeat("x", 1000)
 	hist := make([]Message, 20)
@@ -225,13 +229,15 @@ func TestRun_NilBeforeLLMIsMinimalNoCompaction(t *testing.T) {
 	if tr.calls != 1 {
 		t.Errorf("minimal mode: want 1 LLM call, got %d", tr.calls)
 	}
-	// 全部历史原样进请求体（无压缩、无裁剪）——压缩了就不会含完整 big blob。
+	// The whole history enters the request body verbatim (no compaction, no trimming) — had it been
+	// compacted it would not contain the full big blob.
 	if !strings.Contains(tr.lastBody, big) {
 		t.Errorf("minimal mode should send history verbatim, body lacks big blob: %s", tr.lastBody)
 	}
 }
 
-// OnBudget 返回 ErrBudgetExceeded → Run 立即终止并上抛该 error（预算外挂的熔断契约）。
+// OnBudget returns ErrBudgetExceeded → Run terminates immediately and propagates that error (the
+// circuit-break contract of the budget plugin).
 func TestRun_OnBudgetExceedsStops(t *testing.T) {
 	tool := Tool{Name: "q", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
@@ -239,7 +245,7 @@ func TestRun_OnBudgetExceedsStops(t *testing.T) {
 		textResponse("done"),
 	}}
 	llm := testClients(tr)
-	// 响应 usage={1,1}（见 toolResponse）：首步累计 total={1,1}，阈值 1 → 熔断。
+	// The response usage={1,1} (see toolResponse): the first step accumulates total={1,1}, threshold 1 → circuit-break.
 	hooks := LoopHooks{OnBudget: func(_ context.Context, _ int, _ BudgetInput, total *Usage) error {
 		if total.InputTokens+total.OutputTokens > 1 {
 			return ErrBudgetExceeded
@@ -252,15 +258,15 @@ func TestRun_OnBudgetExceedsStops(t *testing.T) {
 	}
 }
 
-// appendMsg 打戳：Ts==0 自动打戳（>0）；显式 Ts 保留。
+// appendMsg timestamping: Ts==0 is auto-stamped (>0); an explicit Ts is preserved.
 func TestAppendMsg_Timestamp(t *testing.T) {
 	var msgs, newMsgs []Message
 	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: "auto"})
 	if msgs[0].Ts == 0 {
-		t.Error("Ts==0 应被 appendMsg 自动打戳为 >0")
+		t.Error("Ts==0 should be auto-stamped by appendMsg to >0")
 	}
 	appendMsg(&msgs, &newMsgs, Message{Role: RoleUser, Content: "manual", Ts: 42})
 	if msgs[1].Ts != 42 {
-		t.Errorf("显式 Ts 应保留: got %d, want 42", msgs[1].Ts)
+		t.Errorf("explicit Ts should be preserved: got %d, want 42", msgs[1].Ts)
 	}
 }

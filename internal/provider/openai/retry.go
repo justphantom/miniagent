@@ -8,12 +8,13 @@ import (
 	"time"
 )
 
-// 重试：仅对瞬时故障（429/5xx + 网络错误）生效，maxRetries 次。端点 429/503 抖动
-// 数秒内自愈，2 次覆盖典型尖刺；避免真故障下放大下游压力（雪崩）。
+// Retry: applies only to transient failures (429/5xx + network errors), up to maxRetries times.
+// Endpoint 429/503 jitter self-heals within seconds, so 2 attempts covers typical spikes; this
+// avoids amplifying downstream pressure under a real outage (cascading failure).
 const (
 	maxRetries     = 2
 	retryBaseDelay = 500 * time.Millisecond
-	retryMaxDelay  = 8 * time.Second // 单次退火上限，含 Retry-After 解析值
+	retryMaxDelay  = 8 * time.Second // per-attempt backoff cap, includes the parsed Retry-After value
 )
 
 func shouldRetryStatus(code int) bool {
@@ -28,13 +29,15 @@ func shouldRetryStatus(code int) bool {
 	return false
 }
 
-// isContextLengthError 的识别在 core（overflow.go，miniagent.IsContextLengthError）：
-// 24 正则 + 4 排除（§P1-C）。本包经 miniagent.IsContextLengthError 调用，避免分叉。
+// isContextLengthError is identified in core (overflow.go, miniagent.IsContextLengthError):
+// 24 regexes + 4 exclusions (§P1-C). This package calls miniagent.IsContextLengthError to avoid forking.
 
-// isThinkingError 启发式识别 thinking 参数（reasoning_effort 等）不被支持的 400：跨供应商
-// 措辞不一（"reasoning_effort"/"unknown parameter"/"unrecognized"）。强信号（字段名）直接命中；
-// 弱信号需同时含 thinking/reasoning 语义 + 参数未识别措辞——防「unrecognized tool name」「unknown model」
-// 等无关 400 被误判为 thinking 不支持（错误归因 + 烧 2 次请求）。误判只会触发一次无 thinking 重试（审查 v2 #7）。
+// isThinkingError heuristically identifies a 400 indicating the thinking parameter (reasoning_effort,
+// etc.) is unsupported: vendor wording varies ("reasoning_effort"/"unknown parameter"/"unrecognized").
+// A strong signal (the field name) hits directly; a weak signal requires both thinking/reasoning
+// semantics + unrecognized-parameter wording — this prevents unrelated 400s such as "unrecognized
+// tool name" or "unknown model" from being misclassified as thinking-unsupported (wrong attribution
+// + 2 wasted requests). A misclassification only triggers a single thinking-less retry (review v2 #7).
 func isThinkingError(raw []byte) bool {
 	lower := strings.ToLower(string(raw))
 	if strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning_effort_level") {
@@ -45,9 +48,9 @@ func isThinkingError(raw []byte) bool {
 	return hasThinking && hasUnknown
 }
 
-// parseRetryAfter 解析 Retry-After 头：秒数（RFC 7231 §7.1.3）或 HTTP-date。
-// 未提供或解析失败返回 -1（哨兵），以区分显式 "Retry-After: 0"——后者语义为立即重试。
-// 返回值不做上限封顶（封顶在调用处）。
+// parseRetryAfter parses the Retry-After header: seconds (RFC 7231 §7.1.3) or an HTTP-date.
+// Returns -1 (sentinel) when absent or unparseable, to distinguish an explicit "Retry-After: 0" —
+// the latter means retry immediately. The return value is not capped (capping happens at the call site).
 func parseRetryAfter(h http.Header) time.Duration {
 	v := strings.TrimSpace(h.Get("Retry-After"))
 	if v == "" {
@@ -60,14 +63,16 @@ func parseRetryAfter(h http.Header) time.Duration {
 		if d := time.Until(t); d > 0 {
 			return d
 		}
-		// HTTP-date 已成过去：语义等同"立即可重试"，返回 0（区别于 -1 走 backoff）。P3-3。
+		// HTTP-date already in the past: semantically equivalent to "retry now", return 0 (unlike -1
+		// which goes through backoff). P3-3.
 		return 0
 	}
 	return -1
 }
 
-// capRetryDelay：显式 Retry-After（>=0，含 0=立即）优先于指数 backoff，再封顶 retryMaxDelay。
-// retryAfter<0 表示未提供。ChatClient.Do 与 StreamClient.DoStream 重试循环共用（P2-4）。
+// capRetryDelay: an explicit Retry-After (>=0, including 0=immediate) takes precedence over
+// exponential backoff, then is capped at retryMaxDelay. retryAfter<0 means absent. Shared by the
+// retry loops of ChatClient.Do and StreamClient.DoStream (P2-4).
 func capRetryDelay(backoff, retryAfter time.Duration) time.Duration {
 	if retryAfter >= 0 {
 		backoff = retryAfter
@@ -78,7 +83,8 @@ func capRetryDelay(backoff, retryAfter time.Duration) time.Duration {
 	return backoff
 }
 
-// sleepCtx 等 delay 或 ctx 取消，ctx 先就绪返回 ctx.Err()。ChatClient.Do 与 StreamClient.DoStream 重试循环共用。
+// sleepCtx waits for delay or until ctx is canceled; if ctx becomes ready first it returns ctx.Err().
+// Shared by the retry loops of ChatClient.Do and StreamClient.DoStream.
 func sleepCtx(ctx context.Context, delay time.Duration) error {
 	select {
 	case <-time.After(delay):

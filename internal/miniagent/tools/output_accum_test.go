@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// §P1-D under-limit：写少量（< keep）→ finalize 无 banner、拼接等价原文。
+// §P1-D under-limit: writes a small amount (< keep) → finalize has no banner, join is equivalent to the original.
 func TestOutputAccum_UnderLimit(t *testing.T) {
 	a := newOutputAccum(100*1024, 0, "", "")
 	if err := a.write("hello "); err != nil {
@@ -22,7 +22,7 @@ func TestOutputAccum_UnderLimit(t *testing.T) {
 	}
 }
 
-// §P1-D over-limit-keeps-tail：超 keep 丢中段保尾，finalize 含 banner、含尾部、不含首部。
+// §P1-D over-limit-keeps-tail: exceeds keep, drops the middle and keeps the tail; finalize contains the banner, the tail, not the head.
 func TestOutputAccum_OverLimitKeepsTail(t *testing.T) {
 	a := newOutputAccum(100*1024, 0, "", "") // keep=100KB
 	firstChunk := "F" + strings.Repeat("x", 10*1024-1)
@@ -39,55 +39,55 @@ func TestOutputAccum_OverLimitKeepsTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := a.finalize(5000)
-	if !strings.Contains(got, "仅保留尾部") {
-		t.Errorf("超限应含 banner：%q...", firstN(got, 50))
+	if !strings.Contains(got, "only tail kept") {
+		t.Errorf("over limit should contain banner: %q...", firstN(got, 50))
 	}
 	if !strings.Contains(got, "L") {
-		t.Error("超限应保留尾部标记 L")
+		t.Error("over limit should keep the tail marker L")
 	}
 	if strings.Contains(got, "F") {
-		t.Error("超限不应保留首部标记 F（中段应被丢）")
+		t.Error("over limit should not keep the head marker F (middle should be dropped)")
 	}
 }
 
-// §P1-D empty/单 chunk：write("") 不增长 used；单 chunk 超 keep 且 len==1 不剔除（防空滑窗）。
+// §P1-D empty/single chunk: write("") does not grow used; a single chunk over keep with len==1 is not evicted (guards against empty sliding window).
 func TestOutputAccum_SingleChunkNotTrimmed(t *testing.T) {
-	a := newOutputAccum(100, 0, "", "") // keep 远小于 chunk
+	a := newOutputAccum(100, 0, "", "") // keep much smaller than the chunk
 	if err := a.write(""); err != nil {
 		t.Fatal(err)
 	}
 	if a.used != 0 {
-		t.Errorf("write(\"\") 后 used=%d, want 0", a.used)
+		t.Errorf("after write(\"\") used=%d, want 0", a.used)
 	}
 	big := strings.Repeat("y", 500)
 	if err := a.write(big); err != nil {
 		t.Fatal(err)
 	}
 	if a.cut {
-		t.Error("单 chunk 超 keep 且 len==1 不应置 cut（防空滑窗）")
+		t.Error("single chunk over keep with len==1 should not set cut (guards against empty sliding window)")
 	}
 	got := a.finalize(5000)
 	if got != big {
-		t.Errorf("单 chunk 应完整保留（无 banner）: len got=%d want=%d", len(got), len(big))
+		t.Errorf("single chunk should be kept in full (no banner): len got=%d want=%d", len(got), len(big))
 	}
 }
 
-// §P1-D finalize maxChars 兜底：滑窗 join 超 maxChars 时 truncateTail 截到 maxChars rune + 前置 marker。
+// §P1-D finalize maxChars fallback: when the sliding window join exceeds maxChars, truncateTail truncates to maxChars runes + prepends a marker.
 func TestOutputAccum_FinalizeMaxChars(t *testing.T) {
 	a := newOutputAccum(100*1024, 0, "", "")
-	a.write(strings.Repeat("z", 8000)) // 单 chunk 8000 rune < keep，不 cut
+	a.write(strings.Repeat("z", 8000)) // single chunk 8000 runes < keep, no cut
 	got := a.finalize(1000)
-	if !strings.HasPrefix(got, "…[输出已截断]") {
-		t.Errorf("超 maxChars 应前置截断 marker：%q...", firstN(got, 30))
+	if !strings.HasPrefix(got, "…[output truncated]") {
+		t.Errorf("over maxChars should prepend a truncate marker: %q...", firstN(got, 30))
 	}
-	// marker + 1000 rune。
-	want := "…[输出已截断]" + strings.Repeat("z", 1000)
+	// marker + 1000 runes.
+	want := "…[output truncated]" + strings.Repeat("z", 1000)
 	if got != want {
-		t.Errorf("finalize maxChars 长度错: got len=%d want len=%d", len(got), len(want))
+		t.Errorf("finalize maxChars wrong length: got len=%d want len=%d", len(got), len(want))
 	}
 }
 
-// §P1-D spill off（headSpillBytes=0）：file 始终空、无落盘 IO。
+// §P1-D spill off (headSpillBytes=0): file always empty, no disk IO.
 func TestOutputAccum_SpillOff(t *testing.T) {
 	dir := t.TempDir()
 	a := newOutputAccum(100*1024, 0, dir, "prefix")
@@ -96,14 +96,14 @@ func TestOutputAccum_SpillOff(t *testing.T) {
 	}
 	_ = a.closeSink()
 	if a.file != "" {
-		t.Errorf("spill off 时 file 应为空: %q", a.file)
+		t.Errorf("spill off should leave file empty: %q", a.file)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Errorf("spill off 不应产生文件: %d", len(entries))
+		t.Errorf("spill off should not produce files: %d", len(entries))
 	}
 }
 
-// §P1-D spill on（headSpillBytes>0）：total 过阈值后 file 非空、文件内容含全部 chunk。
+// §P1-D spill on (headSpillBytes>0): after total crosses the threshold, file is non-empty and contains all chunks.
 func TestOutputAccum_SpillOn(t *testing.T) {
 	dir := t.TempDir()
 	a := newOutputAccum(100*1024, 50*1024, dir, "spill")
@@ -114,22 +114,22 @@ func TestOutputAccum_SpillOn(t *testing.T) {
 		t.Fatalf("closeSink: %v", err)
 	}
 	if a.file == "" {
-		t.Fatal("spill on 时 file 应非空")
+		t.Fatal("spill on should leave file non-empty")
 	}
 	b, err := os.ReadFile(a.file)
 	if err != nil {
 		t.Fatalf("read spill: %v", err)
 	}
 	if len(b) != 30*10*1024 {
-		t.Errorf("落盘文件应含全部 chunk: len=%d, want %d", len(b), 30*10*1024)
+		t.Errorf("spilled file should contain all chunks: len=%d, want %d", len(b), 30*10*1024)
 	}
-	// closeSink 幂等。
+	// closeSink is idempotent.
 	if err := a.closeSink(); err != nil {
-		t.Errorf("幂等 closeSink: %v", err)
+		t.Errorf("idempotent closeSink: %v", err)
 	}
 }
 
-// §P1-D spill 落盘目录路径出现在 finalize banner 的「全文：」中。
+// §P1-D the spill directory path appears in the finalize banner under "full output: ".
 func TestOutputAccum_SpillBannerHasFile(t *testing.T) {
 	dir := t.TempDir()
 	a := newOutputAccum(100*1024, 50*1024, dir, "spill")
@@ -138,8 +138,8 @@ func TestOutputAccum_SpillBannerHasFile(t *testing.T) {
 	}
 	_ = a.closeSink()
 	got := a.finalize(5000)
-	if !strings.Contains(got, "全文：") || !strings.Contains(got, a.file) {
-		t.Errorf("spill on 的 banner 应含全文路径：%q...", firstN(got, 60))
+	if !strings.Contains(got, "full output: ") || !strings.Contains(got, a.file) {
+		t.Errorf("spill on banner should contain full output path: %q...", firstN(got, 60))
 	}
 	_ = filepath.Base(a.file) // keep filepath used
 }

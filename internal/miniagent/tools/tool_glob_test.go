@@ -32,7 +32,7 @@ func TestGlobTool_NoMatch(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "无匹配") {
+	if !strings.Contains(res.Output, "no matches") {
 		t.Errorf("Output = %q", res.Output)
 	}
 }
@@ -55,7 +55,7 @@ func TestGlobTool_SkipDotGit(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	// 仅列 a.go，不含 .git/x.go。
+	// Only a.go is listed; .git/x.go is excluded.
 	lines := strings.Split(strings.TrimSpace(res.Output), "\n")
 	if len(lines) != 1 || lines[0] != "a.go" {
 		t.Errorf(".git not skipped: %s", res.Output)
@@ -67,7 +67,7 @@ func TestGlobTool_MissingRootErrors(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error for missing root")
 	}
-	if !strings.Contains(res.Output, "列举") {
+	if !strings.Contains(res.Output, "glob") {
 		t.Errorf("error message should mention glob failure: %q", res.Output)
 	}
 }

@@ -22,9 +22,9 @@ type globArgs struct {
 	Path    string `json:"path,omitempty"`
 }
 
-// GlobTool 递归列举匹配通配的文件路径，每行一个相对 workdir 的路径。
-// filepath.Match 通配（*, ?, [...]），不跨 /、不支持 **——需递归用 grep 或 shell。
-// timeout<=0 用默认 fileOpTimeout。
+// GlobTool recursively lists file paths matching a glob, one path per line relative to workdir.
+// Uses filepath.Match globs (*, ?, [...]); they do not cross / and do not support ** — for recursion use grep or shell.
+// timeout<=0 uses the default fileOpTimeout.
 func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
@@ -34,14 +34,14 @@ func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) m
 	}
 	return miniagent.Tool{
 		Name:        "glob",
-		Description: "递归列举匹配通配的文件路径，每行一个（相对 workdir）。filepath.Match 通配（* ? [...]，不跨 /、无 **）。排除 .git。命中上限 " + strconv.Itoa(maxGlobEntries) + "。",
+		Description: "Recursively lists file paths matching a glob pattern, one per line (relative to workdir). Uses filepath.Match globs (* ? [...]; does not cross /, no **). Excludes .git. Match limit " + strconv.Itoa(maxGlobEntries) + ".",
 		Parameters: object(map[string]any{
-			"pattern": map[string]any{"type": "string", "description": "filepath.Match 通配模式，如 *.go 或 *_test.go"},
-			"path":    map[string]any{"type": "string", "description": "根目录，相对 workdir 或绝对，默认 workdir"},
+			"pattern": map[string]any{"type": "string", "description": "A filepath.Match glob pattern, e.g. *.go or *_test.go"},
+			"path":    map[string]any{"type": "string", "description": "Root directory, relative to workdir or absolute, defaults to workdir"},
 		}, "pattern"),
 		ResultLimit: policy.MaxToolResultInHistory,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
-			return runWithTimeout(ctx, timeout, "列举", func(rctx context.Context) miniagent.ToolResult { return runGlob(rctx, workspaceRoot, args, maxOutputChars) })
+			return runWithTimeout(ctx, timeout, "glob", func(rctx context.Context) miniagent.ToolResult { return runGlob(rctx, workspaceRoot, args, maxOutputChars) })
 		},
 	}
 }
@@ -49,13 +49,13 @@ func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) m
 func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int) miniagent.ToolResult {
 	var a globArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("参数解析失败：%v（收到 %q）", err, args)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed: %v (received %q)", err, args)}
 	}
 	if strings.TrimSpace(a.Pattern) == "" {
-		return miniagent.ToolResult{IsError: true, Output: "参数缺失：pattern"}
+		return miniagent.ToolResult{IsError: true, Output: "missing argument: pattern"}
 	}
 	if _, err := filepath.Match(a.Pattern, "x"); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("通配模式非法：%v", err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("invalid glob pattern: %v", err)}
 	}
 	root := resolveToolPath(workspaceRoot, a.Path)
 	var paths []string
@@ -66,9 +66,9 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 		}
 		if err != nil {
 			if path == root {
-				return err // 根目录不可访问：真实错误上抛（codemap 走 Stat 预检，glob 在此区分）
+				return err // root inaccessible: propagate the real error (codemap pre-checks via Stat; glob branches here)
 			}
-			return nil //nolint:nilerr // 子树不可访问跳过，保留可访问部分（与 grep/codemap 一致）
+			return nil //nolint:nilerr // skip inaccessible subtrees, keep accessible parts (consistent with grep/codemap)
 		}
 		if d.IsDir() {
 			if d.Name() == ".git" || d.Type()&fs.ModeSymlink != 0 {
@@ -95,14 +95,14 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 		return nil
 	})
 	if walkErr != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("列举 %q 失败：%v", a.Path, walkErr)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("glob %q failed: %v", a.Path, walkErr)}
 	}
 	if len(paths) == 0 {
-		return miniagent.ToolResult{Output: "无匹配"}
+		return miniagent.ToolResult{Output: "no matches"}
 	}
-	out := text.Truncate(strings.Join(paths, "\n"), maxOutputChars, "…[glob 输出已截断]")
+	out := text.Truncate(strings.Join(paths, "\n"), maxOutputChars, "…[glob output truncated]")
 	if truncated {
-		out += fmt.Sprintf("\n…（超过 %d 条，已停止收集）", maxGlobEntries)
+		out += fmt.Sprintf("\n…(over %d entries, collection stopped)", maxGlobEntries)
 	}
 	return miniagent.ToolResult{Output: out}
 }

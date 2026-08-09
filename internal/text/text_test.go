@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Truncate：n<=0 原样返回；长度<=n 不截；超 n 取前 n rune + marker。
+// Truncate: n<=0 returns input as-is; length<=n not truncated; over n takes first n runes + marker.
 func TestTruncate(t *testing.T) {
 	cases := []struct {
 		s      string
@@ -13,13 +13,13 @@ func TestTruncate(t *testing.T) {
 		marker string
 		want   string
 	}{
-		{"hello", 0, "…", "hello"},  // n<=0 原样
-		{"hello", -1, "…", "hello"}, // n<0 原样
-		{"hello", 5, "…", "hello"},  // 恰好等于，不截
-		{"hello", 10, "…", "hello"}, // 超出长度，不截
-		{"hello", 3, "…", "hel…"},   // 截断
-		{"你好世界", 2, "…", "你好…"},     // rune 边界（非字节）
-		{"", 3, "…", ""},            // 空串
+		{"hello", 0, "…", "hello"},  // n<=0 returns as-is
+		{"hello", -1, "…", "hello"}, // n<0 returns as-is
+		{"hello", 5, "…", "hello"},  // exactly equal, not truncated
+		{"hello", 10, "…", "hello"}, // exceeds length, not truncated
+		{"hello", 3, "…", "hel…"},   // truncated
+		{"你好世界", 2, "…", "你好…"},     // rune boundary (not bytes)
+		{"", 3, "…", ""},            // empty string
 	}
 	for i, c := range cases {
 		if got := Truncate(c.s, c.n, c.marker); got != c.want {
@@ -28,7 +28,7 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-// TruncateTail：保末尾 n rune，截断前置 marker。
+// TruncateTail: keeps last n runes, prefixing a truncate marker.
 func TestTruncateTail(t *testing.T) {
 	if got := TruncateTail("hello", 3, "…"); got != "…llo" {
 		t.Errorf("TruncateTail = %q, want …llo", got)
@@ -37,16 +37,16 @@ func TestTruncateTail(t *testing.T) {
 		t.Errorf("TruncateTail rune = %q, want …世界", got)
 	}
 	for _, s := range []string{"hello", "你好"} {
-		if got := TruncateTail(s, 10, "…"); got != s { // 长度<=n 不截
-			t.Errorf("TruncateTail(%q,10) = %q, want 原样", s, got)
+		if got := TruncateTail(s, 10, "…"); got != s { // length<=n not truncated
+			t.Errorf("TruncateTail(%q,10) = %q, want as-is", s, got)
 		}
 	}
-	if got := TruncateTail("hello", 0, "…"); got != "hello" { // n<=0 原样
-		t.Errorf("TruncateTail n<=0 = %q, want 原样", got)
+	if got := TruncateTail("hello", 0, "…"); got != "hello" { // n<=0 returns as-is
+		t.Errorf("TruncateTail n<=0 = %q, want as-is", got)
 	}
 }
 
-// TruncateHeadTail：保头 n/4 + 尾 3n/4，中段插 marker；长度<=n 不截；头尾已覆盖全部时不截。
+// TruncateHeadTail: keeps head n/4 + tail 3n/4, inserts a marker in the middle; length<=n not truncated; no truncation when head+tail already cover everything.
 func TestTruncateHeadTail(t *testing.T) {
 	s := "0123456789abcdef" // 16 rune
 	got := TruncateHeadTail(s, 8, "…")
@@ -54,24 +54,24 @@ func TestTruncateHeadTail(t *testing.T) {
 	if got != "01…abcdef" {
 		t.Errorf("TruncateHeadTail(16,8) = %q, want 01…abcdef", got)
 	}
-	// rune 边界
-	got = TruncateHeadTail("你好世界你好世界你好世界", 4, "…") // 12 rune
+	// rune boundary
+	got = TruncateHeadTail("你好世界你好世界你好世界", 4, "…") // 12 runes
 	if !strings.HasPrefix(got, "你") || !strings.HasSuffix(got, "界") || !strings.Contains(got, "…") {
-		t.Errorf("TruncateHeadTail rune = %q, want 头+marker+尾", got)
+		t.Errorf("TruncateHeadTail rune = %q, want head+marker+tail", got)
 	}
-	if got := TruncateHeadTail("short", 100, "…"); got != "short" { // 长度<=n 不截
-		t.Errorf("TruncateHeadTail short = %q, want 原样", got)
+	if got := TruncateHeadTail("short", 100, "…"); got != "short" { // length<=n not truncated
+		t.Errorf("TruncateHeadTail short = %q, want as-is", got)
 	}
-	if got := TruncateHeadTail("short", 0, "…"); got != "short" { // n<=0 原样
-		t.Errorf("TruncateHeadTail n<=0 = %q, want 原样", got)
+	if got := TruncateHeadTail("short", 0, "…"); got != "short" { // n<=0 returns as-is
+		t.Errorf("TruncateHeadTail n<=0 = %q, want as-is", got)
 	}
-	// 头尾窗口已覆盖全部时不截（不增 marker 噪音）：n 大到 headN+tailN>=len
+	// when head+tail window already covers everything, not truncated (no marker noise): n large enough that headN+tailN>=len
 	if got := TruncateHeadTail("abc", 3, "…"); got != "abc" {
-		t.Errorf("TruncateHeadTail full-cover = %q, want abc（不加 marker）", got)
+		t.Errorf("TruncateHeadTail full-cover = %q, want abc (no marker added)", got)
 	}
 }
 
-// CountCharsLocal：CJK（Han/Hiragana/Katakana/Hangul）与非 CJK 分流计数。
+// CountCharsLocal: counts CJK (Han/Hiragana/Katakana/Hangul) and non-CJK separately.
 func TestCountCharsLocal(t *testing.T) {
 	cases := []struct {
 		s      string
@@ -81,7 +81,7 @@ func TestCountCharsLocal(t *testing.T) {
 		{"abc", 3, 0},
 		{"你好", 0, 2},  // Han
 		{"안녕", 0, 2},  // Hangul
-		{"a中b", 2, 1}, // 混合
+		{"a中b", 2, 1}, // mixed
 		{"", 0, 0},
 		{"ひらがな", 0, 4}, // Hiragana
 		{"カタカナ", 0, 4}, // Katakana
@@ -94,14 +94,14 @@ func TestCountCharsLocal(t *testing.T) {
 	}
 }
 
-// NowMs 返回正的 Unix 毫秒戳。
+// NowMs returns a positive Unix millisecond timestamp.
 func TestNowMs(t *testing.T) {
 	ms := NowMs()
 	if ms <= 0 {
 		t.Errorf("NowMs = %d, want > 0", ms)
 	}
-	// 单调递增（连续调用后者不小于前者）
+	// monotonically non-decreasing (a later consecutive call is not less than the earlier one)
 	if ms2 := NowMs(); ms2 < ms {
-		t.Errorf("NowMs 非单调: %d -> %d", ms, ms2)
+		t.Errorf("NowMs not monotonic: %d -> %d", ms, ms2)
 	}
 }

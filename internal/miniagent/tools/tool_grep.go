@@ -23,8 +23,8 @@ import (
 
 const (
 	maxGrepMatches   = 500
-	maxGrepFileBytes = 50 << 20 // 单文件大小上限：超大文件（日志/生成物）逐行扫到 fileOpTimeout 才超时，浪费 IO，入口 Stat 直接跳过
-	// maxGrepRegexNodes 限制正则复杂度：AST 节点数超限直接拒绝，防止构造性慢正则消耗 CPU。
+	maxGrepFileBytes = 50 << 20 // per-file size cap: a huge file (logs/build artifacts) scanned line by line only times out at fileOpTimeout, wasting IO, so the entry-point Stat skips it directly
+	// maxGrepRegexNodes limits regex complexity: an AST node count over the limit is rejected outright, preventing a constructed slow regex from burning CPU.
 	maxGrepRegexNodes = 100
 )
 
@@ -34,9 +34,9 @@ type grepArgs struct {
 	Glob    string `json:"glob,omitempty"`
 }
 
-// GrepTool 递归正则搜索文本文件，输出 file:lineno:line（与 grep -n 一致）。
-// workspaceRoot 为空且 path 缺省时，搜调用方进程 cwd。
-// timeout<=0 用默认 fileOpTimeout。
+// GrepTool recursively regex-searches text files, outputting file:lineno:line (consistent with grep -n).
+// When workspaceRoot is empty and path is omitted, it searches the caller process's cwd.
+// timeout<=0 uses the default fileOpTimeout.
 func GrepTool(workspaceRoot string, timeout time.Duration, maxMatches, maxOutputChars int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = fileOpTimeout
@@ -49,16 +49,16 @@ func GrepTool(workspaceRoot string, timeout time.Duration, maxMatches, maxOutput
 	}
 	return miniagent.Tool{
 		Name:        "grep",
-		Description: "递归正则搜索文本文件内容。输出 path:lineno:line（与 grep -n 一致，便于定位）。默认搜 workdir；可用 glob 按文件名过滤（仅匹配 base name，* 不跨 /，如 sub/*.go 不命中）。命中行上限 " + strconv.Itoa(maxMatches) + "，输出超 " + strconv.Itoa(maxOutputChars) + " 字符截断。跳过 .git、二进制与超过 50MB 的文件。",
+		Description: "Recursively regex-searches text file contents. Outputs path:lineno:line (matches grep -n, for easy locating). Searches workdir by default; use glob to filter by file name (matches base name only, * does not cross /, so sub/*.go won't match). Match limit " + strconv.Itoa(maxMatches) + " lines; output is truncated over " + strconv.Itoa(maxOutputChars) + " characters. Skips .git, binary files, and files over 50MB.",
 		Parameters: object(map[string]any{
-			"pattern": map[string]any{"type": "string", "description": "正则表达式（Go regexp 语法，如 foo、Foo.*、(?i)error）"},
-			"path":    map[string]any{"type": "string", "description": "搜索根目录，相对 workdir 或绝对，默认 workdir"},
-			"glob":    map[string]any{"type": "string", "description": "文件名 include 过滤，filepath.Match 通配（如 *.go）"},
+			"pattern": map[string]any{"type": "string", "description": "A regular expression (Go regexp syntax, e.g. foo, Foo.*, (?i)error)"},
+			"path":    map[string]any{"type": "string", "description": "Search root directory, relative to workdir or absolute, defaults to workdir"},
+			"glob":    map[string]any{"type": "string", "description": "File-name include filter, a filepath.Match glob (e.g. *.go)"},
 		}, "pattern"),
 		ResultLimit:   policy.MaxToolResultInHistory,
-		SplitTruncate: true, // 命中上限/无匹配等汇总在尾部，前截断会丢失
+		SplitTruncate: true, // the match-limit/no-match summary is at the tail; front-truncation would lose it
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
-			return runWithTimeout(ctx, timeout, "搜索", func(rctx context.Context) miniagent.ToolResult {
+			return runWithTimeout(ctx, timeout, "search", func(rctx context.Context) miniagent.ToolResult {
 				return runGrep(rctx, workspaceRoot, args, maxMatches, maxOutputChars)
 			})
 		},
@@ -75,7 +75,7 @@ func runGrep(ctx context.Context, workspaceRoot, args string, maxMatches, maxOut
 	}
 	re, err := regexp.Compile(a.Pattern)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("正则非法：%v", err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("invalid regex: %v", err)}
 	}
 	root := resolveToolPath(workspaceRoot, a.Path)
 	var globFn func(string) bool
@@ -87,30 +87,30 @@ func runGrep(ctx context.Context, workspaceRoot, args string, maxMatches, maxOut
 	}
 	matches, truncated, err := grepWalk(ctx, root, re, globFn, maxMatches)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("搜索 %q 失败：%v", a.Path, err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("search %q failed: %v", a.Path, err)}
 	}
 	if len(matches) == 0 {
-		return miniagent.ToolResult{Output: "无命中"}
+		return miniagent.ToolResult{Output: "no matches"}
 	}
 	var sb strings.Builder
 	for _, m := range matches {
 		fmt.Fprintf(&sb, "%s:%d:%s\n", m.file, m.line, m.text)
 	}
-	out := text.Truncate(sb.String(), maxOutputChars, "…[grep 输出已截断]")
+	out := text.Truncate(sb.String(), maxOutputChars, "…[grep output truncated]")
 	if truncated {
-		out += fmt.Sprintf("\n…（命中超过 %d 行，已停止收集）", maxMatches)
+		out += fmt.Sprintf("\n…(over %d matching lines, collection stopped)", maxMatches)
 	}
 	return miniagent.ToolResult{Output: out}
 }
 
-// validateGrepPattern 用 regexp/syntax 解析并限制 AST 节点数，防止构造性慢正则。
+// validateGrepPattern parses the pattern with regexp/syntax and limits the AST node count, preventing a constructed slow regex.
 func validateGrepPattern(pattern string) error {
 	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
-		return fmt.Errorf("正则解析失败：%w", err)
+		return fmt.Errorf("regex parsing failed: %w", err)
 	}
 	if n := countRegexNodes(re); n > maxGrepRegexNodes {
-		return fmt.Errorf("正则过于复杂：%d 个节点（上限 %d）", n, maxGrepRegexNodes)
+		return fmt.Errorf("regex too complex: %d nodes (limit %d)", n, maxGrepRegexNodes)
 	}
 	return nil
 }
@@ -129,10 +129,10 @@ func countRegexNodes(re *syntax.Regexp) int {
 func parseGrepArgs(args string) (grepArgs, error) {
 	var a grepArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return grepArgs{}, fmt.Errorf("参数解析失败：%w（收到 %q）", err, args)
+		return grepArgs{}, fmt.Errorf("argument parsing failed: %w (received %q)", err, args)
 	}
 	if strings.TrimSpace(a.Pattern) == "" {
-		return grepArgs{}, errors.New("参数缺失：pattern")
+		return grepArgs{}, errors.New("missing argument: pattern")
 	}
 	return a, nil
 }
@@ -143,9 +143,9 @@ type grepMatch struct {
 	text string
 }
 
-// grepWalk 遍历 root，对每个文本文件逐行匹配。不可访问的子树/文件跳过而非整体
-// 失败（部分可读仍有益）。跳过 .git、符号链接（防递归误入）、非 regular 文件（FIFO/设备/socket：
-// os.Open 会阻塞，与 read/edit 的 IsRegular 守卫一致）。
+// grepWalk walks root and matches each text file line by line. Inaccessible subtrees/files are skipped rather than failing
+// the whole walk (partial readability is still useful). Skips .git, symlinks (to avoid recursing into them by mistake), and
+// non-regular files (FIFO/device/socket: os.Open would block, consistent with the read/edit IsRegular guard).
 func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(string) bool, maxMatches int) ([]grepMatch, bool, error) {
 	var matches []grepMatch
 	truncated := false
@@ -154,7 +154,7 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 			return err
 		}
 		if walkErr != nil {
-			return nil //nolint:nilerr // 不可访问的子树跳过，保留可访问部分的结果
+			return nil //nolint:nilerr // skip inaccessible subtrees, keep results from accessible parts
 		}
 		if d.IsDir() {
 			if d.Name() == ".git" || d.Type()&fs.ModeSymlink != 0 {
@@ -165,8 +165,8 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
-		// FIFO/设备/socket：os.Open 会阻塞（无写者 FIFO 永久卡至 fileOpTimeout 且泄漏 OS 线程），与
-		// read/edit 的 IsRegular 守卫一致跳过。
+		// FIFO/device/socket: os.Open would block (a FIFO with no writer hangs forever until fileOpTimeout and leaks an OS thread);
+		// skipped consistently with the read/edit IsRegular guard.
 		if !d.Type().IsRegular() {
 			return nil
 		}
@@ -181,7 +181,7 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 		if r, err := filepath.Rel(root, path); err == nil {
 			rel = r
 		}
-		// grepFile 错误（binary/too-large/ErrTooLong 等）仅跳过该文件剩余；ms 含 ErrTooLong 前的 partial 命中仍可用。
+		// A grepFile error (binary/too-large/ErrTooLong etc.) only skips the rest of that file; ms still contains partial matches collected before ErrTooLong and remains usable.
 		ms, _ := grepFile(path, rel, re, maxMatches)
 		for _, m := range ms {
 			if len(matches) >= maxMatches {
@@ -195,16 +195,16 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 	return matches, truncated, err
 }
 
-// grepFile 读 path 逐行匹配，display 作为输出里的文件名（通常是相对 root 的路径）。
-// 含 NUL 视为二进制跳过（与 read 工具一致，防乱码污染上下文）。入口 Stat 限制单文
-// 件大小：无匹配的超大文件（日志/生成物）会逐行扫到 fileOpTimeout，纯耗 IO。
+// grepFile reads path and matches it line by line; display is the file name used in the output (usually the path relative to root).
+// Containing NUL is treated as binary and skipped (consistent with the read tool, to prevent garbled output polluting context).
+// The entry-point Stat caps per-file size: a no-match huge file (logs/build artifacts) would be scanned line by line until fileOpTimeout, pure IO waste.
 func grepFile(path, display string, re *regexp.Regexp, maxMatches int) ([]grepMatch, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
-	// 复检 IsRegular：os.Stat 跟随 symlink，拦截 walk 层 d.Type() 快照后的 swap-race（path 被换 FIFO/设备/socket），
-	// 与 read/edit 在 open 层的守卫对齐（M3-3 残口 R4-5）。
+	// Re-check IsRegular: os.Stat follows symlinks, catching a swap-race after the walk-level d.Type() snapshot (path swapped to a FIFO/device/socket),
+	// aligned with the read/edit open-level guard (M3-3 gap R4-5).
 	if !fi.Mode().IsRegular() {
 		return nil, errors.New("not regular, skipped")
 	}
@@ -222,7 +222,7 @@ func grepFile(path, display string, re *regexp.Regexp, maxMatches int) ([]grepMa
 		return nil, errors.New("binary")
 	}
 	scanner := bufio.NewScanner(br)
-	// 默认 64KB 行长上限太小（压缩/生成文件常见超长行），放宽到 1MB。
+	// The default 64KB line-length cap is too small (compressed/generated files often have very long lines), so loosen it to 1MB.
 	scanner.Buffer(make([]byte, 64*1024), 1<<20)
 	var matches []grepMatch
 	lineno := 0
@@ -230,14 +230,14 @@ func grepFile(path, display string, re *regexp.Regexp, maxMatches int) ([]grepMa
 		lineno++
 		if re.MatchString(scanner.Text()) {
 			matches = append(matches, grepMatch{file: display, line: lineno, text: scanner.Text()})
-			// 单文件命中封顶：防巨文件（每行命中）在 grepWalk 的全局 maxMatches 截断前，瞬态分配整文件命中切片。
+			// Per-file match cap: prevents a giant file (every line matches) from transiently allocating a full-file match slice before grepWalk's global maxMatches truncation.
 			if len(matches) >= maxMatches {
 				return matches, nil
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		// ErrTooLong（>1MB 单行）等：返回已收集的 partial 命中而非丢弃，调用方仍可用。
+		// ErrTooLong (>1MB single line) etc.: return the partial matches collected so far rather than discarding them; the caller can still use them.
 		return matches, err
 	}
 	return matches, nil

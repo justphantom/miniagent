@@ -10,8 +10,8 @@ import (
 
 // setPGID puts the child in a new process group so kill(-pgid) can reach
 // the whole tree spawned by sh -c (otherwise grandchildren go orphan on
-// timeout). 注意：子进程若再调 setsid 自立新会话会脱离该进程组，超时 kill(-pgid)
-// 杀不到这类孤儿；彻底兜底需 cgroup 或命名空间隔离（审查 P3-6）。
+// timeout). Note: if the child then calls setsid to start its own session it leaves this process group,
+// and the timeout kill(-pgid) cannot reach such orphans; a complete fallback requires cgroup or namespace isolation (review P3-6).
 func setPGID(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -31,8 +31,8 @@ func killProcessGroup(cmd *exec.Cmd) {
 	}
 }
 
-// openNoFollow 以 O_NOFOLLOW 打开 path，仅拒绝最终路径分量是符号链接。
-// 中间目录仍可是符号链接，不构成路径边界；free 模式下隔离由调用方保证。
+// openNoFollow opens path with O_NOFOLLOW, rejecting only a symlink as the final path component.
+// Intermediate directories may still be symlinks and do not constitute a path boundary; under free mode isolation is the caller's responsibility.
 func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
 	fd, err := syscall.Open(path, flag|syscall.O_NOFOLLOW, uint32(perm))
 	if err != nil {

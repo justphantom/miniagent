@@ -12,7 +12,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// 空 msgs：AppendMessages no-op，不创建文件（main 仅成功轮调用，空 NewMessages 不落盘）。
+// Empty msgs: AppendMessages is a no-op, does not create a file (main only calls on successful turns; empty NewMessages is not persisted).
 func TestAppendMessages_EmptyNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.jsonl")
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, nil); err != nil {
@@ -23,7 +23,7 @@ func TestAppendMessages_EmptyNoop(t *testing.T) {
 	}
 }
 
-// 落盘权限 0o600（对话属敏感数据）。
+// Persist permission 0o600 (conversation is sensitive data).
 func TestAppendMessages_FileMode0600(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perm.jsonl")
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, sampleTranscript()); err != nil {
@@ -38,7 +38,7 @@ func TestAppendMessages_FileMode0600(t *testing.T) {
 	}
 }
 
-// 多次 Append 累积（append-only），每次仅追加新消息。
+// Multiple Appends accumulate (append-only); each call only appends new messages.
 func TestAppendMessages_AppendsAcrossCalls(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "acc.jsonl")
 	meta := SessionMeta{ID: "s"}
@@ -57,30 +57,33 @@ func TestAppendMessages_AppendsAcrossCalls(t *testing.T) {
 	}
 }
 
-// P1-4：追加后将超过 maxSessionBytes 时返回 error，不写入。读侧硬封顶，写侧不预判会让
-// 某轮落盘后文件刚越 4MiB，下一轮 LoadSession 永久失败致会话不可接续。
+// P1-4: when the append would exceed maxSessionBytes, return an error and do not write. The read side
+// has a hard cap; if the write side did not pre-check, a turn could persist a file just over 4MiB, and the
+// next turn's LoadSession would permanently fail, making the session impossible to resume.
 func TestAppendMessages_OversizedAppendErrors(t *testing.T) {
 	const maxSz = int64(1 << 20)
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	meta := SessionMeta{ID: "s"}
 	big := strings.Repeat("x", int(maxSz/2)+100)
 	if err := AppendMessages(path, meta, []miniagent.Message{{Role: "user", Content: big}}, maxSz); err != nil {
-		t.Fatalf("首次追加应成功: %v", err)
+		t.Fatalf("first append should succeed: %v", err)
 	}
-	// 再追加同样大小，总和超 maxSz → 写侧预判应返回 error。
+	// Append the same size again; the total exceeds maxSz -> the write side pre-check should return an error.
 	if err := AppendMessages(path, meta, []miniagent.Message{{Role: "user", Content: big}}, maxSz); err == nil {
-		t.Fatal("P1-4：追加后超 maxSz 应返回 error")
+		t.Fatal("P1-4: append exceeding maxSz should return an error")
 	}
-	// 第二次失败不应让文件越过上限（写侧预判在写入前）。
+	// The second failed attempt should not let the file exceed the cap (write-side pre-check happens before writing).
 	info, _ := os.Stat(path)
 	if info.Size() > maxSz {
-		t.Errorf("文件大小 %d 超 maxSz %d", info.Size(), maxSz)
+		t.Errorf("file size %d exceeds maxSz %d", info.Size(), maxSz)
 	}
 }
 
-// P2-13：并发 AppendMessages 不损坏 session 文件。flock 跨进程互斥由 POSIX 保证；
-// 同进程内不同 fd 的 flock 语义不互斥，此测试主要回归保护 AppendMessages 集成 flock
-// 后单进程多调用仍正常（不阻塞自己、不残留锁、LoadSession 不报中间损坏）。
+// P2-13: concurrent AppendMessages must not corrupt the session file. flock cross-process mutual
+// exclusion is guaranteed by POSIX; within the same process, flock semantics on different fds are not
+// mutually exclusive, so this test is mainly a regression guard ensuring AppendMessages still works
+// correctly for multiple calls within a single process after integrating flock (does not block itself,
+// leaves no stale locks, and LoadSession reports no intermediate corruption).
 func TestAppendMessages_ConcurrentSafe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	meta := SessionMeta{ID: "s"}
@@ -104,15 +107,15 @@ func TestAppendMessages_ConcurrentSafe(t *testing.T) {
 	wg.Wait()
 	_, msgs, err := LoadSession(path)
 	if err != nil {
-		t.Fatalf("P2-13：并发 append 后 load 报错（行交织中间损坏）: %v", err)
+		t.Fatalf("P2-13: load failed after concurrent append (interleaved lines indicate intermediate corruption): %v", err)
 	}
 	if want := 1 + 4*10; len(msgs) != want {
 		t.Errorf("msgs len = %d, want %d", len(msgs), want)
 	}
 }
 
-// P3 session 硬化：AppendMessages 用 O_NOFOLLOW 拒绝最终分量是 symlink 的目标，
-// 防本地攻击者预先用 symlink 指向敏感文件被 append 污染。
+// P3 session hardening: AppendMessages uses O_NOFOLLOW to reject a target whose final component is a symlink,
+// preventing a local attacker from pre-placing a symlink pointing at a sensitive file and polluting it via append.
 func TestAppendMessages_RejectsSymlinkTarget(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.jsonl")
@@ -124,11 +127,11 @@ func TestAppendMessages_RejectsSymlinkTarget(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 	if err := AppendMessages(link, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "x"}}); err == nil {
-		t.Error("O_NOFOLLOW 应拒绝 symlink 目标")
+		t.Error("O_NOFOLLOW should reject the symlink target")
 	}
 }
 
-// P3 session 硬化：MkdirAll 用 0o700（非旧 0o755），防 group-writable 目录下其他用户写入。
+// P3 session hardening: MkdirAll uses 0o700 (not the old 0o755), preventing other users from writing under a group-writable directory.
 func TestAppendMessages_MkdirAll0700(t *testing.T) {
 	dir := t.TempDir()
 	nested := filepath.Join(dir, "a", "b", "s.jsonl")
@@ -141,13 +144,13 @@ func TestAppendMessages_MkdirAll0700(t *testing.T) {
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o700 {
-		t.Errorf("目录权限 %o, want 700", info.Mode().Perm())
+		t.Errorf("dir permission %o, want 700", info.Mode().Perm())
 	}
 }
 
-// P3-10：validateToolPairing 错误消息索引为 1-based（便于按行号定位 session 文件）。
+// P3-10: validateToolPairing error message index is 1-based (for locating lines in the session file).
 func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
-	// 第 2 条（0-based 索引 1）出现重复 tool_call id。
+	// The 2nd message (0-based index 1) has a duplicate tool_call id.
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
 		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
@@ -156,93 +159,95 @@ func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected pairing error")
 	}
-	if !strings.Contains(err.Error(), "第 2 条") {
-		t.Errorf("错误消息应为 1-based「第 2 条」，got: %v", err)
+	if !strings.Contains(err.Error(), "message 2") {
+		t.Errorf("error message should be 1-based using 'message 2', got: %v", err)
 	}
 }
 
-// RewriteMessages 全量重写：内容正确、临时文件清理、权限 0o600、旧中段（被屏障的旧轮）真丢弃。
-// 这是 P2「session 文件永不压缩」的核心修复——append-only 落盘的 newMsgs 含被屏障旧 summary
-// 与被压中段，rewrite 用全量 transcript（result.Messages）原子替换文件，把它们真正丢掉。
+// RewriteMessages full rewrite: correct content, temp file cleanup, permission 0o600, and the old middle
+// segment (the old turns blocked by the barrier) is truly discarded. This is the core fix for the P2 issue
+// "session files are never compacted" -- append-only persisted newMsgs contain the old summary blocked by
+// the barrier and the compacted middle segment; rewrite atomically replaces the file with the full transcript
+// (result.Messages), truly discarding them.
 func TestRewriteMessages_AtomicRewrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
-	// 先 append 旧内容（含将被 rewrite 丢弃的旧 summary + 旧中段）。
+	// First append old content (including the old summary + old middle segment that rewrite will discard).
 	if err := AppendMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{
-		{Role: "user", Kind: miniagent.KindSummary, Content: "[既往对话摘要] 旧"},
-		{Role: "user", Content: "被屏障的旧轮"},
+		{Role: "user", Kind: miniagent.KindSummary, Content: "[Previous conversation summary] old"},
+		{Role: "user", Content: "old blocked turn"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Rewrite 为新内容（新 summary + 最近轮）。
+	// Rewrite to new content (new summary + recent turns).
 	want := []miniagent.Message{
-		{Role: "user", Kind: miniagent.KindSummary, Content: "[既往对话摘要] 新"},
-		{Role: "user", Content: "最近轮提问"},
-		{Role: "assistant", Content: "最近轮回答"},
+		{Role: "user", Kind: miniagent.KindSummary, Content: "[Previous conversation summary] new"},
+		{Role: "user", Content: "recent turn question"},
+		{Role: "assistant", Content: "recent turn answer"},
 	}
 	if err := RewriteMessages(path, SessionMeta{ID: "s"}, want); err != nil {
 		t.Fatalf("RewriteMessages: %v", err)
 	}
-	// 临时文件已清理。
+	// Temp files have been cleaned up.
 	matches, err := filepath.Glob(filepath.Join(dir, "s.jsonl.tmp-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(matches) != 0 {
-		t.Errorf("临时文件未清理: %v", matches)
+		t.Errorf("temp files not cleaned up: %v", matches)
 	}
-	// 权限 0o600。
+	// Permission 0o600.
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Errorf("权限 %o, want 600", info.Mode().Perm())
+		t.Errorf("permission %o, want 600", info.Mode().Perm())
 	}
-	// 内容：旧"被屏障的旧轮"已丢，load 后只剩新 msgs。
+	// Content: the old "old blocked turn" is gone; after load only the new msgs remain.
 	_, got, err := LoadSession(path)
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("rewrite 后内容错:\n got %+v\nwant %+v", got, want)
+		t.Errorf("content wrong after rewrite:\n got %+v\nwant %+v", got, want)
 	}
 }
 
-// RewriteMessages 空 msgs 也合法（写仅 metadata 文件，等价于「重置」）。
+// RewriteMessages with empty msgs is also valid (writes a metadata-only file, equivalent to a "reset").
 func TestRewriteMessages_EmptyMsgsWritesMeta(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
 	if err := RewriteMessages(path, SessionMeta{ID: "s"}, nil); err != nil {
-		t.Fatalf("RewriteMessages 空 msgs: %v", err)
+		t.Fatalf("RewriteMessages with empty msgs: %v", err)
 	}
 	meta, msgs, err := LoadSession(path)
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
 	if len(msgs) != 0 {
-		t.Errorf("空 rewrite 后 msgs 应为空: %+v", msgs)
+		t.Errorf("after empty rewrite, msgs should be empty: %+v", msgs)
 	}
 	if meta.ID != "s" {
 		t.Errorf("meta.ID = %q, want s", meta.ID)
 	}
 }
 
-// RewriteMessages 超 maxSessionBytes 报错，不创建/不替换文件。
+// RewriteMessages exceeding maxSessionBytes returns an error and does not create/replace the file.
 func TestRewriteMessages_OversizedFails(t *testing.T) {
 	const maxSz = int64(1 << 20)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
 	big := strings.Repeat("x", int(maxSz)+1)
 	if err := RewriteMessages(path, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: big}}, maxSz); err == nil {
-		t.Fatal("超 maxSz 应报错")
+		t.Fatal("exceeding maxSz should error")
 	}
 	if _, err := os.Stat(path); err == nil {
-		t.Error("超限 rewrite 不应创建文件（写临时文件前预判）")
+		t.Error("an over-limit rewrite should not create a file (pre-check before writing the temp file)")
 	}
 }
 
-// P3 session 硬化：RewriteMessages 同样用 O_NOFOLLOW 拒绝 symlink 目标。
+// P3 session hardening: RewriteMessages likewise uses O_NOFOLLOW to reject symlink targets.
 func TestRewriteMessages_RejectsSymlinkTarget(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.jsonl")
@@ -254,6 +259,6 @@ func TestRewriteMessages_RejectsSymlinkTarget(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 	if err := RewriteMessages(link, SessionMeta{ID: "s"}, []miniagent.Message{{Role: "user", Content: "x"}}); err == nil {
-		t.Error("O_NOFOLLOW 应拒绝 symlink 目标")
+		t.Error("O_NOFOLLOW should reject the symlink target")
 	}
 }

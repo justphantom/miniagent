@@ -9,13 +9,15 @@ import (
 	"unicode/utf8"
 )
 
-// 本文件承载 Run 核心原内置的三项策略的默认外挂实现，供 cmd 层组装 LoopHooks 时复用，
-// 使「核心零策略」与「开箱即用的默认行为」兼得：核心循环不读策略、不做估算/预算/落盘/错误恢复；
-// 调用方经这些工厂一行装配即可恢复原内置语义。
+// This file carries the default hook implementations of the three policies originally built into Run core,
+// for reuse by the cmd layer when assembling LoopHooks — so "core has zero policies" and "out-of-the-box
+// default behavior" coexist: the core loop reads no policies and does no estimation/budgeting/persistence/error
+// recovery; callers restore the original built-in semantics by wiring these factories in one line.
 
-// NewDefaultOnLLMError 返回承载 miniagent.ErrContextLength 收紧重试的默认 OnLLMError 钩子。
-// 仅对 miniagent.ErrContextLength 触发：trimHistoryForContext（清 reasoning + 压 tool content）收紧后 retry=true，
-// 核心据此重试一次本次调用；其他 error 透传（retry=false），核心照常上抛。logger 仅用于收紧告警。
+// NewDefaultOnLLMError returns the default OnLLMError hook that carries the miniagent.ErrContextLength
+// tightening retry. Triggered only for miniagent.ErrContextLength: after trimHistoryForContext (clears reasoning
+// + compresses tool content) tightens the history, retry=true and the core retries this call once; other errors
+// pass through (retry=false) and the core propagates them as usual. logger is only used for the tightening warn.
 func NewDefaultOnLLMError(logger *slog.Logger, contextTrim int) func(context.Context, int, []miniagent.Message, error) ([]miniagent.Message, bool, error) {
 	return func(_ context.Context, _ int, msgs []miniagent.Message, err error) ([]miniagent.Message, bool, error) {
 		if !errors.Is(err, miniagent.ErrContextLength) {
@@ -28,14 +30,17 @@ func NewDefaultOnLLMError(logger *slog.Logger, contextTrim int) func(context.Con
 	}
 }
 
-// NewDefaultOnBudget 返回承载零 usage 本地估算 fallback + MaxTotalTokens 预算判定的默认 OnBudget 钩子。
-// 核心已把真实 usage 累加进 total；本钩子在 resp.Usage 全零（流式端点常不 honor include_usage / 非流式缺失）
-// 时补本地估算（EstimateTokens 计请求侧 toSend+system+tools，estimateResponseTokens 计响应侧），
-// 再按 maxTotalTokens 判定熔断。maxTotalTokens<=0 不判定。
+// NewDefaultOnBudget returns the default OnBudget hook that carries the zero-usage local estimation fallback
+// + the MaxTotalTokens budget decision. The core has already accumulated the real usage into total; when
+// resp.Usage is all-zero (streaming endpoints often do not honor include_usage / non-streaming may omit it),
+// this hook supplements a local estimate (EstimateTokens counts the request side toSend+system+tools,
+// estimateResponseTokens counts the response side), then judges circuit-break by maxTotalTokens. maxTotalTokens<=0
+// skips the check.
 func NewDefaultOnBudget(maxTotalTokens int, logger *slog.Logger) func(context.Context, int, miniagent.BudgetInput, *miniagent.Usage) error {
 	return func(_ context.Context, step int, in miniagent.BudgetInput, total *miniagent.Usage) error {
-		// 零 usage fallback：逐侧估算缺失的 token（R4-7）。原 && 仅在全零时估，半零 usage（如只回 prompt_tokens）
-		// 的缺失侧按 0 累计致预算系统性低估；现按侧独立估算。
+		// Zero-usage fallback: estimate the missing tokens per side (R4-7). The original && estimated only when
+		// fully zero; a half-zero usage (e.g. only prompt_tokens returned) accumulated the missing side as 0,
+		// causing systematic budget underestimation; now each side is estimated independently.
 		inZero := in.Resp.Usage.InputTokens == 0
 		outZero := in.Resp.Usage.OutputTokens == 0
 		if inZero || outZero {
@@ -56,10 +61,12 @@ func NewDefaultOnBudget(maxTotalTokens int, logger *slog.Logger) func(context.Co
 	}
 }
 
-// NewDefaultShapeToolResult 返回承载原 defaultShapeResult 语义的默认 ShapeToolResult 钩子：
-// trimForHistory 截断（miniagent.Tool.ResultLimit/SplitTruncate，回落 maxToolResultChars→MaxToolResultInHistory）
-// + 可选落盘（dir 非空时超 limit 的全文写盘，Content 改 preview+路径提示）。dir 空=禁用落盘（仅截断）。
-// 构造时建一次 store 并 cleanup 过期文件（贴合单次运行 CLI 形态）。tools 用于取各工具的 ResultLimit/SplitTruncate。
+// NewDefaultShapeToolResult returns the default ShapeToolResult hook that carries the original defaultShapeResult
+// semantics: trimForHistory truncation (miniagent.Tool.ResultLimit/SplitTruncate, falling back
+// maxToolResultChars→MaxToolResultInHistory) + optional persistence (when dir is non-empty, writes the full text
+// to disk if it exceeds the limit, replacing Content with a preview + path hint). dir empty = persistence disabled
+// (truncate only). At construction it creates the store once and cleans up expired files (matching the
+// single-run CLI shape). tools is used to read each tool's ResultLimit/SplitTruncate.
 func NewDefaultShapeToolResult(tools []miniagent.Tool, dir string, retention time.Duration, maxToolResultChars int, logger *slog.Logger) func(string, string, int, miniagent.ToolResult) (string, error) {
 	toolByName := make(map[string]miniagent.Tool, len(tools))
 	for _, t := range tools {
@@ -77,18 +84,21 @@ func NewDefaultShapeToolResult(tools []miniagent.Tool, dir string, retention tim
 			limit = t.ResultLimit
 			split = t.SplitTruncate
 		}
-		// 工具未声明 ResultLimit 时回落 maxToolResultChars；trimForHistory 仍有 <=0→MaxToolResultInHistory
-		// 的最终兜底，双保险。split 对 shell/grep 类工具走头尾分段截断。
+		// When the tool does not declare ResultLimit, fall back to maxToolResultChars; trimForHistory still has
+		// the final <=0→MaxToolResultInHistory fallback as a double safety net. split enables head+tail segmented
+		// truncation for shell/grep-like tools.
 		if limit <= 0 {
 			limit = maxToolResultChars
 		}
 		preview := TrimForHistory(tres.Output, limit, split)
 		content := preview
 		if store != nil {
-			// §P1-A：超 limit 的全文落盘，入历史 Content 改为 preview+路径提示。truncated 判定用
-			// effective limit 的精确比较（trimForHistory 内部对 limit<=0 回落 MaxToolResultInHistory，
-			// 此处复刻同一解析；截断 iff rune 数 > effective limit），避免 rune 长度差法在「输出刚好超 limit、
-			// preview marker 反而更长」时的假阴性（丢全文不落盘）。
+			// §P1-A: the full text exceeding the limit is persisted to disk, and the history Content is replaced
+			// with a preview + path hint. The truncated decision uses an exact comparison against the effective
+			// limit (trimForHistory internally falls back to MaxToolResultInHistory when limit<=0; the same
+			// resolution is replicated here; truncation occurs iff the rune count > effective limit), avoiding
+			// false negatives of the rune-length-diff approach when "the output just exceeds the limit and the
+			// preview marker is longer anyway" (the full text would be lost and not persisted).
 			effLimit := limit
 			if effLimit <= 0 {
 				effLimit = MaxToolResultInHistory

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// withSessionLock 在 Windows 上应完成加锁、MkdirAll 0o700、写入并解锁。
+// withSessionLock on Windows should complete locking, MkdirAll 0o700, writing, and unlocking.
 func TestWithSessionLock_Windows_WritesAndLocks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "s.jsonl")
@@ -25,7 +25,7 @@ func TestWithSessionLock_Windows_WritesAndLocks(t *testing.T) {
 	if string(data) != "line\n" {
 		t.Errorf("got %q, want line\\n", data)
 	}
-	// 连续加锁不应死锁（同进程不互斥，但至少不能报错）。
+	// Locking twice in a row should not deadlock (within the same process it is not mutually exclusive, but at minimum must not error).
 	if err := withSessionLock(path, os.O_APPEND|os.O_WRONLY, func(f *os.File) error {
 		_, err := f.WriteString("line2\n")
 		return err

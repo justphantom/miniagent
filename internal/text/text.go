@@ -1,7 +1,8 @@
-// Package text 提供核心与外挂子包（compaction/event/builtin/provider/openai）共享的
-// 纯文本 helper：rune 截断（头截 / 尾截 / 头尾分段）、CJK/非 CJK 字符统计、Unix 毫秒时间戳。
-// 全部为不依赖 agent 领域类型的纯函数，故独立成仓库级共享层（internal/text），
-// 消除各包对同一截断/统计逻辑的分叉实现。
+// Package text provides plain-text helpers shared by the core and addon subpackages
+// (compaction/event/builtin/provider/openai): rune truncation (head / tail / head+tail split),
+// CJK/non-CJK rune counting, and Unix millisecond timestamps.
+// All are pure functions independent of agent domain types, so they form a repo-level shared layer
+// (internal/text), eliminating divergent truncation/counting implementations across packages.
 package text
 
 import (
@@ -9,12 +10,12 @@ import (
 	"unicode"
 )
 
-// NowMs 返回 Unix 毫秒时间戳，供消息打戳（如压缩 summaryMsg.Ts）。
+// NowMs returns a Unix millisecond timestamp for stamping messages (e.g. the compaction summaryMsg.Ts).
 func NowMs() int64 {
 	return time.Now().UnixMilli()
 }
 
-// CountCharsLocal 统计 s 的 non-CJK / CJK rune 数（与 token 估算同口径）。
+// CountCharsLocal counts the non-CJK / CJK runes in s (same basis as token estimation).
 func CountCharsLocal(s string) (nonCJK, cjk int) {
 	for _, r := range s {
 		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
@@ -27,7 +28,7 @@ func CountCharsLocal(s string) (nonCJK, cjk int) {
 	return nonCJK, cjk
 }
 
-// Truncate clamps s to n runes and appends marker when it truncated. n<=0 原样返回。
+// Truncate clamps s to n runes and appends marker when it truncated. n<=0 returns s as-is.
 func Truncate(s string, n int, marker string) string {
 	if n <= 0 {
 		return s
@@ -39,8 +40,8 @@ func Truncate(s string, n int, marker string) string {
 	return string(r[:n]) + marker
 }
 
-// TruncateTail 保留 s 末尾 n 个 rune，截断时前置 marker。
-// 服务尾部兜底（shell 累积器保尾丢中段后，再把窗口尾部截到 maxChars）。n<=0 原样返回；len<=n 不截。
+// TruncateTail keeps the last n runes of s, prefixing marker when it truncates.
+// Serves the tail fallback (after the shell accumulator keeps the tail and drops the middle, the window tail is truncated to maxChars). n<=0 returns s as-is; len<=n is not truncated.
 func TruncateTail(s string, n int, marker string) string {
 	if n <= 0 {
 		return s
@@ -52,10 +53,11 @@ func TruncateTail(s string, n int, marker string) string {
 	return marker + string(r[len(r)-n:])
 }
 
-// TruncateHeadTail 把 s 截到约 n 个 rune，保留「头 headN + 尾 tailN」，中间用 marker 连接。
-// 用于关键信息在尾部的工具结果：head-only 会丢掉编译/测试错误汇总、命中上限提示等诊断信息。
-// 头占 n/4（前段上下文/命令回显），尾占 3n/4（错误结论集中处）。n<=0 原样返回；长度<=n 不截。
-// marker 置于中段省略处（与 Truncate 的尾部 marker 语义不同）。
+// TruncateHeadTail truncates s to roughly n runes, keeping a head of headN + a tail of tailN joined by marker.
+// Used for tool results whose key information is in the tail: head-only would drop compile/test error
+// summaries, limit-hit notices, and other diagnostics.
+// Head gets n/4 (leading context / command echo), tail gets 3n/4 (where error conclusions cluster). n<=0 returns s as-is; len<=n is not truncated.
+// marker is placed at the middle omission (different semantics from Truncate's trailing marker).
 func TruncateHeadTail(s string, n int, marker string) string {
 	if n <= 0 {
 		return s
@@ -67,7 +69,7 @@ func TruncateHeadTail(s string, n int, marker string) string {
 	headN := max(n/4, 1)
 	tailN := max(n-headN, 1)
 	if headN+tailN >= len(r) {
-		return s // 头尾窗口已覆盖全部，无需截断（marker 反而增噪）
+		return s // head+tail window already covers everything, no truncation needed (a marker would only add noise)
 	}
 	return string(r[:headN]) + marker + string(r[len(r)-tailN:])
 }

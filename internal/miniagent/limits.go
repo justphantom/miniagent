@@ -1,22 +1,23 @@
 package miniagent
 
-// Limits 集中所有运行时可调阈值，替代散落于各模块的包级 atomic override（Set*）。
-// 经工具构建函数 / session 函数 / 钩子工厂显式注入，消除包级可变状态——
-// 支持多实例（如 subagent fork 用不同 limits）、无 race 风险（不需 atomic）、测试隔离（传参而非 Set 全局）。
-// 零值字段在各注入点回落模块内置默认（<=0 用默认）。分步接入：第1步工具，第2步 session，
-// 第3步 context-trim，第4步 compaction。
+// Limits centralizes all runtime-tunable thresholds, replacing the per-module package-level atomic
+// overrides (Set*). It is injected explicitly via the tool-builder / session / hook factories, eliminating
+// package-level mutable state — this supports multiple instances (e.g. a subagent fork with different
+// limits), has no race risk (no atomic needed), and gives test isolation (passing args rather than Set on a
+// global). Zero-valued fields fall back to the module built-in default at each injection point (<=0 uses the
+// default). Rolled out in steps: step 1 tools, step 2 session, step 3 context-trim, step 4 compaction.
 type Limits struct {
-	// MaxReadFileBytes 是 read 工具单文件读取字节上限（默认 maxReadFileBytes=1MB）。
+	// MaxReadFileBytes is the per-file byte cap for the read tool (default maxReadFileBytes=1MB).
 	MaxReadFileBytes int
-	// MaxShellOutputChars 是 shell/glob/grep 共享的工具输出字符上限（默认 maxShellOutputChars=100KB）。
+	// MaxShellOutputChars is the shared tool-output character cap for shell/glob/grep (default maxShellOutputChars=100KB).
 	MaxShellOutputChars int
-	// ShellStreamWindowBytes 是 shell 输出滑窗字节上限（默认 MaxShellOutputChars*8）。
+	// ShellStreamWindowBytes is the sliding-window byte cap for shell output (default MaxShellOutputChars*8).
 	ShellStreamWindowBytes int
-	// MaxGrepMatches 是 grep 命中行上限（默认 maxGrepMatches=500）。
+	// MaxGrepMatches is the cap on grep matched lines (default maxGrepMatches=500).
 	MaxGrepMatches int
-	// 以下字段后续步骤接入（此处定义待用，零值=各模块内置默认）：
-	// MaxSessionBytes：session 文件字节上限（第2步）。
+	// The fields below are wired in later steps (defined here for future use; zero value = module built-in default):
+	// MaxSessionBytes: byte cap for the session file (step 2).
 	MaxSessionBytes int
-	// ContextTrimToolChars：context 超限时 tool content 压缩上限（第3步）。
+	// ContextTrimToolChars: compaction cap for tool content when context is exceeded (step 3).
 	ContextTrimToolChars int
 }

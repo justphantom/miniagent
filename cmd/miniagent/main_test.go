@@ -16,8 +16,8 @@ import (
 	"time"
 )
 
-// fork-based 测试：通过 MINIAGENT_TEST_ENTRYPOINTS=1 让 test binary 重新进入
-// main()，覆盖 os.Exit 路径（这些路径无法在进程内测试）。
+// fork-based tests: via MINIAGENT_TEST_ENTRYPOINTS=1 the test binary re-enters
+// main(), covering os.Exit paths (these paths cannot be tested in-process).
 
 const entrypointEnv = "MINIAGENT_TEST_ENTRYPOINTS=1"
 
@@ -29,8 +29,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// writeConfigFixture 写一份指向 srvURL 的临时 miniagent.json（mode=auto 免 workdir），
-// 返回其路径。runJSON 非空时原样作为 "run" 段（支持 max_tokens_total/max_duration 等仅 config 参数）。
+// writeConfigFixture writes a temporary miniagent.json pointing at srvURL (mode=auto so workdir is not required),
+// and returns its path. When runJSON is non-empty it is used verbatim as the "run" section (supporting config-only params like max_tokens_total/max_duration).
 func writeConfigFixture(t *testing.T, srvURL, runJSON string) string {
 	t.Helper()
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
@@ -45,14 +45,14 @@ func writeConfigFixture(t *testing.T, srvURL, runJSON string) string {
 	return cfgPath
 }
 
-// configArgs 构造 e2e 的公共参数：写临时 config（替代旧裸模式 chatArgs），返回 -config <path> + extra。
+// configArgs builds the common args for e2e: writes a temporary config (replacing the old bare-mode chatArgs), returns -config <path> + extra.
 func configArgs(t *testing.T, srvURL string, extra ...string) []string {
 	t.Helper()
 	return append([]string{"-config", writeConfigFixture(t, srvURL, "")}, extra...)
 }
 
-// runMainBin fork 出 test binary 自身，注入 env + stdin + args，返回
-// (exitCode, combinedOutput)。extraEnv 追加在默认 env 之后（覆盖同名 key）。
+// runMainBin forks the test binary itself, injecting env + stdin + args, returning
+// (exitCode, combinedOutput). extraEnv is appended after the default env (overriding same-named keys).
 func runMainBin(t *testing.T, stdin string, args []string, extraEnv ...string) (int, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -93,7 +93,7 @@ func TestCLI_VersionExitsZero(t *testing.T) {
 	}
 }
 
-// 显式 -config 不存在 → 报错（S1 后 config 必须存在，不再退裸模式）。
+// Explicit -config that does not exist → error (after S1 config must exist; bare mode is no longer a fallback).
 func TestCLI_ExplicitConfigMissingExits1(t *testing.T) {
 	code, out := runMainBin(t, "prompt", []string{"-config", filepath.Join(t.TempDir(), "nope.json")})
 	if code != 1 {
@@ -104,7 +104,7 @@ func TestCLI_ExplicitConfigMissingExits1(t *testing.T) {
 	}
 }
 
-// config 缺 defaults.provider/model（拆分后必填）→ validateConfig 报错。
+// config missing defaults.provider/model (required after the split) → validateConfig errors out.
 func TestCLI_MissingModelExits1(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
 	body := `{"providers":[{"name":"p","chat_url":"http://127.0.0.1:1/v1/chat/completions"}]}`
@@ -115,7 +115,7 @@ func TestCLI_MissingModelExits1(t *testing.T) {
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "必填") {
+	if !strings.Contains(out, "is required") {
 		t.Errorf("missing required-field error: %s", out)
 	}
 }
@@ -130,7 +130,7 @@ func TestCLI_MissingAPIKeyExits1(t *testing.T) {
 	}
 }
 
-// default 模式无 workdir → 报错（需 -workdir 或 -mode auto）。
+// default mode without workdir → error (needs -workdir or -mode auto).
 func TestCLI_DefaultModeRequiresWorkdir(t *testing.T) {
 	args := configArgs(t, "http://127.0.0.1:1", "-mode", "default")
 	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
@@ -142,14 +142,14 @@ func TestCLI_DefaultModeRequiresWorkdir(t *testing.T) {
 	}
 }
 
-// -stream 与 -result-only 互斥。
+// -stream and -result-only are mutually exclusive.
 func TestCLI_StreamResultOnlyMutex(t *testing.T) {
 	args := configArgs(t, "http://127.0.0.1:1", "-stream", "-result-only")
 	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "互斥") {
+	if !strings.Contains(out, "mutually exclusive") {
 		t.Errorf("missing mutex error: %s", out)
 	}
 }
@@ -169,7 +169,7 @@ func TestCLI_OversizedStdinExits1(t *testing.T) {
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "超过大小上限") {
+	if !strings.Contains(out, "exceeds the size limit") {
 		t.Errorf("missing error: %s", out)
 	}
 }
@@ -184,7 +184,7 @@ func TestCLI_InvalidLogLevelExits1(t *testing.T) {
 	}
 }
 
-// e2e：-save-session 新建会话，把对话落盘到 session.dir 下内部生成 id 的 jsonl。
+// e2e: -save-session creates a new session, persisting the conversation to a jsonl under session.dir with an internally generated id.
 func TestCLI_SingleTurnSessionAppend(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
@@ -213,19 +213,19 @@ func TestCLI_SingleTurnSessionAppend(t *testing.T) {
 	}
 }
 
-// -save-session 与 -session 互斥。
+// -save-session and -session are mutually exclusive.
 func TestCLI_SaveSessionMutex(t *testing.T) {
 	args := configArgs(t, "http://127.0.0.1:1", "-save-session", "-session", "x")
 	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "互斥") {
+	if !strings.Contains(out, "mutually exclusive") {
 		t.Errorf("missing mutex error: %s", out)
 	}
 }
 
-// e2e：stdin 全部内容作为一个 turn 的完整 prompt（多行不拆分），一次 LLM 调用返回一个 result。
+// e2e: the entire stdin content is treated as a single turn's complete prompt (multi-line is not split), one LLM call returns one result.
 func TestCLI_MultiLineStdinSingleTurn(t *testing.T) {
 	var calls int
 	var gotBody string
@@ -242,17 +242,17 @@ func TestCLI_MultiLineStdinSingleTurn(t *testing.T) {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
 	if calls != 1 {
-		t.Errorf("server calls = %d, want 1（多行 stdin 应合成一个 turn）", calls)
+		t.Errorf("server calls = %d, want 1 (multi-line stdin should be composed into a single turn)", calls)
 	}
 	if strings.Count(out, `"type":"result"`) != 1 {
 		t.Errorf("want 1 result event, got: %s", out)
 	}
 	if !strings.Contains(gotBody, `hi\nhello`) {
-		t.Errorf("prompt 应保留多行原文: %s", gotBody)
+		t.Errorf("prompt should preserve the multi-line original: %s", gotBody)
 	}
 }
 
-// e2e：run.max_duration 到期时非交互路径返回 1。
+// e2e: when run.max_duration expires the non-interactive path returns 1.
 func TestCLI_MaxDurationExits1(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)

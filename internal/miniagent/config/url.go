@@ -5,23 +5,23 @@ import (
 	"net/url"
 )
 
-// ValidateURL 解析并校验 raw 为合法 http(s) URL（含 scheme+host）。
-// core 的 config 校验与 provider 实现（internal/provider/openai）共用，避免分叉。
+// ValidateURL parses and validates raw as a legal http(s) URL (with scheme+host).
+// Shared by the core config validation and the provider implementation (internal/provider/openai), to avoid divergence.
 func ValidateURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("url %q 解析失败：%w（需 http(s)://host[:port][/path]）", raw, err)
+		return nil, fmt.Errorf("url %q failed to parse: %w (expected http(s)://host[:port][/path])", raw, err)
 	}
 	if u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("url %q 缺少 scheme 或 host（应为 http(s)://host[:port]）", raw)
+		return nil, fmt.Errorf("url %q is missing scheme or host (expected http(s)://host[:port])", raw)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("url %q 的 scheme %q 不支持（仅 http/https）", raw, u.Scheme)
+		return nil, fmt.Errorf("url %q scheme %q is not supported (http/https only)", raw, u.Scheme)
 	}
-	// 拒 embedded userinfo（https://key@host）：凭证嵌入 URL 会被日志/错误体记录，Go transport 还可能
-	// 作 Basic Auth 发送。API key 须经 provider.key / $MINIAGENT_API_KEY 注入，不进 URL。
+	// Reject embedded userinfo (https://key@host): credentials embedded in the URL get logged in error bodies, and the Go transport may also
+	// send them as Basic Auth. The API key must be injected via provider.key / $MINIAGENT_API_KEY, never in the URL.
 	if u.User != nil {
-		return nil, fmt.Errorf("url %q 含 userinfo（user:pass@host）——禁止，防凭证嵌入 URL 被记录或泄漏", raw)
+		return nil, fmt.Errorf("url %q contains userinfo (user:pass@host) — forbidden, to prevent credentials embedded in the URL from being logged or leaked", raw)
 	}
 	return u, nil
 }

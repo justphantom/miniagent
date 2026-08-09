@@ -11,7 +11,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// 自定义请求头：Headers 中的键值会随请求发送，不覆盖 Authorization / Content-Type。
+// Custom request headers: key/values in Headers are sent with the request and do not override Authorization / Content-Type.
 func TestChatClient_Do_CustomHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Custom") != "abc" {
@@ -41,7 +41,7 @@ func TestChatClient_Do_CustomHeaders(t *testing.T) {
 	}
 }
 
-// 空 Headers：不带自定义头，Authorization / Content-Type 仍然正确。
+// Empty Headers: no custom headers are sent; Authorization / Content-Type are still set correctly.
 func TestChatClient_Do_NoCustomHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := r.Header["X-Custom"]; ok {

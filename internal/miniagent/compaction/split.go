@@ -1,4 +1,4 @@
-// split.go：中段切分与有损压缩。
+// split.go: middle-segment splitting and lossy compaction.
 
 package compaction
 
@@ -13,8 +13,9 @@ import (
 	"github.com/justphantom/miniagent/internal/text"
 )
 
-// applyCompactionBarrier 定位最新一条 Kind=="summary" 消息，返回它及之后的消息；之前的
-// 旧历史（含更老 summary）不进 context，仍留 session 文件。无 summary 原样返回。
+// applyCompactionBarrier locates the most recent Kind=="summary" message and returns it and all messages after it;
+// the older history before it (including older summaries) does not enter the context but remains in the session
+// file. When there is no summary it returns the input as-is.
 func applyCompactionBarrier(msgs []miniagent.Message) []miniagent.Message {
 	for i := range slices.Backward(msgs) {
 		if msgs[i].Kind == miniagent.KindSummary {
@@ -24,12 +25,15 @@ func applyCompactionBarrier(msgs []miniagent.Message) []miniagent.Message {
 	return msgs
 }
 
-// selectTailByTokens 按 token 预算从最近轮累加选 tail（移植 opencode select，§P1-E）。
-// maxTurns=keepRecent（轮数上界）；tokenBudget=preserveRecentTokens(...)。流程：从最近轮向前累加
-// estimateRoundTokens(轮)（边际，不含 system/schema），整轮装下并入 tail；首个装不下的边界轮调
-// splitRoundByTokens 找安全切点（切出后缀并入 tail），切不动（tool-call 轮）转 shrinkRoundToolContents
-// 压 tool content 贴合剩余预算并入 tail，仍不行则整轮进 middle；边界轮之前的全部进 middle。
-// tokenBudget<=0 退化为「最近 maxTurns 轮」纯轮数模式（向后兼容）。返回 tail 与 middle 均为扁平 []miniagent.Message（原顺序）。
+// selectTailByTokens accumulates the tail from the most recent round by token budget (ported from opencode select, §P1-E).
+// maxTurns=keepRecent (round-count upper bound); tokenBudget=preserveRecentTokens(...). Flow: accumulate
+// estimateRoundTokens(round) backward from the most recent round (marginal, excluding system/schema); rounds that
+// fit entirely go into the tail; the first boundary round that does not fit is passed to splitRoundByTokens to find
+// a safe split point (split off the suffix into the tail); if it cannot be split (a tool-call round), fall back to
+// shrinkRoundToolContents to compress the tool content to fit the remaining budget and include it in the tail; if
+// that still fails the whole round goes to middle; everything before the boundary round goes to middle.
+// tokenBudget<=0 degrades to a pure "most recent maxTurns rounds" round-count mode (backward compatible). The
+// returned tail and middle are both flat []miniagent.Message (original order).
 func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int) (tail, middle []miniagent.Message) {
 	n := len(rounds)
 	if n == 0 {
@@ -40,18 +44,19 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 		return flatten(rounds[n-cnt:]), flatten(rounds[:n-cnt])
 	}
 	total := 0
-	// tailStart 初值 0：若全部轮都装下（n<=maxTurns 且未触 token 上界，循环正常结束）则 tail=全部、middle=空。
-	// 循环内 break 时覆写为 i+1（tail=rounds[i+1..]）。
+	// tailStart defaults to 0: if all rounds fit (n<=maxTurns and the token limit is not hit, the loop ends normally)
+	// then tail=all and middle=empty. On break inside the loop it is overwritten to i+1 (tail=rounds[i+1..]).
 	tailStart := 0
-	boundary := -1 // token 边界轮索引（需 split/shrink 决策）；-1=无（全部装下或仅 maxTurns 截断）
+	boundary := -1 // index of the token boundary round (needs a split/shrink decision); -1=none (all fit, or only maxTurns truncation)
 	for i := n - 1; i >= 0; i-- {
 		if n-i > maxTurns {
-			tailStart = i + 1 // maxTurns 截断：tail=rounds[i+1..]，older 进 middle
+			tailStart = i + 1 // maxTurns truncation: tail=rounds[i+1..], older goes to middle
 			break
 		}
 		size := estimateRoundTokens(rounds[i])
-		// 最近轮（i==n-1）即使单独超 tokenBudget 也强制并入 tail：最近上下文不可丢，把它压进 middle
-		// 会被摘要掉，致模型丢失精确近期上下文。故仅 i<n-1 时才在超预算处取边界轮。
+		// The most recent round (i==n-1) is force-included in the tail even if it alone exceeds tokenBudget: the
+		// recent context cannot be dropped; pushing it into middle would get it summarized away, making the model
+		// lose precise recent context. So only when i<n-1 do we take the boundary round at the budget overflow.
 		if i < n-1 && total+size > tokenBudget {
 			boundary = i
 			tailStart = i + 1
@@ -62,17 +67,19 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 	tail = flatten(rounds[tailStart:n])
 	middle = flatten(rounds[:tailStart])
 	if boundary >= 0 {
-		// 边界轮尝试 split/shrink 并入 tail 前端；成功则该轮（压缩后）不进 middle。
+		// The boundary round tries to split/shrink and prepend to the tail; on success that round (post-compression) does not enter middle.
 		remaining := tokenBudget - total
 		if fitted, ok := splitOrShrinkToRound(rounds[boundary], remaining); ok {
 			tail = append(append([]miniagent.Message{}, fitted...), tail...)
-			middle = flatten(rounds[:boundary]) // boundary 轮已并入 tail，从 middle 移除
+			middle = flatten(rounds[:boundary]) // boundary round already included in tail, removed from middle
 		}
-		// split/shrink 失败 → 边界轮整轮留 middle（rounds[:tailStart]=rounds[:boundary+1] 已含），符合预期。
+		// split/shrink failure → the boundary round stays wholly in middle (rounds[:tailStart]=rounds[:boundary+1] already includes it), as expected.
 	}
-	// 不变量：tail 至少含最近 1 轮。兜底覆盖两类曾致空 tail 的退化路径——最近轮单独超 tokenBudget
-	// 且 boundary split/shrink 失败（被上面 i<n-1 守卫挡掉，此处双保险），或 maxTurns<=0 在 i==n-1
-	// 命中 maxTurns 截断。最近轮进 middle 被摘要永远是语义错误，宁可 tail 略超预算。
+	// Invariant: the tail contains at least the most recent round. This fallback covers two degenerate paths that
+	// once produced an empty tail — the most recent round alone exceeds tokenBudget and boundary split/shrink fails
+	// (already guarded out by the i<n-1 check above, double-protected here), or maxTurns<=0 hits the maxTurns
+	// truncation at i==n-1. Letting the most recent round enter middle to be summarized is always a semantic error;
+	// a tail slightly over budget is preferable.
 	if len(tail) == 0 && n > 0 {
 		tail = flatten(rounds[n-1:])
 		middle = flatten(rounds[:n-1])
@@ -80,10 +87,13 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 	return tail, middle
 }
 
-// splitOrShrinkToRound 是边界轮的适配入口：shrinkRoundToolContents 压 tool content 贴合 remaining。
-// 返回 (fitted, ok)；ok=false 表示边界轮无法并入 tail，应整轮进 middle。
-// （原 splitRoundByTokens 已删：miniagent splitRounds 使文本轮为单消息、tool-call 轮为 [A(tc)+tools]，
-// 单轮内无可安全切的非 tool 消息边界，该函数对生产轮恒返回 nil——YAGNI 删除，连带消除其成功路径丢 boundary 轮前缀的隐患。）
+// splitOrShrinkToRound is the adaptation entry for the boundary round: shrinkRoundToolContents compresses the tool
+// content to fit remaining. It returns (fitted, ok); ok=false means the boundary round cannot be included in the
+// tail and should go wholly to middle.
+// (The former splitRoundByTokens is deleted: miniagent splitRounds makes text rounds single-message and tool-call
+// rounds [A(tc)+tools]; within a single round there is no safe non-tool message boundary to split on, so that
+// function always returned nil for production rounds — deleted as YAGNI, which also removes the hidden danger of
+// its success path dropping the boundary round's prefix.)
 func splitOrShrinkToRound(round []miniagent.Message, remaining int) ([]miniagent.Message, bool) {
 	if remaining <= 0 {
 		return nil, false
@@ -95,10 +105,12 @@ func splitOrShrinkToRound(round []miniagent.Message, remaining int) ([]miniagent
 	return nil, false
 }
 
-// shrinkRoundToolContents 是 miniagent flat 模型下 opencode splitTurn 的语义等价物（§P1-E，REFUTED 后的必需补偿）：
-// tool-call 轮切不动时，把轮内 tool 结果 content 就地截短贴合 tokenBudget（深拷贝，不动入参，保配对不变）。
-// 按 round 当前 estimateRoundTokens 与 tokenBudget 的比例缩放每条 tool content 字符数（复用 text.TruncateHeadTail 头1/4+尾3/4）。
-// tokenBudget<=0 原样返回拷贝；无 tool 消息则压缩无意义但仍返回拷贝（由调用方判 fit）。
+// shrinkRoundToolContents is the semantic equivalent of opencode splitTurn under the miniagent flat model (§P1-E,
+// the required compensation after REFUTED): when a tool-call round cannot be split, it truncates the tool result
+// content in-place within the round to fit tokenBudget (deep copy, never touches the input, pairing unchanged).
+// It scales each tool content's char count by the ratio of the round's current estimateRoundTokens to tokenBudget
+// (reusing text.TruncateHeadTail head 1/4 + tail 3/4). tokenBudget<=0 returns a copy as-is; with no tool messages
+// compression is pointless but a copy is still returned (the caller judges fit).
 func shrinkRoundToolContents(round []miniagent.Message, tokenBudget int) []miniagent.Message {
 	out := make([]miniagent.Message, len(round))
 	copy(out, round)
@@ -117,49 +129,58 @@ func shrinkRoundToolContents(round []miniagent.Message, tokenBudget int) []minia
 		if m.Role == miniagent.RoleTool && len(m.Content) > 0 {
 			newLen := int(float64(len([]rune(m.Content))) * ratio)
 			newLen = max(1, newLen)
-			out[i].Content = text.TruncateHeadTail(m.Content, newLen, "…[tool 结果已压缩]")
+			out[i].Content = text.TruncateHeadTail(m.Content, newLen, "…[tool result compressed]")
 		}
 	}
 	return out
 }
 
-// compactWithSummary 保留最早 1 轮 + 最近 keepRecent 轮，中段摘要为单条 miniagent.KindSummary 消息。
-// 返回 (out, summary, usage, err)：out 含新 summary；summary 是该消息（.Kind=="" 表示无中段/失败）；
-// 中段配对断裂或摘要失败返回 error（调用方 FitHistory 回落 compactHistory）。无中段可摘返回
-// (msgs, miniagent.Message{}, miniagent.Usage{}, nil)。不再接收 newMsgs——持久化插入由 Run 完成。
+// compactWithSummary retains the earliest 1 round + the most recent keepRecent rounds, and summarizes the middle
+// segment into a single miniagent.KindSummary message. It returns (out, summary, usage, err): out contains the new
+// summary; summary is that message (.Kind=="" means no middle / failure); on a broken middle-segment pairing or
+// summarization failure it returns an error (the caller FitHistory falls back to compactHistory). When there is no
+// middle to summarize it returns (msgs, miniagent.Message{}, miniagent.Usage{}, nil). It no longer takes newMsgs —
+// persistence insertion is done by Run.
 //
-// 跨轮继承（P2-1 + §P0-A UPDATE）：上轮 LoadSession 带入的旧 summary 经 applyCompactionBarrier
-// 落在 msgs 头，splitRounds 使其单独成 rounds[0]。
-//   - 默认路径（SummarizerPrompt==""）：用 stripSummaryPrefix 抽出旧摘要文本作 previousSummary
-//     经 Summarize 回调下传（UPDATE 模式），head 置 nil、旧摘要不再并入 middle——省一半 token
-//     （旧摘要不再作为 history 重读重写）、显式 preserve 指令降低丢细节概率。这是 99% 用户路径。
-//   - override 路径（SummarizerPrompt!=""）：维持旧行为，旧 summary 并入 middle 开头让 LLM 重读
-//     重写（previousSummary 传空），已设自定义 prompt 的用户零回归。
+// Cross-turn inheritance (P2-1 + §P0-A UPDATE): the old summary brought in by the previous LoadSession lands at the
+// head of msgs via applyCompactionBarrier, and splitRounds makes it a standalone rounds[0].
+//   - Default path (SummarizerPrompt==""): stripSummaryPrefix extracts the old summary text as previousSummary and
+//     passes it down through the Summarize callback (UPDATE mode); head is set to nil and the old summary is no
+//     longer merged into middle — this halves tokens (the old summary is no longer re-read and re-written as
+//     history) and the explicit preserve instruction lowers the chance of dropping details. This is the 99% user
+//     path.
+//   - Override path (SummarizerPrompt!=""): preserves the old behavior, merging the old summary into the head of
+//     middle for the LLM to re-read and re-write (previousSummary passed empty), zero-regression for users who set
+//     a custom prompt.
 //
-// 下轮 barrier 命中新 summary 后旧 summary 被丢弃；首轮非 summary（正常 user 轮）维持原行为。
+// On the next turn, after the barrier hits the new summary, the old summary is dropped; a non-summary first round
+// (a normal user round) keeps the original behavior.
 func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniagent.Message, keepRecent int) (out []miniagent.Message, summary miniagent.Message, usage miniagent.Usage, err error) {
-	// FitHistory 是导出函数，直接调用方可能漏设 Summarize；nil 时无法摘要，返回 error 让 FitHistory 回落有损压缩
-	// （NewCompaction 内部总设 Summarize，生产路径不触发此分支）。
+	// FitHistory is an exported function; a direct caller may forget to set Summarize — when nil, summarization is
+	// impossible, return an error so FitHistory falls back to lossy compaction (NewCompaction always sets Summarize
+	// internally, the production path never hits this branch).
 	if budget.Summarize == nil {
-		return msgs, miniagent.Message{}, miniagent.Usage{}, errors.New("ContextBudget.Summarize 未配置，无法摘要")
+		return msgs, miniagent.Message{}, miniagent.Usage{}, errors.New("ContextBudget.Summarize is not configured, cannot summarize")
 	}
 	rounds := splitRounds(msgs)
 	if len(rounds) <= 1+keepRecent {
-		return msgs, miniagent.Message{}, miniagent.Usage{}, nil // 无中段可摘
+		return msgs, miniagent.Message{}, miniagent.Usage{}, nil // no middle to summarize
 	}
 	head := rounds[0]
-	// §B：tail 预算改为联合预算（jointTailBudget）——从 CW×4/5 扣除 summary+head+请求开销后剩多少给 tail，
-	// 使不可压缩的 summary 优先、tail 主动让步，减少中等 CW 压缩后超窗 trim/终止。tokenBudget<=0 回落纯轮数
-	// 兼容（向后兼容老会话/无窗口）。§P1-E 边界轮细切（split/shrink）语义不变。
+	// §B: the tail budget is now a joint budget (jointTailBudget) — after deducting summary+head+request overhead
+	// from CW×4/5, whatever remains goes to the tail, so the non-compressible summary is prioritized and the tail
+	// proactively yields, reducing post-compaction over-window trim/abort on medium CW. tokenBudget<=0 falls back to
+	// pure round-count mode (backward compatible with old sessions / no window). §P1-E boundary-round fine-split
+	// (split/shrink) semantics unchanged.
 	tokenBudget := jointTailBudget(budget, head)
 	tail, middleCore := selectTailByTokens(rounds[1:], keepRecent, tokenBudget)
 	prevSummary := ""
 	if len(head) == 1 && head[0].Kind == miniagent.KindSummary {
 		if budget.SummarizerPrompt == "" {
-			// 默认路径：抽旧摘要作 UPDATE 锚点，不再并入 middle 重读重写。
+			// Default path: extract the old summary as the UPDATE anchor, do not merge it into middle for re-read/re-write.
 			prevSummary = stripSummaryPrefix(head[0].Content)
 		} else {
-			// override 路径：维持旧行为，旧 summary 并入 middle 让 LLM 重读重写。
+			// Override path: preserve the old behavior, merge the old summary into middle for the LLM to re-read/re-write.
 			middleCore = append([]miniagent.Message{head[0]}, middleCore...)
 		}
 		head = nil
@@ -168,33 +189,39 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	if len(middle) == 0 {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, nil
 	}
-	// 中段必须自洽配对：否则替换进 summary 会留下孤立的 tool_call/tool，续跑被端点 400。
+	// The middle segment must be self-contained pairing-wise: otherwise substituting it with a summary would leave
+	// orphaned tool_call/tool messages, and continuation would be rejected by the endpoint with a 400.
 	if err := session.ValidateToolPairing(middle); err != nil {
-		return msgs, miniagent.Message{}, miniagent.Usage{}, fmt.Errorf("中段配对断裂，无法安全摘要：%w", err)
+		return msgs, miniagent.Message{}, miniagent.Usage{}, fmt.Errorf("middle segment pairing is broken, cannot summarize safely: %w", err)
 	}
-	// 摘要前对 middle 全压 strip（keepN=0）：middle 全是待有损摘要的非近期对象，清冗余 reasoning / 折叠被取代的
-	// read / 压 write-edit args——省摘要 input token（实测 ~56%）+ 防 middle+summaryMaxTokens 超摘要模型 CW。
-	// applyContextStrips 只改字段不删消息、不动 ToolCallID，配对不变（上面 ValidateToolPairing 已通过）。
-	// logger=nil → dbg=false 直接 strip 零开销。UPDATE 旧 summary 走 prevSummary 不进 middle；override 并入的旧
-	// summary 是纯 user 消息，strip 不影响。
+	// Before summarizing, apply full strip to middle (keepN=0): middle is all non-recent objects about to be
+	// lossily summarized — clear redundant reasoning / fold superseded reads / compress write-edit args — saving
+	// summary input tokens (measured ~56%) and preventing middle+summaryMaxTokens from exceeding the summary
+	// model's CW. applyContextStrips only mutates fields, never deletes messages, never touches ToolCallID, so
+	// pairing is unchanged (ValidateToolPairing above already passed). logger=nil → dbg=false strips at zero
+	// overhead. The UPDATE old summary goes via prevSummary and never enters middle; the old summary merged in by
+	// the override path is a pure user message, strip does not affect it.
 	middle = applyContextStrips(ctx, middle, 0, 0, 0, nil, budget.System, budget.Tools)
 	compModel := budget.CompactionModel
 	if compModel == "" {
 		compModel = budget.Model
 	}
-	// §P2：摘要 LLM 调用前触发 compaction hook（注入 context / 一次性替换 summarizerPrompt）。
-	// 必须排在 session.ValidateToolPairing(middle) 通过之后：context 注入仅追加无 tool_calls 的 user 消息，不破坏配对。
+	// §P2: trigger the compaction hook before the summary LLM call (inject context / one-shot replace summarizerPrompt).
+	// It must run after session.ValidateToolPairing(middle) passes: context injection only appends user messages
+	// without tool_calls, so it does not break pairing.
 	effPrompt, effMiddle, herr := applyCompactingHook(ctx, budget.Compacting, budget.SessionID, compModel, budget.SummarizerPrompt, middle)
 	if herr != nil {
-		return msgs, miniagent.Message{}, miniagent.Usage{}, herr // 实现A：hook 抛错上抛中止压缩
+		return msgs, miniagent.Message{}, miniagent.Usage{}, herr // implementation A: a hook error is propagated upward to abort compaction
 	}
 	sumText, sumUsage, err := budget.Summarize(ctx, compModel, effPrompt, prevSummary, effMiddle)
 	if err != nil {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, err
 	}
-	// §P0-B：summaryMsg 显式打新戳 text.NowMs()（不经 appendMsg）——防陈旧的关键触发点：新 Ts 使其前
-	// assistant 的真实 usage 在下一轮 estimateTokensFromUsage 中失效（lastApplicableUsageIndex 的
-	// latestSummaryTs 抬高），强制回落本地估算重算压缩后的小体积历史，避免陈旧大 usage 立即二次压缩。
+	// §P0-B: summaryMsg is explicitly stamped with a new Ts (text.NowMs(), not via appendMsg) — the key trigger point
+	// for anti-staleness: the new Ts invalidates the real usage of preceding assistants in the next round's
+	// estimateTokensFromUsage (lastApplicableUsageIndex's latestSummaryTs is raised), forcing a fallback to local
+	// estimation to recompute the small post-compaction history, avoiding an immediate second compaction driven by
+	// the stale large usage.
 	summaryMsg := miniagent.Message{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + sumText, Ts: text.NowMs()}
 	out = append([]miniagent.Message{}, head...)
 	out = append(out, summaryMsg)

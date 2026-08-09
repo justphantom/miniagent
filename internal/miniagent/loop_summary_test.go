@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// 阶段 3：迭代上限后注入总结 prompt，LLM 返回文本 → FinishStop，steps=maxIterations+1。
+// Phase 3: inject summary prompt after iteration limit, LLM returns text → FinishStop, steps=maxIterations+1.
 func TestRun_SummaryInjectionSucceeds(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
-		textResponse("总结完成"),
+		textResponse("summary done"),
 	}}
 	llm := testClients(tr)
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}, "x", LoopHooks{}, nil)
@@ -21,23 +21,23 @@ func TestRun_SummaryInjectionSucceeds(t *testing.T) {
 	if res.Finish != FinishStop {
 		t.Errorf("Finish = %q, want %q", res.Finish, FinishStop)
 	}
-	if res.Text != "总结完成" {
-		t.Errorf("Text = %q, want '总结完成'", res.Text)
+	if res.Text != "summary done" {
+		t.Errorf("Text = %q, want 'summary done'", res.Text)
 	}
-	if res.Steps != 2 { // 1 步工具 + 1 步总结
+	if res.Steps != 2 { // 1 tool step + 1 summary step
 		t.Errorf("Steps = %d, want 2", res.Steps)
 	}
 	if tr.calls != 2 {
 		t.Errorf("LLM calls = %d, want 2", tr.calls)
 	}
-	// 第二次请求 body 应含 summary request prompt。
+	// Second request body should contain the summary request prompt.
 	secondBody := tr.bodies[1]
 	if !strings.Contains(secondBody, summaryRequestPrompt) {
 		t.Errorf("second request missing summary prompt: %s", secondBody)
 	}
 }
 
-// 阶段 3：迭代上限后注入总结 prompt，LLM 仍请求工具 → 回落 FinishMaxIterations。
+// Phase 3: inject summary prompt after iteration limit, LLM still requests tool → fallback FinishMaxIterations.
 func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
@@ -56,29 +56,29 @@ func TestRun_SummaryInjectionFallsBack(t *testing.T) {
 		t.Errorf("Text = %q, want empty", res.Text)
 	}
 	if res.Steps != 1 {
-		t.Errorf("Steps = %d, want 1（回落，不累计额外步）", res.Steps)
+		t.Errorf("Steps = %d, want 1 (fallback, no extra step accumulated)", res.Steps)
 	}
-	// summary request 仍注入并发给了 LLM（第二次请求 body 含 prompt），但不再污染 transcript
-	// （Result.Messages 不含内部 RoleSystem 引导消息——经临时 reqMsgs 发送）。
+	// summary request is still injected and sent to the LLM (second request body contains the prompt), but no longer pollutes the transcript
+	// (Result.Messages does not contain the internal RoleSystem bootstrap message — sent via temporary reqMsgs).
 	secondBody := tr.bodies[1]
 	if !strings.Contains(secondBody, summaryRequestPrompt) {
 		t.Errorf("second request missing summary prompt: %s", secondBody)
 	}
 	for i, m := range res.Messages {
 		if m.Role == RoleSystem {
-			t.Errorf("Result.Messages[%d] 不应含内部 RoleSystem 引导消息: %+v", i, m)
+			t.Errorf("Result.Messages[%d] should not contain internal RoleSystem bootstrap message: %+v", i, m)
 		}
 	}
 }
 
-// 阶段 3：迭代上限后注入自定义 summary request prompt（通过 LoopConfig 配置）。
+// Phase 3: inject a custom summary request prompt after iteration limit (configured via LoopConfig).
 func TestRun_SummaryRequestPromptConfigurable(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
-		textResponse("自定义总结"),
+		textResponse("custom summary"),
 	}}
-	customPrompt := "这是自定义总结引导"
+	customPrompt := "this is a custom summary bootstrap"
 	llm := testClients(tr)
 	res, err := Run(context.Background(), llm, LoopConfig{
 		Tools:          []Tool{tool},
@@ -88,10 +88,10 @@ func TestRun_SummaryRequestPromptConfigurable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Text != "自定义总结" {
-		t.Errorf("Text = %q, want '自定义总结'", res.Text)
+	if res.Text != "custom summary" {
+		t.Errorf("Text = %q, want 'custom summary'", res.Text)
 	}
-	// 验证使用了自定义 prompt 而非默认值。
+	// Verify the custom prompt was used instead of the default.
 	secondBody := tr.bodies[1]
 	if !strings.Contains(secondBody, customPrompt) {
 		t.Errorf("second request missing custom summary prompt: %s", secondBody)
@@ -101,29 +101,29 @@ func TestRun_SummaryRequestPromptConfigurable(t *testing.T) {
 	}
 }
 
-// 总结步 LLM 调用失败（err2，如坏响应）时回落 FinishMaxIterations——不上抛、不污染 transcript
-// （summaryReq 经临时 reqMsgs，失败也不进 Messages）。覆盖 summarizeAtLimit 的 err2 退出路径。
+// Summary step LLM call fails (err2, e.g. bad response) → fallback FinishMaxIterations — does not propagate, does not pollute transcript
+// (summaryReq goes via temporary reqMsgs, so failure does not enter Messages). Covers the err2 exit path of summarizeAtLimit.
 func TestRun_SummaryLLMFailureFallsBack(t *testing.T) {
 	tool := Tool{Name: "loop", Call: func(context.Context, string) ToolResult { return ToolResult{Output: "x"} }}
 	tr := &fakeTransport{responses: []string{
 		toolResponse(ToolCall{ID: "c", Name: "loop", Args: "{}"}),
-		"not-valid-json", // 总结步解析失败 → err2
+		"not-valid-json", // summary step parse failure → err2
 	}}
 	llm := testClients(tr)
 	cfg := LoopConfig{Tools: []Tool{tool}, MaxIterations: 1}
 	res, err := Run(context.Background(), llm, cfg, "x", LoopHooks{}, nil)
 	if err != nil {
-		t.Fatalf("总结 LLM 失败应回落而非上抛, got: %v", err)
+		t.Fatalf("summary LLM failure should fallback instead of propagating, got: %v", err)
 	}
 	if res.Finish != FinishMaxIterations {
-		t.Errorf("Finish = %q, want %q（总结失败回落）", res.Finish, FinishMaxIterations)
+		t.Errorf("Finish = %q, want %q (summary failure fallback)", res.Finish, FinishMaxIterations)
 	}
 	if res.Steps != 1 {
-		t.Errorf("Steps = %d, want 1（=iterLimit）", res.Steps)
+		t.Errorf("Steps = %d, want 1 (=iterLimit)", res.Steps)
 	}
 	for i, m := range res.Messages {
 		if m.Role == RoleSystem {
-			t.Errorf("Result.Messages[%d] 不应含 RoleSystem: %+v", i, m)
+			t.Errorf("Result.Messages[%d] should not contain RoleSystem: %+v", i, m)
 		}
 	}
 }

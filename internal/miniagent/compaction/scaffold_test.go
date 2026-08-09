@@ -9,9 +9,10 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// 本文件为压缩包测试提供共享脚手架（与核心 loop_test 的同名 helper 等价，独立以避免跨包循环）。
+// This file provides shared scaffolding for the compaction package tests (equivalent to the same-named helper in
+// the core loop_test, kept independent to avoid cross-package cycles).
 
-// fakeTransport 把预设的非流式 JSON body 按调用顺序回放；lastBody/bodies 记录请求体供断言。
+// fakeTransport replays the preset non-streaming JSON bodies in call order; lastBody/bodies record the request bodies for assertions.
 type fakeTransport struct {
 	responses []string
 	statuses  []int
@@ -45,12 +46,12 @@ func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// textResponse 构造非流式 chat completions JSON：单条 choice，纯文本回复。
+// textResponse builds a non-streaming chat completions JSON: a single choice, plain-text reply.
 func textResponse(text string) string {
 	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
 }
 
-// testClients 从一个 RoundTripper 构造 ChatClient + StreamClient（ChatURL=http://localhost）。
+// testClients builds a ChatClient + StreamClient from a RoundTripper (ChatURL=http://localhost).
 func testClients(tr http.RoundTripper) (*openai.ChatClient, *openai.StreamClient) {
 	return &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}},
 		&openai.StreamClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}

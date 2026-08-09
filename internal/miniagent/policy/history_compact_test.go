@@ -7,22 +7,22 @@ import (
 )
 
 func TestEstimateTokens(t *testing.T) {
-	// 纯 ASCII：4 字符 ≈ 1 token；空 system + 无工具时 = 内容 + systemOverhead + 每条消息信封。
+	// Pure ASCII: 4 chars ≈ 1 token; with an empty system + no tools it equals content + systemOverhead + per-message envelope.
 	if n := EstimateTokens([]miniagent.Message{{Role: "user", Content: "abcdefgh"}}, "", nil); n != 2+SystemOverheadTokens+EnvelopePerMsgTokens {
 		t.Errorf("ascii 8 chars = %d, want %d", n, 2+SystemOverheadTokens+EnvelopePerMsgTokens)
 	}
-	// 纯中文：2 字符 ≈ 1 token
+	// Pure CJK: 2 chars ≈ 1 token
 	if n := EstimateTokens([]miniagent.Message{{Role: "user", Content: "四个汉字"}}, "", nil); n != 2+SystemOverheadTokens+EnvelopePerMsgTokens {
 		t.Errorf("cjk 4 chars = %d, want %d", n, 2+SystemOverheadTokens+EnvelopePerMsgTokens)
 	}
-	// tool_calls.Args 计入估算；每个 tool_call 额外计信封（嵌套 function 对象）。
+	// tool_calls.Args is counted in the estimate; each tool_call adds an extra envelope (the nested function object).
 	if n := EstimateTokens([]miniagent.Message{{Role: "assistant", ToolCalls: []miniagent.ToolCall{{Args: "abcd"}}}}, "", nil); n != 1+SystemOverheadTokens+EnvelopePerMsgTokens+EnvelopePerToolCallTokens {
 		t.Errorf("args 4 chars = %d, want %d", n, 1+SystemOverheadTokens+EnvelopePerMsgTokens+EnvelopePerToolCallTokens)
 	}
 }
 
-// estimateTokens 失明：system prompt 内容 + 工具 schema 固定开销须计入，否则压缩触发偏晚。
-// 用 delta 断言，使测试不依赖具体常量取值。
+// estimateTokens blind spot: the fixed overhead of system prompt content + tool schema must be counted,
+// otherwise compaction triggers too late. Uses delta assertions so the test does not depend on concrete constant values.
 func TestEstimateTokens_Overhead(t *testing.T) {
 	msgs := []miniagent.Message{{Role: "user", Content: "abcdefgh"}}
 	base := EstimateTokens(msgs, "", nil)

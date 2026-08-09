@@ -25,7 +25,7 @@ const (
 	lockfileFailImmediately = 0x00000001
 )
 
-// lockSession 在 Windows 上对 session 文件加排他字节区间锁。
+// lockSession takes an exclusive byte-range lock on the session file on Windows.
 func lockSession(f *os.File) error {
 	h := syscall.Handle(f.Fd())
 	var ov syscall.Overlapped
@@ -47,7 +47,7 @@ func lockSession(f *os.File) error {
 		}
 		time.Sleep(lockSessionInterval)
 	}
-	return errors.New("session 锁繁忙：另一进程持有且 5s 内未释放")
+	return errors.New("session lock busy: another process holds it and did not release within 5s")
 }
 
 const (
@@ -55,7 +55,7 @@ const (
 	lockSessionInterval = 100 * time.Millisecond
 )
 
-// unlockSession 释放 lockSession 持有的锁。
+// unlockSession releases the lock held by lockSession.
 func unlockSession(f *os.File) error {
 	h := syscall.Handle(f.Fd())
 	var ov syscall.Overlapped
@@ -72,11 +72,12 @@ func unlockSession(f *os.File) error {
 	return err
 }
 
-// withSessionLock 打开 path 并加锁，执行 fn 后解锁关闭。OpenNoFollow 留核心（session/config 共用）。
+// withSessionLock opens path, takes a lock, and runs fn before unlocking and closing. OpenNoFollow is kept in
+// core (shared by session/config).
 func withSessionLock(path string, flag int, fn func(*os.File) error) error {
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("创建 session 目录：%w", err)
+			return fmt.Errorf("create session directory: %w", err)
 		}
 	}
 	f, err := miniagent.OpenNoFollow(path, flag, 0o600)
