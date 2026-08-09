@@ -44,6 +44,10 @@ type ProviderConfig struct {
 	ThinkingLevel *string `json:"thinking_level,omitempty"`
 	// Headers are per-provider custom request headers, injected with each request; they do not override Authorization / Content-Type.
 	Headers map[string]string `json:"headers,omitempty"`
+	// StreamAllowUnterminated (opt-in) accepts a streaming response that emitted content then ended without [DONE]/finish_reason
+	// (a connection drop) as success, returning the partial Response. For non-compliant endpoints (some vLLM/Ollama configs)
+	// that emit content then close with no terminator; default false = the drop is a hard error. Affects streaming only.
+	StreamAllowUnterminated *bool `json:"stream_allow_unterminated,omitempty"`
 }
 
 // ModelConfig is the configuration for a single model under a provider: Name is required, the rest are model-level parameters

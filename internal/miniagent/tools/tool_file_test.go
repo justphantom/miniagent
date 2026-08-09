@@ -1,8 +1,8 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,15 +43,33 @@ func TestWriteFile_CreatesParentDirs(t *testing.T) {
 	}
 }
 
-func TestWriteFile_FileMode0644(t *testing.T) {
+func TestWriteFile_NewFileDefaultPerm0600(t *testing.T) {
 	dir := t.TempDir()
 	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"m.txt","content":"x"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
 	info, _ := os.Stat(filepath.Join(dir, "m.txt"))
+	// New files default to owner-only 0600 (S-7: tighter than the historical 0644 for multi-user hosts).
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("new-file mode = %o, want 0600", info.Mode().Perm())
+	}
+}
+
+// Overwrite preserves the existing file's permissions (not the new-file 0600 default).
+func TestWriteFile_OverwritePreservesPerm(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "exist.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"exist.txt","content":"new"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	info, _ := os.Stat(target)
 	if info.Mode().Perm() != 0o644 {
-		t.Errorf("mode = %o", info.Mode().Perm())
+		t.Errorf("overwritten file mode = %o, want preserved 0644", info.Mode().Perm())
 	}
 }
 

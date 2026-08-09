@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
@@ -20,18 +21,19 @@ import (
 // generations, P2-5); total duration is controlled by ctx.
 // Non-streaming goes through ChatClient (P4 split); SSE parsing is in stream_parse.go.
 type StreamClient struct {
-	APIKey             string
-	ChatURL            string
-	Headers            map[string]string // custom request headers, does not override Authorization / Content-Type
-	chatURL            *url.URL
-	chatOnce           sync.Once
-	chatErr            error
-	HTTP               *http.Client
-	Logger             *slog.Logger
-	defaultClient      *http.Client // cached streaming client (no Timeout) when c.HTTP==nil
-	defaultClientOnce  sync.Once
-	injectedClient     *http.Client // when c.HTTP has a total Timeout, a new no-Timeout client borrowing its Transport (cached)
-	injectedClientOnce sync.Once
+	APIKey                  string
+	ChatURL                 string
+	Headers                 map[string]string // custom request headers, does not override Authorization / Content-Type
+	StreamAllowUnterminated bool              // opt-in: accept content-then-EOF (connection drop, no [DONE]/finish_reason) for non-compliant endpoints (vLLM/Ollama)
+	chatURL                 *url.URL
+	chatOnce                sync.Once
+	chatErr                 error
+	HTTP                    *http.Client
+	Logger                  *slog.Logger
+	defaultClient           *http.Client // cached streaming client (no Timeout) when c.HTTP==nil
+	defaultClientOnce       sync.Once
+	injectedClient          *http.Client // when c.HTTP has a total Timeout, a new no-Timeout client borrowing its Transport (cached)
+	injectedClientOnce      sync.Once
 }
 
 // NewStreamClient parses and caches chatURL at construction time. headers are provider custom request headers, may be nil.
@@ -91,11 +93,23 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 	if c.Logger != nil {
 		c.Logger.Debug("llm stream request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
 	}
+	// deltaSent counts deltas pushed to onDelta during the current attempt. A parseSSE failure with deltaSent==0 means
+	// nothing reached the caller yet (early reset / 200-then-EOF), so the call can be transparently retried without
+	// duplicating live output; deltaSent>0 means the stream is irrevocable (live UX already received partial content).
+	var deltaSent int
+	wrappedOnDelta := func(d miniagent.Delta) error {
+		deltaSent++
+		if onDelta != nil {
+			return onDelta(d)
+		}
+		return nil
+	}
 	backoff := retryBaseDelay
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return miniagent.Response{}, err
 		}
+		deltaSent = 0
 		// Rebuild httpReq each iteration: the body reader from the previous round has been consumed; reusing it would send an empty body.
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 		if err != nil {
@@ -155,10 +169,55 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 			backoff *= 2
 			continue
 		}
-		return func() (miniagent.Response, error) { // HTTP 200: parseSSE streams delta. defer Close inside the IIFE: when onDelta panics (recovered by callLLMOnce) the body is still closed; a function-level defer would accumulate across retries, so it is inlined within each iteration.
+		// HTTP 200: parseSSE streams deltas (defer Close inside the IIFE: when onDelta panics — recovered by callLLMOnce —
+		// the body is still closed; a function-level defer would accumulate across retries, so it is inlined per iteration).
+		res, perr := func() (miniagent.Response, error) {
 			defer func() { _ = resp.Body.Close() }()
-			return parseSSE(resp.Body, onDelta)
+			return parseSSE(resp.Body, wrappedOnDelta)
 		}()
+		if perr == nil {
+			return res, nil
+		}
+		// Opt-in relaxation: accept a content-then-EOF stream (connection drop, no [DONE]/finish_reason) for non-compliant
+		// endpoints (vLLM/Ollama). parseSSE returns the partial Response alongside errStreamUnterminated, so the caller
+		// still receives the content that was streamed before the drop.
+		if c.StreamAllowUnterminated && errors.Is(perr, errStreamUnterminated) {
+			if c.Logger != nil {
+				c.Logger.Warn("stream ended without [DONE]/finish_reason; accepted partial response under stream_allow_unterminated")
+			}
+			return res, nil
+		}
+		// parseSSE failed. If ZERO deltas were emitted (early reset / 200-then-EOF — the common LB/proxy first-byte drop)
+		// and the error is transient, retry transparently: mirrors the non-streaming client's network retry with zero delta
+		// duplication. Once a delta has streamed the call is irrevocable (P2-4): live UX already received partial content,
+		// so surface the error as-is rather than replaying a half-stream.
+		if deltaSent == 0 && isTransientStreamError(perr) && attempt < maxRetries {
+			if c.Logger != nil {
+				c.Logger.Warn("llm stream ended pre-delta, retrying", "error", perr, "failed_attempt", attempt+1)
+			}
+			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, -1)); waitErr != nil {
+				return miniagent.Response{}, waitErr
+			}
+			backoff *= 2
+			continue
+		}
+		return miniagent.Response{}, perr
 	}
 	return miniagent.Response{}, errors.New("llm stream retry loop exited unexpectedly")
+}
+
+// isTransientStreamError reports whether a parseSSE failure (in the zero-delta phase) is worth one transparent retry —
+// mirroring the non-streaming client's network-error retry. Covers connection drops/resets that surface as a wrapped
+// "read sse:" scanner error or io.ErrUnexpectedEOF, plus the 200-then-EOF "stream ended without any choices" case
+// (LB/proxy first-byte reset). ctx cancellation/deadline is excluded (the loop's ctx.Err() check handles it); a JSON
+// parse error of an actually-received chunk is excluded (likely persistent, not a connection blip).
+func isTransientStreamError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	s := err.Error()
+	return strings.HasPrefix(s, "read sse:") || strings.Contains(s, "stream ended without any choices")
 }

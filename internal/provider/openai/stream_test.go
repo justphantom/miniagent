@@ -235,3 +235,97 @@ func TestDoStream_ErrorOmitsBody(t *testing.T) {
 		t.Errorf("error should contain status code 400 for debugging: %q", err.Error())
 	}
 }
+
+// Connection-drop detection (Fix 1): content streamed but the stream ended with NEITHER [DONE] NOR finish_reason
+// (proxy/LB closed mid-generation). Without the fix the partial "Hello" is returned as a silent success (loop.go → FinishStop).
+func TestParseSSE_TruncatedNoDoneNoFinish_Errors(t *testing.T) {
+	const sse = `data: {"choices":[{"delta":{"content":"Hello"}}]}
+` // reader EOF after content — no finish_reason, no [DONE]
+	_, err := parseSSE(strings.NewReader(sse), nil)
+	if err == nil {
+		t.Fatal("expected error for content-then-EOF with no [DONE]/finish_reason, got nil")
+	}
+	if !strings.Contains(err.Error(), "[DONE]") && !strings.Contains(err.Error(), "finish_reason") {
+		t.Errorf("error should mention [DONE]/finish_reason, got: %v", err)
+	}
+}
+
+// OR-of-markers (Fix 1): a stream that emits finish_reason but NEVER [DONE] (Azure / some LiteLLM configs) still succeeds.
+func TestParseSSE_FinishReasonOnlyNoDone_OK(t *testing.T) {
+	const sse = `data: {"choices":[{"delta":{"content":"Hi"}}]}
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+` // no [DONE], but finish_reason present
+	res, err := parseSSE(strings.NewReader(sse), nil)
+	if err != nil {
+		t.Fatalf("finish_reason-only stream should succeed: %v", err)
+	}
+	if res.Text != "Hi" || res.FinishReason != "stop" {
+		t.Errorf("res = %+v", res)
+	}
+}
+
+// Index collision without ids (Fix 3): a compat endpoint omitting index sends two distinct tool_calls both at index 0
+// with no stable ids — the second (name="shell") colliding into the first (name="read") must error instead of silently
+// overwriting the name and concatenating args.
+func TestParseSSE_ToolCallIndexCollisionNameMismatch(t *testing.T) {
+	const sse = "data: " + `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{}"}}]}}]}` + "\n" +
+		"data: " + `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"shell","arguments":"{}"}}]}}]}` + "\n" +
+		"data: [DONE]\n"
+	_, err := parseSSE(strings.NewReader(sse), nil)
+	if err == nil {
+		t.Fatal("expected index-collision error, got nil")
+	}
+	if !strings.Contains(err.Error(), "collision") {
+		t.Errorf("error should mention collision, got: %v", err)
+	}
+}
+
+// StreamAllowUnterminated (opt-in flag): a content-then-EOF stream (no [DONE]/finish_reason) is accepted as success with
+// the partial Response — for non-compliant endpoints (vLLM/Ollama). Default (flag off) would surface errStreamUnterminated.
+func TestDoStream_AllowUnterminatedAcceptsPartial(t *testing.T) {
+	const sse = `data: {"choices":[{"delta":{"content":"Hello partial"}}]}
+` // content then EOF — no [DONE], no finish_reason
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sse)
+	}))
+	defer srv.Close()
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL, StreamAllowUnterminated: true}
+	resp, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
+	if err != nil {
+		t.Fatalf("DoStream with StreamAllowUnterminated: %v", err)
+	}
+	if resp.Text != "Hello partial" {
+		t.Errorf("Text = %q, want the partial content", resp.Text)
+	}
+}
+
+// DoStream transparently retries a pre-delta stream end (Fix 2): first attempt returns 200 then immediate EOF (LB/proxy
+// first-byte reset) — nothing reached the caller, so the retry duplicates zero live output. Second attempt succeeds.
+func TestDoStream_PreDeltaResetRetried(t *testing.T) {
+	const good = `data: {"choices":[{"delta":{"content":"Hi"}}]}
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if attempts == 1 {
+			return // 200 then immediate EOF (first-byte reset), no SSE data
+		}
+		fmt.Fprint(w, good)
+	}))
+	defer srv.Close()
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
+	resp, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
+	if err != nil {
+		t.Fatalf("DoStream: %v (expected transparent retry to succeed)", err)
+	}
+	if resp.Text != "Hi" {
+		t.Errorf("Text = %q, want Hi", resp.Text)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2 (first EOFd pre-delta, retried)", attempts)
+	}
+}

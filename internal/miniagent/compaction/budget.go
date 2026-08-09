@@ -3,9 +3,9 @@
 package compaction
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"context"
 	"fmt"
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"log/slog"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
@@ -268,7 +268,9 @@ const (
 )
 
 // contextKeepReasoning is the default number of most recent assistant messages retained during proactive reasoning cleanup (P1).
-// 1 = retain only the most recent assistant's chain-of-thought (current reasoning context), earlier ones cleared.
+// 1 = retain only the most recent assistant's chain-of-thought (current reasoning context), earlier ones cleared. Kept conservative
+// because reasoning is large and retained verbatim; long-chain cross-step reasoning tasks that need more reasoning context should
+// raise run.context_keep_reasoning (2–3) — token cost grows with each step kept.
 const contextKeepReasoning = 1
 
 // contextKeepReasoningChars is the upper character limit (P7, in runes) for a single Reasoning within the retained window.

@@ -1,10 +1,10 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
 	"fmt"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
 	"path/filepath"
 	"time"
@@ -54,7 +54,7 @@ func runWriteFile(workspaceRoot, args string) miniagent.ToolResult {
 	if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to create parent directory: %v", err)}
 	}
-	mode := os.FileMode(0o644)
+	mode := os.FileMode(0o600) // new-file default (owner-only, safer on multi-user hosts); overwrite preserves the existing perm below
 	if info, err := os.Lstat(full); err == nil {
 		// Reject non-regular files: FIFO/character devices would cause ambiguous errors from
 		// subsequent Rename, directories would EISDIR; aligned with edit to report "not a
@@ -80,8 +80,8 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	cleanup := func() { _ = os.Remove(tmpName) }
 	// Write first then Chmod: CreateTemp defaults to 0600, so the temp keeps the
 	// narrowest permissions during the write; only after writing do we set the target
-	// perm (commonly 0644), avoiding exposing unfinished content with wide permissions
-	// mid-write.
+	// perm (0600 for new files, or the preserved perm of an existing file), avoiding
+	// exposing unfinished content with wide permissions mid-write.
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		cleanup()

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-
 )
 
 // maxParallelTools: upper bound of parallel tools per step, to prevent exhausting FDs/connections or triggering target rate limiting.
@@ -44,7 +43,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			calls[i].ID = fmt.Sprintf("synth_%d_%d", step, i)
 		}
 	}
-		// Chain-of-thought enters history with the assistant message (needed to feed back reasoning models). §P0-B: attach real usage for subsequent stale-estimate prevention.
+	// Chain-of-thought enters history with the assistant message (needed to feed back reasoning models). §P0-B: attach real usage for subsequent stale-estimate prevention.
 	// Content: resp.Text — models often prepend explanatory text before tool_calls (Claude via OpenAI proxy, some open-source models);
 	// including it in history preserves multi-turn coherence; the final text (loop.go:166)/summary (:102) paths both set Content, this aligns (R4-2, was previously discarded).
 	appendMsg(&msgs, newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
@@ -161,11 +160,19 @@ func runToolsParallel(ctx context.Context, logger *slog.Logger, calls []ToolCall
 			defer wg.Done()
 			// Semaphore acquisition tied to ctx: after cancellation, queued calls immediately abort without waiting for a slot;
 			// otherwise a ctx-disrespecting blocking tool would hold a slot forever, wg.Wait wouldn't return, Run hangs.
+			// Priority-select on ctx.Done: a plain select picks randomly when both a slot and ctx.Done are ready, so a
+			// cancelled tool could win the slot and run. Check ctx non-blocking first; only if not yet cancelled block on sem.
 			select {
-			case sem <- struct{}{}:
 			case <-ctx.Done():
-			results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "cancelled"}
+				results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "cancelled"}
 				return
+			default:
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					results[i] = ToolResult{IsError: true, ExitCode: ExitCodeNotSet, Output: "cancelled"}
+					return
+				}
 			}
 			defer func() { <-sem }()
 			results[i] = safeCall(ctx, logger, tool, tc.Name, tc.Args)

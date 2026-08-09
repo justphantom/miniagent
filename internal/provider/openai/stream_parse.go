@@ -68,8 +68,15 @@ type streamAccum struct {
 	finish     string
 	usage      miniagent.Usage
 	sawChoice  bool // whether a chunk with choices was seen (empty-response detection, P1-2)
+	doneSeen   bool // whether the terminal "data: [DONE]" marker was seen (connection-drop detection)
 	totalBytes int  // accumulated bytes upper-bound guard
 }
+
+// errStreamUnterminated is returned (alongside the partial Response) when content/reasoning/tool_calls were received but
+// the stream ended without EITHER the [DONE] marker or a finish_reason — a connection drop that would otherwise masquerade
+// as a silent partial success. StreamClient.DoStream relaxes it to success when the provider opted in via
+// StreamAllowUnterminated (non-compliant endpoints such as vLLM/Ollama that emit content then close with no terminator).
+var errStreamUnterminated = errors.New("stream ended without [DONE]/finish_reason (connection dropped mid-generation)")
 
 // parseSSE reads the SSE stream: for each content/reasoning fragment it calls onDelta; when onDelta returns an error it aborts; on completion it returns the aggregated Response.
 // Line format: starts with "data: ", payload is JSON; "data: [DONE]" terminates; blank lines/":" comments are ignored.
@@ -93,6 +100,7 @@ func parseSSE(r io.Reader, onDelta func(miniagent.Delta) error) (miniagent.Respo
 			continue // empty data line (proxy keepalive), does not interrupt the stream
 		}
 		if data == "[DONE]" {
+			acc.doneSeen = true
 			break
 		}
 		var chunk chatCompletionChunk
@@ -115,6 +123,17 @@ func parseSSE(r io.Reader, onDelta func(miniagent.Delta) error) (miniagent.Respo
 	// Never saw choices (truncated/empty stream/usage-only): report an error rather than masquerading as an empty answer, aligned with parseChatResponse (P1-2).
 	if !acc.sawChoice && res.FinishReason == "" && res.Text == "" && len(res.ToolCalls) == 0 {
 		return miniagent.Response{}, errors.New("stream ended without any choices")
+	}
+	// Connection-drop detection: content/reasoning/tool_calls were received but the stream ended with NEITHER the
+	// [DONE] marker NOR a finish_reason — a reverse proxy/LB closing the connection mid-generation is otherwise
+	// indistinguishable from a well-terminated stream (clean EOF, sc.Err()==nil), and the partial content would be
+	// returned as a silent success (loop.go treats it as FinishStop). The OR of "no [DONE]" AND "no finish_reason" is
+	// intentional: spec-compliant providers signal completion via EITHER marker (Azure / some LiteLLM configs emit
+	// finish_reason but never [DONE]), so a finish_reason-only stream still succeeds.
+	if !acc.doneSeen && res.FinishReason == "" && (acc.text.Len() > 0 || acc.reasoning.Len() > 0 || len(acc.callOrder) > 0) {
+		// Return the partial Response (not empty) so DoStream can still hand the caller the content it received when the
+		// provider opted into StreamAllowUnterminated.
+		return res, errStreamUnterminated
 	}
 	return res, nil
 }
@@ -165,6 +184,13 @@ func (a *streamAccum) apply(ch chatCompletionChunk, onDelta func(miniagent.Delta
 			// The same index has already merged tool_calls with different ids: the provider omitted index, causing multiple tool_calls to be incorrectly merged.
 			// When index is missing, subsequent fragments cannot be reliably routed; report an error explicitly rather than silently merging (native OpenAI always carries index, only compat endpoints omit it).
 			return fmt.Errorf("streaming tool_call missing index: %q and %q merged into index %d", acc.id, tc.ID, tc.Index)
+		}
+		// Index collision without ids: a name-bearing fragment at an existing index whose name DIFFERS means a distinct
+		// tool_call is colliding into this index — compat endpoints that omit index (every call at index 0) with no stable
+		// ids would otherwise silently overwrite the name and concatenate args. Spec-compliant streams carry the name only
+		// on the first fragment of an index, so a second distinct name is a reliable collision signal (zero false positives).
+		if ok && acc.name != "" && tc.Function.Name != "" && tc.Function.Name != acc.name {
+			return fmt.Errorf("streaming tool_call index collision: %q and %q merged into index %d (provider omitted index)", acc.name, tc.Function.Name, tc.Index)
 		}
 		if !ok {
 			acc = &streamToolCall{}
