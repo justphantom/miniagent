@@ -1,8 +1,8 @@
 package policy
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"encoding/json"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"strings"
 	"unicode"
 

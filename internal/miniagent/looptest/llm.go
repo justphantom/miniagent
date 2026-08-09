@@ -117,7 +117,7 @@ func (f *FakeLLM) Do(ctx context.Context, req miniagent.Request) (miniagent.Resp
 			}
 			return miniagent.Response{}, err
 		}
-		SleepCtx(ctx, CapRetryDelay(backoff, retryAfter))
+		_ = SleepCtx(ctx, CapRetryDelay(backoff, retryAfter))
 		backoff *= 2
 	}
 	return miniagent.Response{}, errors.New("fake llm retry loop exited unexpectedly")

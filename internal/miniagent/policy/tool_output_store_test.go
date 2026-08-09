@@ -159,7 +159,7 @@ func TestToolOutputStore_Cleanup_CountCap(t *testing.T) {
 	dir := t.TempDir()
 	const n = toolOutputMaxFiles + 2
 	base := time.Now().Add(-1 * time.Hour) // well within the 7d retention below → only the count cap should fire
-	for i := 0; i < n; i++ {
+	for i := range n {
 		path := filepath.Join(dir, fmt.Sprintf("tool_%03d.txt", i))
 		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)

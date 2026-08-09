@@ -1,13 +1,13 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io/fs"
 	"os"
 	"path/filepath"

@@ -36,7 +36,7 @@ func TestNewDefaultOnBudget_NoPreEstimateEstimates(t *testing.T) {
 		ToSend:      []miniagent.Message{{Role: miniagent.RoleUser, Content: strings.Repeat("x", 10000)}},
 		System:      "s",
 		Resp:        miniagent.Response{Usage: miniagent.Usage{}}, // zero usage → inZero
-		PreEstimate: 0, // no compaction estimate → must estimate
+		PreEstimate: 0,                                            // no compaction estimate → must estimate
 	}
 	if err := hook(context.Background(), 1, in, total); err != nil {
 		t.Fatalf("OnBudget: %v", err)

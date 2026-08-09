@@ -156,9 +156,9 @@ func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	providers := `"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}]`
 	def := `"defaults":{"provider":"p","model":"m"}`
 	cases := map[string]string{
-		"defaults.provider missing":   `{` + providers + `,"defaults":{"model":"m"}}`,
-		"defaults.model missing":      `{` + providers + `,"defaults":{"provider":"p"}}`,
-		"compaction model-only":       `{` + providers + `,` + def + `,"compaction":{"model":"m"}}`,
+		"defaults.provider missing": `{` + providers + `,"defaults":{"model":"m"}}`,
+		"defaults.model missing":    `{` + providers + `,"defaults":{"provider":"p"}}`,
+		"compaction model-only":     `{` + providers + `,` + def + `,"compaction":{"model":"m"}}`,
 	}
 	for name, body := range cases {
 		if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {

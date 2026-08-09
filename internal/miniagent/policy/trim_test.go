@@ -40,4 +40,3 @@ func TestTrimForHistory_SplitKeepsTail(t *testing.T) {
 		t.Errorf("split total length should be near limit: len=%d", len(got))
 	}
 }
-

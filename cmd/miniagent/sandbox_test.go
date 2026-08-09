@@ -1,14 +1,13 @@
 package main
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/tools"
 	"context"
 	"fmt"
+	"github.com/justphantom/miniagent/internal/miniagent/tools"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
 )
 
 // A relative path falling inside the workdir subtree should pass.

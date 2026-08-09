@@ -127,9 +127,9 @@ func readYes(stdin io.Reader, stdout io.Writer, name, input string) bool {
 }
 
 func truncateForPrompt(s string) string {
-	const max = 200
-	if len(s) <= max {
+	const limit = 200
+	if len(s) <= limit {
 		return s
 	}
-	return s[:max] + "…"
+	return s[:limit] + "…"
 }

@@ -27,9 +27,9 @@ func layeredCfg() *Config {
 				{Name: "m2"},
 			},
 		}},
-		Defaults:      DefaultsConfig{Provider: "p", Model: "m1", Thinking: "slow"},
-		Compaction:    CompactionConfig{Provider: "p", Model: "m1"},
-		Run: RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000), HTTPTimeout: sptr("200s")},
+		Defaults:   DefaultsConfig{Provider: "p", Model: "m1", Thinking: "slow"},
+		Compaction: CompactionConfig{Provider: "p", Model: "m1"},
+		Run:        RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000), HTTPTimeout: sptr("200s")},
 	}
 }
 
@@ -61,10 +61,10 @@ func TestResolve_ModelParamsLayered(t *testing.T) {
 // Neither provider nor model declares → global run.
 func TestResolve_ModelParamsFallthroughGlobal(t *testing.T) {
 	cfg := &Config{
-		Providers:     []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions", Models: []ModelConfig{{Name: "m"}}}},
-		Defaults:      DefaultsConfig{Provider: "p", Model: "m"},
-		Compaction:    CompactionConfig{Provider: "p", Model: "m"},
-		Run: RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000)},
+		Providers:  []ProviderConfig{{Name: "p", ChatURL: "https://a/v1/chat/completions", Models: []ModelConfig{{Name: "m"}}}},
+		Defaults:   DefaultsConfig{Provider: "p", Model: "m"},
+		Compaction: CompactionConfig{Provider: "p", Model: "m"},
+		Run:        RunConfig{MaxTokens: iptr(1000), ContextWindow: iptr(50000)},
 	}
 	r, err := Resolve(cfg, CLIOverrides{})
 	if err != nil {

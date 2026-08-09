@@ -1,8 +1,8 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os/exec"
 	"path/filepath"
 	"strings"

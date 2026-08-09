@@ -1,7 +1,7 @@
 // Package metrics provides the default consumer of the miniagent.LoopHooks.OnStep observability seam: a best-effort NDJSON
 // emitter that writes one line per step, turning the long-session behavior the docs could previously only argue (transcript
 // growth, token-spend slope, compaction count, per-turn LLM request count) into collectible curves.
-package metrics
+package metrics //nolint:revive // var-naming: name is deliberate; no stdlib import collision
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func NewStepEmitter(w io.Writer) *StepEmitter {
 func (e *StepEmitter) Emit(_ context.Context, snap miniagent.StepSnapshot) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_ = e.enc.Encode(struct {
+	_ = e.enc.Encode(struct { //nolint:musttag // StepSnapshot is serialized via field-name promotion (contract: capitalized keys)
 		Type string `json:"type"`
 		Ts   int64  `json:"ts"`
 		miniagent.StepSnapshot

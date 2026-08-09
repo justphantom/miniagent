@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/justphantom/miniagent/internal/text"
@@ -360,16 +358,4 @@ func toolResponse(calls ...ToolCall) string {
 		tcs = append(tcs, fmt.Sprintf(`{"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}`, c.ID, c.Name, c.Args))
 	}
 	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[%s]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, strings.Join(tcs, ","))
-}
-
-// lastToolMessage returns the last role=tool message in msgs (test helper).
-func lastToolMessage(t *testing.T, msgs []Message) Message {
-	t.Helper()
-	for idx := range slices.Backward(msgs) {
-		if msgs[idx].Role == RoleTool {
-			return msgs[idx]
-		}
-	}
-	t.Fatalf("no tool message in msgs: %+v", msgs)
-	return Message{}
 }

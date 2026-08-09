@@ -1,11 +1,11 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io"
 	"os"
 	"os/exec"

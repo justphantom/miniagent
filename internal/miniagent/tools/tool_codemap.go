@@ -1,11 +1,11 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -59,7 +59,7 @@ func runCodemap(ctx context.Context, workspaceRoot, args string) miniagent.ToolR
 	root := resolveToolPath(workspaceRoot, a.Path)
 	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
 		if err == nil {
-				err = errors.New("not a directory")
+			err = errors.New("not a directory")
 		}
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to traverse %q: %v", a.Path, err)}
 	}

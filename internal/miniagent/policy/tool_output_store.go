@@ -156,7 +156,7 @@ func (s *toolOutputStore) cleanup() {
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].modTime.Before(kept[j].modTime) })
 	surplus := len(kept) - toolOutputMaxFiles
-	for i := 0; i < surplus; i++ {
+	for i := range surplus {
 		if err := os.Remove(filepath.Join(s.dir, kept[i].name)); err != nil && s.logger != nil {
 			s.logger.Warn("tool-output cleanup remove failed", "file", kept[i].name, "error", err)
 		}

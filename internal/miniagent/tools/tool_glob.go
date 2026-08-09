@@ -1,10 +1,10 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
 	"fmt"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io/fs"
 	"path/filepath"
 	"strconv"
@@ -40,7 +40,9 @@ func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) m
 		}, "pattern"),
 		ResultLimit: miniagent.MaxToolResultInHistory,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
-			return runWithTimeout(ctx, timeout, "glob", func(rctx context.Context) miniagent.ToolResult { return runGlob(rctx, workspaceRoot, args, maxOutputChars) })
+			return runWithTimeout(ctx, timeout, "glob", func(rctx context.Context) miniagent.ToolResult {
+				return runGlob(rctx, workspaceRoot, args, maxOutputChars)
+			})
 		},
 	}
 }

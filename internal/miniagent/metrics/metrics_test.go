@@ -1,4 +1,4 @@
-package metrics
+package metrics //nolint:revive // var-naming: package name is deliberate; stdlib collision is benign
 
 import (
 	"context"

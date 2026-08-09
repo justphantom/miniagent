@@ -1,10 +1,10 @@
 package tools
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
 	"fmt"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"sort"
 	"strings"
 	"sync"
