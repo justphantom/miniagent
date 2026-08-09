@@ -3,6 +3,7 @@ layer: L2
 type: decision
 tags: [security, sandbox, shell, credentials, config-driven, default-mode]
 created: 2026-08-09
+updated: 2026-08-09
 confidence: high
 ---
 
@@ -24,6 +25,7 @@ confidence: high
 **真隔离（防越界 / 逃逸 / 凭证泄漏）责任在调用方 OS 层**（低权用户 + 容器 + 只读 rootfs + cgroup）；代码侧仅 guardrail 防 misfired 工具调用，越界 / 逃逸不视为漏洞。安全漏洞走 GitHub Security Advisory 私有上报，禁公开 issue。
 
 ## 参考
-- `cmd/miniagent/sandbox.go`（`checkConfine`）
+- `cmd/miniagent/sandbox.go`（`checkConfine`，写工具 confine 边界）
+- `internal/miniagent/tools/tool_shell.go`（`sudoSuRe`，shell 提权器拒绝）
 - `internal/miniagent/policy/confirm_on_tool_use.go`
 - commits `1b00e63`、`24bf12b`
