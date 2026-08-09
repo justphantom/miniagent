@@ -5,6 +5,7 @@ package compaction
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -120,6 +121,14 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 	})
 	if err != nil {
 		return "", miniagent.Usage{}, err
+	}
+	// R1 defense (summary path): a length-truncated EMPTY summary — reasoning_content burned the output budget on an
+	// intrinsic-reasoning compaction model (CompactionModel falls back to the main model when unset) — would silently
+	// persist a degraded summary and accelerate semantic dilution on every subsequent compaction. Surface it as an
+	// error so compactWithSummary propagates and FitHistory falls back to lossy compaction (split.go), instead of
+	// emitting garbage. Non-empty text (even if truncated) is still kept — TruncateHeadTail below handles it.
+	if resp.FinishReason == "length" && strings.TrimSpace(resp.Text) == "" && resp.Reasoning != "" {
+		return "", resp.Usage, fmt.Errorf("summary truncated to empty by finish_reason=length (reasoning burned the output budget); falling back to lossy compaction")
 	}
 	// Head-tail split truncation (head 1/4 + tail 3/4): the actionable parts of the summary ("Next Step", "Relevant Files") are often at the end;
 	// pure head truncation would drop these first.

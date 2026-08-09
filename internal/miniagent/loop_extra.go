@@ -29,6 +29,24 @@ func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int
 		downgraded = true
 		requests = 2
 	}
+	// R1 defense: finish_reason=length with empty text means the model burned its output budget (typically on
+	// reasoning_content) and returned no usable content — treating that as the final reply silently truncates the
+	// turn (kimi/k3 and other long-reasoning models). When thinking was actually sent, retry once with thinking
+	// dropped to free the output budget for real content (mirrors the thinking-downgrade retry above; the single
+	// retry + downgraded flag prevents any loop). Narrow by design — only the empty-text sub-case: mid-sentence-cut
+	// text is left to the truncation warn below, since cheap auto-continuation isn't feasible. Best-effort: some
+	// providers don't free output budget when thinking drops, so the rescue is not guaranteed.
+	if err == nil && resp.FinishReason == "length" && resp.Text == "" && resp.Reasoning != "" && !downgraded && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
+		if logger != nil {
+			logger.Warn("length truncation with empty text; retrying once with thinking dropped to free output budget", "step", step)
+		}
+		down := cfg
+		down.ThinkingLevel = ""
+		down.Thinking = nil
+		resp, err = callLLMOnce(ctx, llm, down, step, msgs, hooks)
+		downgraded = true
+		requests++
+	}
 	if err != nil {
 		if logger != nil {
 			logger.Warn("llm call failed", "step", step, "error", err)

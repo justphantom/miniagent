@@ -28,21 +28,22 @@ import (
 var version string
 
 type cliFlags struct {
-	provider      *string
-	model         *string
-	workdir       *string
-	session       *string
-	saveSession   *bool
-	logLevel      *string
-	showVer       *bool
-	maxIterations *int
-	stream        *bool
-	listModels    *bool
-	configPath    *string
-	mode          *string
-	thinking      *string
-	resultOnly    *bool
-	replay        *string
+	provider           *string
+	model              *string
+	workdir            *string
+	session            *string
+	saveSession        *bool
+	logLevel           *string
+	showVer            *bool
+	maxIterations      *int
+	stream             *bool
+	listModels         *bool
+	configPath         *string
+	mode               *string
+	thinking           *string
+	resultOnly         *bool
+	confirmDestructive *bool
+	replay             *string
 }
 
 func parseFlags() *cliFlags {
@@ -51,6 +52,7 @@ func parseFlags() *cliFlags {
 	f.mode = flag.String("mode", "", "permission mode default|auto (workdir required when default); defaults to default")
 	f.thinking = flag.String("thinking", "", "thinking level off|minimal|low|medium|high|xhigh|max (default off)")
 	f.resultOnly = flag.Bool("result-only", false, "output only result.text (for subagent fork); mutually exclusive with -stream")
+	f.confirmDestructive = flag.Bool("confirm-destructive", false, "opt-in: prompt before write/edit and dangerous shell; in non-interactive/subagent mode destructive tools are denied unless MINIAGENT_AUTO_APPROVE=1")
 	f.provider = flag.String("provider", "", "LLM provider name (pairs with -model to override the defaults pair; standalone for filtering with -list-models)")
 	f.model = flag.String("model", "", "LLM model id (pairs with -provider to override the defaults pair)")
 	f.workdir = flag.String("workdir", "", "working directory (default mode constrains write-tool boundaries + shell cwd)")
@@ -158,6 +160,7 @@ func main() {
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits)
 	baseCfg := loopCfg(resolved, f, history, tools)
+	warnNoBudgetFuse(resolved, f, logger)
 	// §P1-A: tool output persist directory — explicit config wins; otherwise, when -save-session/-session is active, derive from the session directory
 	// as <sessionDir>/<id>.tool-output/ (disabled when there is no session and no config set).
 	if resolved.RunConfig.ToolOutputDir != nil && *resolved.RunConfig.ToolOutputDir != "" {
@@ -170,7 +173,7 @@ func main() {
 	}
 	// Compaction as a plugin: obtain before/after via NewCompaction; the three default policies (OnLLMError/OnBudget/ShapeToolResult) are attached via assembleHooks.
 	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, chat, compChat, baseCfg.System, tools, logger))
-	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, baseCfg, tools, limits, logger)
+	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, *f.confirmDestructive, baseCfg, tools, limits, logger)
 
 	prompt := mustReadPrompt(ctx, os.Stdin)
 	// runCtx carries the -max-duration timeout (if any); constructed after stdin read — mustReadPrompt uses the signal ctx and is unconstrained.
@@ -246,7 +249,7 @@ func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.
 func assembleHooks(
 	compBefore func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error),
 	compAfter func(context.Context, int, miniagent.Response) error,
-	resultOnly bool, baseCfg miniagent.LoopConfig, tools []miniagent.Tool, limits miniagent.Limits, logger *slog.Logger,
+	resultOnly bool, confirmDestructive bool, baseCfg miniagent.LoopConfig, tools []miniagent.Tool, limits miniagent.Limits, logger *slog.Logger,
 ) miniagent.LoopHooks {
 	hooks := buildHooks(resultOnly)
 	hooks.BeforeLLM = compBefore
@@ -254,6 +257,14 @@ func assembleHooks(
 	hooks.OnLLMError = policy.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
 	hooks.OnBudget = policy.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
 	hooks.ShapeToolResult = policy.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
+	// S-2 (opt-in): wrap OnToolUse with a destructive-tool confirmation gate. buildHooks returns empty hooks (no
+	// OnToolUse) for -result-only/subagent mode, so this wraps AFTER buildHooks in both paths — when enabled the gate
+	// is active even for subagents (deny-by-default, since they have no TTY), closing the otherwise-uncovered
+	// autonomous path; when disabled ConfirmOnToolUse is the identity, leaving behavior unchanged.
+	hooks.OnToolUse = policy.ConfirmOnToolUse(hooks.OnToolUse, policy.ConfirmCfg{
+		Enabled:     confirmDestructive,
+		AutoApprove: os.Getenv("MINIAGENT_AUTO_APPROVE") == "1",
+	})
 	return hooks
 }
 
@@ -281,6 +292,24 @@ func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message
 		MaxToolResultChars: into(resolved.RunConfig.MaxToolResultChars, 0),
 		MaxParallelTools:   into(resolved.RunConfig.MaxParallelTools, 0),
 	}
+}
+
+// warnNoBudgetFuse (C3): run.max_tokens_total defaults to nil → OnBudget skips the cumulative-spend check entirely,
+// so a long Run can burn unbounded tokens until repeated context-window compaction. The default-config single turn is
+// already bounded by soft fuses (max_iterations=20, CompactionAuto default-on, optional max-duration); the real footgun
+// is cross-turn -session resume accumulation and single Runs with iterations raised above 20. Warn (do NOT auto-pick a
+// budget — that would decide for the user) only when the fuse is unset AND the run is long-session-prone.
+func warnNoBudgetFuse(resolved *config.Resolved, f *cliFlags, logger *slog.Logger) {
+	if resolved.RunConfig.MaxTotalTokens != nil {
+		return
+	}
+	iter := into(resolved.Run.MaxIterations, *f.maxIterations)
+	if *f.session == "" && iter <= 20 {
+		return
+	}
+	logger.Warn("run.max_tokens_total is not set: no cumulative token budget fuse",
+		"resume", *f.session != "", "max_iterations", iter,
+		"hint", "set run.max_tokens_total to cap cumulative spend (especially across -session resumes)")
 }
 
 // compactionOptions assembles the resolved compaction policies into CompactionOptions. chat is the summarization client
