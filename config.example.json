@@ -75,6 +75,7 @@
     "write_timeout": "10s",
     "http_timeout": "180s",
     "stream": false,
+    "confirm_destructive": false,
     "max_tool_result_chars": 2000,
     "max_file_result_chars": 8000,
     "max_parallel_tools": 8,

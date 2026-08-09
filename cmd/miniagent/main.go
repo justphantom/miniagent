@@ -173,7 +173,7 @@ func main() {
 	}
 	// Compaction as a plugin: obtain before/after via NewCompaction; the three default policies (OnLLMError/OnBudget/ShapeToolResult) are attached via assembleHooks.
 	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, chat, compChat, baseCfg.System, tools, logger))
-	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, *f.confirmDestructive, baseCfg, tools, limits, logger)
+	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, intoBool(resolved.Run.ConfirmDestructive, *f.confirmDestructive), baseCfg, tools, limits, logger)
 
 	prompt := mustReadPrompt(ctx, os.Stdin)
 	// runCtx carries the -max-duration timeout (if any); constructed after stdin read — mustReadPrompt uses the signal ctx and is unconstrained.
@@ -300,16 +300,24 @@ func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message
 // is cross-turn -session resume accumulation and single Runs with iterations raised above 20. Warn (do NOT auto-pick a
 // budget — that would decide for the user) only when the fuse is unset AND the run is long-session-prone.
 func warnNoBudgetFuse(resolved *config.Resolved, f *cliFlags, logger *slog.Logger) {
-	if resolved.RunConfig.MaxTotalTokens != nil {
-		return
-	}
 	iter := into(resolved.Run.MaxIterations, *f.maxIterations)
-	if *f.session == "" && iter <= 20 {
+	if !shouldWarnBudgetFuse(resolved.RunConfig.MaxTotalTokens != nil, *f.session, iter) {
 		return
 	}
 	logger.Warn("run.max_tokens_total is not set: no cumulative token budget fuse",
 		"resume", *f.session != "", "max_iterations", iter,
 		"hint", "set run.max_tokens_total to cap cumulative spend (especially across -session resumes)")
+}
+
+// shouldWarnBudgetFuse reports whether the C3 no-fuse warning should fire: the cumulative budget fuse is unset AND the
+// run is long-session-prone — a cross-turn -session resume (the real cumulative-spend footgun) or a single Run with
+// iterations raised above the default 20. Default single turns are left alone (soft fuses already bound them). Pure
+// predicate for testability; 20 mirrors the maxIterations default.
+func shouldWarnBudgetFuse(maxTotalTokensSet bool, session string, maxIterations int) bool {
+	if maxTotalTokensSet {
+		return false
+	}
+	return session != "" || maxIterations > 20
 }
 
 // compactionOptions assembles the resolved compaction policies into CompactionOptions. chat is the summarization client

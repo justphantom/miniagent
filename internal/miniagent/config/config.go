@@ -95,6 +95,9 @@ type RunConfig struct {
 	FileOpTimeout  *string `json:"file_op_timeout,omitempty"`
 	WriteTimeout   *string `json:"write_timeout,omitempty"`
 	Stream         *bool   `json:"stream,omitempty"`
+	// ConfirmDestructive (opt-in, S-2) gates write/edit + dangerous shell behind an interactive prompt; in non-interactive
+	// /subagent mode destructive tools are denied unless MINIAGENT_AUTO_APPROVE=1. nil/unset=false (current behavior preserved).
+	ConfirmDestructive *bool `json:"confirm_destructive,omitempty"`
 	// S4 strategized constants (<=0 or unset = built-in default).
 	MaxToolResultChars  *int    `json:"max_tool_result_chars,omitempty"`
 	MaxFileResultChars  *int    `json:"max_file_result_chars,omitempty"`

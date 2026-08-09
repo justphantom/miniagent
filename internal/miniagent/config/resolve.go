@@ -14,7 +14,7 @@ import (
 type CLIOverrides struct {
 	Provider, Model, Thinking, Mode, Workdir *string
 	MaxIterations                            *int
-	Stream, ResultOnly                       *bool
+	Stream, ResultOnly, ConfirmDestructive   *bool
 }
 
 // ResolvedRun holds the run parameters produced by Resolve — only fields that need arbitration or parsing
@@ -24,6 +24,7 @@ type ResolvedRun struct {
 	Workdir                                                *string
 	MaxIterations                                          *int
 	Stream                                                 *bool
+	ConfirmDestructive                                     *bool
 	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout *time.Duration
 	ToolOutputRetention                                    *time.Duration
 }
@@ -223,6 +224,11 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 		r.Stream = o.Stream
 	} else {
 		r.Stream = cfg.Run.Stream
+	}
+	if o.ConfirmDestructive != nil {
+		r.ConfirmDestructive = o.ConfirmDestructive
+	} else {
+		r.ConfirmDestructive = cfg.Run.ConfirmDestructive
 	}
 	// durations: *string → *time.Duration. Pure pass-through fields bypass this (consumers read Resolved.RunConfig).
 	var err error
