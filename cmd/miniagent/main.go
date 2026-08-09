@@ -292,7 +292,6 @@ func compactionOptions(resolved *config.Resolved, meta session.SessionMeta, chat
 	}
 	return compaction.CompactionOptions{
 		Chat:                     compClient,
-		MaxTokens:                into(resolved.MaxTokens, 0),
 		ContextWindow:            into(resolved.ContextWindow, 0),
 		Model:                    resolved.ModelID,
 		CompactionModel:          resolved.CompactionModelID,

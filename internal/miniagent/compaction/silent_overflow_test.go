@@ -10,63 +10,63 @@ import (
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
-// §P1-B isUsageOverflow table-driven (B.5 case set).
+// §P1-B isUsageOverflow table-driven (B.5 case set). maxTokens no longer participates in the reserve (see
+// compaction_split.go compactionBuffer): the detector fires at ~80% of CW, not ~97%.
 func TestIsUsageOverflow(t *testing.T) {
 	cases := []struct {
-		name                          string
-		u                             miniagent.Usage
-		contextWindow, maxTokens, res int
-		auto                          bool
-		want                          bool
+		name               string
+		u                  miniagent.Usage
+		contextWindow, res int
+		auto               bool
+		want               bool
 	}{
-		{"auto_off", miniagent.Usage{InputTokens: 99000, OutputTokens: 0}, 100000, 4096, 0, false, false},
-		{"window_zero", miniagent.Usage{InputTokens: 99000, OutputTokens: 0}, 0, 4096, 0, true, false},
-		{"under_usable", miniagent.Usage{InputTokens: 50000, OutputTokens: 0}, 100000, 4096, 0, true, false}, // usable=95904
-		{"equal_usable", miniagent.Usage{InputTokens: 95904, OutputTokens: 0}, 100000, 4096, 0, true, true},  // 95904>=95904
-		{"over_usable", miniagent.Usage{InputTokens: 96000, OutputTokens: 0}, 100000, 4096, 0, true, true},
-		{"reserved_explicit", miniagent.Usage{InputTokens: 95500, OutputTokens: 0}, 100000, 4096, 5000, true, true}, // usable=95000
-		{"maxtokens_fallback", miniagent.Usage{InputTokens: 92500, OutputTokens: 0}, 100000, 8000, 0, true, true},   // reserve=8000,usable=92000
-		{"zero_usage", miniagent.Usage{InputTokens: 0, OutputTokens: 0}, 100000, 4096, 0, true, false},
+		{"auto_off", miniagent.Usage{InputTokens: 99000, OutputTokens: 0}, 100000, 0, false, false},
+		{"window_zero", miniagent.Usage{InputTokens: 99000, OutputTokens: 0}, 0, 0, true, false},
+		{"under_usable", miniagent.Usage{InputTokens: 79000, OutputTokens: 0}, 100000, 0, true, false},        // usable=80000
+		{"equal_usable", miniagent.Usage{InputTokens: 80000, OutputTokens: 0}, 100000, 0, true, true},         // 80000>=80000
+		{"over_usable", miniagent.Usage{InputTokens: 81000, OutputTokens: 0}, 100000, 0, true, true},          // 81000>80000
+		{"reserved_explicit", miniagent.Usage{InputTokens: 95500, OutputTokens: 0}, 100000, 5000, true, true}, // usable=95000
+		{"zero_usage", miniagent.Usage{InputTokens: 0, OutputTokens: 0}, 100000, 0, true, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := isUsageOverflow(c.u, c.contextWindow, c.maxTokens, c.res, c.auto); got != c.want {
+			if got := isUsageOverflow(c.u, c.contextWindow, c.res, c.auto); got != c.want {
 				t.Errorf("isUsageOverflow = %v, want %v", got, c.want)
 			}
 		})
 	}
 }
 
-// §P1-B compactionReserve three branches.
+// §P1-B compactionReserve two branches (reservedCfg>0 wins; otherwise the flat buffer — the former maxTokens
+// branch is gone).
 func TestCompactionReserve(t *testing.T) {
 	cases := []struct {
-		maxTokens, res, want int
+		res, want int
 	}{
-		{1000, 500, 500},  // reservedCfg>0 wins
-		{8000, 0, 8000},   // min(20000,8000)
-		{10000, 0, 10000}, // min(20000,10000)
-		{0, 0, 20000},     // no maxTokens → buffer
-		{30000, 0, 20000}, // min(20000,30000)=20000
+		{500, 500}, // reservedCfg>0 wins
+		{0, 20000}, // default → flat buffer
+		{30000, 30000},
 	}
 	for i, c := range cases {
-		if got := compactionReserve(c.maxTokens, c.res); got != c.want {
-			t.Errorf("case %d: compactionReserve(%d,%d) = %d, want %d", i, c.maxTokens, c.res, got, c.want)
+		if got := compactionReserve(c.res); got != c.want {
+			t.Errorf("case %d: compactionReserve(%d) = %d, want %d", i, c.res, got, c.want)
 		}
 	}
 }
 
-// §P1-B usableTokens: window<=0→0; normally subtract reserve; clamp 0.
+// §P1-B usableTokens: window<=0→0; large CW subtracts the flat 20000 reserve; small CW clamps reserve to CW/5.
 func TestUsableTokens(t *testing.T) {
 	cases := []struct {
-		contextWindow, maxTokens, res, want int
+		contextWindow, res, want int
 	}{
-		{0, 1000, 0, 0},
-		{100000, 4096, 0, 95904},
-		{100000, 4096, 5000, 95000},
-		{100, 4096, 0, 80}, // reserve clamp CW/5=20 → 100-20=80 (prevents small CW reserve from exceeding half and inverting against the gate, bug 6)
+		{0, 0, 0},
+		{100000, 0, 80000},    // reserve=min(20000,20000)=20000 → 80% (was 95904 when coupled to maxTokens)
+		{100000, 5000, 95000}, // reserved explicit: reserve=min(5000,20000)=5000
+		{128000, 0, 108000},   // reserve=min(20000,25600)=20000 → 84.4% (big-context model, the bug's main victim)
+		{100, 0, 80},          // small CW: CW/5=20 clamp → 100-20=80 (prevents reserve from exceeding half and inverting against the gate)
 	}
 	for i, c := range cases {
-		if got := usableTokens(c.contextWindow, c.maxTokens, c.res); got != c.want {
+		if got := usableTokens(c.contextWindow, c.res); got != c.want {
 			t.Errorf("case %d: usableTokens = %d, want %d", i, got, c.want)
 		}
 	}
@@ -117,7 +117,7 @@ func TestRun_SilentUsageOverflowTriggersCompaction(t *testing.T) {
 	chat, stream := testClients(tr)
 	// 6-round history + prompt → step2 compaction has a mid-section to summarize (>1+keepRecent=5).
 	history := []miniagent.Message{{Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"}, {Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"}, {Role: miniagent.RoleUser, Content: "h6"}}
-	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: true, Model: "m"})
+	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, Auto: true, Model: "m"})
 	res, err := miniagent.Run(context.Background(), &openai.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run: %v", err)
@@ -146,7 +146,7 @@ func TestRun_SilentUsageOverflowDisabled(t *testing.T) {
 	tr := &fakeTransport{responses: []string{step1, textResponse("done")}}
 	chat, stream := testClients(tr)
 	history := []miniagent.Message{{Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"}, {Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"}, {Role: miniagent.RoleUser, Content: "h6"}}
-	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, MaxTokens: 4096, Auto: false, Model: "m"})
+	before, after := NewCompaction(CompactionOptions{Chat: chat, ContextWindow: 10000, Auto: false, Model: "m"})
 	res, err := miniagent.Run(context.Background(), &openai.Provider{Chat: chat, Stream: stream}, miniagent.LoopConfig{Tools: []miniagent.Tool{tool}, History: history}, "prompt", miniagent.LoopHooks{BeforeLLM: before, AfterLLM: after}, nil)
 	if err != nil {
 		t.Fatalf("miniagent.Run: %v", err)

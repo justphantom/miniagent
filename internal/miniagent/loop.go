@@ -3,6 +3,7 @@ package miniagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/justphantom/miniagent/internal/text"
@@ -38,6 +39,19 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 
 	// Usage/Messages/NewMessages/thinkingDowngraded/compacted are written into the named return result uniformly via defer — eliminating the three-piece duplication across 12 returns, and new returns need not write it by hand (preventing omitted fields that would drop messages during session persistence). Each return sets only the differing fields (Steps/Text/Finish). The early return for llm==nil happens before this defer is registered and is unaffected (result is zero-valued).
 	defer func() {
+		// Top-level panic backstop: safeCall (loop_tools.go) and callLLMOnce (loop_extra.go) each recover their own
+		// panics, but Run had none — so a panic in any of the 7 user hooks (BeforeLLM/AfterLLM/OnBudget/OnLLMError/
+		// OnToolUse/OnToolResult/ShapeToolResult) or in the applyBeforeLLM/recordStepUsage helpers would crash the
+		// process and lose the turn's un-persisted NewMessages. recover() runs first so the field assignments below
+		// still execute (the transcript survives for session persistence); the named err converts the panic into a
+		// normal error return. Folded into this existing defer rather than wrapping each hook call site — strictly
+		// more protective (also catches core-logic panics).
+		if r := recover(); r != nil {
+			if logger != nil {
+				logger.Error("run panicked", "panic", r)
+			}
+			err = fmt.Errorf("run panicked: %v", r)
+		}
 		result.Usage = total
 		result.Messages = msgs
 		result.NewMessages = newMsgs
@@ -75,10 +89,10 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		reqMsgs := make([]Message, 0, len(msgs)+1)
 		reqMsgs = append(reqMsgs, msgs...)
 		reqMsgs = append(reqMsgs, Message{Role: RoleSystem, Content: summaryReq})
-		resp2, down2, _, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
+		resp2, down2, reqs2, err2 := callLLMWithDowngrade(ctx, llm, cfg, s+1, reqMsgs, hooks, logger)
 		// Capture downgrade in the summary step (consolidated via captureDowngrade).
 		captureDowngrade(down2)
-		llmReqs++ // the summary step's actual call counts toward LLMRequests (independent of provider-level retries)
+		llmReqs += reqs2 // summary step: count actual requests (2 when it downgraded), not a flat 1 — reqs2 is returned even on the err path
 		if err2 != nil {
 			if logger != nil {
 				logger.Warn("summary LLM call failed", "step", s+1, "error", err2)
@@ -120,9 +134,9 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			return Result{Steps: step - 1}, perr
 		}
 
-		resp, downgraded, _, err := callLLMWithDowngrade(ctx, llm, cfg, step, toSend, hooks, logger)
+		resp, downgraded, reqs, err := callLLMWithDowngrade(ctx, llm, cfg, step, toSend, hooks, logger)
 		captureDowngrade(downgraded)
-		llmReqs++ // main-path call (including downgrade retries inside callLLMOnce returned via requests)
+		llmReqs += reqs // main-path call: count actual requests (2 when a thinking downgrade retried), not a flat 1
 		// Open seam OnLLMError: LLM failure recovery (typically ErrContextLength triggers trim-and-retry). nil=error is re-raised directly.
 		// The core does no error-recovery policy; the default implementation NewDefaultOnLLMError carries the former trimHistoryForContext.
 		// Pass msgs (persistent transcript) rather than toSend (BeforeLLM's transient View, Commit=false never enters the transcript):
@@ -138,9 +152,10 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 				}
 				// Capture downgrade on the retry path (unified solidification via captureDowngrade).
 				var down2 bool
-				resp, down2, _, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
+				var reqs2 int
+				resp, down2, reqs2, err = callLLMWithDowngrade(ctx, llm, cfg, step, msgs, hooks, logger)
 				captureDowngrade(down2)
-				llmReqs++ // OnLLMError retry call
+				llmReqs += reqs2 // OnLLMError retry: count actual requests (2 when the retry itself downgraded)
 				// The retry actually sends the trimmed msgs (recovered); refresh toSend so downstream recordStepUsage/OnBudget
 				// estimation aligns with what was actually sent (otherwise the pre-trim toSend would systematically overestimate, breaking the contract).
 				toSend = msgs

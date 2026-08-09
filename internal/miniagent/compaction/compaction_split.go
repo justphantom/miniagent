@@ -17,9 +17,6 @@ type CompactionOptions struct {
 	// Chat is the client used for summary compaction (may be a different provider than the main chat); when nil
 	// the caller must inject Summarize, otherwise NewCompaction builds the summarizeMiddle callback from it.
 	Chat miniagent.Doer
-	// MaxTokens is the single-turn output limit of the main request, used by isUsageOverflow to detect silent
-	// overflow (mirrors the original cfg.MaxTokens).
-	MaxTokens int
 	// ContextWindow is the model context limit (tokens); <=0 disables proactive compaction (only the
 	// ErrContextLength passive retry remains).
 	ContextWindow int
@@ -138,7 +135,11 @@ func estimateThreshold(msgs []miniagent.Message, system string, tools []miniagen
 	return policy.EstimateTokens(msgs, system, tools)
 }
 
-// compactionBuffer is the token buffer reserved for model output and future-round growth (mirrors opencode COMPACTION_BUFFER=20000).
+// compactionBuffer is the flat token buffer reserved for model output and future-round growth (mirrors opencode
+// COMPACTION_BUFFER=20000). Used verbatim — NOT clamped to the model's output MaxTokens: the reserve is headroom
+// for the next round's input+growth within the CONTEXT window, independent of the single-turn output cap. Coupling
+// it to MaxTokens (the former min(compactionBuffer,maxTokens) branch) collapsed the buffer to ~4096 on every
+// big-context model and pushed the silent-overflow Force threshold from ~80% to ~97%, defeating §P1-B.
 const compactionBuffer = 20000
 
 // usageFootprint returns the real context footprint (input+output) of a single LLM call.
@@ -147,34 +148,34 @@ func usageFootprint(u miniagent.Usage) int {
 }
 
 // compactionReserve returns the number of tokens reserved from ContextWindow (mirrors reserved in opencode usable()).
-func compactionReserve(maxTokens, reservedCfg int) int {
+// reservedCfg>0 wins (explicit override); otherwise the flat compactionBuffer. The former maxTokens branch is removed
+// — it collapsed the reserve on big-context models and made the silent-overflow detector nearly inert (see compactionBuffer).
+func compactionReserve(reservedCfg int) int {
 	if reservedCfg > 0 {
 		return reservedCfg
-	}
-	if maxTokens > 0 {
-		return min(compactionBuffer, maxTokens)
 	}
 	return compactionBuffer
 }
 
 // usableTokens returns the token budget available for history filling (mirrors opencode usable()).
-// reserve is clamped to at most CW/5: prevents compactionReserve (default min(20000,maxTokens)) from taking more
-// than half of CW on small CW, which would make the isUsageOverflow (usage>=usable) threshold lower than the
-// FitHistory gate (CW*4/5=80%), letting the Force path take over too early.
-func usableTokens(contextWindow, maxTokens, reservedCfg int) int {
+// reserve is clamped to at most CW/5: on small CW this prevents the flat 20000 buffer from taking more than half
+// of CW, which would make the isUsageOverflow (usage>=usable) threshold lower than the FitHistory gate (CW*4/5=80%),
+// letting the Force path take over too early. On large CW (>5×20000=100k) reserve stays 20000, so the Force safety
+// net fires at ~80–84% — aligned with the FitHistory gate, the intended §P1-B behavior.
+func usableTokens(contextWindow, reservedCfg int) int {
 	if contextWindow <= 0 {
 		return 0
 	}
-	reserve := min(compactionReserve(maxTokens, reservedCfg), contextWindow/5)
+	reserve := min(compactionReserve(reservedCfg), contextWindow/5)
 	return max(0, contextWindow-reserve)
 }
 
 // isUsageOverflow determines whether the previous step's real usage has hit the context window (mirrors opencode isOverflow, §P1-B).
-func isUsageOverflow(u miniagent.Usage, contextWindow, maxTokens, reservedCfg int, auto bool) bool {
+func isUsageOverflow(u miniagent.Usage, contextWindow, reservedCfg int, auto bool) bool {
 	if !auto || contextWindow <= 0 {
 		return false
 	}
-	return usageFootprint(u) >= usableTokens(contextWindow, maxTokens, reservedCfg)
+	return usageFootprint(u) >= usableTokens(contextWindow, reservedCfg)
 }
 
 // One round (grouped, preserving tool_calls/tool pairing); user and assistant without tool_calls each form their own round.

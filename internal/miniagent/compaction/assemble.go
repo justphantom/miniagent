@@ -268,7 +268,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		// only read-only references like Summarize/Tools).
 		force := false
 		if idx := lastApplicableUsageIndex(in.Msgs); idx >= 0 {
-			force = isUsageOverflow(*in.Msgs[idx].Usage, opts.ContextWindow, opts.MaxTokens, opts.Reserved, opts.Auto)
+			force = isUsageOverflow(*in.Msgs[idx].Usage, opts.ContextWindow, opts.Reserved, opts.Auto)
 		}
 		b := budget
 		b.Force = force
