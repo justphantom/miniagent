@@ -85,7 +85,7 @@ func TestUsageFootprint(t *testing.T) {
 // §P1-B When Force=true, even if policy.EstimateTokens is far below the 4/5 threshold, FitHistory still
 // goes through compactWithSummary.
 func TestFitHistory_ForceCompactsRegardlessOfEstimate(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("forced summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("forced summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
@@ -113,7 +113,7 @@ func TestRun_SilentUsageOverflowTriggersCompaction(t *testing.T) {
 	tool := miniagent.Tool{Name: "t", Call: func(context.Context, string) miniagent.ToolResult { return miniagent.ToolResult{Output: "tr"} }}
 	// step1: tool_call + huge prompt_tokens (>= usable=8000: CW=10000 - reserve clamp 2000, bug 6) triggers overflow.
 	step1 := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"t","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":8500,"completion_tokens":100}}`
-	tr := &fakeTransport{responses: []string{step1, textResponse("compaction-summary"), textResponse("done")}}
+	tr := &fakeTransport{responses: []string{step1, summaryResponse("compaction-summary"), textResponse("done")}}
 	chat, stream := testClients(tr)
 	// 6-round history + prompt → step2 compaction has a mid-section to summarize (>1+keepRecent=5).
 	history := []miniagent.Message{{Role: miniagent.RoleUser, Content: "h1"}, {Role: miniagent.RoleUser, Content: "h2"}, {Role: miniagent.RoleUser, Content: "h3"}, {Role: miniagent.RoleUser, Content: "h4"}, {Role: miniagent.RoleUser, Content: "h5"}, {Role: miniagent.RoleUser, Content: "h6"}}

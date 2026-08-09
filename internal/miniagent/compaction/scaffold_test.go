@@ -48,6 +48,16 @@ func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // textResponse builds a non-streaming chat completions JSON: a single choice, plain-text reply.
 func textResponse(text string) string {
+	return textResponseJSON(text)
+}
+
+// summaryResponse builds a textResponse whose content passes the default-shape section guard (>=2 template sections):
+// short stubs without sections would be rejected as summary garbage and burn the prose-only retry.
+func summaryResponse(stub string) string {
+	return textResponseJSON("## Goal: " + stub + "\n\n## Progress: " + stub)
+}
+
+func textResponseJSON(text string) string {
 	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
 }
 

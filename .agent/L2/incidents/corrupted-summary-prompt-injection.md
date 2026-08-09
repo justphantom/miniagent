@@ -1,14 +1,14 @@
 ---
 layer: L2
 type: incident
-tags: [compaction, summary, prompt-injection, quality, P0, open-issue]
+tags: [compaction, summary, prompt-injection, quality, P0, fixed-v4.3.0]
 created: 2026-08-09
 confidence: high
 ---
 
-# 损坏摘要被当 KindSummary 落盘并主动注入（P0 未决）
+# 损坏摘要被当 KindSummary 落盘并主动注入（P0，v4.3.0 已修复）
 
-> 状态：**未实施根因修复**。记录现状与根治方向，供未来会话不要重蹈、也不要假设摘要内容可信。
+> 状态：**已修复（v4.3.0）**。`summarizeMiddle` 现经 `isSummaryGarbage` 结构校验（tool_call/code fence 标记 + 默认模板缺 ≥2 章节标题行【按行精确前缀，防子串绕过】）→ strict prose-only 重试一次 → surface error → `FitHistory` 回落 lossy。自定义 prompt/template 仅做 markup 拒绝。消费侧零改动（纯 Kind 判别不变）。本文件留作事故复盘与设计依据。
 
 ## 现象
 实跑会话（kimi/k3 + compaction 用 agnes-2.5-flash、`summary_max_tokens=512`）压缩产出的 1502 字符 `<tool_call>` python 改写脚本（无任何模板段）被原样落盘为 idx0 `KindSummary`；agent 复活后第一个动作（idx1）原样执行该 stale draft 脚本（与实际落盘代码 divergent），重走压缩前已被抛弃的「指纹路径」——压缩成 prompt 注入向量，净边际信息为负。

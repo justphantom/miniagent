@@ -18,7 +18,7 @@ import (
 // (mergePersisted in production) prepends the summary so it ranks before the user_prompt — otherwise the next
 // turn's applyCompactionBarrier would barrier out this turn's user_prompt.
 func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("history summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("history summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
@@ -46,7 +46,7 @@ func TestCompactWithSummary_SummaryBeforeUserPrompt(t *testing.T) {
 // P1-1 end-to-end: compactWithSummary + summary-prepending merge (mergePersisted in production) → session.AppendMessages
 // persists → session.LoadSession reads → applyCompactionBarrier: this turn's user_prompt must still be in the result.
 func TestCompactWithSummary_CrossTurnBarrierPreservesUserPrompt(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("previous conversation summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("previous conversation summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
@@ -105,7 +105,7 @@ func mergeSummaryIntoNewMsgs(newMsgs *[]miniagent.Message, summary miniagent.Mes
 // After the merge path (mergePersisted in production, drops the old by Kind then prepends) newMsgs has only one
 // miniagent.KindSummary (the latest), ranked first, and applyCompactionBarrier hits it.
 func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("summary1"), textResponse("summary2")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("summary1"), summaryResponse("summary2")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 20 {
@@ -157,7 +157,7 @@ func TestCompactWithSummary_SingleTurnMultiplePreservesOrder(t *testing.T) {
 // summary text still appears in the LLM request body (the <previous-summary> block of the system prompt), truly
 // inherited rather than a broken chain.
 func TestCompactWithSummary_CrossTurnInheritsLegacySummary(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("new-summary-content")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("new-summary-content")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{
 		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "[Previous Conversation Summary]\nlegacy-summary-content-old"},

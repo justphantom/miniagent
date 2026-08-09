@@ -167,7 +167,7 @@ func TestDeriveSummaryMaxChars(t *testing.T) {
 // CW=4096 -> maxChars=819 -> maxSummaryTokens=819/2=409. 20 rounds x 600 CJK chars triggers summary; ignore before's possible terminate error,
 // only verify the summary request carries the derived max_tokens (under A+B CW=4096 does not terminate in practice, but assertion does not depend on this).
 func TestNewCompaction_ScalesSummaryMaxCharsByWindow(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	before, _ := NewCompaction(CompactionOptions{
 		Chat:          llm,
@@ -284,7 +284,7 @@ func TestApplyCompactionBarrier(t *testing.T) {
 // compactWithSummary: middle summarized into miniagent.KindSummary, structure (earliest 1 round + summary + most-recent N rounds) correct,
 // and summary can be merged into newMsgs (persistence semantics; production path is loop.go mergePersisted).
 func TestCompactWithSummary_Success(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("compacted summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("compacted summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	var msgs []miniagent.Message
 	for i := range 10 {
@@ -358,7 +358,7 @@ func TestSummarizeMiddle_LLMError(t *testing.T) {
 
 // P2 summary tokens enter budget: summarizeMiddle returns LLM usage for upstream accumulation into MaxTotalTokens budget.
 func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
-	body := `{"choices":[{"message":{"role":"assistant","content":"summary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
+	body := `{"choices":[{"message":{"role":"assistant","content":"## Goal: usage probe\n\n## Progress: usage probe"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":30}}`
 	tr := &fakeTransport{responses: []string{body}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	_, usage, err := summarizeMiddle(context.Background(), llm, "m", "", "", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}})
@@ -372,7 +372,7 @@ func TestSummarizeMiddle_ReturnsUsage(t *testing.T) {
 
 // P3-1: summary request sets MaxTokens=summaryMaxTokens (derived by default from summaryMaxChars = summaryMaxChars/2).
 func TestSummarizeMiddle_SetsMaxTokens(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)
@@ -405,7 +405,7 @@ func TestDeriveSummaryMaxTokens(t *testing.T) {
 // Verifies the "configure chars -> token auto-follows" end-to-end contract. CW=1 forces history to exceed 4/5 gate triggering summary; >0 tokens post-compaction
 // will hit FitHistory termination guard (returns error) — but the summary LLM call already happened before termination, tr.lastBody is already recorded, so the error is ignored.
 func TestNewCompaction_DerivesMaxTokensFromChars(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	before, after := NewCompaction(CompactionOptions{
 		Chat:            llm,
@@ -431,7 +431,7 @@ func TestNewCompaction_DerivesMaxTokensFromChars(t *testing.T) {
 
 // compactWithSummary should propagate budget.CompactionModel to the Summarize callback.
 func TestCompactWithSummary_CompactionModelOverride(t *testing.T) {
-	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{textResponse("x")}}}}
+	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: &fakeTransport{responses: []string{summaryResponse("x")}}}}
 	var gotModel string
 	budget := ContextBudget{
 		Model:           "main-model",
@@ -551,7 +551,7 @@ func TestCompactWithSummary_UpdateModeExtractsPrevSummary(t *testing.T) {
 
 // §P0-A: summarizeMiddle UPDATE mode writes previous-summary into request system.
 func TestSummarizeMiddle_UpdateModeRequest(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("updated-summary")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("updated-summary")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	if _, _, err := summarizeMiddle(context.Background(), llm, "m", "", "old-anchor", "", "", "", summaryMaxChars, 0, []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}); err != nil {
 		t.Fatalf("summarizeMiddle: %v", err)

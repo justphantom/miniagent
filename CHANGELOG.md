@@ -5,6 +5,34 @@
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-08-09
+
+> 观测性 + 安全护栏加固 minor：新增 `OnStep` 观测缝与 `-metrics-step` 每步指标、危险工具确认门、流式中断检测；default 模式文件工具 confine 提供 opt-in 收紧；多项 compaction / 计数 / 落盘可靠性修复。全部向后兼容——新增配置项与 CLI flag 均 opt-in，既有配置与行为不变。
+
+### Added
+- **`OnStep` 观测缝 + `metrics` 子包 + `-metrics-step` CLI**：`LoopHooks` 新增第 8 个钩子 `OnStep(ctx, StepSnapshot)`——每步迭代顶部触发（先于 BeforeLLM/LLM/tools），observe-only 无 error 返回，nil 即零开销。`StepSnapshot` 携带 step/transcript_len/input_tokens/output_tokens/compacted/llm_requests/new_messages（全部取自手边状态，无额外扫描）。`internal/miniagent/metrics` 提供默认消费方 `NewStepEmitter`（NDJSON writer）；cmd 层 `-metrics-step` 接线到 stderr，把长会话行为（transcript 增长、token 消耗斜率、压缩次数、每轮请求数）变成可采集曲线。
+- **危险工具确认门 `policy.ConfirmOnToolUse`**：`-confirm-destructive` 或 config `run.confirm_destructive`（config > CLI）启用——按 name/pattern 匹配拦截危险工具调用并要求人工确认，子 agent（`-mode auto` 等无 stdin 场景）default deny；`MINIAGENT_AUTO_APPROVE=1` 跳过（沙箱/容器内自动化）。
+- **流式连接中断硬错检测**：`parseSSE` 在已有 content 流出但无 `[DONE]` 且无 `finish_reason` 时判为连接中断，返回 `errStreamUnterminated`（不再静默把半截回复当成功）。vLLM/Ollama 等非合规端点可经 provider 配置 `stream_allow_unterminated: true` 放宽。同步加 tool_call index 碰撞防护：同 index 不同 name 直接报错，防省略 index 的端点静默覆盖工具调用。
+- **default 模式 confine opt-in 收紧**：新增 `run.confine_eval_symlinks`（路径最终 `filepath.EvalSymlinks` + 双重 root 解析再比对前缀，收窄逐段词法检查遗留的并发 symlink 交换 TOCTOU 窗口；ENOENT 竞态回落词法结果，保 create 语义）与 `run.confine_auto`（auto 模式下也给 read/write/edit/grep/glob/codemap 套 confineWrap，shell 仍自由——纵深防御，非安全边界）。默认均 false，既有语义不变。
+- **`run.max_iterations` config 可配**：迭代上限从纯 CLI `-max-iterations` 扩为 config `run.max_iterations`（cli > config 裁决），默认 20 不变。
+- **累计 LLM 请求计数**：`Result.LLMRequests` 统计单轮实际发给 LLM 端点的请求数（thinking 降级重试 / OnLLMError 收紧重试 / 总结步全计，不含 provider 层透明重试）；`result` 事件输出 `llm_requests` 字段；session jsonl 首行 meta 加 `llm_requests` 跨轮累加。session meta 为首行需原子重写——saveSession 对该路径统一走 `RewriteMessages`（临时文件 + rename，append-only 语义不受影响）。
+
+### Fixed
+- **损坏摘要注入防护（P0）**：摘要输出经结构校验——含 `<tool_call>` / code fence 标记、或默认模板下缺 ≥2 个章节标题行（按行精确前缀匹配，防子串绕过）判定为 garbage → 附 strict "OUTPUT PROSE ONLY" 指令重试一次 → 再失败 surface error，`FitHistory` 回落 lossy 压缩。堵死「压缩产出 tool_call 脚本被原样落盘为 KindSummary、复活后当 prompt 注入执行」向量；重试 usage 计入预算（对齐降级链语义）。消费侧零改动（`applyCompactionBarrier` 仍纯 Kind 判别）；自定义 summarizer prompt / template 时仅做 markup 拒绝。
+- **`LLMRequests` 降级路径少计**：`callLLMWithDowngrade` 返回请求数（降级=2）但三处调用点恒 `+1`，降级重试被少计；改为累加返回值，补主路径 / 总结步 / OnLLMError 重试三路测试。
+- **`Run` 顶层 panic 兜底**：任一用户钩子 panic 不再崩进程——顶层 recover 后 transcript 保活供 session 落盘，错误照常返回。
+- **finish_reason=length 空回复防御**：`length` + 空 text + 有 reasoning（推理烧光输出预算）时，主路径自动去 thinking 重试一次；压缩路径 `summarizeMiddle` 上抛该信号由 `FitHistory` 降级到 lossy 压缩，不再产出空摘要。
+- **compaction 压缩质量加固**：`compactWithSummary` 遇已有 KindSummary 先剥离再入中段（新摘要覆写旧，防陈旧摘要累积致语义稀释）；post-compaction tail 保留 reasoning（`context_keep_reasoning` 扩展到 tail 段）；`dedupReadResults` 等增强 exact/near-duplicate 检测；各层截断标记统一为英文并对齐 `policy.TrimForHistory` 的 split marker。
+- **`compactionReserve` 解耦 `maxTokens`**：压缩预留改 flat 20000 buffer，不再随输出上限浮动（配大 max_tokens 时压缩预留被隐性放大）。
+- **`tool_output_store` 文件数硬上限**：新增 `toolOutputMaxFiles=500`，cleanup 先按 age 过期、再按最老 mtime 淘汰，防 dense large-output runs 在 retention 窗口内无限积盘；保护 read-back 契约（模型最近收到「已保存」提示的文件优先存活）。
+- **session 路径解析加固**：`resolveSessionForRun` 非交互模式报错更明确（区分不存在 / 不可读 / 非法路径）。
+- **流式工具并发退出**：`runToolsParallel` 在 ctx 取消时，信号量排队中的调用直接放弃，不再阻塞等空位。
+- **tool_write 新文件权限收紧**：新文件默认 0644→0600（多用户主机更安全），覆盖写保留原文件权限。
+- **i18n**：全部 `.go` 文件（生产+测试）注释 / 错误消息 / 工具描述 / 提示词模板中译英；CJK 测试 fixture 保留（rune 边界 / token 估算语义）；术语统一（session/context/hook/budget/compaction/truncate/downgrade/persist）。
+
+### Notes
+- `.agent/` 三层项目记忆系统入库（L0 约束 / L1 会话 / L2 经验 + `CLAUDE.md` 工作区规则），纯文档，无代码影响。
+
 ## [4.2.1] - 2026-08-08
 
 > 内部架构重构（续 4.1.0/4.2.0）：core 包进一步子包化——工具实现、策略钩子、配置、会话各成独立子包。CLI 行为与 NDJSON 事件契约零变更，属非破坏性 patch。

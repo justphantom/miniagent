@@ -167,7 +167,7 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 // summarized). Guards the preserveRecentTokens(budget) wiring (review Finding 2): if tokenBudget is wrongly changed
 // to 0 (pure turn-count fallback), tail=the most recent keepRecent rounds would contain bigTool, failing this assertion.
 func TestCompactWithSummary_TokenBudgetTailE2E(t *testing.T) {
-	tr := &fakeTransport{responses: []string{textResponse("sum")}}
+	tr := &fakeTransport{responses: []string{summaryResponse("sum")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	bigTool := strings.Repeat("x", 20000) // ~5000 tokens > preserveRecentTokens=2000
 	msgs := []miniagent.Message{

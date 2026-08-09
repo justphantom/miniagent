@@ -27,7 +27,7 @@ func TestSummarizeMiddle_LengthEmptyReasoning_ReturnsError(t *testing.T) {
 // R1 summary-path control: non-empty text truncated by length is still usable — kept (TruncateHeadTail handles it),
 // no error. The defense only rejects the empty/reasoning-burned case.
 func TestSummarizeMiddle_LengthNonEmpty_KeepsText(t *testing.T) {
-	body := `{"choices":[{"message":{"role":"assistant","content":"partial summary text cut mid-sentence","reasoning_content":"thoughts"},"finish_reason":"length"}],"usage":{"prompt_tokens":5,"completion_tokens":5}}`
+	body := `{"choices":[{"message":{"role":"assistant","content":"## Goal: partial summary text cut mid-sentence\n\n## Progress: partial","reasoning_content":"thoughts"},"finish_reason":"length"}],"usage":{"prompt_tokens":5,"completion_tokens":5}}`
 	tr := &fakeTransport{responses: []string{body}}
 	chat, _ := testClients(tr)
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "x"}}

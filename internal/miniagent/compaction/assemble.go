@@ -5,7 +5,6 @@ package compaction
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -113,10 +112,48 @@ func stripSummaryPrefix(content string) string {
 	return strings.TrimPrefix(content, summaryPrefix)
 }
 
+// proseOnlyRetryDirective is appended to the system prompt on the single retry after summary garbage detection:
+// the retry is prompt-level (not temperature/param fiddling) so tool-shaped responses cannot pass the check again.
+const proseOnlyRetryDirective = "\n\nYour previous output was REJECTED: it was not prose summary text (it contained tool-call markup or raw code). OUTPUT PROSE ONLY: the summary text itself, no <tool_call> tags, no code blocks, no tool invocations."
+
+// summaryGarbageMarkers are output shapes that can never be a legitimate summary — a summarizer that echoes tool-call
+// markup or emits a bare code fence is producing an executable draft, not a summary (see the corrupted-summary incident:
+// such output persisted as KindSummary becomes a prompt-injection vector on resume). Structural check, prefix-free.
+var summaryGarbageMarkers = []string{"<tool_call>", "<tool_calls>", "</tool_call>", "```"}
+
+// isSummaryGarbage reports whether t is structurally unfit to persist as a KindSummary: containing tool-call markup,
+// a bare code fence, or (when the built-in summarizer shape is in effect) lacking ≥2 of the template section headings.
+// A custom summarizerPrompt (config defaults, CompactOnly option, or CompactingHook override), custom instructions, or a
+// custom template disables the section check — only markup rejection applies there, since a custom prompt may bake in
+// its own structure.
+func isSummaryGarbage(t, summarizerPrompt, createInstr, updateInstr, template string) bool {
+	for _, m := range summaryGarbageMarkers {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	if summarizerPrompt != "" || createInstr != "" || updateInstr != "" || template != "" {
+		return false
+	}
+	sections := 0
+	// Count heading LINES (prefix match per line), not substrings: "## Goal" buried inside a paragraph must not count.
+	for line := range strings.Lines(t) {
+		l := strings.TrimSpace(line)
+		for _, h := range []string{"## Goal", "## Key Details", "## Progress", "## Next Step", "## Relevant Files"} {
+			if strings.HasPrefix(l, h) && len(l) > len(h) {
+				sections++
+				break
+			}
+		}
+	}
+	return sections < 2
+}
+
 // summarizeMiddle calls the LLM to compress the middle msgs into a single summary text (without tools). Returns the
 // maxChars-truncated summary + the miniagent.Usage of this call (for upstream budget accumulation). Reuses miniagent.ChatClient.Do;
 // the caller falls back to lossy compaction based on the error (review v2 #6). When previousSummary is non-empty it uses UPDATE mode
-// (decided by buildSummarizerSystem).
+// (decided by buildSummarizerSystem). Garbage outputs (tool-call markup / template-less text on the default template) are rejected and
+// retried once with a strict prose-only directive; a second failure surfaces as an error → FitHistory falls back to lossy compaction.
 func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerPrompt, previousSummary, createInstr, updateInstr, template string, maxChars, maxSummaryTokens int, msgs []miniagent.Message) (string, miniagent.Usage, error) {
 	if maxSummaryTokens <= 0 {
 		maxSummaryTokens = summaryMaxTokens
@@ -140,10 +177,28 @@ func summarizeMiddle(ctx context.Context, llm miniagent.Doer, model, summarizerP
 	// error so compactWithSummary propagates and FitHistory falls back to lossy compaction (split.go), instead of
 	// emitting garbage. Non-empty text (even if truncated) is still kept — TruncateHeadTail below handles it.
 	if resp.FinishReason == "length" && strings.TrimSpace(resp.Text) == "" && resp.Reasoning != "" {
-		return "", resp.Usage, fmt.Errorf("summary truncated to empty by finish_reason=length (reasoning burned the output budget); falling back to lossy compaction")
+		return "", resp.Usage, errors.New("summary truncated to empty by finish_reason=length (reasoning burned the output budget); falling back to lossy compaction")
 	}
-	// Head-tail split truncation (head 1/4 + tail 3/4): the actionable parts of the summary ("Next Step", "Relevant Files") are often at the end;
-	// pure head truncation would drop these first.
+	// P0 (corrupted summary injection): a non-empty response can still be structurally unfit (tool-call markup / code / missing the
+	// template sections the consumer expects). Retry ONCE with a strict prose-only directive; a second failure surfaces as an error so
+	// FitHistory falls back to lossy compaction. Both attempts' usage is accumulated (like the length/429 downgrade path).
+	if isSummaryGarbage(resp.Text, summarizerPrompt, createInstr, updateInstr, template) {
+		retry, rerr := llm.Do(ctx, miniagent.Request{
+			Model:     model,
+			System:    system + proseOnlyRetryDirective,
+			Messages:  msgs,
+			MaxTokens: maxSummaryTokens,
+		})
+		resp.Usage.InputTokens += retry.Usage.InputTokens
+		resp.Usage.OutputTokens += retry.Usage.OutputTokens
+		if rerr != nil {
+			return "", resp.Usage, rerr
+		}
+		if isSummaryGarbage(retry.Text, summarizerPrompt, createInstr, updateInstr, template) {
+			return "", resp.Usage, errors.New("summary output is not prose (tool-call markup / code / missing template sections after prose-only retry); falling back to lossy compaction")
+		}
+		resp.Text = retry.Text
+	}
 	return text.TruncateHeadTail(strings.TrimSpace(resp.Text), maxChars, "...[summary truncated]"), resp.Usage, nil
 }
 
