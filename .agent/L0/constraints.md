@@ -14,7 +14,7 @@ updated: 2026-08-09
 5. 编译 / 测试不过自主修复不超过 3 轮。
 
 ## 架构不变量
-6. **核心零策略**：`loop.go:Run` 仅做注册钩子 / 拼上下文 / 调 LLM / 执行工具 / 无 tool_calls 退出。压缩、预算、溢出恢复、工具成型、事件输出、provider 全经 `LoopHooks`（`loop_api.go`）8 个可 nil 函数字段 + `CompactingHook` 外挂。换策略只换钩子，核心零改动。
+6. **核心零策略**：`loop.go:Run` 仅做注册钩子 / 拼上下文 / 调 LLM / 执行工具 / 无 tool_calls 退出。压缩、预算、溢出恢复、工具成型、事件输出、provider 全经 `LoopHooks`（`loop_api.go`）9 个可 nil 函数字段 + `CompactingHook` 外挂。换策略只换钩子，核心零改动。
 7. **工具配对不变量**：`assistant.tool_calls` ↔ tool 消息一一对应。下游管道断裂由 `fillPlaceholderTail`（`loop_tools.go`）补占位 tool 消息，防续跑端点 400。`ShapeToolResult` 只可改 content，禁改 role / tool_call_id。
 8. **session 层标记绝不进 wire**：`Message.Kind` / `Usage` / `IsError` / `Ts` 是领域层标记；`buildChatBody`（`provider/openai/wire.go`）独立构造厂商 JSON，防内部状态泄漏给 LLM。
 9. **msgs / newMsgs 双轨**：`appendMsg` 同步追加；裁剪只动 `msgs`（LLM 视图），`main` 据 `newMsgs` append-only 落盘。压缩屏障依赖此语义。

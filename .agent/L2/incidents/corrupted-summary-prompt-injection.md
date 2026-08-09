@@ -16,8 +16,8 @@ confidence: high
 ## 根因
 `summarizeMiddle`（`internal/miniagent/compaction/assemble.go`）唯一守卫是 `FinishReason=="length" && TrimSpace(Text)=="" && Reasoning!=""`——只挡空摘要。agnes-2.5-flash + 通用 prompt + 紧预算回吐的非空 tool_call 输出，`FinishReason` 大概率 `stop` + 非空 → 直通落盘。当前对 `length+空+非空 reasoning` 子例已回落 lossy（见 [thinking-pindown-downgrade-length.md](thinking-pindown-downgrade-length.md)），但**非空含 tool_call 标记的输出未拦**。
 
-## 根治方向（未实施）
-拒绝含 `tool_call` 标记或缺 ≥2 模板段的摘要输出 → 加 strict "OUTPUT PROSE ONLY" 重试一次 → 再失败 surface error → `FitHistory` 回落 lossy。辅以：pin 已知好 summarizer；`summary_max_tokens` 勿过紧。
+## 根治方案（已实施于 v4.3.0，详见顶部状态注记）
+拒绝含 `tool_call` 标记或缺 ≥2 模板段的摘要输出（`isSummaryGarbage`）→ strict "OUTPUT PROSE ONLY" 重试一次 → 再失败 surface error → `FitHistory` 回落 lossy。辅以：pin 已知好 summarizer；`summary_max_tokens` 勿过紧。
 
 ## 关键约束
 1. 压缩路径缺 prose 校验是结构性缺口。

@@ -7,14 +7,18 @@ updated: 2026-08-09T20:45:00+08:00
 # 当前会话
 
 ## 当前任务
-发版前完善（v4.3.0 待发）——三项已全部完成，待用户提交+打 tag。
+`.agent` 目录全量评审（14 文件）+ 对照代码核验（进行中，问题清单已产出）。
 
-## 最近聚焦
-- **① lint 修复**：gofmt -s 16 文件 + golangci-lint 8 issue（errcheck/intrange/musttag/perfsprint/revive×2/unused）→ 全绿。metrics 包名冲突用 `//nolint:revive` 豁免（须贴 package 行同一行，doc 注释隔开无效）；musttag 用 `//nolint:musttag` 豁免（字段大写是 NDJSON 外部契约）。
-- **② CHANGELOG 定版 v4.3.0**：11 个 commit 入账。判定 **minor**（纯新增配置项 opt-in：confine_eval_symlinks/confine_auto/max_iterations/confirm_destructive/stream_allow_unterminated；新 flag -metrics-step；新钩子 OnStep；result 事件新增 llm_requests 键——均向后兼容；confineEvalSymlinks/confineAuto 默认 false 保旧行为）。
-- **③ P0 损坏摘要修复**：`summarizeMiddle` 加 `isSummaryGarbage` 校验（tool_call/code fence 标记 + 默认模板缺 ≥2 章节标题行【按行精确前缀匹配，Contains 子串可被绕过】）→ prose-only 重试一次 → surface error → FitHistory 回落 lossy。custom prompt/template 时仅 markup 拒绝（防自定义结构误伤）。12 个既有测试桩适配为合规结构（scaffold 加 `summaryResponse` helper），新增 summary_garbage_test.go 3 用例。
-- verify-gate 全绿（fmt/build/vet/test-race/lint）。
+## 已完成
+- v4.3.0 已由用户提交+打 tag（18bb801），「发版前完善」任务闭环。
+- `.agent` 全量评审（14 文件）+ 对照代码核验；按用户授权修正：3 处「8→9」（L0 constraints.md / L2 决策 / L2 incident）+ corrupted-summary「未实施」小节改为已实施。
+- 沉淀 L2 元规则 `patterns/memory-freshness-pointer-over-count.md`（结构数量引用用指针不硬编码），已登记 index.md。
+
+## 评审发现（.agent 全量）
+- 文件引用全部有效；11 个 commit hash 全在版本库。
+- 3 处不一致：① L1 session 记「31 文件 diff 待提交」已过期（已提交）；② LoopHooks 函数字段数实为 9（OnStep 已加），constraints/decisions/incident 三处写「8 个」；③ L2 streaming 引用路径 `internal/provider/openai/...` 与 L0 #6 一致但写法偏简，无实质错误。
+- 待确认：corrupted-summary 事故文件「根治方向（未实施）」小节未随 v4.3.0 更新（顶部已标已修，小节矛盾）。
 
 ## 未决问题
-- 待用户审阅 `git diff`（31 文件 +149/-70）后自行提交；annotated tag v4.3.0 + `./release.sh v4.3.0` 由用户执行。
-- config.example.json 已确认含 confirm_destructive；confine_eval_symlinks/confine_auto/max_iterations/stream_allow_unterminated 是否入 example 未核对（可选）。
+- L0 constraints.md #6 及 L2 两处「8 个函数字段」是否改为 9（L0 修改需用户授权）。
+- config.example.json 新增配置项是否补齐（遗留可选）。

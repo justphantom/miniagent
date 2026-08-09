@@ -12,7 +12,7 @@ confidence: high
 miniagent 定位为极简、无内置策略的 ReAct agent 核心库。核心循环 `loop.go:Run`（`loop.go` / `loop_api.go` / `loop_tools.go` / `loop_extra.go` / `message.go` / `errors.go` / `provider_api.go`）只做五件事：注册钩子 / 拼上下文 / 调 LLM / 执行工具 / 无 tool_calls 退出。
 
 ## 决策
-一切上下文能力经 `LoopHooks`（`loop_api.go`）的 8 个可 nil 函数字段 + `CompactingHook` 外挂：压缩 `NewCompaction`、预算 `NewDefaultOnBudget`、溢出恢复 `NewDefaultOnLLMError`、工具成型 `NewDefaultShapeToolResult`、NDJSON 事件、`provider/openai`。装配集中在 `cmd/miniagent/main.go`。
+一切上下文能力经 `LoopHooks`（`loop_api.go`）的 9 个可 nil 函数字段 + `CompactingHook` 外挂：压缩 `NewCompaction`、预算 `NewDefaultOnBudget`、溢出恢复 `NewDefaultOnLLMError`、工具成型 `NewDefaultShapeToolResult`、NDJSON 事件、`provider/openai`。装配集中在 `cmd/miniagent/main.go`。
 
 `StepOutput` 五字段（`View` / `Commit` / `Persist` / `ExtraUsage` / `Compacted`）是策略外挂的关键语义：`Commit=true` 替换运行 transcript；`Persist` 带 `Kind` 条目替换同 `Kind` 旧条目（多次压缩只留最新 summary）。
 
