@@ -16,27 +16,29 @@ import (
 // defaultSessionDir is the fallback directory when session.dir is not configured (overridden by config in Phase C).
 const defaultSessionDir = ".miniagent/sessions"
 
-// resolveSessionForRun adjudicates the session across three states (mutual exclusion is guaranteed by validateConversation so they are never both true):
-//   - saveNew=true: create a new session, generateSessionID generates the id, construct meta (the stdout NDJSON output of the id is handled by main's EmitSession), history=nil.
-//   - sessionArg!="": resume; validate the id then LoadSession; if the file does not exist (meta.Type=="") error out to prevent creating a garbage session on a typo.
-//   - both empty: stateless, return an empty path (main skips persistence accordingly).
-func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (string, session.SessionMeta, []miniagent.Message) {
+// resolveSession is the os.Exit-free, testable core of resolveSessionForRun: it adjudicates the session across three states
+// (mutual exclusion is guaranteed by validateConversation so saveNew+sessionArg are never both true) and returns errors instead
+// of terminating the process. resolveSessionForRun wraps it with the stderr+os.Exit(1) CLI behavior. Tests exercise the
+// previously-untestable error paths (resume missing, load failure) hermetically via a temp dir — real FS (faithful: keeps the
+// max_session_bytes / atomic-rename / crash-recovery semantics a memStore mock would silently drop), no new Store interface.
+//   - saveNew=true: create a new session (generateSessionID), construct meta, history=nil.
+//   - sessionArg!="": resume; validate id + LoadSession; if the file does not exist (meta.Type=="") return a "not found" error.
+//   - both empty: stateless, return an empty path (main skips persistence).
+func resolveSession(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (sessPath string, meta session.SessionMeta, history []miniagent.Message, err error) {
 	if !saveNew && sessionArg == "" {
-		return "", session.SessionMeta{}, nil
+		return "", session.SessionMeta{}, nil, nil
 	}
 	id := sessionArg
 	if saveNew {
 		id = generateSessionID()
 	}
-	sessPath, err := session.ResolveSessionPath(id, sessionDir)
+	sessPath, err = session.ResolveSessionPath(id, sessionDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: session: %v\n", err)
-		os.Exit(1)
+		return "", session.SessionMeta{}, nil, fmt.Errorf("session: %w", err)
 	}
-	meta, history, err := session.LoadSession(sessPath, maxSessionBytes)
+	meta, history, err = session.LoadSession(sessPath, maxSessionBytes)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
-		os.Exit(1)
+		return "", session.SessionMeta{}, nil, fmt.Errorf("load session: %w", err)
 	}
 	if meta.Type == "" {
 		if saveNew {
@@ -50,12 +52,22 @@ func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provi
 				Created:  time.Now().Format(time.RFC3339),
 			}
 		} else {
-			// Resume but the file does not exist → error out (prevent creating a garbage session on a typo; use -save-session to create a new one).
-			fmt.Fprintf(os.Stderr, "miniagent: session %q not found (use -save-session to create a new one)\n", id)
-			os.Exit(1)
+			// Resume but the file does not exist → error (prevent creating a garbage session on a typo; use -save-session to create a new one).
+			return "", session.SessionMeta{}, nil, fmt.Errorf("session %q not found (use -save-session to create a new one)", id)
 		}
 	} else {
 		warnSessionMismatch(meta, modelSpec, workdir)
+	}
+	return sessPath, meta, history, nil
+}
+
+// resolveSessionForRun is the CLI entry: resolveSession + stderr + os.Exit(1) on error. The error messages are preserved
+// verbatim from the pre-refactor inline form (wrapped under "miniagent: " by this wrapper).
+func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (string, session.SessionMeta, []miniagent.Message) {
+	sessPath, meta, history, err := resolveSession(saveNew, sessionArg, sessionDir, modelSpec, provider, workdir, maxSessionBytes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
+		os.Exit(1)
 	}
 	return sessPath, meta, history
 }

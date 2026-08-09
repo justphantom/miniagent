@@ -139,6 +139,10 @@ type StepOutput struct {
 	ExtraUsage *Usage
 	// Compacted=true flags that compaction occurred this round; the core sets Result.Compacted accordingly (the interaction layer rewrites the session based on this).
 	Compacted bool
+	// ViewEstimate is the request-side token estimate of View computed by the compaction pass (policy.EstimateTokens(View)),
+	// threaded to OnBudget so it can reuse it on the zero-usage (streaming) path instead of re-scanning ToSend. 0 = not computed
+	// (non-compaction path) → OnBudget estimates itself. Eliminates the per-step duplicate EstimateTokens scan (st2).
+	ViewEstimate int
 }
 
 // StepSnapshot is the per-step observability sample carried by the OnStep hook: a point-in-time view of loop state at the
@@ -161,6 +165,9 @@ type BudgetInput struct {
 	System string
 	Tools  []Tool
 	Resp   Response
+	// PreEstimate is the request-side token estimate of ToSend computed earlier in the step (by the compaction pass), reused by
+	// OnBudget on the zero-usage path to avoid a duplicate EstimateTokens scan. 0 = not available → OnBudget estimates as before.
+	PreEstimate int
 }
 
 type Result struct {

@@ -1,9 +1,9 @@
 package policy
 
 import (
-	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"errors"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"log/slog"
 	"time"
 	"unicode/utf8"
@@ -48,7 +48,13 @@ func NewDefaultOnBudget(maxTotalTokens int, logger *slog.Logger) func(context.Co
 				logger.Warn("llm returned partial/zero usage; estimating missing side(s) locally", "step", step)
 			}
 			if inZero {
-				total.InputTokens += EstimateTokens(in.ToSend, in.System, in.Tools)
+				// Reuse the compaction pass's already-computed request estimate when available (streaming zero-usage path) instead
+				// of a duplicate EstimateTokens scan of ToSend (st2). PreEstimate is 0 on the non-compaction path → estimate as before.
+				if in.PreEstimate > 0 {
+					total.InputTokens += in.PreEstimate
+				} else {
+					total.InputTokens += EstimateTokens(in.ToSend, in.System, in.Tools)
+				}
 			}
 			if outZero {
 				total.OutputTokens += estimateResponseTokens(in.Resp)

@@ -97,7 +97,7 @@ type ContextBudget struct {
 //   - err: returned when still over window even after lossy trim; Run should stop to avoid burning requests in a loop.
 //
 // Does not touch newMsgs — persistence-layer summary insertion/dedup is done by Run via mergePersisted (loop.go:216).
-func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBudget, logger *slog.Logger) (out []miniagent.Message, summary miniagent.Message, summarized, committed bool, usage miniagent.Usage, err error) {
+func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBudget, logger *slog.Logger) (out []miniagent.Message, summary miniagent.Message, summarized, committed bool, usage miniagent.Usage, viewEstimate int, err error) {
 	keepReasoning := budget.KeepReasoning
 	if keepReasoning <= 0 {
 		keepReasoning = contextKeepReasoning
@@ -118,7 +118,7 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 		stripped := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
 		if budget.ContextWindow <= 0 || estimateThreshold(stripped, budget.System, budget.Tools, budget.UseRealUsage) <= budget.ContextWindow*4/5 {
 			// Non-compaction: strip only this round's View (committed=false), transcript keeps original, next round recomputes strip from original.
-			return stripped, miniagent.Message{}, false, false, miniagent.Usage{}, nil
+			return stripped, miniagent.Message{}, false, false, miniagent.Usage{}, 0, nil
 		}
 	}
 	keepRecent := budget.KeepRecent
@@ -169,9 +169,9 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	// Cache post-trim out token estimate: reused by both the check below and the error message (eliminates one of the original three EstimateTokens calls).
 	est := policy.EstimateTokens(out, budget.System, budget.Tools)
 	if est > budget.ContextWindow*4/5 {
-		return out, sm, summarized, true, sumUsage, fmt.Errorf("history exceeds context window (~%d tokens) even after lossy trimming — terminating to avoid burning requests in a loop", est)
+		return out, sm, summarized, true, sumUsage, est, fmt.Errorf("history exceeds context window (~%d tokens) even after lossy trimming — terminating to avoid burning requests in a loop", est)
 	}
-	return out, sm, summarized, true, sumUsage, nil
+	return out, sm, summarized, true, sumUsage, est, nil
 }
 
 // applyContextStrips runs all proactive trims (P1/P4/P6/P7/P8'/P9b/P11), only modifying the context-side copy,

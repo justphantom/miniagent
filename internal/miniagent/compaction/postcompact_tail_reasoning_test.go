@@ -38,7 +38,7 @@ func TestFitHistory_PostCompactionTailReasoningStripped(t *testing.T) {
 	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R2", Reasoning: "thinking2"})
 	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q2"})
 
-	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("FitHistory: %v", err)
 	}

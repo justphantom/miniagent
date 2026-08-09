@@ -69,7 +69,7 @@ func TestFitHistory_JointBudgetSavesMidWindow(t *testing.T) {
 	for range 20 {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: strings.Repeat("历", 600)})
 	}
-	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("CW=5120 joint budget should not terminate, err=%v (out=%d msgs, summarized=%v)", err, len(out), summarized)
 	}
@@ -99,7 +99,7 @@ func TestFitHistory_PreservesTailReasoningOnCompaction(t *testing.T) {
 	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q1"})
 	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleAssistant, Content: "R2", Reasoning: "thinking2"})
 	msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q2"})
-	out, _, _, committed, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, _, committed, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("FitHistory: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestFitHistory_NonCompactNotCommitted(t *testing.T) {
 		},
 	}
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q1"}, {Role: miniagent.RoleUser, Content: "q2"}}
-	_, _, _, committed, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	_, _, _, committed, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("FitHistory: %v", err)
 	}

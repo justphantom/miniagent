@@ -102,7 +102,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		if len(resp2.ToolCalls) != 0 {
 			// Fallback: the model still wants tools, but the iteration limit is already hit so nothing is executed. This call's tokens are still consumed — accumulated via
 			// recordStepUsage and circuit-broken through OnBudget (aligned with the main path), so the degraded path cannot bypass budget enforcement and silently exceed MaxTotalTokens.
-			if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
+			if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, 0, cfg, &total); berr != nil {
 				return Result{Steps: s + 1}, true, berr
 			}
 			// Exception (already documented, see TestRun_SummaryInjectionFallsBack): the summary call is an internal bootstrap that "persuades the model to wrap up after the limit is hit";
@@ -118,7 +118,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 				return Result{Steps: s}, true, aerr
 			}
 		}
-		if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, cfg, &total); berr != nil {
+		if berr := recordStepUsage(ctx, hooks, s+1, resp2, reqMsgs, 0, cfg, &total); berr != nil {
 			return Result{Steps: s + 1}, true, berr // budget error: Finish left empty (error-return invariant), aligned with :107 and the main loop
 		}
 		return Result{Text: resp2.Text, Steps: s + 1, Finish: FinishStop}, true, nil
@@ -142,7 +142,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			return Result{Steps: step - 1}, err
 		}
 		// Open seam BeforeLLM: compaction / memory / RAG / context management. nil=pass-through (minimal mode).
-		toSend, perr := applyBeforeLLM(ctx, hooks, step, &msgs, &newMsgs, &total, &compacted, cfg)
+		toSend, viewEstimate, perr := applyBeforeLLM(ctx, hooks, step, &msgs, &newMsgs, &total, &compacted, cfg)
 		if perr != nil {
 			return Result{Steps: step - 1}, perr
 		}
@@ -188,7 +188,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		// Open seam OnBudget: accumulate real usage (zero-usage estimation fallback carried by NewDefaultOnBudget) + budget judgment.
 		// nil=core neither estimates nor circuit-breaks (minimal). AfterLLM and OnBudget differ in Steps semantics (former step-1, latter step),
 		// so AfterLLM stays in the caller while only accumulation + judgment sink into recordStepUsage for reuse.
-		if berr := recordStepUsage(ctx, hooks, step, resp, toSend, cfg, &total); berr != nil {
+		if berr := recordStepUsage(ctx, hooks, step, resp, toSend, viewEstimate, cfg, &total); berr != nil {
 			return Result{Steps: step}, berr
 		}
 
@@ -222,13 +222,13 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 
 // applyBeforeLLM invokes hooks.BeforeLLM (nil=pass-through, minimal mode) and folds its side effects on
 // transcript / persistence / usage / compaction flags back into the loop's local state. Returns the message view (toSend) actually sent to the LLM this turn.
-func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsgs *[]Message, total *Usage, compacted *bool, cfg LoopConfig) ([]Message, error) {
+func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsgs *[]Message, total *Usage, compacted *bool, cfg LoopConfig) ([]Message, int, error) {
 	if hooks.BeforeLLM == nil {
-		return *msgs, nil
+		return *msgs, 0, nil
 	}
 	out, err := hooks.BeforeLLM(ctx, StepInput{Step: step, Msgs: *msgs, System: cfg.System, Tools: cfg.Tools})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	toSend := out.View
 	if len(toSend) == 0 {
@@ -250,7 +250,9 @@ func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsg
 	if out.Compacted {
 		*compacted = true
 	}
-	return toSend, nil
+	// Thread the compaction pass's request-side estimate (out.ViewEstimate, 0 on non-compaction) to OnBudget, so the zero-usage
+	// streaming path can reuse it instead of a duplicate EstimateTokens scan of toSend (st2).
+	return toSend, out.ViewEstimate, nil
 }
 
 // mergePersisted bulk-merges persisted into newMsgs: entries with a non-empty Kind replace the old entry of the same Kind in newMsgs
@@ -290,11 +292,11 @@ func appendMsg(msgs, newMsgs *[]Message, m Message) {
 // recordStepUsage accumulates a single step's real usage into total and runs the zero-usage estimation fallback + budget check via the OnBudget hook.
 // Shared by the main path and the summary path, eliminating the duplicated three-part logic in two places (AfterLLM stays at each caller because its Steps
 // semantics and Result construction are coupled). toSend is the message view actually sent to the LLM this turn, used by OnBudget for estimation.
-func recordStepUsage(ctx context.Context, hooks LoopHooks, step int, resp Response, toSend []Message, cfg LoopConfig, total *Usage) error {
+func recordStepUsage(ctx context.Context, hooks LoopHooks, step int, resp Response, toSend []Message, viewEstimate int, cfg LoopConfig, total *Usage) error {
 	total.InputTokens += resp.Usage.InputTokens
 	total.OutputTokens += resp.Usage.OutputTokens
 	if hooks.OnBudget != nil {
-		if berr := hooks.OnBudget(ctx, step, BudgetInput{ToSend: toSend, System: cfg.System, Tools: cfg.Tools, Resp: resp}, total); berr != nil {
+		if berr := hooks.OnBudget(ctx, step, BudgetInput{ToSend: toSend, System: cfg.System, Tools: cfg.Tools, Resp: resp, PreEstimate: viewEstimate}, total); berr != nil {
 			return berr
 		}
 	}

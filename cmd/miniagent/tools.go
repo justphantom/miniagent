@@ -16,11 +16,14 @@ import (
 // fileOpTimeout<=0 uses the default 30s; writeTimeout<=0 uses the default 30s.
 // When fileResultLimit>0 it overrides read/edit's Tool.ResultLimit (S4: config run.max_file_result_chars);
 // <=0 keeps the constructor builtin default (maxFileResultInHistory).
-func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, limits miniagent.Limits) []miniagent.Tool {
+func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, limits miniagent.Limits, confineAuto, evalSymlinks bool) []miniagent.Tool {
 	shellMode := mode
 	if shellMode == "" {
 		shellMode = miniagent.ModeDefault
 	}
+	// confine wraps the file tools when in ModeDefault, OR in ModeAuto when confineAuto is opted in (shell stays free either way —
+	// S-1 root cause untouched; this is deterministic-file-primitive defense-in-depth for long sessions).
+	confine := mode == miniagent.ModeDefault || (mode == miniagent.ModeAuto && confineAuto)
 	read := tools.ReadFileTool(workdir, fileOpTimeout, limits.MaxReadFileBytes)
 	write := tools.WriteFileTool(workdir, writeTimeout)
 	edit := tools.EditFileTool(workdir, fileOpTimeout)
@@ -29,18 +32,18 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		read.ResultLimit = fileResultLimit
 		edit.ResultLimit = fileResultLimit
 	}
-	if mode == miniagent.ModeDefault && workdir != "" {
-		read = confineWrap(read, workdir)
-		write = confineWrap(write, workdir)
-		edit = confineWrap(edit, workdir)
+	if confine && workdir != "" {
+		read = confineWrap(read, workdir, evalSymlinks)
+		write = confineWrap(write, workdir, evalSymlinks)
+		edit = confineWrap(edit, workdir, evalSymlinks)
 	}
 	grep := tools.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
 	glob := tools.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
 	codemap := tools.CodemapTool(workdir, fileOpTimeout)
-	if mode == miniagent.ModeDefault && workdir != "" {
-		grep = confineWrap(grep, workdir)
-		glob = confineWrap(glob, workdir)
-		codemap = confineWrap(codemap, workdir)
+	if confine && workdir != "" {
+		grep = confineWrap(grep, workdir, evalSymlinks)
+		glob = confineWrap(glob, workdir, evalSymlinks)
+		codemap = confineWrap(codemap, workdir, evalSymlinks)
 	}
 	built := []miniagent.Tool{
 		read,

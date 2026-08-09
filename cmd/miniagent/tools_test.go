@@ -9,14 +9,14 @@ import (
 )
 
 func TestBuildTools_AlwaysRegisters10(t *testing.T) {
-	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{})
+	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
 	if len(tools) != 10 {
 		t.Fatalf("got %d tools, want 10 (7 builtins + 3 todo)", len(tools))
 	}
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
-	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{})
+	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
 	if len(tools) != 10 {
 		t.Fatalf("got %d tools, want 10 (7 builtins + 3 todo)", len(tools))
 	}
@@ -26,7 +26,7 @@ func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	dir := t.TempDir()
 	byName := map[string]int{}
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, miniagent.Limits{}) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, miniagent.Limits{}, false, false) {
 		byName[tl.Name] = tl.ResultLimit
 	}
 	for _, name := range []string{"read", "edit"} {
@@ -35,7 +35,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 		}
 	}
 	// <=0: keeps the builtin maxFileResultInHistory (8000).
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false) {
 		if tl.Name == "read" && tl.ResultLimit != 8000 {
 			t.Errorf("read ResultLimit = %d, want builtin 8000 when limit<=0", tl.ResultLimit)
 		}
@@ -45,7 +45,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 // After buildTools(default), write tools return IsError for an out-of-bounds path (containing "default mode").
 func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
-	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{})
+	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)
 	byName := map[string]miniagent.Tool{}
 	for _, tk := range tools {
 		byName[tk.Name] = tk

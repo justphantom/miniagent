@@ -293,11 +293,11 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		}
 		b := budget
 		b.Force = force
-		fitted, summary, summarized, committed, sumUsage, err := FitHistory(ctx, barrier, b, opts.Logger)
+		fitted, summary, summarized, committed, sumUsage, viewEstimate, err := FitHistory(ctx, barrier, b, opts.Logger)
 		if err != nil {
 			return miniagent.StepOutput{}, err
 		}
-		out := miniagent.StepOutput{View: fitted, Commit: committed} // only compaction/fallback replaces transcript; non-compaction strip is this round's View only (transcript retains original)
+		out := miniagent.StepOutput{View: fitted, Commit: committed, ViewEstimate: viewEstimate} // only compaction/fallback replaces transcript; non-compaction strip is this round's View only. viewEstimate (0 on non-compaction) lets OnBudget skip a duplicate EstimateTokens scan on the streaming zero-usage path (st2).
 		if summarized {
 			out.Persist = []miniagent.Message{summary}
 			u := sumUsage

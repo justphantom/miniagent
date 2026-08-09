@@ -212,7 +212,7 @@ func TestFitHistory_NoWindowNoop(t *testing.T) {
 	tr := &fakeTransport{responses: []string{textResponse("x")}}
 	llm := &openai.ChatClient{APIKey: "sk", ChatURL: "http://localhost", HTTP: &http.Client{Transport: tr}}
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}
-	out, summary, summarized, _, usage, err := FitHistory(context.Background(), msgs, ContextBudget{Summarize: testBudget(llm).Summarize}, nil)
+	out, summary, summarized, _, usage, _, err := FitHistory(context.Background(), msgs, ContextBudget{Summarize: testBudget(llm).Summarize}, nil)
 	if err != nil || summarized || summary.Kind == miniagent.KindSummary {
 		t.Fatalf("expected noop, got out=%d summarized=%v kind=%v err=%v", len(out), summarized, summary.Kind, err)
 	}
@@ -235,7 +235,7 @@ func TestFitHistory_SummarizeErrorFallsBackLossy(t *testing.T) {
 	}
 	// ContextWindow=4000 → threshold 3200: 30 msgs (~7900) exceed the window and trigger; compactHistory compacts to 4 msgs (~1400) which falls back inside the window.
 	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Summarize: testBudget(llm).Summarize}
-	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("lossy fallback should not error when it fits: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestFitHistory_NilSummarizeFallsBackLossy(t *testing.T) {
 	}
 	// Force=true skips the 4/5 gate and enters compactWithSummary directly; Summarize=nil (zero value) triggers the nil guard → lossy fallback.
 	budget := ContextBudget{ContextWindow: 4000, KeepRecent: 3, Force: true}
-	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("nil Summarize should fall back to lossy rather than error: %v", err)
 	}

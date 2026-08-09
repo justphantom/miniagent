@@ -135,6 +135,14 @@ type RunConfig struct {
 	ToolOutputDir *string `json:"tool_output_dir,omitempty"`
 	// ToolOutputRetention is the retention duration for persisted files ("168h"); <=0/unset=7d.
 	ToolOutputRetention *string `json:"tool_output_retention,omitempty"`
+	// ConfineEvalSymlinks (opt-in) tightens the default-mode file-tool confine check with a final filepath.EvalSymlinks +
+	// re-HasPrefix (resolving both target and root, so a workdir reached via a symlink does not false-positive), narrowing the
+	// parallel-symlink-swap TOCTOU window. Default false preserves the lexical semantics the maintainer chose. This is guardrail
+	// hardening, NOT security — shell stays an unrestricted write primitive (S-1 root cause untouched).
+	ConfineEvalSymlinks *bool `json:"confine_eval_symlinks,omitempty"`
+	// ConfineAuto (opt-in) wraps the file tools (read/write/edit/grep/glob/codemap) with confineWrap in ModeAuto too (shell stays
+	// free). Defense-in-depth for long sessions where the deterministic file primitives are worth constraining even when shell is free.
+	ConfineAuto *bool `json:"confine_auto,omitempty"`
 }
 
 // CompactionConfig configures the summary compaction model for long sessions.

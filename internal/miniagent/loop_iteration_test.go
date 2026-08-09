@@ -142,7 +142,7 @@ func TestApplyBeforeLLM_CommitNilViewKeepsTranscript(t *testing.T) {
 			return StepOutput{Commit: true, View: nil}, nil
 		},
 	}
-	toSend, err := applyBeforeLLM(context.Background(), hooks, 1, &msgs, &newMsgs, total, &compacted, LoopConfig{})
+	toSend, _, err := applyBeforeLLM(context.Background(), hooks, 1, &msgs, &newMsgs, total, &compacted, LoopConfig{})
 	if err != nil {
 		t.Fatalf("applyBeforeLLM: %v", err)
 	}

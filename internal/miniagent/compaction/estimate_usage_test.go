@@ -161,7 +161,7 @@ func TestFitHistory_RealUsagePreventsCompaction(t *testing.T) {
 		Summarize:     testBudget(llm).Summarize,
 	}
 	_ = tr
-	out, _, summarized, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out, _, summarized, _, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("FitHistory: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 		{Role: miniagent.RoleAssistant, Content: "recent", Ts: 100, Usage: uPtr(9000, 100)}, // stale large usage
 	}
 	// First pass: stale large usage (9100) exceeds the 1600 threshold -> summarize.
-	out1, _, summarized1, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
+	out1, _, summarized1, _, _, _, err := FitHistory(context.Background(), msgs, budget, nil)
 	if err != nil {
 		t.Fatalf("1st FitHistory: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestFitHistory_NoDoubleCompactionAfterSummary(t *testing.T) {
 	// Simulate the next step: after out1 (which contains the summary with a new Ts), append rounds so the second pass has enough rounds to summarize.
 	msgs2 := append([]miniagent.Message{}, out1...)
 	msgs2 = append(msgs2, miniagent.Message{Role: miniagent.RoleUser, Content: "u6"}, miniagent.Message{Role: miniagent.RoleUser, Content: "u7"})
-	_, _, summarized2, _, _, err := FitHistory(context.Background(), msgs2, budget, nil)
+	_, _, summarized2, _, _, _, err := FitHistory(context.Background(), msgs2, budget, nil)
 	if err != nil {
 		t.Fatalf("2nd FitHistory: %v", err)
 	}
