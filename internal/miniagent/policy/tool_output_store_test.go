@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -149,5 +150,45 @@ func TestToolOutputStore_Cleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Errorf("non tool_*.txt should not be cleaned: %v", err)
+	}
+}
+
+// §P1-3 cleanup count cap: beyond toolOutputMaxFiles, evicts oldest-mtime-first even when files are within retention
+// ("未过期也删"). The newest files survive — protecting the read-back contract for hints the model may still act on.
+func TestToolOutputStore_Cleanup_CountCap(t *testing.T) {
+	dir := t.TempDir()
+	const n = toolOutputMaxFiles + 2
+	base := time.Now().Add(-1 * time.Hour) // well within the 7d retention below → only the count cap should fire
+	for i := 0; i < n; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("tool_%03d.txt", i))
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mtime := base.Add(time.Duration(i) * time.Second) // i=0 oldest, i=n-1 newest
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := newToolOutputStore(dir, 7*24*time.Hour, nil)
+	s.cleanup()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != toolOutputMaxFiles {
+		t.Fatalf("count cap should leave exactly toolOutputMaxFiles files: got %d want %d", len(entries), toolOutputMaxFiles)
+	}
+	// Oldest two evicted (oldest-mtime-first) ...
+	if _, err := os.Stat(filepath.Join(dir, "tool_000.txt")); !os.IsNotExist(err) {
+		t.Errorf("oldest tool_000 should be evicted: stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tool_001.txt")); !os.IsNotExist(err) {
+		t.Errorf("second-oldest tool_001 should be evicted: stat err=%v", err)
+	}
+	// ... and the newest retained (read-back contract).
+	if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("tool_%03d.txt", n-1))); err != nil {
+		t.Errorf("newest file should be retained (read-back contract): %v", err)
 	}
 }

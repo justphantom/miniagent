@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,15 @@ const toolOutputRetentionDefault = 7 * 24 * time.Hour
 
 // toolOutputMaxBytes is the byte hard cap for a single persisted file (prevents OOM; above the shell entry 100KB cap, with headroom).
 const toolOutputMaxBytes = 1 << 20 // 1 MiB
+
+// toolOutputMaxFiles is the count hard cap on persisted tool_*.txt files kept under dir. cleanup evicts the oldest-mtime
+// files beyond this cap even when not yet expired by retention, bounding the steady-state disk footprint across processes:
+// a single run's own accumulation is reclaimed at the start of the next process (cleanup runs once at construction), and
+// without this cap dense large-output runs would accumulate without bound within the retention window (RL-3 / §P1-3).
+// Eviction is oldest-mtime-first so the most recently saved files — those the model most recently got a "full output
+// saved" hint for and may still read back via read/grep — survive (read-back contract safe). 500 leaves headroom over a
+// typical run and caps worst-case disk at ~500 × toolOutputMaxBytes.
+const toolOutputMaxFiles = 500
 
 // toolOutputStore is the on-disk storage for tool output; private; constructed once at the Run entry and reused across steps.
 // Tool output exceeding the limit is written to disk in full; the history Content is replaced with "existing preview +
@@ -102,14 +112,27 @@ func (s *toolOutputStore) bound(step int, callID, output, preview string, trunca
 	return preview + "\n\n" + marker + ": " + abs + "; read it back via read(offset/limit) or grep, do not read the entire file]"
 }
 
-// cleanup scans tool_*.txt under dir and os.Remove those with mtime < now-retention (best-effort, on failure only warn).
-// Run calls it once opportunistically at startup, fitting the single-run CLI form (no background timer).
+// cleanup scans tool_*.txt under dir and:
+//  1. removes files with mtime < now-retention (age-based expiry);
+//  2. enforces toolOutputMaxFiles: if more files remain, evicts oldest-mtime-first down to the cap — bounding disk
+//     usage when dense large-output runs accumulate across turns within the retention window (RL-3 / §P1-3).
+//
+// Eviction is oldest-mtime-first to protect the read-back contract: the most recently saved files (those the model most
+// recently got a "full output saved: <abs>" hint for and may still read back via read/grep) are kept; only the oldest are
+// removed. cleanup runs once at process start, before the current run writes anything, so no current-run file is present.
+// Best-effort (on failure only warn). Run calls it once opportunistically at startup, fitting the single-run CLI form
+// (no background timer); every new prompt is a new process, so this self-heals residue.
 func (s *toolOutputStore) cleanup() {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return // directory does not exist etc.: no persisted files to clean, silent.
 	}
 	cutoff := time.Now().Add(-s.retention)
+	type keptEntry struct {
+		name    string
+		modTime time.Time
+	}
+	var kept []keptEntry
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), "tool_") || !strings.HasSuffix(e.Name(), ".txt") {
 			continue
@@ -118,10 +141,24 @@ func (s *toolOutputStore) cleanup() {
 		if err != nil {
 			continue
 		}
+		// Age-based expiry first.
 		if info.ModTime().Before(cutoff) {
 			if err := os.Remove(filepath.Join(s.dir, e.Name())); err != nil && s.logger != nil {
 				s.logger.Warn("tool-output cleanup remove failed", "file", e.Name(), "error", err)
 			}
+			continue
+		}
+		kept = append(kept, keptEntry{name: e.Name(), modTime: info.ModTime()})
+	}
+	// Count cap: evict oldest-mtime-first down to toolOutputMaxFiles (contract-safe; see const doc).
+	if len(kept) <= toolOutputMaxFiles {
+		return
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].modTime.Before(kept[j].modTime) })
+	surplus := len(kept) - toolOutputMaxFiles
+	for i := 0; i < surplus; i++ {
+		if err := os.Remove(filepath.Join(s.dir, kept[i].name)); err != nil && s.logger != nil {
+			s.logger.Warn("tool-output cleanup remove failed", "file", kept[i].name, "error", err)
 		}
 	}
 }
