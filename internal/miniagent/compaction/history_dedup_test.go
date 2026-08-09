@@ -162,6 +162,65 @@ func TestDedupShellCommands(t *testing.T) {
 	}
 }
 
+// dedupShellCommands (P9b) result folding: the tool RESULT Content for repeated shell commands is
+// folded symmetrically with the args — earlier occurrences are placeholdered, the LAST stays verbatim
+// (shell output for the same command often differs between runs, so keep-last-fold-earlier is the
+// only safe semantics, mirroring P6 in history_dedup_read.go). The args folding (existing behavior)
+// still applies; pairing (role=tool present for each tool_call_id) is unchanged; caller input untouched.
+func TestDedupShellCommands_FoldsResultContent(t *testing.T) {
+	// same shell command run 3 times; each run's output differs (re-running is the point).
+	msgs := []miniagent.Message{
+		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "s1", Name: "shell", Args: `{"command":"go test ./..."}`}}}, // 0
+		{Role: "tool", ToolCallID: "s1", Content: "run1 output (FAIL: pkg_a)"},                                               // 1
+		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "s2", Name: "shell", Args: `{"command":"go test ./..."}`}}}, // 2
+		{Role: "tool", ToolCallID: "s2", Content: "run2 output (FAIL: pkg_b)"},                                               // 3
+		{Role: "assistant", ToolCalls: []miniagent.ToolCall{{ID: "s3", Name: "shell", Args: `{"command":"go test ./..."}`}}}, // 4
+		{Role: "tool", ToolCallID: "s3", Content: "run3 output (ok)"},                                                        // 5
+	}
+	out := dedupShellCommands(msgs, 1) // retain the most recent 1 assistant (idx4) → windowStart=4
+	// LAST result stays verbatim.
+	if out[5].Content != "run3 output (ok)" {
+		t.Errorf("last shell result should stay verbatim, got %q", out[5].Content)
+	}
+	// EARLIER results are placeholdered (foldedIDs={s1,s2}; s3 stays verbatim).
+	for _, i := range []int{1, 3} {
+		if out[i].Content == msgs[i].Content {
+			t.Errorf("earlier shell result at idx %d should be folded, got %q", i, out[i].Content)
+		}
+		if !strings.Contains(out[i].Content, "superseded by a later execution") {
+			t.Errorf("folded shell result at idx %d should contain the superseded marker, got %q", i, out[i].Content)
+		}
+	}
+	// args folding (existing behavior) still applies to the earlier commands.
+	for _, i := range []int{0, 2} {
+		if !strings.Contains(out[i].ToolCalls[0].Args, "superseded by a later execution") {
+			t.Errorf("earlier shell args at assistant idx %d should be folded, got %q", i, out[i].ToolCalls[0].Args)
+		}
+	}
+	// the last command (inside the window) keeps its original args.
+	if !strings.Contains(out[4].ToolCalls[0].Args, "go test") {
+		t.Errorf("last shell command args inside the window should stay verbatim, got %q", out[4].ToolCalls[0].Args)
+	}
+	// pairing unchanged: each tool_call_id still has a role=tool message with a matching id.
+	paired := map[string]bool{"s1": false, "s2": false, "s3": false}
+	for _, m := range out {
+		if m.Role == miniagent.RoleTool {
+			if _, ok := paired[m.ToolCallID]; ok {
+				paired[m.ToolCallID] = true
+			}
+		}
+	}
+	for id, ok := range paired {
+		if !ok {
+			t.Errorf("role=tool pairing lost for tool_call_id %s", id)
+		}
+	}
+	// caller input not modified.
+	if msgs[1].Content != "run1 output (FAIL: pkg_a)" {
+		t.Errorf("caller input was modified")
+	}
+}
+
 // foldStaleReadResults (P11): a later successful write/edit to the same path triggers folding of earlier read results;
 // a later failure does not trigger; different paths do not trigger; write triggers it as well; messages inside
 // the retention window are untouched; no read / no write → zero-copy; does not modify the caller's input.

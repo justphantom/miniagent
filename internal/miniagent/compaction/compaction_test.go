@@ -29,7 +29,7 @@ func testBudget(llm *openai.ChatClient) ContextBudget {
 // headAdj is 0 on default path since old summary doesn't enter out. reqOverhead=EstimateTokens(nil,"",nil)=SystemOverhead=400;
 // head="q" is non-summary → estimateRoundTokens=4; summaryEstimate=summaryMaxChars/2+Envelope=2504.
 func TestJointTailBudget(t *testing.T) {
-	head := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}                                   // first round non-summary
+	head := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}                                           // first round non-summary
 	headSum := []miniagent.Message{{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "old summary"}} // UPDATE path head
 	mk := func(cw int) ContextBudget { return ContextBudget{ContextWindow: cw, System: "", Tools: nil} }
 	cases := []struct {
@@ -38,12 +38,12 @@ func TestJointTailBudget(t *testing.T) {
 		head []miniagent.Message
 		want int
 	}{
-		{"CW<=0 no window fall back to 0", mk(0), head, 0},                      // preserveRecentTokens(CW<=0)=0
-		{"large CW 128k takes userCap 8000", mk(128000), head, 8000},    // avail 99492 > cap 8000
+		{"CW<=0 no window fall back to 0", mk(0), head, 0},                    // preserveRecentTokens(CW<=0)=0
+		{"large CW 128k takes userCap 8000", mk(128000), head, 8000},          // avail 99492 > cap 8000
 		{"large CW 128k UPDATE head no deduction", mk(128000), headSum, 8000}, // headAdj=0 but cap dominates
-		{"medium CW 5120 deduct head", mk(5120), head, 1188},              // 4096-400-4-2504=1188 < cap 2000
-		{"medium CW 5120 UPDATE no head deduction", mk(5120), headSum, 1192},   // 4096-400-0-2504=1192
-		{"small CW 2048 avail<=0 zeroed", mk(2048), head, 0},            // 1638-400-4-2504<0 → 0
+		{"medium CW 5120 deduct head", mk(5120), head, 1188},                  // 4096-400-4-2504=1188 < cap 2000
+		{"medium CW 5120 UPDATE no head deduction", mk(5120), headSum, 1192},  // 4096-400-0-2504=1192
+		{"small CW 2048 avail<=0 zeroed", mk(2048), head, 0},                  // 1638-400-4-2504<0 → 0
 	}
 	for _, c := range cases {
 		if got := jointTailBudget(c.bud, c.head); got != c.want {
@@ -78,8 +78,8 @@ func TestFitHistory_JointBudgetSavesMidWindow(t *testing.T) {
 	}
 }
 
-// FitHistory compaction: tail keeps original reasoning (after Commit semantics change, compaction branch does not strip out), committed=true.
-// Before the change applyContextStrips(out) cleared all but the most recent 1 reasoning; now all are preserved.
+// FitHistory compaction: the post-compaction tail applies the steady-state P1 reasoning strip — only the most-recent
+// keepReasoning (=1) assistant keeps its reasoning (R2/thinking2); earlier tail reasoning (R1) is cleared. committed=true.
 func TestFitHistory_PreservesTailReasoningOnCompaction(t *testing.T) {
 	bigSummary := strings.Repeat("摘", 5000)
 	budget := ContextBudget{
@@ -104,13 +104,20 @@ func TestFitHistory_PreservesTailReasoningOnCompaction(t *testing.T) {
 		t.Fatalf("FitHistory: %v", err)
 	}
 	reasoningCnt := 0
+	keptReasoning := ""
 	for _, m := range out {
 		if m.Role == miniagent.RoleAssistant && m.Reasoning != "" {
 			reasoningCnt++
+			keptReasoning = m.Reasoning
 		}
 	}
-	if reasoningCnt < 2 {
-		t.Errorf("compaction tail should preserve >=2 original reasoning entries (before the change strip cleared all but the most recent 1), actual %d", reasoningCnt)
+	// Post-compaction-tail strip: the tail applies the same steady-state P1 reasoning strip, keeping only the most-recent
+	// keepReasoning (=1) assistant's reasoning and clearing earlier tail reasoning (matches next-turn P1).
+	if reasoningCnt != 1 {
+		t.Errorf("compaction tail should keep exactly 1 (most-recent) reasoning after the post-compaction strip, actual %d", reasoningCnt)
+	}
+	if keptReasoning != "thinking2" {
+		t.Errorf("most-recent reasoning (R2/thinking2) should survive the strip, kept %q", keptReasoning)
 	}
 	if !committed {
 		t.Error("compaction should set committed=true")
@@ -469,14 +476,19 @@ func TestBuildSummarizerSystem_UpdateMode(t *testing.T) {
 	}
 }
 
-// §P0-A: override: summarizerPrompt non-empty -> full takeover, {max_chars} placeholder replaced, no template/previous-summary.
+// §P0-A: override: summarizerPrompt non-empty -> renders {max_chars}; with a non-empty previousSummary and no {previous_summary}
+// placeholder, the <previous-summary> block is appended (override is a superset of default, never loses the old summary).
+// The summaryTemplate is still NOT appended in override.
 func TestBuildSummarizerSystem_Override(t *testing.T) {
 	got := buildSummarizerSystem("custom{max_chars}", "old", "", "", "", 5000)
-	if got != "custom5000" {
-		t.Errorf("override = %q, want custom5000", got)
+	if !strings.HasPrefix(got, "custom5000") {
+		t.Errorf("override should render {max_chars}: %q", got)
 	}
-	if strings.Contains(got, "<previous-summary>") || strings.Contains(got, "## Goal") {
-		t.Errorf("override should not contain template/previous-summary: %s", got)
+	if !strings.Contains(got, "<previous-summary>") || !strings.Contains(got, "</previous-summary>") || !strings.Contains(got, "old") {
+		t.Errorf("override with non-empty previousSummary should append the <previous-summary> block: %q", got)
+	}
+	if strings.Contains(got, "## Goal") {
+		t.Errorf("override should not contain the summaryTemplate: %q", got)
 	}
 }
 
@@ -534,40 +546,6 @@ func TestCompactWithSummary_UpdateModeExtractsPrevSummary(t *testing.T) {
 	// head set to empty: out = summaryMsg + tail (3), first is new summary.
 	if len(out) != 1+3 || out[0].Kind != miniagent.KindSummary {
 		t.Errorf("out should be summary+tail (head set to empty): %+v", out)
-	}
-}
-
-// §P0-A: override path (SummarizerPrompt!="") maintains old behavior — old miniagent.KindSummary merged into middle,
-// previousSummary passed empty.
-func TestCompactWithSummary_OverrideMergesPrevSummaryIntoMiddle(t *testing.T) {
-	var gotPrev string
-	var gotMiddle []miniagent.Message
-	budget := ContextBudget{
-		Model:            "m",
-		SummarizerPrompt: "custom{max_chars}",
-		Summarize: func(_ context.Context, _, _ string, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
-			gotPrev = prevSummary
-			gotMiddle = middle
-			return "new-summary", miniagent.Usage{}, nil
-		},
-	}
-	msgs := []miniagent.Message{
-		{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: summaryPrefix + "old-sum"},
-		{Role: miniagent.RoleUser, Content: "real0"},
-		{Role: miniagent.RoleUser, Content: "real1"},
-		{Role: miniagent.RoleUser, Content: "real2"},
-		{Role: miniagent.RoleUser, Content: "real3"},
-		{Role: miniagent.RoleUser, Content: "real4"},
-		{Role: miniagent.RoleUser, Content: "this-turn"},
-	}
-	if _, _, _, err := compactWithSummary(context.Background(), budget, msgs, 3); err != nil {
-		t.Fatalf("compactWithSummary: %v", err)
-	}
-	if gotPrev != "" {
-		t.Errorf("override path previousSummary should be empty, got %q", gotPrev)
-	}
-	if len(gotMiddle) == 0 || gotMiddle[0].Kind != miniagent.KindSummary || !strings.Contains(gotMiddle[0].Content, "old-sum") {
-		t.Errorf("override path middle first should be old miniagent.KindSummary (old behavior): %+v", gotMiddle)
 	}
 }
 

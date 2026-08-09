@@ -139,8 +139,26 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 		// fallback lossy trim (raw): no jointTailBudget fallback, keep strip to prevent overflow.
 		out = compactHistory(msgs, keepRecent)
 		out = applyContextStrips(ctx, out, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
+	} else {
+		// §P1-post: apply the steady-state reasoning strip to the TAIL subslice only (head + summaryMsg untouched).
+		// out = [head?(nil), summaryMsg, tail...] and the new summaryMsg is the boundary compactWithSummary created;
+		// summaryTailStart locates it (the single miniagent.KindSummary in out) and everything after it is the tail.
+		// Without this, the one post-compaction request — the most context-starved request of the run — replays the
+		// retained tail's full reasoning verbatim; next turn's P1 strip would clear it anyway, so applying the SAME
+		// keepReasoning / keepReasoningChars here removes that one oversized request with zero steady-state divergence.
+		// Only the reasoning strips (P1 stripStaleReasoning + P7 truncateKeptReasoning) are applied — mirroring "next
+		// turn P1" and keeping the change minimal; head + summaryMsg precede the boundary and are left untouched.
+		if tailStart := summaryTailStart(out); tailStart >= 0 && tailStart < len(out) {
+			strippedTail := stripStaleReasoning(out[tailStart:], keepReasoning)
+			strippedTail = truncateKeptReasoning(strippedTail, keepReasoning, keepReasoningChars)
+			combined := make([]miniagent.Message, 0, tailStart+len(strippedTail))
+			combined = append(combined, out[:tailStart]...)
+			combined = append(combined, strippedTail...)
+			out = combined
+		}
 	}
-	// summarized: out=fitted no strip — tail raw reasoning/args preserved, size controlled by jointTailBudget (≤ CW×4/5).
+	// summarized: out=fitted with only the tail reasoning stripped (head + summaryMsg untouched); overall size still
+	// controlled by jointTailBudget (≤ CW×4/5).
 	// Post-compaction uses local EstimateTokens for gating (estimateThreshold reflects pre-compaction prefix; post-compaction real usage is stale, local is more accurate).
 	if policy.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
@@ -189,6 +207,20 @@ func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReaso
 			"before_tokens", policy.EstimateTokens(msgs, sys, tools), "after_tokens", policy.EstimateTokens(out, sys, tools), "msgs", len(out))
 	}
 	return out
+}
+
+// summaryTailStart returns the index in msgs immediately AFTER the first miniagent.KindSummary message (the new summary
+// compactWithSummary emits), i.e. the start of the retained tail. Returns -1 when no KindSummary is present. Used by
+// FitHistory's summarized branch to apply the steady-state reasoning strip to the tail subslice only — everything
+// before the boundary (head + summaryMsg) is left untouched. compactWithSummary emits exactly one KindSummary (the old
+// summary, if any, is extracted as previousSummary and never enters out), so the first match is the new summary.
+func summaryTailStart(msgs []miniagent.Message) int {
+	for i, m := range msgs {
+		if m.Kind == miniagent.KindSummary {
+			return i + 1
+		}
+	}
+	return -1
 }
 
 // preserveRecentTokens resolves the upper bound of the retainedTail token budget (ported from opencode preserveRecentBudget, §P1-E):

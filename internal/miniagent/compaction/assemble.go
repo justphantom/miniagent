@@ -62,18 +62,30 @@ Rules:
 - Do not mention the summary/compaction process itself.`
 
 // buildSummarizerSystem centrally builds the summary system prompt (replacing the old inline system selection). Rules:
-//   - summarizerPrompt non-empty → full override (fmt.Sprintf(summarizerPrompt, maxChars)),
-//     backward compatible with user customization, ignoring previousSummary (override path keeps the old "merge old summary into middle" behavior).
+//   - summarizerPrompt non-empty → override: the render helper substitutes {max_chars} and {previous_summary}. If the
+//     prompt embeds the literal {previous_summary} placeholder the old summary is substituted inline; otherwise, when
+//     previousSummary is non-empty, the same <previous-summary> block the default UPDATE path uses is appended
+//     unconditionally — so the override is a strict superset of default and never loses the old summary. The
+//     summaryTemplate is NOT appended in the override branch (too invasive — a custom prompt may bake in its own
+//     template); existing custom prompts without the placeholder strictly improve (was: old summary lost entirely).
 //   - Default path + previousSummary non-empty → UPDATE (summaryUpdateInstruction + <previous-summary>
 //     block wrapping the old summary + summaryTemplate): the old summary is no longer re-read and re-written as history,
 //     saving half the tokens, and the explicit preserve instruction reduces the chance of losing details.
 //   - Default path + previousSummary empty → CREATE (summaryCreateInstruction + summaryTemplate).
 func buildSummarizerSystem(summarizerPrompt, previousSummary, createInstr, updateInstr, template string, maxChars int) string {
 	render := func(s string) string {
-		return strings.NewReplacer("{max_chars}", strconv.Itoa(maxChars)).Replace(s)
+		return strings.NewReplacer("{max_chars}", strconv.Itoa(maxChars), "{previous_summary}", previousSummary).Replace(s)
 	}
 	if summarizerPrompt != "" {
-		return render(summarizerPrompt)
+		// Override path: render the user prompt (substituting {max_chars} and {previous_summary}). If the prompt did
+		// not embed the {previous_summary} placeholder, append the same <previous-summary> block the default UPDATE
+		// path uses so the old summary is never lost — the override is a strict superset of default. The template is
+		// intentionally not appended (a custom prompt may carry its own template).
+		rendered := render(summarizerPrompt)
+		if !strings.Contains(summarizerPrompt, "{previous_summary}") && previousSummary != "" {
+			rendered += "\n<previous-summary>\n" + previousSummary + "\n</previous-summary>\n\n"
+		}
+		return rendered
 	}
 	if createInstr == "" {
 		createInstr = summaryCreateInstruction

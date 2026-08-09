@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
@@ -39,7 +38,7 @@ func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) m
 			"pattern": map[string]any{"type": "string", "description": "A filepath.Match glob pattern, e.g. *.go or *_test.go"},
 			"path":    map[string]any{"type": "string", "description": "Root directory, relative to workdir or absolute, defaults to workdir"},
 		}, "pattern"),
-		ResultLimit: policy.MaxToolResultInHistory,
+		ResultLimit: miniagent.MaxToolResultInHistory,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "glob", func(rctx context.Context) miniagent.ToolResult { return runGlob(rctx, workspaceRoot, args, maxOutputChars) })
 		},

@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
@@ -48,7 +47,7 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string, maxOutp
 		Parameters: object(map[string]any{
 			"command": map[string]any{"type": "string", "description": "The shell command to execute"},
 		}, "command"),
-		ResultLimit:   policy.MaxToolResultInHistory,
+		ResultLimit:   miniagent.MaxToolResultInHistory,
 		SplitTruncate: true, // the error conclusion of shell output (exit status / FAIL) is often at the tail; front-truncation would lose it
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			var a struct {

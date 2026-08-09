@@ -3,6 +3,8 @@ package policy
 import (
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // TrimForHistory: an explicit limit trims down to that value; limit<=0 uses the default MaxToolResultInHistory. split=false uses head-only.
@@ -14,8 +16,8 @@ func TestTrimForHistory_PerLimit(t *testing.T) {
 	}
 	got0 := TrimForHistory(big, 0, false)
 	// Default trims down to MaxToolResultInHistory: length should be slightly above that value (marker included), well below 8000.
-	if len(got0) <= MaxToolResultInHistory || len(got0) >= 8000 {
-		t.Errorf("limit=0: len=%d, want in (%d, 8000)", len(got0), MaxToolResultInHistory)
+	if len(got0) <= miniagent.MaxToolResultInHistory || len(got0) >= 8000 {
+		t.Errorf("limit=0: len=%d, want in (%d, 8000)", len(got0), miniagent.MaxToolResultInHistory)
 	}
 }
 

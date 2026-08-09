@@ -143,15 +143,14 @@ func shrinkRoundToolContents(round []miniagent.Message, tokenBudget int) []minia
 // persistence insertion is done by Run.
 //
 // Cross-turn inheritance (P2-1 + §P0-A UPDATE): the old summary brought in by the previous LoadSession lands at the
-// head of msgs via applyCompactionBarrier, and splitRounds makes it a standalone rounds[0].
-//   - Default path (SummarizerPrompt==""): stripSummaryPrefix extracts the old summary text as previousSummary and
-//     passes it down through the Summarize callback (UPDATE mode); head is set to nil and the old summary is no
-//     longer merged into middle — this halves tokens (the old summary is no longer re-read and re-written as
-//     history) and the explicit preserve instruction lowers the chance of dropping details. This is the 99% user
-//     path.
-//   - Override path (SummarizerPrompt!=""): preserves the old behavior, merging the old summary into the head of
-//     middle for the LLM to re-read and re-write (previousSummary passed empty), zero-regression for users who set
-//     a custom prompt.
+// head of msgs via applyCompactionBarrier, and splitRounds makes it a standalone rounds[0]. Both the default and
+// override paths extract the old summary text as previousSummary (stripSummaryPrefix) and pass it down through the
+// Summarize callback (UPDATE mode); head is set to nil and the old summary is never merged into middle — this
+// halves tokens (the old summary is no longer re-read and re-written as history) and the explicit preserve
+// instruction lowers the chance of dropping details. The override path's previousSummary is consumed by
+// buildSummarizerSystem (the {previous_summary} placeholder is substituted if present, otherwise the same
+// <previous-summary> block the default UPDATE path uses is appended), so a custom prompt is a strict superset of
+// default rather than regressing to the old dilutive re-read/re-write.
 //
 // On the next turn, after the barrier hits the new summary, the old summary is dropped; a non-summary first round
 // (a normal user round) keeps the original behavior.
@@ -176,13 +175,13 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	tail, middleCore := selectTailByTokens(rounds[1:], keepRecent, tokenBudget)
 	prevSummary := ""
 	if len(head) == 1 && head[0].Kind == miniagent.KindSummary {
-		if budget.SummarizerPrompt == "" {
-			// Default path: extract the old summary as the UPDATE anchor, do not merge it into middle for re-read/re-write.
-			prevSummary = stripSummaryPrefix(head[0].Content)
-		} else {
-			// Override path: preserve the old behavior, merge the old summary into middle for the LLM to re-read/re-write.
-			middleCore = append([]miniagent.Message{head[0]}, middleCore...)
-		}
+		// Both default and override paths extract the old summary as the UPDATE anchor (previousSummary) and do NOT
+		// merge it into middle for re-read/re-write — this halves tokens (the old summary is no longer re-read and
+		// re-written as history) and the explicit preserve instruction lowers the chance of dropping details. The
+		// override path's previousSummary is consumed by buildSummarizerSystem (placeholder substitution or an
+		// appended <previous-summary> block), making override a strict superset of default rather than regressing to
+		// the old dilutive re-read/re-write.
+		prevSummary = stripSummaryPrefix(head[0].Content)
 		head = nil
 	}
 	middle := middleCore
@@ -199,8 +198,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	// summary input tokens (measured ~56%) and preventing middle+summaryMaxTokens from exceeding the summary
 	// model's CW. applyContextStrips only mutates fields, never deletes messages, never touches ToolCallID, so
 	// pairing is unchanged (ValidateToolPairing above already passed). logger=nil → dbg=false strips at zero
-	// overhead. The UPDATE old summary goes via prevSummary and never enters middle; the old summary merged in by
-	// the override path is a pure user message, strip does not affect it.
+	// overhead. The UPDATE old summary goes via prevSummary and never enters middle (both default and override).
 	middle = applyContextStrips(ctx, middle, 0, 0, 0, nil, budget.System, budget.Tools)
 	compModel := budget.CompactionModel
 	if compModel == "" {

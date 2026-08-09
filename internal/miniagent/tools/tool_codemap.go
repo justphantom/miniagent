@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"context"
 	"encoding/json"
@@ -41,7 +40,7 @@ func CodemapTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 			"path":  map[string]any{"type": "string", "description": "Root directory, relative to workdir or absolute; defaults to workdir"},
 			"depth": map[string]any{"type": "integer", "description": "Maximum recursion depth, default " + strconv.Itoa(defaultCodemapDepth) + " (omitted/0 are equivalent); <0 means unlimited (still capped by the entry limit)"},
 		}),
-		ResultLimit:   policy.MaxToolResultInHistory,
+		ResultLimit:   miniagent.MaxToolResultInHistory,
 		SplitTruncate: true, // the entry-limit hint is at the tail; front-truncation would lose it
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "traverse", func(rctx context.Context) miniagent.ToolResult { return runCodemap(rctx, workspaceRoot, args) })

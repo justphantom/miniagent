@@ -115,8 +115,8 @@ func TestRun_ToolResultLimitUsedInHistory(t *testing.T) {
 		if m.Role != miniagent.RoleTool {
 			continue
 		}
-		if len(m.Content) > 8200 || len(m.Content) <= policy.MaxToolResultInHistory {
-			t.Errorf("tool content not trimmed by ResultLimit: len=%d (want (%d, 8200])", len(m.Content), policy.MaxToolResultInHistory)
+		if len(m.Content) > 8200 || len(m.Content) <= miniagent.MaxToolResultInHistory {
+			t.Errorf("tool content not trimmed by ResultLimit: len=%d (want (%d, 8200])", len(m.Content), miniagent.MaxToolResultInHistory)
 		}
 		if !strings.Contains(m.Content, "truncated") {
 			t.Errorf("trim marker missing: len=%d", len(m.Content))

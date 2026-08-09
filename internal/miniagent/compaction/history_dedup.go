@@ -220,10 +220,12 @@ func foldedWriteEditArgs(path string) string {
 
 // dedupShellCommands (P9b) deduplicates shell tool_calls outside the retention window by
 // normalized command signature: each group keeps the last occurrence verbatim in time order;
-// earlier synonymous commands are folded to a placeholder. ReAct sessions frequently repeat
-// exploration commands (pwd && ls, find ... -name); earlier synonymous commands have no value
-// for subsequent decisions (v5 §3 P9b). No IsError needed. Deep-copies the ToolCalls slice of
-// modified assistant messages.
+// earlier synonymous commands are folded to a placeholder, AND the corresponding role=tool
+// RESULT Content is folded symmetrically (keep-last verbatim, placeholder earlier ones — mirroring
+// P6 in history_dedup_read.go; shell output for the same command often differs between runs, so
+// only earlier results are safe to drop). ReAct sessions frequently repeat exploration commands
+// (pwd && ls, find ... -name); earlier synonymous commands have no value for subsequent decisions
+// (v5 §3 P9b). No IsError needed. Deep-copies the ToolCalls slice of modified assistant messages.
 func dedupShellCommands(msgs []miniagent.Message, keepN int) []miniagent.Message {
 	shellKeyOf := map[string]string{}
 	for _, m := range msgs {
@@ -286,9 +288,17 @@ func dedupShellCommands(msgs []miniagent.Message, keepN int) []miniagent.Message
 	}
 	out := make([]miniagent.Message, len(msgs))
 	copy(out, msgs)
+	// foldedIDs collects the tool_call IDs being folded (earlier occurrences; the last stays verbatim).
+	// It drives a second pass that ALSO folds the corresponding role=tool RESULT Content — symmetric
+	// with the args folding and mirroring P6/P11 in history_dedup_read.go (keep-last-fold-earlier).
+	// Shell output for the same command frequently differs between runs (re-running go test / git
+	// status is the point of re-running), so only the already-folded earlier results are placeholdered;
+	// the last occurrence's ID is not in toFold, so its result stays verbatim.
+	foldedIDs := map[string]bool{}
 	dirty := map[int]bool{}
 	for fk := range toFold {
 		dirty[fk.msgIdx] = true
+		foldedIDs[out[fk.msgIdx].ToolCalls[fk.tcIdx].ID] = true
 	}
 	for i := range out {
 		if !dirty[i] {
@@ -305,6 +315,14 @@ func dedupShellCommands(msgs []miniagent.Message, keepN int) []miniagent.Message
 			}
 		}
 		out[i].ToolCalls = calls
+	}
+	// Fold the tool RESULT Content for the same ToolCallIDs. Content is a value field, so assigning on
+	// the slice-element copy leaves the caller's input untouched — the same pattern P6/P11 rely on.
+	for i := range out {
+		if out[i].Role != miniagent.RoleTool || !foldedIDs[out[i].ToolCallID] {
+			continue
+		}
+		out[i].Content = "…[prior identical shell command result superseded by a later execution]"
 	}
 	return out
 }

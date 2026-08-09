@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+// MaxToolResultInHistory is the built-in per-tool-result character cap — the final fallback when Tool.ResultLimit and
+// LoopConfig.MaxToolResultChars are both <=0 (TrimForHistory applies it). Lives in core so the built-in tools (grep/glob/shell)
+// can reference it without importing the policy package (kills the tools→policy edge for this constant).
+const MaxToolResultInHistory = 4000
+
 // Tool is one agent tool the LLM may call. Name/Description/Parameters
 // are the three elements of the OpenAI function-calling schema; serialization is done by wire.go.
 type Tool struct {

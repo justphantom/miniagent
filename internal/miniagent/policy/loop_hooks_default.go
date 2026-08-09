@@ -101,7 +101,7 @@ func NewDefaultShapeToolResult(tools []miniagent.Tool, dir string, retention tim
 			// preview marker is longer anyway" (the full text would be lost and not persisted).
 			effLimit := limit
 			if effLimit <= 0 {
-				effLimit = MaxToolResultInHistory
+				effLimit = miniagent.MaxToolResultInHistory
 			}
 			content = store.bound(step, callID, tres.Output, preview, utf8.RuneCountInString(tres.Output) > effLimit)
 		}

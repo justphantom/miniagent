@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"bufio"
 	"bytes"
@@ -55,7 +54,7 @@ func GrepTool(workspaceRoot string, timeout time.Duration, maxMatches, maxOutput
 			"path":    map[string]any{"type": "string", "description": "Search root directory, relative to workdir or absolute, defaults to workdir"},
 			"glob":    map[string]any{"type": "string", "description": "File-name include filter, a filepath.Match glob (e.g. *.go)"},
 		}, "pattern"),
-		ResultLimit:   policy.MaxToolResultInHistory,
+		ResultLimit:   miniagent.MaxToolResultInHistory,
 		SplitTruncate: true, // the match-limit/no-match summary is at the tail; front-truncation would lose it
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "search", func(rctx context.Context) miniagent.ToolResult {
