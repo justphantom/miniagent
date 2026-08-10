@@ -4,7 +4,7 @@ COMMIT := $(shell git describe --always --dirty --tags)
 
 build:
 	mkdir -p bin
-	go build -ldflags "-X main.version=$(COMMIT)" -o bin/miniagent ./cmd/miniagent
+	go build -ldflags "-s -w -X main.version=$(COMMIT)" -o bin/miniagent ./cmd/miniagent
 
 test:
 	go test -race ./...

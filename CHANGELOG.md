@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Changed
+- 发布二进制加 `-ldflags "-s -w"`：剥离符号表与 DWARF 调试信息，产物体积减小约 30%（9.7M → 6.8M）。
+
 ## [4.3.0] - 2026-08-09
 
 > 观测性 + 安全护栏加固 minor：新增 `OnStep` 观测缝与 `-metrics-step` 每步指标、危险工具确认门、流式中断检测；default 模式文件工具 confine 提供 opt-in 收紧；多项 compaction / 计数 / 落盘可靠性修复。全部向后兼容——新增配置项与 CLI flag 均 opt-in，既有配置与行为不变。
