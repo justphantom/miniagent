@@ -100,14 +100,13 @@ func contextTokensFromUsage(u miniagent.Usage) int {
 // ran every step. Correctness is unchanged: Ts order of summaries guarantees last-position == max Ts.
 func lastApplicableUsageIndex(msgs []miniagent.Message) int {
 	var latestSummaryTs int64
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Kind == miniagent.KindSummary {
-			latestSummaryTs = msgs[i].Ts
+	for _, m := range slices.Backward(msgs) {
+		if m.Kind == miniagent.KindSummary {
+			latestSummaryTs = m.Ts
 			break
 		}
 	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m := msgs[i]
+	for i, m := range slices.Backward(msgs) {
 		if m.Role == miniagent.RoleAssistant && m.Usage != nil &&
 			(m.Usage.InputTokens > 0 || m.Usage.OutputTokens > 0) &&
 			m.Ts >= latestSummaryTs {
