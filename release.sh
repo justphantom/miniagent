@@ -26,6 +26,10 @@ echo "✓ 发版检查通过: $VERSION"
 echo "  git describe: $(git describe --tags)"
 echo "  类型: annotated tag"
 
+# verify-gate：发版前全绿（test 含 -race）
+echo "→ 运行 verify-gate（test + lint）..."
+make test lint
+
 # 构建
 make build
 

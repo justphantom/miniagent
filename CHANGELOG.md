@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+## [4.3.1] - 2026-08-10
+
+> 维护性 patch：无功能性变更，不影响 API / 配置 / CLI 行为 / NDJSON 契约。
+
 ### Changed
 - 发布二进制加 `-ldflags "-s -w"`：剥离符号表与 DWARF 调试信息，产物体积减小约 30%（9.7M → 6.8M）。
 - `compaction_split.go` 反向遍历改用 `slices.Backward` 迭代器（Go 1.23+），消除 `modernize` lint 告警。

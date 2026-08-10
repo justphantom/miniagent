@@ -74,6 +74,7 @@ make test       # go test -race ./...
 | 变量 | 用途 |
 |------|------|
 | `MINIAGENT_API_KEY` | API 密钥，作为 `Authorization: Bearer <key>` 发送。config `provider.key` 未设时必需 |
+| `MINIAGENT_AUTO_APPROVE` | `-confirm-destructive` 在非交互/subagent 模式下默认拒绝破坏性工具；设为 `1` 则放行（等价于自动确认） |
 
 ## CLI 参数
 
@@ -81,9 +82,11 @@ make test       # go test -race ./...
 
 ```
 -config string           配置文件路径（默认查 ~/.miniagent/miniagent.json；不存在则报错）
+-confirm-destructive     opt-in：写/edit 及危险 shell 执行前交互确认；非交互/subagent 模式下破坏性工具默认拒绝，除非 MINIAGENT_AUTO_APPROVE=1
 -list-models             列出可用模型后退出，逐行输出 NDJSON 事件 {"type":"model","provider":"...","model":"..."}（静态 models 不发 GET，否则 GET models-url；-provider 可筛选单个 provider）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
+-metrics-step            每步输出 metrics NDJSON 到 stderr（step/transcript 长度/token 花费/压缩/LLM 请求数）
 -mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
 -model string            LLM model id（须与 -provider 成对传入，同传覆盖 defaults 对；只传其一报错）
 -provider string         LLM provider 名（须与 -model 成对传入；-list-models 时单独用于筛选单个 provider）

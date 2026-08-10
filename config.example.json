@@ -21,7 +21,11 @@
           "xhigh": "xhigh",
           "max": "max"
         }
-      }
+      },
+      // stream_allow_unterminated (opt-in, default false): 流式响应已输出 content 后在无 [DONE] / finish_reason 时断开（如连接中断），
+      // 视为成功并返回已收到的部分响应。默认 false = 此情况为硬错（errStreamUnterminated）。
+      // 适用于已输出内容即关闭的非标准端点（部分 vLLM / Ollama 配置）。
+      "stream_allow_unterminated": false
     },
     {
       "name": "anthropic",
@@ -94,7 +98,12 @@
     "shell_stream_window_bytes": 0,
     "preserve_recent_tokens": 0,
     "tool_output_dir": "",
-    "tool_output_retention": "168h"
+    "tool_output_retention": "168h",
+    // confine_eval_symlinks (opt-in, default false): default 模式下对文件工具的 workdir 越界检查追加 filepath.EvalSymlinks + 重检 HasPrefix，
+    // 收窄并行符号链接替换的 TOCTOU 窗口。这是护栏加固，非安全边界（shell 仍是无限制写原语）。
+    "confine_eval_symlinks": false,
+    // confine_auto (opt-in, default false): auto 模式下也给文件工具（read/write/edit/grep/glob/codemap）套 confineWrap（shell 仍不受限）。
+    "confine_auto": false
   },
   "compaction": {
     "provider": "openai",
