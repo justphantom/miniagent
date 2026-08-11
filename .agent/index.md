@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-11T13:00:00+08:00
+updated: 2026-08-11T16:00:00+08:00
 ---
 
 # .agent 记忆索引
@@ -20,8 +20,12 @@ updated: 2026-08-11T13:00:00+08:00
 - [patterns/compaction-system.md](L2/patterns/compaction-system.md) — 压缩体系：预算自适应 CW + 7 阶裁剪 + reasoning 头尾截断
 - [patterns/config-tri-state-resolve.md](L2/patterns/config-tri-state-resolve.md) — config 三态裁决 + 隐性 footgun
 - [patterns/memory-freshness-pointer-over-count.md](L2/patterns/memory-freshness-pointer-over-count.md) — 记忆反过期元规则：结构数量引用用指针不硬编码
+- [patterns/producer-contract-change-ripple.md](L2/patterns/producer-contract-change-ripple.md) — 改动涟漪：改/删 X 必 grep 代码+注释+测试+文档四类
+- [patterns/adversarial-workflow-review.md](L2/patterns/adversarial-workflow-review.md) — 对抗式 workflow 评审（finder × verify 两阶段）+ 盲区维度收益
 - [incidents/session-jsonl-persistence.md](L2/incidents/session-jsonl-persistence.md) — session jsonl 持久化可靠性组
 - [incidents/streaming-sse-robustness.md](L2/incidents/streaming-sse-robustness.md) — 流式 SSE 健壮性（中断/index 碰撞/幂等重试）
 - [incidents/thinking-pindown-downgrade-length.md](L2/incidents/thinking-pindown-downgrade-length.md) — thinking 钉死 + 降级链 + length 空回复
 - [incidents/hooks-no-recover-shape-result-contract.md](L2/incidents/hooks-no-recover-shape-result-contract.md) — 钩子无 recover + Run 顶层兜底 + ShapeToolResult 契约
 - [incidents/corrupted-summary-prompt-injection.md](L2/incidents/corrupted-summary-prompt-injection.md) — 损坏摘要注入（P0，v4.3.0 已修：isSummaryGarbage 校验 + prose-only 重试 + lossy 回落）
+- [incidents/compaction-headadj-override-stale-clause.md](L2/incidents/compaction-headadj-override-stale-clause.md) — jointTailBudget override 路径误扣 headAdj（SummarizerPrompt 过时子句，生产者契约改消费者未同步）
+- [incidents/anthropic-provider-copy-asymmetry.md](L2/incidents/anthropic-provider-copy-asymmetry.md) — anthropic 复制 openai 漏的 5 对称项（role=system/max_tokens/529/StreamAllowUnterminated/thinking.map）+ 跨 provider 复制清单
