@@ -16,6 +16,7 @@ updated: 2026-08-11T13:00:00+08:00
 - [decisions/multi-provider-kind-dispatch.md](L2/decisions/multi-provider-kind-dispatch.md) — 多 provider Kind 分派 + wire 边界有损投影 + anthropic 协议易错点
 - [decisions/core-zero-policy-loophooks-decoupling.md](L2/decisions/core-zero-policy-loophooks-decoupling.md) — 核心零策略 + LoopHooks 外挂 + 子包化解耦
 - [decisions/default-mode-not-security-boundary.md](L2/decisions/default-mode-not-security-boundary.md) — default 模式非安全边界 + 凭证剥离局限 + confirm/sandbox 配置化
+- [decisions/system-prompt-config-only.md](L2/decisions/system-prompt-config-only.md) — system prompt 来源统一 config-only（.miniagent/ 层收口 + NEW-1 回归 + 迁移规则）
 - [patterns/compaction-system.md](L2/patterns/compaction-system.md) — 压缩体系：预算自适应 CW + 7 阶裁剪 + reasoning 头尾截断
 - [patterns/config-tri-state-resolve.md](L2/patterns/config-tri-state-resolve.md) — config 三态裁决 + 隐性 footgun
 - [patterns/memory-freshness-pointer-over-count.md](L2/patterns/memory-freshness-pointer-over-count.md) — 记忆反过期元规则：结构数量引用用指针不硬编码

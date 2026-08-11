@@ -274,16 +274,12 @@ func assembleHooks(
 
 // loopCfg overrides flag defaults per resolved (cli>config) to construct LoopConfig (loop body + policy-carrier fields;
 // compaction policies are attached via NewCompaction, other policies via NewDefault* hook factories, core Run has zero policies).
-// On the production path resolved.System is guaranteed non-empty by assembleSystemPrompt (main.go:126); the empty-string fallback below
-// only matters for tests that directly construct loopCfg (prevents missing System from causing an empty prompt).
+// resolved.System must already be non-empty (the production path guarantees this via assembleSystemPrompt at main.go:148);
+// loopCfg does not re-default it — a missing System here is a caller bug, surfaced as an empty prompt rather than silently papered over.
 func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
-	system := resolved.System
-	if system == "" {
-		system = defaultSystemPrompt
-	}
 	return miniagent.LoopConfig{
 		Model:              resolved.ModelID,
-		System:             system,
+		System:             resolved.System,
 		SummaryRequest:     resolved.SummaryRequest,
 		MaxTokens:          into(resolved.MaxTokens, 0),
 		Tools:              tools,
