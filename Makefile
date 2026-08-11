@@ -19,4 +19,4 @@ clean:
 	rm -rf bin/
 
 deploy: build
-	sudo mv bin/miniagent /usr/local/bin/miniagent
+	sudo install -m 0755 bin/miniagent /usr/local/bin/miniagent
