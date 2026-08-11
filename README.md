@@ -113,7 +113,7 @@ make test       # go test -race ./...
 
 > **升级到 4.2.0（4 项 breaking）**：
 > - **模型参数分层**：`models` 改对象数组 `[{"name":"x"}]`（旧 `["x"]` 加载报错）；`max_tokens`/`context_window`/`thinking` level 支持 `model > provider > global`，`http_timeout` 仅 `provider > global`；**取消 `-max-tokens` CLI**（改 config `run.max_tokens` 或 provider/model 级；三层全未配则不发 `max_tokens`、回落模型默认）。
-> - **取消 `-system` CLI 与全局 `~/.miniagent/` 规则**：system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认）+ 项目级 `workdir/.miniagent/`。全局 persona/rules 物进 `defaults.system_prompt`。
+> - **取消 `-system` CLI 与全局 `~/.miniagent/` 规则**：system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认）+ 项目级 `workdir/.miniagent/`（**注：该层已于 v4.4.0 移除，见下文「项目专属配置」**）。全局 persona/rules 物进 `defaults.system_prompt`。
 > - **提示词模板 config 化**：新增 `subagent_guidance`（`{config_path}`/`{mode}`）、`summary_create`/`update_instruction`（`{max_chars}`）、`summary_template`；`summarizer_prompt` 占位符 `%v`→`{max_chars}`。
 > - **新增 `-replay <id>`**：离线回放 session 为同构 NDJSON 事件流。
 >
@@ -197,6 +197,8 @@ make test       # go test -race ./...
 ## 工具清单
 
 文件与 shell 工具的约束取决于 `-mode`：default 模式下写工具（write/edit）限定在 workdir 子树、shell 拒 sudo/su 等 11 个提权器；auto 模式无任何约束。工具参数为 JSON 对象。
+
+> **v4.4.0 破坏性变更**：移除内置工具 `codemap`（目录树概览，与 glob+read 功能重叠）与 `todo`（`todo_create`/`todo_update`/`todo_list`，进程内任务清单，与核心零策略冲突），内置工具 10→6。迁移：`codemap` 改用 `glob`（结构）+ `read`（内容）组合；`todo` 改由模型在正文跟踪任务。详见 [CHANGELOG](./CHANGELOG.md)。
 
 ### `read`
 
@@ -332,7 +334,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `maxWriteFileBytes` / `maxEditFileBytes` | 10 MiB | — | 写 / 编辑文件字节上限 |
 | `maxShellOutputChars` | 100000 | `run.max_shell_output_chars` | shell 输出字符上限 |
 | `maxSessionBytes` | 50 MiB | `run.max_session_bytes` | session 文件字节上限 |
-| `shellTimeout` | 120s | `run.shell_timeout` | shell/script 命令超时（默认值，可被 config 覆盖） |
+| `shellTimeout` | 120s | `run.shell_timeout` | shell 命令超时（默认值，可被 config 覆盖） |
 | `fileOpTimeout` | 30s | `run.file_op_timeout` | read/edit/grep/glob 文件操作超时（默认值，可被 config 覆盖） |
 | `writeOpTimeout` | 30s | `run.write_timeout` | write 原子写入超时（默认值，可被 config 覆盖） |
 
@@ -370,14 +372,17 @@ system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认 
       "chat_url": "https://api.openai.com/v1/chat/completions",
       "models_url": "https://api.openai.com/v1/models",
       "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "models": ["gpt-4o", "gpt-4o-mini"]
+      "models": [
+        {"name": "gpt-4o"},
+        {"name": "gpt-4o-mini"}
+      ]
     }
   ],
   "session": {"dir": ".sessions"},
   "defaults": {
     "provider": "openai",
     "model": "gpt-4o",
-    "thinking": "medium",
+    "thinking": "off",
     "mode": "default",
     "summary_request": "请按以下格式总结：...",
     "summarizer_prompt": "你是代码审查助手。"

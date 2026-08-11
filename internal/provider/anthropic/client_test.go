@@ -101,3 +101,26 @@ func TestNewClient_URLReject(t *testing.T) {
 		t.Fatal("want error for invalid URL")
 	}
 }
+
+// Non-streaming parseResponse folds cache tokens into InputTokens (parallel to the streaming path covered by
+// sse_test.go TestParseSSE_CacheTokensFoldedIntoInput). Cached non-streaming calls (e.g. the compaction summarizer
+// with stream=false) must report folded input so the real-usage overflow guard sees the true figure.
+func TestClient_CacheTokensFoldedIntoInput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":1,"cache_creation_input_tokens":30,"cache_read_input_tokens":70}}`))
+	}))
+	defer srv.Close()
+	c, _ := NewClient("k", srv.URL, srv.Client(), nil, nil, false)
+	res, err := c.Do(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Usage.InputTokens != 200 {
+		t.Errorf("InputTokens = %d, want 200 (100+30+70 folded)", res.Usage.InputTokens)
+	}
+	if res.Usage.OutputTokens != 1 {
+		t.Errorf("OutputTokens = %d, want 1", res.Usage.OutputTokens)
+	}
+}

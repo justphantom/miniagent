@@ -115,7 +115,7 @@ type RunConfig struct {
 	HTTPTimeout         *string `json:"http_timeout,omitempty"`
 	MaxReadFileBytes    *int    `json:"max_read_file_bytes,omitempty"`
 	MaxShellOutputChars *int    `json:"max_shell_output_chars,omitempty"`
-	// ShellStreamWindowBytes is the sliding-window byte cap for shell/script output (keeps the tail, §P1-D); unset/<=0 uses the default max_shell_output_chars*8.
+	// ShellStreamWindowBytes is the sliding-window byte cap for shell output (keeps the tail, §P1-D); unset/<=0 uses the default max_shell_output_chars*8.
 	ShellStreamWindowBytes *int `json:"shell_stream_window_bytes,omitempty"`
 	MaxSessionBytes        *int `json:"max_session_bytes,omitempty"`
 	SummaryMaxTokens       *int `json:"summary_max_tokens,omitempty"`
@@ -164,7 +164,7 @@ type CompactionConfig struct {
 
 // CLIOverrides / ResolvedRun / Resolved / Resolve / resolveRun are in resolve.go.
 
-// maxConfigFileBytes is the byte cap for config/rule files, preventing OOM from multi-GB files.
+// maxConfigFileBytes is the byte cap for the config file, preventing OOM from multi-GB files.
 const maxConfigFileBytes = 4 << 20 // 4 MiB
 
 // ReadFileLimited reads path with a size limit; returns an error if it exceeds maxBytes. It opens via miniagent.OpenNoFollow,

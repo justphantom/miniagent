@@ -149,3 +149,26 @@ func TestStreamClient_PostDeltaDropNotRetried(t *testing.T) {
 		t.Errorf("attempts = %d, want 1 (post-delta drop is irrevocable: must NOT retry — would duplicate live output)", attempts)
 	}
 }
+
+// StreamAllowUnterminated (opt-in flag): the same content-then-EOF stream as above is accepted as a partial success
+// instead of errStreamUnterminated — for non-compliant endpoints (vLLM/Ollama). Mirrors openai TestDoStream_AllowUnterminatedAcceptsPartial.
+func TestStreamClient_AllowUnterminatedAcceptsPartial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"input_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hel\"}}\n\n"))
+		// no message_stop — connection drops after one delta; flag accepts the partial response.
+	}))
+	defer srv.Close()
+	c, _ := NewStreamClient("k", srv.URL, srv.Client(), nil, nil, false)
+	c.StreamAllowUnterminated = true // flag is wired post-construction (mirrors setup.go), not a NewStreamClient param.
+	res, err := c.DoStream(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}}, nil)
+	if err != nil {
+		t.Fatalf("StreamAllowUnterminated should accept partial: %v", err)
+	}
+	if res.Text != "hel" {
+		t.Errorf("Text = %q, want the partial \"hel\"", res.Text)
+	}
+}

@@ -20,7 +20,7 @@ type Tool struct {
 	// default). Code-oriented tools like read/edit set a high limit to avoid losing accuracy to truncation. Not part of the tool schema serialization.
 	ResultLimit int
 	// SplitTruncate, when true, splits the tool result into "head N/4 + tail 3N/4" truncation (joined by an ellipsis marker),
-	// instead of the default head-only. shell/grep/script-style tools often have key conclusions at the tail (compile/test error
+	// instead of the default head-only. shell/grep-style tools often have key conclusions at the tail (compile/test error
 	// summaries, hit-limit notices); pure head truncation would drop the diagnostic information the model most needs to see, forcing a
 	// re-run (which burns more tokens). Code-oriented tools with line numbers like read/edit keep head-only (false): head truncation
 	// matches the "paginate reading large files" semantics. Not part of the tool schema serialization (like ResultLimit, it is a

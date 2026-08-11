@@ -23,12 +23,12 @@ if ! grep -q 'git describe.*--tags' Makefile; then
 fi
 
 echo "✓ 发版检查通过: $VERSION"
-echo "  git describe: $(git describe --tags)"
+echo "  git describe: $(git describe --tags --match "v*")"
 echo "  类型: annotated tag"
 
-# verify-gate：发版前全绿（test 含 -race）
-echo "→ 运行 verify-gate（test + lint）..."
-make test lint
+# verify-gate：发版前全绿（AGENTS.md 五步：gofmt 空 / build ./... / vet / test -race / lint）
+echo "→ 运行 verify-gate..."
+make verify
 
 # 构建
 make build

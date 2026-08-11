@@ -65,7 +65,6 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string, maxOutp
 }
 
 // runShellCommand executes command (via sh -c), including the mode blacklist / env scrubbing / process group / timeout / output truncation / exit-code mapping.
-// Shared by the shell tool and the script tool (P1: tools registered via .miniagent/scripts.json inherit the same set of security policies).
 // timeout<=0 uses the default shellTimeout. Distinguishes the shell's own timeout from parent ctx cancellation: only when the parent ctx is not cancelled
 // and runCtx expires is it the shell's own timeout; a non-zero exit is a legitimate command result (IsError=false, the LLM decides success via ExitCode).
 func runShellCommand(ctx context.Context, workdir, mode, command string, timeout time.Duration, maxOutputChars, streamWindow int) miniagent.ToolResult {

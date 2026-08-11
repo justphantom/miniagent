@@ -59,7 +59,7 @@ func EstimateTokens(msgs []miniagent.Message, system string, tools []miniagent.T
 
 // schemaTokens estimates the fixed token overhead based on the actual JSON schema size of tools;
 // on serialization failure it falls back to a flat estimate. Not cached: tools are a fixed small set
-// (built-in tools + scripts), so marshal cost is negligible; caching keyed by slice pointer identity
+// (built-in tools only), so marshal cost is negligible; caching keyed by slice pointer identity
 // would, across Runs, collide under GC address reuse (different-content slices of the same length
 // reuse the same first-element address) and return stale values — not worth it.
 func schemaTokens(tools []miniagent.Tool) int {

@@ -10,8 +10,23 @@ import (
 
 func TestBuildTools_AlwaysRegisters6(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
-	if len(tools) != 6 {
-		t.Fatalf("got %d tools, want 6 (read/write/edit/grep/glob/shell)", len(tools))
+	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true}
+	got := map[string]bool{}
+	for _, tl := range tools {
+		got[tl.Name] = true
+	}
+	if len(tools) != len(want) {
+		t.Fatalf("got %d tools %v, want %d (read/write/edit/grep/glob/shell)", len(tools), got, len(want))
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("missing expected tool %q (got %v)", name, got)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("unexpected tool %q registered (got %v)", name, got)
+		}
 	}
 }
 

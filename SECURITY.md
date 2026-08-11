@@ -4,7 +4,7 @@
 
 miniagent 执行 LLM 产出的命令与代码，**默认不构成安全边界**——这是设计取舍，非缺陷：
 
-- **`default` 模式**是薄软约束：写工具（write/edit）限 workdir 子树、shell/script 拒 sudo/su。但 shell 可经 `cd`/绝对路径越界，写工具可经符号链接逃逸 workdir。
+- **`default` 模式**是薄软约束：写工具（write/edit）限 workdir 子树、shell 拒 sudo/su。但 shell 可经 `cd`/绝对路径越界，写工具可经符号链接逃逸 workdir。
 - **`auto` 模式**无任何约束。
 - **隔离责任在调用方**：沙箱、容器、cgroup 或专用低权限账号。default 模式的越界是已知行为，不视为漏洞。
 
@@ -19,5 +19,5 @@ miniagent 执行 LLM 产出的命令与代码，**默认不构成安全边界**�
 ## 不属于漏洞（设计已知）
 
 - `default` 模式下 shell 经 `cd`/绝对路径访问 workdir 外路径——README/ARCHITECTURE 明示，约束非安全边界。
-- LLM 经 shell/script 工具执行任意命令——工具的本质；已有超时 + 进程组清理，真正隔离依赖调用方。
+- LLM 经 shell 工具执行任意命令——工具的本质；已有超时 + 进程组清理，真正隔离依赖调用方。
 - 环境变量 `MINIAGENT_API_KEY` 经 config 注入后被 shell 工具读取——机密应通过隔离环境而非进程内剥离保护（`scrubEnv` 仅 best-effort 降低概率，非边界）。

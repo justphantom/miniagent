@@ -22,9 +22,6 @@
           "max": "max"
         }
       },
-      // stream_allow_unterminated (opt-in, default false): 流式响应已输出 content 后在无 [DONE] / finish_reason 时断开（如连接中断），
-      // 视为成功并返回已收到的部分响应。默认 false = 此情况为硬错（errStreamUnterminated）。
-      // 适用于已输出内容即关闭的非标准端点（部分 vLLM / Ollama 配置）。
       "stream_allow_unterminated": false
     },
     {
@@ -32,8 +29,6 @@
       "kind": "anthropic",
       "chat_url": "https://api.anthropic.com/v1/messages",
       "key": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
-      // kind=anthropic 走原生 Messages API：x-api-key + anthropic-version 由 provider 内部固定，勿在 headers 覆写。
-      // models_url 不支持（必空，用静态 models 列表）；max_tokens 必填（Messages API 强制，缺失启动报错）。
       "max_tokens": 64000,
       "models": [
         {"name": "claude-sonnet-5", "context_window": 200000},
@@ -42,12 +37,7 @@
       "headers": {
         "X-Tenant-Id": "my-tenant"
       },
-      // cache (nil/auto 默认开) 开启 prompt caching：system + 最后一条 user 消息加 cache_control 断点（≤4 断点）。
       "cache": true,
-      // thinking.map 值是 JSON 对象字符串（经 ThinkingMapping 钉死链路，不动核心类型）。
-      // Claude 4.7+/5 系列（sonnet-5/opus-4-8/fable-5）须用 adaptive + effort（如下）；
-      // Claude 4.5 及更早改用 enabled + budget_tokens，如 "high": "{\"type\":\"enabled\",\"budget_tokens\":20000}"
-      // （须 < max_tokens，最小 1024）。配错模型族会触发 isThinkingError 降级（drop thinking 重试一次）。
       "thinking": {
         "field": "thinking",
         "map": {
@@ -69,12 +59,6 @@
     "system_prompt": "",
     "summary_request": "Summarize the completed tools and key results; do not continue calling tools.",
     "summarizer_prompt": "You are a context compression assistant; summarize the middle section of the conversation concisely in Chinese."
-    // The following prompt templates are optional (empty uses the built-in default); placeholders: subagent_guidance={config_path}/{mode},
-    // summary_create/update_instruction={max_chars}, summary_template has no placeholder.
-    // "subagent_guidance": "- Subtask delegation: miniagent -config {config_path} -mode {mode} ...",
-    // "summary_create_instruction": "You are a session compressor. Compress into a summary of no more than {max_chars} characters.",
-    // "summary_update_instruction": "Update the existing summary, output no more than {max_chars} characters.",
-    // "summary_template": "## Goal\n## Key details\n..."
   },
   "run": {
     "workdir": "./repo",
@@ -108,10 +92,7 @@
     "preserve_recent_tokens": 0,
     "tool_output_dir": "",
     "tool_output_retention": "168h",
-    // confine_eval_symlinks (opt-in, default false): default 模式下对文件工具的 workdir 越界检查追加 filepath.EvalSymlinks + 重检 HasPrefix，
-    // 收窄并行符号链接替换的 TOCTOU 窗口。这是护栏加固，非安全边界（shell 仍是无限制写原语）。
     "confine_eval_symlinks": false,
-    // confine_auto (opt-in, default false): auto 模式下也给文件工具（read/write/edit/grep/glob）套 confineWrap（shell 仍不受限）。
     "confine_auto": false
   },
   "compaction": {

@@ -3,9 +3,11 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
 ## [4.4.0] - 2026-08-11
 
-> minor：首个非 openai 上游——`anthropic` provider（Messages API）正式落地，含流式 / prompt caching / interleaved-thinking / 签名跨轮；配套 core 层「LLM 端点 400 硬错」补丁。新增 provider / 配置项均 opt-in，既有 openai 行为零改动。
+> minor：首个非 openai 上游——`anthropic` provider（Messages API）正式落地，含流式 / prompt caching / interleaved-thinking / 签名跨轮；配套 core 层「LLM 端点 400 硬错」补丁。另含两项 breaking：内置工具 10→6（移除 codemap/todo）、`.miniagent/` persona/rules 自动加载收口（system prompt 统一 config-only）。新增 provider / 配置项均 opt-in，既有 openai 行为零改动。
 
 ### Added
 - **`anthropic` provider（`internal/provider/anthropic`，Messages API）**：新增 `ProviderKind=anthropic`，`cmd` 按 Kind 字符串分派返回统一 `LLM` 接口，核心领域类型（`Message/Request/Response/Usage`）与 openai 包零改动。
@@ -17,17 +19,22 @@
 
 ### Changed
 - **core 层「LLM 端点 400 硬错」补丁（`llm_endpoint_400_hard_error`）**：`loop.go:Run` 主路径遇 `errHTTP400` 直接 `return err`，不再落入 `OnLLMError` 透明重试后 `continue`——400 是协议层坏请求（payload 不合法），重试无意义，静默继续会吞掉本次回复致后续上下文/压缩失真。`OnLLMError` 仅处理瞬时/可恢复错误（限流 / 5xx / 超时）。
+- **`make deploy` 改用 `install -m 0755` 替代 `mv`**：跨文件系统 / 覆盖运行中二进制更稳，显式设权限。
+- **`loopCfg` 移除空 `System` 兜底**（原 `if system=="" → defaultSystemPrompt` 删除）：dead-code 清理，生产路径由 `assembleSystemPrompt` 保证非空。
 
-### Notes
-- `.agent/` 记忆已同步（L1 session + 本轮 commit）。
-
-## [Unreleased]
+### Fixed
+- **compaction tail 预算回归（`jointTailBudget` override 路径）**：custom `summarizer_prompt` 下，单一旧 `KindSummary` head 被 `SummarizerPrompt != ""` 子句双重扣减，tail 预算被错误压到 0 致小窗口压缩失败；与 default 路径对齐（`headAdj=0`），附回归测试。
+- **`system_prompt` 去重**：config 已提供 `system_prompt` 后不再重复追加 `defaultSystemPrompt`。
 
 ### Removed
 - **`codemap` 工具移除**：递归目录树概览与 glob+read 功能重叠，是专用工具里边际最低的一个；不符合极简默认工具集定位。模型改用 glob（结构）+ read（内容）组合感知仓库布局。
 - **`todo` 工具移除（`todo_create`/`todo_update`/`todo_list`）**：进程内任务清单是纯内存脚手架（每 Run 新建、不持久、无 loop 逻辑读取它），属认知策略而非原语能力，与核心零策略/极简定位冲突。模型可在正文跟踪任务。
 - **breaking（工具面契约）**：内置工具 10 → 6（`read`/`write`/`edit`/`grep`/`glob`/`shell`）。无配置迁移（此前无 per-tool 开关）；下游若依赖这两个工具，改用 glob/read 组合或在调用方自行装配等价工具经 `LoopConfig.Tools` 注入。
 - **`.miniagent/persona.md`/`rules.md` 自动加载移除（breaking）**：system prompt 来源统一为 config-only（`defaults.system_prompt`，未配则内置默认 `defaultSystemPrompt`），不再启动期读 `workdir/.miniagent/` 下的 persona/rules 文件。删 `cmd/miniagent/project.go`（`loadProjectRules`/`mergeSystemPrompt`/`projectRules`/`readTrimmedFile`）+ `project_test.go`；`assembleSystemPrompt` 砍 `pr` 参数、简化为「base 兜底 + 注入 subagent guidance」。继全局 `~/.miniagent/` 层（已删）之后的第二次收口。**迁移**：原 persona 内容直进 `defaults.system_prompt`（「取代默认」语义等价）；原 rules 为「追加」语义，物进 `system_prompt` 文本时需自行保留内置默认的工作流约束（或接受其丢失）。`.miniagent/` 目录保留用于 session 存储。
+
+### Notes
+- `.agent/` 记忆已同步（L1 session + 本轮 commit）。
+- 新增 Makefile `verify` 目标（聚合 AGENTS.md 五步 gate：gofmt 空 / `go build ./...` / `go vet` / `go test -race` / lint）；`release.sh` 改用 `make verify`。
 
 ## [4.3.1] - 2026-08-10
 
