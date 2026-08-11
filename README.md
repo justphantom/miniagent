@@ -87,7 +87,7 @@ make test       # go test -race ./...
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -metrics-step            每步输出 metrics NDJSON 到 stderr（step/transcript 长度/token 花费/压缩/LLM 请求数）
--mode string             权限模式 default|auto（默认 default）：default 时 workdir 必填、写工具限 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
+-mode string             权限模式 default|auto（默认 default）：workdir 恒必填；default 限写工具于 workdir、shell 拒 sudo/su 等 11 个提权器；auto 无限制
 -model string            LLM model id（须与 -provider 成对传入，同传覆盖 defaults 对；只传其一报错）
 -provider string         LLM provider 名（须与 -model 成对传入；-list-models 时单独用于筛选单个 provider）
 -replay string           回放指定会话（读 session 文件重显过程，不调 LLM；与 -save-session/-session/-result-only 互斥）
@@ -97,7 +97,7 @@ make test       # go test -race ./...
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
 -thinking string         思考级别（默认 off；启用时 provider 必声明 thinking{field,map}，wire 必经映射，见 config.example.json）
 -version                 显示版本号并退出
--workdir string          工作目录（default 模式写工具边界 + shell 的 cwd）
+-workdir string          工作目录（必填，须绝对路径；写工具边界 + shell 的 cwd，唯一来源，不从 config 取）
 ```
 
 > 破坏性变更（-list-models 输出）：由纯文本 `provider/model_id` 行改为逐行 NDJSON 事件 `{"type":"model","provider":"...","model":"..."}`（model id 含 `/` 时文本拆分有歧义）；解析该输出的消费方需改为逐行 JSON 解析。部分失败语义不变：成功条目照常输出，退出码 1。
@@ -128,7 +128,7 @@ make test       # go test -race ./...
 
 - 无法确定 endpoint/model（config 缺 provider/defaults.provider/defaults.model，或 config 解析失败）→ stderr 报错，退出码 1
 - API key 缺失（provider.key / `$MINIAGENT_API_KEY` 均无）→ stderr 报错，退出码 1
-- `default` 模式无 `-workdir` → stderr 报错，退出码 1（用 `-mode auto` 放行）
+- 缺 `-workdir` 或非绝对路径 → stderr 报错，退出码 1（workdir 恒必填，所有模式；唯一来源为该 flag）
 - `-stream` 与 `-result-only` 同传 → stderr 报错，退出码 1
 - `-save-session` 与 `-session` 同传 → stderr 报错，退出码 1
 - `-save-session` 与 `-result-only` 同传 → stderr 报错，退出码 1（subagent fork 无状态，不落盘会话）
@@ -300,7 +300,7 @@ make test       # go test -race ./...
 | 码 | 含义 |
 |----|------|
 | 0 | 正常结束（含达到 `maxIterations` 上限、最终文本为空的场景） |
-| 1 | 参数错误、API key 缺失、default 模式缺 workdir、stdin 为空、session 加载/追加失败、`-list-models` 失败、主流程 `error` 事件 |
+| 1 | 参数错误、API key 缺失、缺 workdir 或非绝对路径、stdin 为空、session 加载/追加失败、`-list-models` 失败、主流程 `error` 事件 |
 | 130 | SIGINT/SIGTERM 取消的干净退出（128+SIGINT，POSIX 习惯；不 emit `error` 事件，区别于真故障） |
 
 ## 运行隔离（工程实践）
@@ -388,7 +388,6 @@ system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认 
     "summarizer_prompt": "你是代码审查助手。"
   },
   "run": {
-    "workdir": "./repo",
     "max_tokens": 4096,
     "max_iterations": 20,
     "context_window": 128000,
@@ -433,20 +432,20 @@ echo "用一句话解释 goroutine" | \
 # 显式指定配置文件
 MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -config /path/to/miniagent.json ...
 
-# 带工具 + 指定工作目录（default 模式：写工具限 ./repo，shell cwd 为 ./repo）
+# 带工具 + 指定工作目录（default 模式：写工具限该目录，shell cwd 为该目录；-workdir 须绝对路径）
 echo "在当前目录跑测试并总结失败原因" | \
-  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir ./repo
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir "$PWD/repo"
 
 # 思考级别 + 摘要压缩（run.context_window 在 config 配置）
 echo "重构这段代码" | \
-  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir . -thinking high
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir "$PWD" -thinking high
 
 # 限制整体墙钟 5 分钟（防 ReAct 循环失控烧 token；config run.max_duration）
 echo "跑全量测试并总结" | \
-  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -mode auto -workdir .
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -mode auto -workdir "$PWD"
 
 # subagent fork：把可并行子任务再调一次 miniagent（仅输出结果文本）
-echo "<子任务>" | ./bin/miniagent -config <path> -workdir . -mode default -result-only  # subagent 无状态，不落盘会话
+echo "<子任务>" | ./bin/miniagent -config <path> -workdir "$PWD" -mode default -result-only  # subagent 无状态，不落盘会话
 
 # 查看版本
 ./bin/miniagent -version

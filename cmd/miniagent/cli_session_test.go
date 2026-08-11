@@ -21,7 +21,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
-// writeSessionConfig writes a temporary config pointing at srvURL, with session.dir=sessionDir and mode=auto (workdir not required).
+// writeSessionConfig writes a temporary config pointing at srvURL, with session.dir=sessionDir and mode=auto (workdir is passed explicitly per caller; required in all modes).
 func writeSessionConfig(t *testing.T, srvURL, sessionDir string) string {
 	t.Helper()
 	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
@@ -48,7 +48,7 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	code, out := runMainBin(t, "turn1-question", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "turn1-question", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("turn1 code = %d, out = %s", code, out)
 	}
@@ -59,7 +59,7 @@ func TestCLI_SessionTwoTurns(t *testing.T) {
 	sess := matches[0]
 	id := strings.TrimSuffix(filepath.Base(sess), ".jsonl")
 
-	code, out = runMainBin(t, "turn2-question", []string{"-config", cfgPath, "-session", id}, "MINIAGENT_API_KEY=sk-test")
+	code, out = runMainBin(t, "turn2-question", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-session", id}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("turn2 code = %d, out = %s", code, out)
 	}
@@ -93,7 +93,7 @@ func TestCLI_CorruptSessionExits1(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfgPath := writeSessionConfig(t, "http://127.0.0.1:1", sessionDir)
-	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath, "-session", "bad"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-session", "bad"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -106,7 +106,7 @@ func TestCLI_CorruptSessionExits1(t *testing.T) {
 func TestCLI_ResumeMissingSessionExits1(t *testing.T) {
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, "http://127.0.0.1:1", sessionDir)
-	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath, "-session", "nope"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "prompt", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-session", "nope"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -127,7 +127,7 @@ func TestCLI_SIGINTExits130(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], configArgs(t, srv.URL)...)
+	cmd := exec.CommandContext(ctx, os.Args[0], configArgs(t, srv.URL, "-workdir", t.TempDir())...)
 	cmd.Stdin = strings.NewReader("prompt")
 	env := []string{entrypointEnv}
 	for _, kv := range os.Environ() {
@@ -191,7 +191,7 @@ func TestCLI_SaveSessionEmitsSessionEventFirst(t *testing.T) {
 	defer srv.Close()
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	code, out := runMainBin(t, "question", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "question", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -251,7 +251,7 @@ func TestCLI_ErrorRunSavesPartialSession(t *testing.T) {
 
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	code, out := runMainBin(t, "help-question", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "help-question", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Fatalf("code = %d, want 1 (LLM 500 should exit 1); out=%s", code, out)
 	}
@@ -289,7 +289,7 @@ func TestCLI_CanceledRunSavesSession(t *testing.T) {
 	defer cancel()
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	cmd := exec.CommandContext(ctx, os.Args[0], "-config", cfgPath, "-save-session")
+	cmd := exec.CommandContext(ctx, os.Args[0], "-config", cfgPath, "-workdir", t.TempDir(), "-save-session")
 	cmd.Stdin = strings.NewReader("mid-cancel-question")
 	env := []string{entrypointEnv}
 	for _, kv := range os.Environ() {
@@ -345,7 +345,7 @@ func TestCLI_ErrorRunNoSessionSkipsSave(t *testing.T) {
 	defer srv.Close()
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	code, _ := runMainBin(t, "question", []string{"-config", cfgPath}, "MINIAGENT_API_KEY=sk-test")
+	code, _ := runMainBin(t, "question", []string{"-config", cfgPath, "-workdir", t.TempDir()}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1 (500 error)", code)
 	}

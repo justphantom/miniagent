@@ -61,7 +61,6 @@
     "summarizer_prompt": "You are a context compression assistant; summarize the middle section of the conversation concisely in Chinese."
   },
   "run": {
-    "workdir": "./repo",
     "max_tokens": 4096,
     "max_iterations": 20,
     "max_tokens_total": 0,

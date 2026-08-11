@@ -27,7 +27,7 @@ func TestCLI_ProviderKeyAuth(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out := runMainBin(t, "ping", []string{"-config", cfgPath})
+	code, out := runMainBin(t, "ping", []string{"-config", cfgPath, "-workdir", t.TempDir()})
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}

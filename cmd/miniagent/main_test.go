@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// writeConfigFixture writes a temporary miniagent.json pointing at srvURL (mode=auto so workdir is not required),
+// writeConfigFixture writes a temporary miniagent.json pointing at srvURL (mode=auto; -workdir is supplied explicitly per e2e caller — workdir is required in all modes),
 // and returns its path. When runJSON is non-empty it is used verbatim as the "run" section (supporting config-only params like max_tokens_total/max_duration).
 func writeConfigFixture(t *testing.T, srvURL, runJSON string) string {
 	t.Helper()
@@ -121,7 +121,7 @@ func TestCLI_MissingModelExits1(t *testing.T) {
 }
 
 func TestCLI_MissingAPIKeyExits1(t *testing.T) {
-	code, out := runMainBin(t, "prompt", configArgs(t, "http://127.0.0.1:1"))
+	code, out := runMainBin(t, "prompt", configArgs(t, "http://127.0.0.1:1", "-workdir", t.TempDir()))
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -130,7 +130,7 @@ func TestCLI_MissingAPIKeyExits1(t *testing.T) {
 	}
 }
 
-// default mode without workdir → error (needs -workdir or -mode auto).
+// missing -workdir → error in ANY mode (workdir is unconditionally required and must be absolute).
 func TestCLI_DefaultModeRequiresWorkdir(t *testing.T) {
 	args := configArgs(t, "http://127.0.0.1:1", "-mode", "default")
 	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
@@ -155,7 +155,7 @@ func TestCLI_StreamResultOnlyMutex(t *testing.T) {
 }
 
 func TestCLI_EmptyStdinExits1(t *testing.T) {
-	code, out := runMainBin(t, "", configArgs(t, "http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "", configArgs(t, "http://127.0.0.1:1", "-workdir", t.TempDir()), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -165,7 +165,7 @@ func TestCLI_EmptyStdinExits1(t *testing.T) {
 }
 
 func TestCLI_OversizedStdinExits1(t *testing.T) {
-	code, out := runMainBin(t, strings.Repeat("x", maxPromptBytes+1), configArgs(t, "http://127.0.0.1:1"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, strings.Repeat("x", maxPromptBytes+1), configArgs(t, "http://127.0.0.1:1", "-workdir", t.TempDir()), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -193,7 +193,7 @@ func TestCLI_SingleTurnSessionAppend(t *testing.T) {
 
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	code, out := runMainBin(t, "hi", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "hi", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -237,7 +237,7 @@ func TestCLI_MultiLineStdinSingleTurn(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code, out := runMainBin(t, "hi\nhello\n", configArgs(t, srv.URL), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "hi\nhello\n", configArgs(t, srv.URL, "-workdir", t.TempDir()), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -261,7 +261,7 @@ func TestCLI_MaxDurationExits1(t *testing.T) {
 	defer srv.Close()
 
 	cfgPath := writeConfigFixture(t, srv.URL, `{"max_duration":"1ns"}`)
-	code, out := runMainBin(t, "hi", []string{"-config", cfgPath}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "hi", []string{"-config", cfgPath, "-workdir", t.TempDir()}, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1; out=%s", code, out)
 	}

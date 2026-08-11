@@ -57,7 +57,7 @@ func parseFlags() *cliFlags {
 	f.metricsStep = flag.Bool("metrics-step", false, "emit per-step metrics NDJSON to stderr (step, transcript len, token spend, compaction, llm requests)")
 	f.provider = flag.String("provider", "", "LLM provider name (pairs with -model to override the defaults pair; standalone for filtering with -list-models)")
 	f.model = flag.String("model", "", "LLM model id (pairs with -provider to override the defaults pair)")
-	f.workdir = flag.String("workdir", "", "working directory (default mode constrains write-tool boundaries + shell cwd)")
+	f.workdir = flag.String("workdir", "", "working directory (REQUIRED, must be absolute; constrains write-tool boundaries + shell cwd)")
 	f.session = flag.String("session", "", "resume an existing session by id (resolved to a .jsonl file under session.dir; errors if not found)")
 	f.saveSession = flag.Bool("save-session", false, "create a new session and persist it (id generated internally; mutually exclusive with -session)")
 	f.replay = flag.String("replay", "", "replay the specified session (reads the session file and replays the process without calling the LLM; mutually exclusive with -save-session/-session/-result-only)")
@@ -131,7 +131,7 @@ func main() {
 	if resolved.Session.Dir != "" {
 		sessionDir = resolved.Session.Dir
 	}
-	workdir := effectiveWorkdir(resolved, f)
+	workdir := effectiveWorkdir(f)
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
 	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, resolved.Provider.Name, workdir, int64(maxSessionBytesOf(resolved)))
 	if *f.saveSession {

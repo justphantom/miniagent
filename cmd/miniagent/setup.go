@@ -74,9 +74,6 @@ func collectOverrides(f *cliFlags) config.CLIOverrides {
 	if set["mode"] {
 		o.Mode = f.mode
 	}
-	if set["workdir"] {
-		o.Workdir = f.workdir
-	}
 	if set["max-iterations"] {
 		o.MaxIterations = f.maxIterations
 	}
@@ -115,16 +112,24 @@ func validateConversation(resolved *config.Resolved, f *cliFlags) {
 		fmt.Fprintln(os.Stderr, "miniagent: -save-session is mutually exclusive with -result-only (subagent fork is stateless, does not persist session)")
 		os.Exit(1)
 	}
-	if resolved.Mode == miniagent.ModeDefault && effectiveWorkdir(resolved, f) == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: default mode requires -workdir (or config run.workdir, or use -mode auto)")
+	// workdir is required unconditionally, must be an absolute path, and is sourced
+	// ONLY from -workdir (no config run.workdir, no cwd fallback). effectiveWorkdir +
+	// absWorkdir honour the same single-source contract.
+	wd := effectiveWorkdir(f)
+	if wd == "" {
+		fmt.Fprintln(os.Stderr, "miniagent: -workdir is required")
+		os.Exit(1)
+	}
+	if !filepath.IsAbs(wd) {
+		fmt.Fprintf(os.Stderr, "miniagent: -workdir must be an absolute path (got %q)\n", wd)
 		os.Exit(1)
 	}
 }
 
-func effectiveWorkdir(resolved *config.Resolved, f *cliFlags) string {
-	if resolved.Run.Workdir != nil && *resolved.Run.Workdir != "" {
-		return *resolved.Run.Workdir
-	}
+// effectiveWorkdir returns the workdir the agent runs in. It is sourced ONLY from
+// the -workdir flag — never from config (run.workdir is removed) and never from the
+// process cwd. validateConversation enforces non-empty + absolute before any turn.
+func effectiveWorkdir(f *cliFlags) string {
 	return *f.workdir
 }
 

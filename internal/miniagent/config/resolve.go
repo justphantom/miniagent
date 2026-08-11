@@ -12,16 +12,15 @@ import (
 // for Resolve to arbitrate by cli>config>builtin precedence. A nil pointer means not passed. After P2 only
 // core CLI parameters remain; strategy parameters (summary/duration/window etc.) live only in config, so they are absent here.
 type CLIOverrides struct {
-	Provider, Model, Thinking, Mode, Workdir *string
-	MaxIterations                            *int
-	Stream, ResultOnly, ConfirmDestructive   *bool
+	Provider, Model, Thinking, Mode        *string
+	MaxIterations                          *int
+	Stream, ResultOnly, ConfirmDestructive *bool
 }
 
 // ResolvedRun holds the run parameters produced by Resolve — only fields that need arbitration or parsing
 // (cli>config three-state arbitration + duration parsing). Pure pass-through fields (config-only source, no CLI
 // override, no parsing) bypass this indirection; consumers read Resolved.RunConfig (= cfg.Run) directly.
 type ResolvedRun struct {
-	Workdir                                                *string
 	MaxIterations                                          *int
 	Stream                                                 *bool
 	ConfirmDestructive                                     *bool
@@ -212,13 +211,10 @@ func FindProvider(cfg *Config, name string) (ProviderConfig, error) {
 
 func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 	var r ResolvedRun
-	// Three-state arbitration (cli>config): Workdir/MaxIterations/Stream can be overridden by CLI; nil=unset.
+	// Three-state arbitration (cli>config): MaxIterations/Stream can be overridden by CLI; nil=unset.
 	// MaxTokens is not here (no cli, layering is in Resolve); HTTPTimeout moved to Resolved (provider>global).
-	if o.Workdir != nil && *o.Workdir != "" {
-		r.Workdir = o.Workdir
-	} else {
-		r.Workdir = cfg.Run.Workdir
-	}
+	// Workdir is deliberately NOT arbitrated here: it comes ONLY from the -workdir flag (read directly via
+	// effectiveWorkdir), never from config — keeps the agent's working directory pinned to the explicit flag.
 	r.MaxIterations = pickInt(o.MaxIterations, cfg.Run.MaxIterations)
 	if o.Stream != nil {
 		r.Stream = o.Stream

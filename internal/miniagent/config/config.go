@@ -93,7 +93,6 @@ type DefaultsConfig struct {
 // RunConfig's duration fields use *string ("30s"); Resolve parses them into time.Duration,
 // keeping the config file readable without a custom JSON type.
 type RunConfig struct {
-	Workdir        *string `json:"workdir,omitempty"`
 	MaxTokens      *int    `json:"max_tokens,omitempty"`
 	MaxIterations  *int    `json:"max_iterations,omitempty"`
 	MaxTotalTokens *int    `json:"max_tokens_total,omitempty"`

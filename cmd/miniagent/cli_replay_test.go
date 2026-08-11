@@ -144,7 +144,7 @@ func TestCLI_Replay(t *testing.T) {
 
 	sessionDir := t.TempDir()
 	cfgPath := writeSessionConfig(t, srv.URL, sessionDir)
-	code, out := runMainBin(t, "read that file", []string{"-config", cfgPath, "-save-session"}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "read that file", []string{"-config", cfgPath, "-workdir", t.TempDir(), "-save-session"}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("save-session code=%d out=%s", code, out)
 	}

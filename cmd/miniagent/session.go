@@ -85,12 +85,11 @@ func generateSessionID() string {
 }
 
 func absWorkdir(workdir string) string {
+	// No os.Getwd() fallback: workdir must come from -workdir only (validated
+	// non-empty + absolute upstream by validateConversation). Empty stays empty
+	// rather than silently leaking the process cwd into the session metadata.
 	if workdir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return ""
-		}
-		return wd
+		return ""
 	}
 	abs, err := filepath.Abs(workdir)
 	if err != nil {

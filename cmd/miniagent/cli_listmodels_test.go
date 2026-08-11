@@ -170,7 +170,7 @@ func TestCLI_ResultOnly(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"pure result"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-result-only", "-log-level", "error", "-workdir", t.TempDir()), "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
@@ -185,7 +185,7 @@ func TestCLI_ResultOnlyError(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-result-only", "-log-level", "error"), "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "ping", configArgs(t, srv.URL, "-result-only", "-log-level", "error", "-workdir", t.TempDir()), "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -213,7 +213,7 @@ func TestCLI_SubagentPromptInjected(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out := runMainBin(t, "hi", []string{"-config", cfgPath}, "MINIAGENT_API_KEY=sk-test")
+	code, out := runMainBin(t, "hi", []string{"-config", cfgPath, "-workdir", t.TempDir()}, "MINIAGENT_API_KEY=sk-test")
 	if code != 0 {
 		t.Fatalf("code = %d, out = %s", code, out)
 	}
