@@ -16,7 +16,7 @@ import (
 // fileOpTimeout<=0 uses the default 30s; writeTimeout<=0 uses the default 30s.
 // When fileResultLimit>0 it overrides read/edit's Tool.ResultLimit (S4: config run.max_file_result_chars);
 // <=0 keeps the constructor builtin default (maxFileResultInHistory).
-func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, limits miniagent.Limits, confineAuto, evalSymlinks bool) []miniagent.Tool {
+func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration, mode string, fileResultLimit int, limits miniagent.Limits, confineAuto, evalSymlinks bool, shellConfineCD bool, shellAllowlist []string) []miniagent.Tool {
 	shellMode := mode
 	if shellMode == "" {
 		shellMode = miniagent.ModeDefault
@@ -43,12 +43,18 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		grep = confineWrap(grep, workdir, evalSymlinks)
 		glob = confineWrap(glob, workdir, evalSymlinks)
 	}
+	shell := tools.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes)
+	// Opt-in default-mode shell guardrails (allowlist + cd-confine). Applied only in ModeDefault with a real workdir,
+	// so auto mode stays fully unrestricted and the empty-workdir degenerate case is untouched.
+	if shellMode == miniagent.ModeDefault && workdir != "" && (shellConfineCD || len(shellAllowlist) > 0) {
+		shell = tools.GuardShell(shell, workdir, shellAllowlist, shellConfineCD)
+	}
 	return []miniagent.Tool{
 		read,
 		write,
 		edit,
 		grep,
 		glob,
-		tools.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
+		shell,
 	}
 }

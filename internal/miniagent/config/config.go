@@ -146,6 +146,15 @@ type RunConfig struct {
 	// ConfineAuto (opt-in) wraps the file tools (read/write/edit/grep/glob) with confineWrap in ModeAuto too (shell stays
 	// free). Defense-in-depth for long sessions where the deterministic file primitives are worth constraining even when shell is free.
 	ConfineAuto *bool `json:"confine_auto,omitempty"`
+	// ShellAllowlist (opt-in, default-mode only) restricts shell to commands whose leading token is in this list; every command in a
+	// pipeline/list (a | b && c; d) is checked. Exact match only — path-qualified forms (/usr/bin/git) must be listed verbatim, so they
+	// cannot be confused with an allowed name. Empty/unset = no check (current behavior). Best-effort lexical guardrail, bypassable via
+	// eval/$()/backticks/alias — same framing as the sudo/su denylist, NOT a security boundary (see README "default mode").
+	ShellAllowlist []string `json:"shell_allowlist,omitempty"`
+	// ShellConfineCd (opt-in, default-mode only) blocks cd/pushd whose target escapes workdir lexically (absolute path, .. that climbs out,
+	// ~, $VAR, bare cd→HOME, cd -→previous). Best-effort lexical guardrail, NOT a security boundary — bypassable via subshell/eval; true
+	// isolation relies on the caller's OS layer.
+	ShellConfineCd *bool `json:"shell_confine_cd,omitempty"`
 }
 
 // CompactionConfig configures the summary compaction model for long sessions.

@@ -6,7 +6,7 @@
 - 默认非流式：每次 LLM 调用是普通 POST，等完整响应返回；传 `-stream` 改走 SSE，增量发 `text_delta`/`reasoning_delta` 事件
 - 会话：默认无状态；`-save-session` 新建并落盘（id 内部生成），`-session <id>` 接续已存在会话；均以 jsonl append-only 落盘（首行 metadata + 每条 message），跨进程接续对话。二者互斥
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
-- 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
+- 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器；另有两个 opt-in shell guardrail `run.shell_allowlist`/`run.shell_confine_cd`，默认关）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`internal/miniagent/platform_windows.go`）
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
 - 工具：`read` / `write` / `edit` / `grep` / `glob` / `shell`
@@ -272,6 +272,7 @@ make test       # go test -race ./...
 - 命令超时 120 秒，超时后整进程组被 `SIGKILL` 清理（防止 `make`/`find` 等派生的孙子进程残留）
 - 输出超过 100000 字符截断
 - 退出码：成功 `ExitCode=0`；命令非 0 退出 `IsError=false` + `ExitCode=N`（命令的合法结果，非执行失败）；超时/启动失败 `IsError=true` + `ExitCode=-1`（`exitCodeNotSet`）。LLM 据 `ExitCode` 判命令成败
+- default 模式可叠加两个 **opt-in** shell guardrail（config `run.*`，默认关）：`shell_allowlist`（命令名白名单，管道/链式 `a | b && c; d` **每段**都校验，**精确匹配**——`/usr/bin/git` 不会命中 `git`，须逐字列入）；`shell_confine_cd`（词法拦 `cd`/`pushd` 越出 workdir：绝对路径、`..`、`~`、`$VAR`、裸 `cd`、`cd -`）。两者均为 best-effort **词法约束**，可被 `eval`/`$()`/反引号/子 shell 绕过，与 sudo/su 拒绝名单同性质，**非安全边界**
 - 子进程**继承父进程环境变量，但显式剥离所有 `MINIAGENT_*` 前缀变量**（`API_KEY`/`BASE_URL` 等，防止 LLM 通过 `echo $MINIAGENT_API_KEY` 读取宿主配置与密钥）；另剥离变量名（大写后）含密钥关键字（KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL/PWD/PASS/PASSPHRASE/AUTH/PAT）的第三方凭证变量（PAT 排除含 PATH 的路径类变量如 `PATH`/`GITHUB_PATH`）；**注意：该防护对 `/proc/<pid>/environ` 无效**——procfs 暴露的是 exec 时刻的环境快照，`cat /proc/$PPID/environ` 仍可读到 key。彻底防护需调用方隔离（容器/独立 UID）；其他第三方工具的敏感变量（如 `DATABASE_URL`）同样会泄漏，调用方需自行评估风险
 
 ## 会话（-save-session / -session）
@@ -305,7 +306,7 @@ make test       # go test -race ./...
 
 ## 运行隔离（工程实践）
 
-miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、`read`/`grep`/`glob` 在 default 模式下被限制在 workdir 内、shell 词边界拒 11 个提权器（sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl，仍可被变量拼接/拆分绕过）。shell 可经 `cd`/绝对路径访问 workdir 外。`-mode auto` 无任何限制。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
+miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、`read`/`grep`/`glob` 在 default 模式下被限制在 workdir 内、shell 词边界拒 11 个提权器（sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl，仍可被变量拼接/拆分绕过）。shell 可经 `cd`/绝对路径访问 workdir 外（opt-in `run.shell_allowlist` 命令白名单 + `run.shell_confine_cd` 拦 cd 越界可收窄，但仍是词法约束，可被 `eval`/`$()`/子 shell 绕过）。`-mode auto` 无任何限制。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
 
 - 用**专用低权限用户**运行；workdir 属该用户（或只读挂载），无关路径靠文件系统权限隔离。
 - 密钥经 `$MINIAGENT_API_KEY` 环境变量或 config `provider.key` 注入。**注意：无论哪种方式，shell 子进程都可经 `/proc/$PPID/environ` 或读 config 文件拿到 key**（环境变量剥离只挡 `echo $VAR` 这类直读，挡不住 procfs）。因此密钥隔离**依赖运行用户的 OS 权限**：专用低权限用户、config 文件 `0600`、必要时容器/独立 UID。不要再依赖已移除的 `-key-file`。

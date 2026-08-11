@@ -92,7 +92,9 @@
     "tool_output_dir": "",
     "tool_output_retention": "168h",
     "confine_eval_symlinks": false,
-    "confine_auto": false
+    "confine_auto": false,
+    "shell_allowlist": [],
+    "shell_confine_cd": false
   },
   "compaction": {
     "provider": "openai",

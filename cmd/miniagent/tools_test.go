@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildTools_AlwaysRegisters6(t *testing.T) {
-	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
+	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
 	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true}
 	got := map[string]bool{}
 	for _, tl := range tools {
@@ -31,7 +31,7 @@ func TestBuildTools_AlwaysRegisters6(t *testing.T) {
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
-	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
+	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
 	if len(tools) != 6 {
 		t.Fatalf("got %d tools, want 6 (read/write/edit/grep/glob/shell)", len(tools))
 	}
@@ -41,7 +41,7 @@ func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	dir := t.TempDir()
 	byName := map[string]int{}
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, miniagent.Limits{}, false, false) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, miniagent.Limits{}, false, false, false, nil) {
 		byName[tl.Name] = tl.ResultLimit
 	}
 	for _, name := range []string{"read", "edit"} {
@@ -50,7 +50,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 		}
 	}
 	// <=0: keeps the builtin maxFileResultInHistory (8000).
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil) {
 		if tl.Name == "read" && tl.ResultLimit != 8000 {
 			t.Errorf("read ResultLimit = %d, want builtin 8000 when limit<=0", tl.ResultLimit)
 		}
@@ -60,7 +60,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 // After buildTools(default), write tools return IsError for an out-of-bounds path (containing "default mode").
 func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
-	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)
+	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false, false, nil)
 	byName := map[string]miniagent.Tool{}
 	for _, tk := range tools {
 		byName[tk.Name] = tk

@@ -1,7 +1,7 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-11T22:40:37+08:00
+updated: 2026-08-12T00:00:00+08:00
 ---
 
 # 当前会话
@@ -10,6 +10,7 @@ updated: 2026-08-11T22:40:37+08:00
 无。
 
 ## 已完成
+- default 模式 shell guardrail（opt-in `run.shell_allowlist` + `run.shell_confine_cd`）：新增 `internal/miniagent/tools/tool_shell_guard.go`（`GuardShell` 包装 + 词法分词器 `tokenize` + `checkAllowlist`/`checkConfineCD`/`targetEscapesWorkdir`）；config RunConfig 加两字段（纯 passthrough，未改 resolve.go）；`buildTools` 在 ModeDefault+非空 workdir 条件包装 shell（镜像 `confineWrap`），**不改 `ShellTool` 签名**——涟漪仅 buildTools 6 处测试调用点 + main.go:162。设计抉择：wrapper 而非改签名（零 churn on 21 处 ShellTool 测试）；白名单精确匹配（`/usr/bin/git` 不命中 `git`，防路径混淆）；分词器处理 `2>&1`/引号/`VAR=val`/子 shell，可被 `eval`/`$()` 绕过（best-effort，非安全边界，不变量 #13 不变）。测试：guard 单元+集成（26 用例）+ config round-trip。文档：config.example/README/ARCHITECTURE/CHANGELOG。verify-gate 全绿（gofmt 空/build/vet/test -race/lint 0）。L2 `default-mode-not-security-boundary.md` 已补记。待用户审 diff / 决定提交。
 - 接入 Anthropic Messages API provider（方案 A：核心零改动 + wire 边界有损投影）。新建 internal/provider/anthropic/（retry/wire/wire_blocks/sse/client/stream/provider，7 文件全 ≤300 行）；config 加 Kind/Cache 字段 + anthropic 校验；cmd 装配按 Kind 字符串分支（buildLLM/buildDoer 返回接口，buildRuntimeClients/compactionOptions 改 Doer 签名，删 main.go:193 硬编码）；config.example.json 改真 anthropic 示例。核心领域类型 + openai 包零改动。thinking 经 ThinkingMapping（Map 值 JSON 对象串，覆盖 4.7+ adaptive-effort / 4.5- enabled-budget）；首版含 prompt caching + interleaved-thinking beta；signature 多轮靠 wire DROP 历史 thinking 规避。全包测试（wire/sse/retry/client/stream）+ verify-gate 全绿。待用户审阅 diff / 决定提交 + L2 沉淀。
 - v4.3.0 由用户提交+打 tag（18bb801），「发版前完善」闭环。
 - `.agent` 全量评审（14 文件）+ 代码核验（含复审二轮深度结构性扫描）。

@@ -47,7 +47,7 @@ func TestCheckConfine_EvalSymlinks_SymlinkComponentCaught(t *testing.T) {
 // confineAuto=false (default) + ModeAuto: file tools are NOT wrapped (current behavior). Just confirms the buildTools flag
 // threads through without panicking; the wrapping-vs-not distinction is covered by the buildTools confine condition.
 func TestBuildTools_ConfineFlagsThread(t *testing.T) {
-	built := buildTools("/wd", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
+	built := buildTools("/wd", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
 	if len(built) == 0 {
 		t.Fatal("buildTools returned no tools")
 	}

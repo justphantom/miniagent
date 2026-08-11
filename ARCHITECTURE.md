@@ -188,7 +188,7 @@ return finishMaxIterations
 
 **两种权限模式**（`loop_api.go`）：
 
-- **`default`**：薄软约束——写工具（write/edit）经 `confineWrap` 限定 workdir 子树、shell 拒 sudo/su；workdir 必填。
+- **`default`**：薄软约束——写工具（write/edit）经 `confineWrap` 限定 workdir 子树、shell 拒 sudo/su；另有两个 opt-in shell guardrail（`run.shell_allowlist` 命令白名单 + `run.shell_confine_cd` 拦 cd 越界，`tools.GuardShell` 词法校验，默认关）；workdir 必填。
 - **`auto`**：无任何约束。
 
 **重要**：default **不构成安全边界**——shell 可 cd/绝对路径越界，写工具可符号链接逃逸。隔离由调用方（沙箱/容器）保证。
