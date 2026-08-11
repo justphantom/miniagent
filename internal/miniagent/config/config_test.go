@@ -151,6 +151,41 @@ func TestLoadConfig_ThinkingPinRequiresDeclaration(t *testing.T) {
 	}
 }
 
+// kind=anthropic: a model-level max_tokens<=0 overrides the valid provider value via pickMPG and would 400 every call,
+// so it must be rejected at the config stage. nil (inherit provider) is allowed.
+func TestLoadConfig_AnthropicModelMaxTokensMustBePositive(t *testing.T) {
+	body := `{
+  "providers":[{"name":"a","kind":"anthropic","chat_url":"https://a/v1/messages","max_tokens":64000,"models":[{"name":"m","max_tokens":0}]}],
+  "defaults":{"provider":"a","model":"m"}
+}`
+	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
+		t.Fatal("kind=anthropic model-level max_tokens:0 should error at config stage (overrides valid provider value)")
+	}
+	// Counter-example: nil model-level max_tokens inherits the provider value (valid).
+	bodyOK := strings.Replace(body, `{"name":"m","max_tokens":0}`, `{"name":"m"}`, 1)
+	if _, err := LoadConfig(writeTmpConfig(t, bodyOK)); err != nil {
+		t.Errorf("nil model max_tokens (inherit provider 64000) should pass: %v", err)
+	}
+}
+
+// kind=anthropic: thinking.map values are JSON-object STRINGS (resolveThinking unmarshals each). A value whose content
+// is not a JSON object, or is one missing "type", must fail loud at startup rather than silently disable thinking.
+func TestLoadConfig_AnthropicThinkingMapValuesValidated(t *testing.T) {
+	base := func(highVal string) string {
+		return `{"providers":[{"name":"a","kind":"anthropic","chat_url":"https://a/v1/messages","max_tokens":64000,"models":[{"name":"m"}],"thinking":{"field":"thinking","map":{"high":` + highVal + `}}}],"defaults":{"provider":"a","model":"m"}}`
+	}
+	// Each bad value is a well-formed JSON string (so map[string]string parses), but its CONTENT is either invalid JSON
+	// or a JSON object missing "type".
+	for _, bad := range []string{`"notvalidjson"`, `"{\"effort\":\"high\"}"`} {
+		if _, err := LoadConfig(writeTmpConfig(t, base(bad))); err == nil {
+			t.Errorf("anthropic thinking.map high=%q should error (content not a JSON object with type)", bad)
+		}
+	}
+	if _, err := LoadConfig(writeTmpConfig(t, base(`"{\"type\":\"adaptive\",\"effort\":\"high\"}"`))); err != nil {
+		t.Errorf("valid anthropic thinking.map value should pass: %v", err)
+	}
+}
+
 // Pairing rule: the defaults pair is required; setting only one compaction field errors.
 func TestLoadConfig_ModelPairRequired(t *testing.T) {
 	providers := `"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}]`

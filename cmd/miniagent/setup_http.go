@@ -177,6 +177,7 @@ func buildAnthropicLLM(apiKey string, p config.ProviderConfig, logger *slog.Logg
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)
 	}
+	stream.StreamAllowUnterminated = p.StreamAllowUnterminated != nil && *p.StreamAllowUnterminated
 	return &anthropic.Provider{Chat: chat, Stream: stream}
 }
 

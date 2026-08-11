@@ -222,3 +222,46 @@ func TestBuildBody_StreamTrueOnly(t *testing.T) {
 		t.Error("stream_options must not be written")
 	}
 }
+
+// Body-embedded role=system messages (e.g. the core's summarizeAtLimit summary request) must fold into the top-level
+// system field, not be dropped — Anthropic rejects role=system inside messages with 400, but the core injects them.
+func TestBuildBody_FoldsBodySystemIntoTopLevelSystem(t *testing.T) {
+	req := miniagent.Request{Model: "m", MaxTokens: 1, System: "base system", Messages: []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "q"},
+		{Role: miniagent.RoleSystem, Content: "SUMMARY REQUEST: wrap up"},
+		{Role: miniagent.RoleAssistant, Content: "a"},
+		{Role: miniagent.RoleSystem, Content: "second nudge"},
+	}}
+	body, _ := buildBody(req, false)
+	var m map[string]any
+	json.Unmarshal(body, &m)
+	sys := m["system"].([]any)[0].(map[string]any)
+	text := sys["text"].(string)
+	if !strings.Contains(text, "base system") || !strings.Contains(text, "SUMMARY REQUEST: wrap up") || !strings.Contains(text, "second nudge") {
+		t.Errorf("top-level system = %q, want req.System + both body role=system contents folded", text)
+	}
+	for _, msg := range m["messages"].([]any) {
+		if msg.(map[string]any)["role"] == "system" {
+			t.Error("body role=system must not appear in messages array (folded into top-level system)")
+		}
+	}
+}
+
+func TestMapStopReason(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"end_turn", "stop"},
+		{"stop_sequence", "stop"},
+		{"tool_use", "tool_calls"},
+		{"max_tokens", "length"},
+		{"refusal", "refusal"},       // passthrough (safety classifier; not mapped)
+		{"pause_turn", "pause_turn"}, // passthrough (server-tool loop; miniagent has none)
+		{"model_context_window_exceeded", "model_context_window_exceeded"}, // passthrough
+	}
+	for _, c := range cases {
+		if got := mapStopReason(c.in); got != c.want {
+			t.Errorf("mapStopReason(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

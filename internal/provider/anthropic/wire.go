@@ -41,8 +41,22 @@ func buildBody(req miniagent.Request, cache bool) ([]byte, error) {
 		"model":      req.Model,
 		"max_tokens": req.MaxTokens, // Anthropic mandates max_tokens (config-side validated > 0 for kind=anthropic)
 	}
-	if req.System != "" {
-		payload["system"] = systemBlocks(req.System, cache)
+	// Fold any role=system messages embedded in the body into the top-level system field. Anthropic only accepts system
+	// at the top level (a role=system entry in messages is rejected with 400), but the core legitimately injects such
+	// messages — e.g. summarizeAtLimit (loop.go) appends a role=system summary request at the iteration limit. Dropping
+	// them (as projectMessages does for the array) would silently lose the instruction. req.System leads; body system
+	// messages append in encounter order, newline-separated.
+	systemText := req.System
+	for _, m := range req.Messages {
+		if m.Role == miniagent.RoleSystem && m.Content != "" {
+			if systemText != "" {
+				systemText += "\n"
+			}
+			systemText += m.Content
+		}
+	}
+	if systemText != "" {
+		payload["system"] = systemBlocks(systemText, cache)
 	}
 	payload["messages"] = projectMessages(req.Messages, cache)
 	if len(req.Tools) > 0 {

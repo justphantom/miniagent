@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -101,5 +102,50 @@ func TestStreamClient_ThinkingErrorMaps(t *testing.T) {
 func TestNewStreamClient_URLReject(t *testing.T) {
 	if _, err := NewStreamClient("k", "://bad", nil, nil, nil, false); err == nil {
 		t.Fatal("want error for invalid URL")
+	}
+}
+
+// Streaming 400 with an overflow body must map to miniagent.ErrContextLength so the core's trim-and-retry fires
+// (mirrors the non-streaming client_test path; the stream branch is a separate copy that previously had no test).
+func TestStreamClient_ContextLengthMaps(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 300000 tokens > 200000 maximum"}}`))
+	}))
+	defer srv.Close()
+	c, _ := NewStreamClient("k", srv.URL, srv.Client(), nil, nil, false)
+	_, err := c.DoStream(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}}, nil)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if !errors.Is(err, miniagent.ErrContextLength) {
+		t.Errorf("err = %v, want errors.Is ErrContextLength", err)
+	}
+}
+
+// The irrevocable side of the idempotent retry boundary: once a delta has been pushed (deltaSent>0), a mid-generation
+// connection drop (content received, no message_stop) must NOT retry — replaying would duplicate live output.
+func TestStreamClient_PostDeltaDropNotRetried(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"input_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hel\"}}\n\n"))
+		// no message_delta / message_stop — connection drops mid-generation after one delta reached the caller.
+	}))
+	defer srv.Close()
+	c, _ := NewStreamClient("k", srv.URL, srv.Client(), nil, nil, false)
+	_, err := c.DoStream(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}}, nil)
+	if err == nil {
+		t.Fatal("want errStreamUnterminated (content received without message_stop)")
+	}
+	if !errors.Is(err, errStreamUnterminated) {
+		t.Errorf("err = %v, want errStreamUnterminated", err)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (post-delta drop is irrevocable: must NOT retry — would duplicate live output)", attempts)
 	}
 }

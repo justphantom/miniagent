@@ -23,7 +23,10 @@ func shouldRetryStatus(code int) bool {
 		http.StatusInternalServerError, // 500
 		http.StatusBadGateway,          // 502
 		http.StatusServiceUnavailable,  // 503
-		http.StatusGatewayTimeout:      // 504
+		http.StatusGatewayTimeout,      // 504
+		529:                            // Anthropic overloaded_error — the canonical Anthropic transient under load (Retryable=Yes in their error
+		// reference, retried by the official SDKs). No Go stdlib http.Status constant exists, and OpenAI has no
+		// equivalent, so this is Anthropic-specific (NOT mirrored from the openai provider's retry.go).
 		return true
 	}
 	return false

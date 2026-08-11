@@ -290,6 +290,24 @@ func validateConfig(cfg *Config) error {
 				provCustomKeys[k] = true
 			}
 		}
+		// kind=anthropic renders thinking.map VALUES as JSON objects on the wire (resolveThinking unmarshals each value
+		// into the top-level thinking field, splitting effort into output_config). A malformed value would otherwise be
+		// silently dropped at runtime (resolveThinking returns on Unmarshal failure) — validate at startup so a typo
+		// fails loud instead of quietly disabling thinking. The "off" level is never rendered, so its value is exempt.
+		if kind == "anthropic" && p.Thinking != nil {
+			for level, val := range p.Thinking.Map {
+				if level == miniagent.ThinkingOff {
+					continue
+				}
+				var obj map[string]any
+				if json.Unmarshal([]byte(val), &obj) != nil {
+					return fmt.Errorf("provider %q thinking.map[%q] is not a valid JSON object (kind=anthropic expects e.g. {\"type\":\"adaptive\",\"effort\":\"high\"})", p.Name, level)
+				}
+				if _, ok := obj["type"]; !ok {
+					return fmt.Errorf("provider %q thinking.map[%q] object is missing the \"type\" key (kind=anthropic)", p.Name, level)
+				}
+			}
+		}
 		// Models: Name must be non-empty and unique within the provider.
 		modelNames := map[string]bool{}
 		for j, mc := range p.Models {
@@ -304,6 +322,12 @@ func validateConfig(cfg *Config) error {
 				if err := validateThinking(*mc.Thinking, provCustomKeys); err != nil {
 					return fmt.Errorf("provider %q model %q thinking: %w", p.Name, mc.Name, err)
 				}
+			}
+			// kind=anthropic mandates a positive max_tokens (the Messages API rejects max_tokens<=0 with 400). The
+			// provider-level check above only covers p.MaxTokens, but pickMPG prefers a non-nil model-level value, so a
+			// model-level max_tokens<=0 would override the valid provider value and 400 every call. nil is allowed (= inherit provider).
+			if kind == "anthropic" && mc.MaxTokens != nil && *mc.MaxTokens <= 0 {
+				return fmt.Errorf("provider %q model %q max_tokens must be > 0 (kind=anthropic mandates a positive max_tokens; nil inherits the provider value)", p.Name, mc.Name)
 			}
 		}
 		if p.ThinkingLevel != nil {

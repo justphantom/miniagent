@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent/config"
+	"github.com/justphantom/miniagent/internal/provider/anthropic"
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
@@ -57,6 +58,25 @@ func TestBuildLLM_ChatTimeoutStreamNoTimeoutSharedTransport(t *testing.T) {
 	}
 	if ctr.ResponseHeaderTimeout == 0 {
 		t.Error("Transport.ResponseHeaderTimeout = 0, want >0")
+	}
+}
+
+// buildAnthropicLLM must wire StreamAllowUnterminated from config just like the openai path (buildOpenAILLM),
+// otherwise the opt-in is silently a no-op for kind=anthropic despite StreamClient honoring the field.
+func TestBuildLLM_AnthropicStreamAllowUnterminated(t *testing.T) {
+	t1 := true
+	llm := buildLLM("sk", config.ProviderConfig{Kind: "anthropic", ChatURL: "http://localhost:1234/v1/messages", StreamAllowUnterminated: &t1}, nil, 0)
+	p, ok := llm.(*anthropic.Provider)
+	if !ok {
+		t.Fatalf("buildLLM anthropic kind returned %T, want *anthropic.Provider", llm)
+	}
+	if !p.Stream.StreamAllowUnterminated {
+		t.Error("anthropic StreamClient.StreamAllowUnterminated = false, want true (must be wired from config)")
+	}
+	// Default (nil) stays false.
+	llm0 := buildLLM("sk", config.ProviderConfig{Kind: "anthropic", ChatURL: "http://localhost:1234/v1/messages"}, nil, 0)
+	if p0, ok := llm0.(*anthropic.Provider); !ok || p0.Stream.StreamAllowUnterminated {
+		t.Error("anthropic StreamAllowUnterminated should default to false when config is nil")
 	}
 }
 

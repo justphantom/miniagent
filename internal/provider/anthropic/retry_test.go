@@ -16,6 +16,7 @@ func TestShouldRetryStatus(t *testing.T) {
 		{http.StatusBadGateway, true},
 		{http.StatusServiceUnavailable, true},
 		{http.StatusGatewayTimeout, true},
+		{529, true}, // Anthropic overloaded_error (no stdlib constant)
 		{http.StatusBadRequest, false},
 		{http.StatusNotFound, false},
 		{http.StatusOK, false},
