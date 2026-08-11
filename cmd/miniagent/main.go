@@ -21,7 +21,6 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/metrics"
 	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"github.com/justphantom/miniagent/internal/miniagent/session"
-	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // version is injected at build time via make build using -ldflags "-X main.version=$(git describe --tags)";
@@ -159,7 +158,7 @@ func main() {
 	}
 
 	// Main provider chat/stream + summary compChat (when crossing providers); os.Exit on missing key or invalid endpoint.
-	chat, stream, compChat := buildRuntimeClients(resolved, apiKey, logger)
+	llm, compChat := buildRuntimeClients(resolved, apiKey, logger)
 
 	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits, intoBool(resolved.RunConfig.ConfineAuto, false), intoBool(resolved.RunConfig.ConfineEvalSymlinks, false))
 	baseCfg := loopCfg(resolved, f, history, tools)
@@ -175,7 +174,7 @@ func main() {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
 	}
 	// Compaction as a plugin: obtain before/after via NewCompaction; the three default policies (OnLLMError/OnBudget/ShapeToolResult) are attached via assembleHooks.
-	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, chat, compChat, baseCfg.System, tools, logger))
+	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, llm, compChat, baseCfg.System, tools, logger))
 	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, intoBool(resolved.Run.ConfirmDestructive, *f.confirmDestructive), baseCfg, tools, limits, logger)
 	if *f.metricsStep {
 		hooks.OnStep = metrics.NewStepEmitter(os.Stderr).Emit
@@ -190,7 +189,6 @@ func main() {
 		runCtx, cancel = context.WithTimeout(runCtx, d)
 		defer cancel()
 	}
-	llm := &openai.Provider{Chat: chat, Stream: stream}
 	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
 
 	// saveSession recovers the already-executed part of this turn for resume: Run via defer guarantees result.Messages/NewMessages are returned on
@@ -234,10 +232,11 @@ func main() {
 	}
 }
 
-// buildRuntimeClients constructs the main provider's chat/stream client and (when compaction crosses providers) the summarization compChat.
-// compChat is left nil when it has the same name as the main provider (loop falls back to main chat). os.Exit on missing key or invalid endpoint (the original secondaryClient closure is used only by compaction, inlined).
-func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.Logger) (chat *openai.ChatClient, stream *openai.StreamClient, compChat *openai.ChatClient) {
-	chat, stream = buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
+// buildRuntimeClients constructs the main provider's LLM and (when compaction crosses providers) the
+// summarization Doer. compChat is left nil when compaction uses the same provider (compaction falls back to
+// llm, which satisfies miniagent.Doer). os.Exit on missing key or invalid endpoint.
+func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.Logger) (miniagent.LLM, miniagent.Doer) {
+	llm := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
 	if resolved.CompactionProvider.Name != resolved.Provider.Name {
 		key := resolveFinalKey(resolved.CompactionProvider.Key)
 		if key == "" {
@@ -245,9 +244,9 @@ func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.
 			os.Exit(1)
 		}
 		warnProviderInsecureURLs(resolved.CompactionProvider)
-		compChat = buildChatClient(key, resolved.CompactionProvider, logger, httpTimeoutOf(resolved))
+		return llm, buildDoer(key, resolved.CompactionProvider, logger, httpTimeoutOf(resolved))
 	}
-	return chat, stream, compChat
+	return llm, nil
 }
 
 // assembleHooks assembles LoopHooks: event output (buildHooks) + compaction before/after + three default policy attachments
@@ -328,10 +327,12 @@ func shouldWarnBudgetFuse(maxTotalTokensSet bool, session string, maxIterations 
 
 // compactionOptions assembles the resolved compaction policies into CompactionOptions. chat is the summarization client
 // (use compChat if non-nil, otherwise fall back to main chat).
-func compactionOptions(resolved *config.Resolved, meta session.SessionMeta, chat, compChat *openai.ChatClient, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
-	compClient := compChat
+// compactionOptions assembles the resolved compaction policies into CompactionOptions. mainDoer is the
+// summarization client fallback (used when compDoer is nil, i.e. compaction shares the main provider).
+func compactionOptions(resolved *config.Resolved, meta session.SessionMeta, mainDoer, compDoer miniagent.Doer, system string, tools []miniagent.Tool, logger *slog.Logger) compaction.CompactionOptions {
+	compClient := compDoer
 	if compClient == nil {
-		compClient = chat
+		compClient = mainDoer
 	}
 	return compaction.CompactionOptions{
 		Chat:                     compClient,

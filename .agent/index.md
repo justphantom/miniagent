@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-09T22:15:00+08:00
+updated: 2026-08-11T13:00:00+08:00
 ---
 
 # .agent 记忆索引
@@ -13,6 +13,7 @@ updated: 2026-08-09T22:15:00+08:00
 - [active/session.md](L1/active/session.md) — 当前会话
 
 ## L2 经验教训
+- [decisions/multi-provider-kind-dispatch.md](L2/decisions/multi-provider-kind-dispatch.md) — 多 provider Kind 分派 + wire 边界有损投影 + anthropic 协议易错点
 - [decisions/core-zero-policy-loophooks-decoupling.md](L2/decisions/core-zero-policy-loophooks-decoupling.md) — 核心零策略 + LoopHooks 外挂 + 子包化解耦
 - [decisions/default-mode-not-security-boundary.md](L2/decisions/default-mode-not-security-boundary.md) — default 模式非安全边界 + 凭证剥离局限 + confirm/sandbox 配置化
 - [patterns/compaction-system.md](L2/patterns/compaction-system.md) — 压缩体系：预算自适应 CW + 7 阶裁剪 + reasoning 头尾截断

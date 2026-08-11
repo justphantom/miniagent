@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent/config"
+	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 func TestHTTPTimeoutFromConfig_RejectsNegative(t *testing.T) {
@@ -21,10 +22,16 @@ func TestHTTPTimeoutFromConfig_RejectsNegative(t *testing.T) {
 	}
 }
 
-// P4: buildLLM returns a ChatClient (with 120s overall Timeout, non-streaming Do fallback preventing hangs #3) + a StreamClient
-// (no Timeout, body not cut P2-5); both share the same *http.Transport (proxy/dial/TLS timeout, #2).
+// P4: buildLLM (default openai kind) returns a Provider composing a ChatClient (120s overall Timeout,
+// non-streaming Do fallback preventing hangs #3) + a StreamClient (no Timeout, body not cut P2-5); both
+// share the same *http.Transport (proxy/dial/TLS timeout, #2).
 func TestBuildLLM_ChatTimeoutStreamNoTimeoutSharedTransport(t *testing.T) {
-	chat, stream := buildLLM("sk", config.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil, 0)
+	llm := buildLLM("sk", config.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil, 0)
+	p, ok := llm.(*openai.Provider)
+	if !ok {
+		t.Fatalf("buildLLM default kind returned %T, want *openai.Provider", llm)
+	}
+	chat, stream := p.Chat, p.Stream
 	if chat.HTTP == nil {
 		t.Fatal("ChatClient.HTTP is nil, want injected client")
 	}

@@ -27,6 +27,7 @@ type SessionConfig struct {
 
 type ProviderConfig struct {
 	Name      string `json:"name"`
+	Kind      string `json:"kind,omitempty"` // wire format: "" / "openai" (default, Chat Completions) or "anthropic" (Messages API)
 	ChatURL   string `json:"chat_url"`
 	ModelsURL string `json:"models_url,omitempty"`
 	Key       string `json:"key,omitempty"`
@@ -48,6 +49,9 @@ type ProviderConfig struct {
 	// (a connection drop) as success, returning the partial Response. For non-compliant endpoints (some vLLM/Ollama configs)
 	// that emit content then close with no terminator; default false = the drop is a hard error. Affects streaming only.
 	StreamAllowUnterminated *bool `json:"stream_allow_unterminated,omitempty"`
+	// Cache (anthropic only) toggles prompt-caching cache_control breakpoints on the system prompt and the
+	// last user message. nil=auto (anthropic provider defaults to enabled); false=kill-switch. No effect on openai.
+	Cache *bool `json:"cache,omitempty"`
 }
 
 // ModelConfig is the configuration for a single model under a provider: Name is required, the rest are model-level parameters
@@ -247,6 +251,23 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("provider name %q is duplicated", p.Name)
 		}
 		seen[p.Name] = true
+		// Kind enum + anthropic-specific constraints: the Messages API mandates max_tokens and has no
+		// OpenAI-style /v1/models listing (a static models list is used instead).
+		kind := p.Kind
+		if kind == "" {
+			kind = "openai"
+		}
+		if kind != "openai" && kind != "anthropic" {
+			return fmt.Errorf("provider %q kind %q is invalid (openai|anthropic)", p.Name, kind)
+		}
+		if kind == "anthropic" {
+			if p.MaxTokens == nil || *p.MaxTokens <= 0 {
+				return fmt.Errorf("provider %q kind=anthropic requires max_tokens > 0 (Anthropic Messages API mandates it)", p.Name)
+			}
+			if p.ModelsURL != "" {
+				return fmt.Errorf("provider %q kind=anthropic does not support models_url (leave empty; use a static models list)", p.Name)
+			}
+		}
 		if _, err := ValidateURL(p.ChatURL); err != nil {
 			return fmt.Errorf("provider %q chat_url: %w", p.Name, err)
 		}

@@ -29,22 +29,31 @@
     },
     {
       "name": "anthropic",
+      "kind": "anthropic",
       "chat_url": "https://api.anthropic.com/v1/messages",
-      "models_url": "https://api.anthropic.com/v1/models",
       "key": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
-      "models": [{"name":"claude-sonnet-4"},{"name":"claude-opus-4"}],
+      // kind=anthropic 走原生 Messages API：x-api-key + anthropic-version 由 provider 内部固定，勿在 headers 覆写。
+      // models_url 不支持（必空，用静态 models 列表）；max_tokens 必填（Messages API 强制，缺失启动报错）。
+      "max_tokens": 64000,
+      "models": [
+        {"name": "claude-sonnet-5", "context_window": 200000},
+        {"name": "claude-opus-4-8", "context_window": 200000}
+      ],
       "headers": {
-        "anthropic-version": "2023-06-01",
         "X-Tenant-Id": "my-tenant"
       },
+      // cache (nil/auto 默认开) 开启 prompt caching：system + 最后一条 user 消息加 cache_control 断点（≤4 断点）。
+      "cache": true,
+      // thinking.map 值是 JSON 对象字符串（经 ThinkingMapping 钉死链路，不动核心类型）。
+      // Claude 4.7+/5 系列（sonnet-5/opus-4-8/fable-5）须用 adaptive + effort（如下）；
+      // Claude 4.5 及更早改用 enabled + budget_tokens，如 "high": "{\"type\":\"enabled\",\"budget_tokens\":20000}"
+      // （须 < max_tokens，最小 1024）。配错模型族会触发 isThinkingError 降级（drop thinking 重试一次）。
       "thinking": {
         "field": "thinking",
         "map": {
-          "off": "off",
-          "low": "low",
-          "medium": "medium",
-          "high": "high",
-          "max": "high"
+          "low": "{\"type\":\"adaptive\",\"effort\":\"low\"}",
+          "medium": "{\"type\":\"adaptive\",\"effort\":\"medium\"}",
+          "high": "{\"type\":\"adaptive\",\"effort\":\"high\"}"
         }
       }
     }
