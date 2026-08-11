@@ -8,17 +8,17 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-func TestBuildTools_AlwaysRegisters10(t *testing.T) {
+func TestBuildTools_AlwaysRegisters6(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
-	if len(tools) != 10 {
-		t.Fatalf("got %d tools, want 10 (7 builtins + 3 todo)", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("got %d tools, want 6 (read/write/edit/grep/glob/shell)", len(tools))
 	}
 }
 
 func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
 	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
-	if len(tools) != 10 {
-		t.Fatalf("got %d tools, want 10 (7 builtins + 3 todo)", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("got %d tools, want 6 (read/write/edit/grep/glob/shell)", len(tools))
 	}
 }
 

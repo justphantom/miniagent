@@ -67,9 +67,9 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 		}
 		if err != nil {
 			if path == root {
-				return err // root inaccessible: propagate the real error (codemap pre-checks via Stat; glob branches here)
+				return err // root inaccessible: propagate the real error
 			}
-			return nil //nolint:nilerr // skip inaccessible subtrees, keep accessible parts (consistent with grep/codemap)
+			return nil //nolint:nilerr // skip inaccessible subtrees, keep accessible parts (consistent with grep)
 		}
 		if d.IsDir() {
 			if d.Name() == ".git" || d.Type()&fs.ModeSymlink != 0 {

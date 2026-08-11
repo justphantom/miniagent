@@ -7,7 +7,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/tools"
 )
 
-// buildTools registers 7 builtin tools and adjusts constraints by mode:
+// buildTools registers 6 builtin tools and adjusts constraints by mode:
 //   - default: write tools (write/edit) are confined to the workdir subtree via confineWrap;
 //     shell is registered with mode=default (rejects sudo/su). workdir is required (validated at the main entry).
 //   - auto: no constraints (shell mode=auto, write tools are not wrapped).
@@ -39,21 +39,16 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	}
 	grep := tools.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
 	glob := tools.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
-	codemap := tools.CodemapTool(workdir, fileOpTimeout)
 	if confine && workdir != "" {
 		grep = confineWrap(grep, workdir, evalSymlinks)
 		glob = confineWrap(glob, workdir, evalSymlinks)
-		codemap = confineWrap(codemap, workdir, evalSymlinks)
 	}
-	built := []miniagent.Tool{
+	return []miniagent.Tool{
 		read,
 		write,
 		edit,
 		grep,
 		glob,
-		codemap,
 		tools.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes),
 	}
-	// todo tools (in-memory for a single Run): each buildTools call creates a new *TodoList, shared across steps, reset across Runs.
-	return append(built, tools.TodoTools(&tools.TodoList{})...)
 }

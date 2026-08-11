@@ -46,11 +46,11 @@ func object(props map[string]any, required ...string) map[string]any {
 }
 
 // runWithTimeout wraps "ctx cancellation check + WithTimeout + goroutine + select fallback" into a single helper,
-// reused by file-type tools like read/write/edit/grep/glob/codemap (previously 6 near-verbatim boilerplate copies).
+// reused by file-type tools like read/write/edit/grep/glob (previously 5 near-verbatim boilerplate copies).
 // label goes into the timeout/cancellation message (e.g. "read", "search"). fn receives runCtx (with timeout) and
 // can check runCtx during long operations/traversals to return early — but Go cannot forcibly terminate a goroutine:
 // single-file syscalls (read/write/edit) stuck in D-state are uninterruptible (OS-level limitation); only the
-// WalkDir traversals of grep/glob/codemap can be terminated promptly via runCtx. fn must return promptly, otherwise
+// WalkDir traversals of grep/glob can be terminated promptly via runCtx. fn must return promptly, otherwise
 // after the select fallback the goroutine still runs until fn ends naturally (done buffered=1 guarantees the send
 // won't block, but does not guarantee fn is interruptible).
 func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn func(ctx context.Context) miniagent.ToolResult) miniagent.ToolResult {

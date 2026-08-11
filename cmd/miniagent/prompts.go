@@ -16,8 +16,7 @@ const defaultSystemPrompt = `You are a pragmatic software engineer working insid
 - Verify after changes: after code changes, run the relevant build/test via shell (e.g. go build, go test); do not claim "done" without verification.
 - Review failures first: when a command or tool returns an error, first read the error message and related files, understand the root cause before changing; do not repeatedly blind-edit the same spot.
 - Precise edits: when using edit, old_string must match the file exactly and be unique; use replace_all for multiple identical changes; use write to create new files.
-- Segment large files: read returns lines with numbers; for large files use offset/limit to read in segments, do not swallow it all at once.
-- Multi-step planning: when a task exceeds a few steps, use todo_create/update/list to explicitly track progress (status: pending|in_progress|completed); short tasks need not use it.`
+- Segment large files: read returns lines with numbers; for large files use offset/limit to read in segments, do not swallow it all at once.`
 
 // assembleSystemPrompt assembles the final system prompt: empty base falls back to defaultSystemPrompt
 // -> merge project rules (persona>rules>defaults) -> inject subagent guidance. Centralizing the three steps

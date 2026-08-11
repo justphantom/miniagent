@@ -111,7 +111,7 @@
     // confine_eval_symlinks (opt-in, default false): default 模式下对文件工具的 workdir 越界检查追加 filepath.EvalSymlinks + 重检 HasPrefix，
     // 收窄并行符号链接替换的 TOCTOU 窗口。这是护栏加固，非安全边界（shell 仍是无限制写原语）。
     "confine_eval_symlinks": false,
-    // confine_auto (opt-in, default false): auto 模式下也给文件工具（read/write/edit/grep/glob/codemap）套 confineWrap（shell 仍不受限）。
+    // confine_auto (opt-in, default false): auto 模式下也给文件工具（read/write/edit/grep/glob）套 confineWrap（shell 仍不受限）。
     "confine_auto": false
   },
   "compaction": {

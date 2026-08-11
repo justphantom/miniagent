@@ -23,6 +23,11 @@
 
 ## [Unreleased]
 
+### Removed
+- **`codemap` 工具移除**：递归目录树概览与 glob+read 功能重叠，是专用工具里边际最低的一个；不符合极简默认工具集定位。模型改用 glob（结构）+ read（内容）组合感知仓库布局。
+- **`todo` 工具移除（`todo_create`/`todo_update`/`todo_list`）**：进程内任务清单是纯内存脚手架（每 Run 新建、不持久、无 loop 逻辑读取它），属认知策略而非原语能力，与核心零策略/极简定位冲突。模型可在正文跟踪任务。
+- **breaking（工具面契约）**：内置工具 10 → 6（`read`/`write`/`edit`/`grep`/`glob`/`shell`）。无配置迁移（此前无 per-tool 开关）；下游若依赖这两个工具，改用 glob/read 组合或在调用方自行装配等价工具经 `LoopConfig.Tools` 注入。
+
 ## [4.3.1] - 2026-08-10
 
 > 维护性 patch：无功能性变更，不影响 API / 配置 / CLI 行为 / NDJSON 契约。

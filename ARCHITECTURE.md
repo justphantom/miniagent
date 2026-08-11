@@ -44,7 +44,7 @@ internal/miniagent/   核心库（零外部依赖，纯标准库）
   platform*.go        平台原语：flock / O_NOFOLLOW / 进程组 kill（windows 分文件）
   tools.go            路径解析、截断工具（truncate/truncateHeadTail）、schema 构造
   tool_output_store.go 工具输出落盘 store（超 limit 全文写盘 + 过期清理）
-  tool_*.go           内置工具实现（read/write/edit/grep/glob/codemap/shell/script）
+  tool_*.go           内置工具实现（read/write/edit/grep/glob/shell/script）
   url.go / history_util.go 小型工具
 
 internal/miniagent/compaction/  压缩引擎子包（「压缩作为外挂」的默认实现）
@@ -143,12 +143,12 @@ return finishMaxIterations
 
 ## 6. 工具系统
 
-**内置工具**（10 个，`buildTools` 注册）：`read` / `write` / `edit` / `grep` / `glob` / `codemap` / `shell` + `todo_create` / `todo_update` / `todo_list`（单 Run 内存任务跟踪，闭包 `*TodoList` 共享、与 transcript/压缩解耦）。
+**内置工具**（6 个，`buildTools` 注册）：`read` / `write` / `edit` / `grep` / `glob` / `shell`。
 
 **并行执行**（`loop_tools.go:runToolsParallel`）：同一步内 LLM 一次发起的多个 tool_call 相互独立，并行执行（信号量限并发，默认 `maxParallelTools=8`），结果按原 index 回填保证与 `assistant.tool_calls` 一一对应（OpenAI 要求顺序匹配）。信号量获取联动 ctx，取消后排队调用立即放弃。每个工具 panic 由 `safeCall` 兜底，未知/被拒工具短路回填错误结果。
 
 **工具结果成型**（`defaultShapeResult`）：`trimForHistory` 截断 + 可选落盘。
-- `SplitTruncate`：shell/grep/script/codemap 走**头 1/4 + 尾 3/4**分段截断（错误结论常在尾部）；read/edit 等**带行号代码类**走 head-only（前截断符合分段读大文件语义）。
+- `SplitTruncate`：shell/grep/script 走**头 1/4 + 尾 3/4**分段截断（错误结论常在尾部）；read/edit 等**带行号代码类**走 head-only（前截断符合分段读大文件语义）。
 - **工具输出落盘**（`cfg.ToolOutputDir`，默认按 session 目录派生 `<id>.tool-output/`）：超 limit 的全文写盘，历史 Content 改为 preview + 绝对路径提示；启动时机会性清理过期文件（默认保留 7d）。
 
 **配对不变量**：assistant.tool_calls 与 tool 消息一一对应是核心保证的不变量。下游管道关闭时，核心为剩余 calls 补占位 tool 消息保配对完整，防续跑被端点 400。
