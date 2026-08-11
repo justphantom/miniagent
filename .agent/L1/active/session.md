@@ -18,6 +18,7 @@ updated: 2026-08-11T13:00:00+08:00
 - L0 护栏变更：用户授权删除「禁止自动提交代码；提交只能由用户执行」，保留「提交前给 diff 摘要待审阅」（约束 2）→ 提交 `672c41f`。
 - lint 修复：`compaction_split.go` 反向遍历改 `slices.Backward`，`golangci-lint` 清零 → 提交 `d6bc475`。
 - 发版前完善 5 项：①CHANGELOG 定版 v4.3.1 ②config.example.json 补 3 项 opt-in ③README 补 2 flag + 1 环境变量 ④release.sh 加 test/lint gate ⑤session.md 同步 → 提交 `32dbffb`。
+- anthropic 完善：StreamAllowUnterminated 装配、body role=system 折叠到顶层 system、stop_reason 映射、model max_tokens<=0 与 thinking.map 启动校验 + 测试 → 提交 `d6d0c61`（已 push）。
 - v4.3.1 发版完成：push main + annotated tag v4.3.1 + release.sh（verify-gate 全绿 + build），版本号 `miniagent v4.3.1`。
 
 ## 未决问题
