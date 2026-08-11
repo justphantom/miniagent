@@ -20,6 +20,8 @@ updated: 2026-08-11T13:00:00+08:00
 - 发版前完善 5 项：①CHANGELOG 定版 v4.3.1 ②config.example.json 补 3 项 opt-in ③README 补 2 flag + 1 环境变量 ④release.sh 加 test/lint gate ⑤session.md 同步 → 提交 `32dbffb`。
 - anthropic 完善：StreamAllowUnterminated 装配、body role=system 折叠到顶层 system、stop_reason 映射、model max_tokens<=0 与 thinking.map 启动校验 + 测试 → 提交 `d6d0c61`（已 push）。
 - v4.3.1 发版完成：push main + annotated tag v4.3.1 + release.sh（verify-gate 全绿 + build），版本号 `miniagent v4.3.1`。
+- 本轮三项（见下，已提交并 push；详见 CHANGELOG.md [4.4.0]）：①core 层「LLM 端点 400 硬错」补丁 + session JSONL 持久化可靠性组（flock 跨进程锁 + 临时文件 Rename 原子 rewrite + ensureTrailingNewline 截崩溃半行 + 写盘期忽略 SIGINT/SIGTERM，新文件 0600/目录 0700）+ SSE 流式健壮性（连接中断/空内容行/[DONE] 处理/幂等重试）——三项均对应 L2 经验教训文件；②anthropic model-level `max_tokens<=0` 在 config 层启动报错（会覆盖 provider 合法值致每次 400）+ `thinking.map` 值启动校验（须为含 `type` 的合法 JSON 对象串，防静默禁用 thinking）；③anthropic 流式 SSE 重试/超时/`retry_after` 对齐（429 body 带 retry_after 计入 rate-limit）+ `cache_control` 计数修复（含 null 分支）+ 对应测试。
+- v4.4.0 定版：session.md + CHANGELOG.md 同步落版（[4.4.0] 2026-08-11），verify-gate 全绿（gofmt 空 / build / vet / test -race / lint 0 issues）。
 
 ## 未决问题
 无。

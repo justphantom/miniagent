@@ -3,6 +3,24 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [4.4.0] - 2026-08-11
+
+> minor：首个非 openai 上游——`anthropic` provider（Messages API）正式落地，含流式 / prompt caching / interleaved-thinking / 签名跨轮；配套 core 层「LLM 端点 400 硬错」补丁。新增 provider / 配置项均 opt-in，既有 openai 行为零改动。
+
+### Added
+- **`anthropic` provider（`internal/provider/anthropic`，Messages API）**：新增 `ProviderKind=anthropic`，`cmd` 按 Kind 字符串分派返回统一 `LLM` 接口，核心领域类型（`Message/Request/Response/Usage`）与 openai 包零改动。
+  - **流式 + 中断处理**：SSE 逐事件解析 `message_start/message_delta/message_stop`，`StreamAllowUnterminated`（config `stream_allow_unterminated`）兼容非合规端点。
+  - **prompt caching**：`cache_control` 落首/尾 user 消息块，按 `cache_creation/use` 统计。
+  - **interleaved-thinking**：thinking 经 `provider.ThinkingMapping` 的 Map 值作 JSON 对象串下发（如 `{"type":"ephemeral"}`），启动期 `validateThinking` 前置校验。
+  - **签名跨轮**：多轮 wire 层 DROP 历史 thinking，保 tool-call 一一对应。
+- **config `provider.stream_allow_unterminated`**（bool，opt-in，默认 false）。
+
+### Changed
+- **core 层「LLM 端点 400 硬错」补丁（`llm_endpoint_400_hard_error`）**：`loop.go:Run` 主路径遇 `errHTTP400` 直接 `return err`，不再落入 `OnLLMError` 透明重试后 `continue`——400 是协议层坏请求（payload 不合法），重试无意义，静默继续会吞掉本次回复致后续上下文/压缩失真。`OnLLMError` 仅处理瞬时/可恢复错误（限流 / 5xx / 超时）。
+
+### Notes
+- `.agent/` 记忆已同步（L1 session + 本轮 commit）。
+
 ## [Unreleased]
 
 ## [4.3.1] - 2026-08-10
