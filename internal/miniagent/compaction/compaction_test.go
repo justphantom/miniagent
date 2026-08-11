@@ -32,6 +32,7 @@ func TestJointTailBudget(t *testing.T) {
 	head := []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}                                           // first round non-summary
 	headSum := []miniagent.Message{{Role: miniagent.RoleUser, Kind: miniagent.KindSummary, Content: "old summary"}} // UPDATE path head
 	mk := func(cw int) ContextBudget { return ContextBudget{ContextWindow: cw, System: "", Tools: nil} }
+	mkOverride := func(cw int) ContextBudget { b := mk(cw); b.SummarizerPrompt = "custom"; return b } // override path (custom summarizer_prompt)
 	cases := []struct {
 		name string
 		bud  ContextBudget
@@ -44,6 +45,11 @@ func TestJointTailBudget(t *testing.T) {
 		{"medium CW 5120 deduct head", mk(5120), head, 1188},                  // 4096-400-4-2504=1188 < cap 2000
 		{"medium CW 5120 UPDATE no head deduction", mk(5120), headSum, 1192},  // 4096-400-0-2504=1192
 		{"small CW 2048 avail<=0 zeroed", mk(2048), head, 0},                  // 1638-400-4-2504<0 → 0
+		// override path (SummarizerPrompt!=""): a single KindSummary head is extracted in BOTH default and override paths,
+		// so headAdj=0 here too. Regression guard: a stale `SummarizerPrompt != ""` clause once wrongly deducted the old
+		// summary here, driving tail budget to 0 and failing small-window compaction under a custom summarizer_prompt.
+		{"medium CW 5120 override + summary head no deduction", mkOverride(5120), headSum, 1192}, // same as default UPDATE head
+		{"medium CW 5120 override + non-summary head deducts", mkOverride(5120), head, 1188},     // non-summary head still enters out → deduct
 	}
 	for _, c := range cases {
 		if got := jointTailBudget(c.bud, c.head); got != c.want {

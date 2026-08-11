@@ -252,9 +252,9 @@ func preserveRecentTokens(budget ContextBudget) int {
 // preserveRecentTokens (user's tail will upper bound): physical constraint ∧ will upper bound. CW<=0 falls back to
 // preserveRecentTokens (windowless pure round-count compatibility).
 //
-// headAdj refinement: under the default path (SummarizerPrompt==""), when head is an old KindSummary, it's extracted
-// as prevSummary for UPDATE and doesn't enter out, so headAdj=0 with no erroneous deduction; otherwise (first round is
-// not summary, override path) head enters out → deduct estimateRoundTokens(head). avail<=0 (small CW:
+// headAdj refinement: when head is a single old KindSummary, compactWithSummary extracts it as prevSummary for UPDATE
+// and it doesn't enter out — in BOTH the default and override (SummarizerPrompt!="") paths — so headAdj=0 with no
+// erroneous deduction; otherwise (head is a regular round, which enters out) deduct estimateRoundTokens(head). avail<=0 (small CW:
 // summary+head+overhead already fills 4/5) → return 0, selectTailByTokens degrades to forcibly retaining most recent round,
 // FitHistory's trailing trim/error fallback. This function does not eliminate termination under extremely small CW;
 // direction A (deriveSummaryMaxChars scales summaryMaxChars with CW) pushes that boundary up to CW<~1536 — beyond that
@@ -266,7 +266,7 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 	target := budget.ContextWindow * 4 / 5
 	reqOverhead := policy.EstimateTokens(nil, budget.System, budget.Tools)
 	headAdj := 0
-	if len(headRounds) != 1 || headRounds[0].Kind != miniagent.KindSummary || budget.SummarizerPrompt != "" {
+	if len(headRounds) != 1 || headRounds[0].Kind != miniagent.KindSummary {
 		headAdj = estimateRoundTokens(headRounds)
 	}
 	maxChars := budget.SummaryMaxChars

@@ -82,8 +82,8 @@ func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
 
 // NEW-1 regression: under the default config (empty base), assembleSystemPrompt must fall back to
 // defaultSystemPrompt, and the final prompt contains the ReAct constraints; otherwise injectSubagentGuidance
-// appends to the empty string making the loopCfg empty-string fallback fail (dead code), and the agent silently
-// loses all workflow constraints.
+// appends to the empty string, leaving the system guidance-only — loopCfg uses resolved.System verbatim (no
+// re-default), so the agent would silently lose all workflow constraints.
 func TestAssembleSystemPrompt_DefaultApplied(t *testing.T) {
 	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "default")
 	if !strings.Contains(got, "Observe before acting") {

@@ -18,9 +18,8 @@ cmd/miniagent/        CLI 入口层：flag 解析 → 组装 → 调 Run → 落
   main.go             组装主线（config→Resolve→tools→hooks→Run→save）
   setup.go            config 查找、key 解析、hooks 构建、退出码
   setup_http.go       buildLLM / buildChatClient（HTTP client 注入）
-  tools.go            buildTools：注册内置工具 + 脚本工具，按 mode 调约束
+  tools.go            buildTools：注册内置工具（read/write/edit/grep/glob/shell），按 mode 调约束
   session.go          session 解析（-save-session/-session 互斥、load/write）
-  project.go          .miniagent/ 项目规则（persona/rules/scripts）发现（单层 workdir，取消全局层）
   sandbox.go          confineWrap：default 模式写工具路径越界拒绝
   prompts.go          默认 system prompt、subagent 引导注入
   stdin.go            读 prompt（空 stdin 交互引导）
@@ -44,7 +43,7 @@ internal/miniagent/   核心库（零外部依赖，纯标准库）
   platform*.go        平台原语：flock / O_NOFOLLOW / 进程组 kill（windows 分文件）
   tools.go            路径解析、截断工具（truncate/truncateHeadTail）、schema 构造
   tool_output_store.go 工具输出落盘 store（超 limit 全文写盘 + 过期清理）
-  tool_*.go           内置工具实现（read/write/edit/grep/glob/shell/script）
+  tool_*.go           内置工具实现（read/write/edit/grep/glob/shell）
   url.go / history_util.go 小型工具
 
 internal/miniagent/compaction/  压缩引擎子包（「压缩作为外挂」的默认实现）
@@ -66,7 +65,7 @@ internal/miniagent/event/  NDJSON 事件编码子包（session/tool_use/tool_res
 internal/text/        纯文本工具（NowMs / Truncate / TruncateTail）
 ```
 
-入口 `cmd/miniagent/main.go` 自上而下：**flag → config → Resolve → key → workdir/session → 合并项目规则 → 注入 `Limits` 运行时覆盖 → buildLLM → buildTools → loopCfg → NewCompaction → buildHooks → Run → 落盘**。
+入口 `cmd/miniagent/main.go` 自上而下：**flag → config → Resolve → key → workdir/session → assembleSystemPrompt（config-only system prompt + subagent guidance）→ 注入 `Limits` 运行时覆盖 → buildLLM → buildTools → loopCfg → NewCompaction → buildHooks → Run → 落盘**。
 
 ## 3. 核心循环 `Run`
 
@@ -177,7 +176,7 @@ return finishMaxIterations
 
 **配置来源**：config 文件（`-config` 显式 > 默认 `~/.miniagent/miniagent.json`，不存在报错——S1 删裸模式后 config 必须存在）。结构 `Config`：`providers[]` / `defaults` / `run` / `session` / `compaction`。
 
-**裁决优先级**（`resolve.go:Resolve`）：`cli > config > builtin`。CLI 用 `flag.Visit` 区分"显式传入"与"默认值"。核心 CLI 参数（provider/model/thinking/mode/system/workdir/max-iterations/stream）可被 CLI 覆盖；策略参数（summary/duration/window/keep\*/context 阈值等）只在 config。`max_tokens`/`context_window`/`thinking` level/`http_timeout` 改为 config 三层覆盖（`model > provider > global`；http_timeout 仅 `provider > global`，无 model；max_tokens 取消 CLI，纯 config 分层；thinking 仍保留 `-thinking` CLI 为最高优先级）。
+**裁决优先级**（`resolve.go:Resolve`）：`cli > config > builtin`。CLI 用 `flag.Visit` 区分"显式传入"与"默认值"。核心 CLI 参数（provider/model/thinking/mode/workdir/max-iterations/stream）可被 CLI 覆盖（system 仅来自 config `defaults.system_prompt`，无 CLI 覆盖）；策略参数（summary/duration/window/keep\*/context 阈值等）只在 config。`max_tokens`/`context_window`/`thinking` level/`http_timeout` 改为 config 三层覆盖（`model > provider > global`；http_timeout 仅 `provider > global`，无 model；max_tokens 取消 CLI，纯 config 分层；thinking 仍保留 `-thinking` CLI 为最高优先级）。
 
 **成对规则**：`provider/model` 须成对（`-provider`/`-model` 同传覆盖 defaults 对，同缺以 defaults 为准）；`compaction.provider/model` 可跨 provider，同空回落 defaults。
 

@@ -23,8 +23,9 @@ const defaultSystemPrompt = `You are a pragmatic software engineer working insid
 //
 // Under the default config (no defaults.system_prompt) resolved.System is empty:
 // it must fall back to defaultSystemPrompt. Otherwise injectSubagentGuidance appends subagent guidance to the
-// empty string making it non-empty, the loopCfg `if system == ""` fallback never triggers (dead code), and the
-// agent silently loses all ReAct constraints.
+// empty string, leaving resolved.System guidance-only; loopCfg uses resolved.System verbatim (it no longer
+// re-defaults an empty System), so the agent would run on guidance-only text and silently lose all ReAct
+// constraints.
 func assembleSystemPrompt(base, guidance, configAbsPath, mode string) string {
 	if base == "" {
 		base = defaultSystemPrompt

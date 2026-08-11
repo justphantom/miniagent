@@ -30,6 +30,6 @@
 
 - **provider**：实现 `LLM` 接口（`Do` 非流式 + `DoStream` 流式），见 `internal/miniagent/provider_api.go`；OpenAI 兼容实现见 `internal/provider/openai/`。
 - **钩子**：经 `LoopHooks` 外挂上下文管理/用量/成型/失败恢复策略，契约见 [HOOKS.md](./HOOKS.md)。
-- **工具**：`Tool.Call` 函数字段，由 `cfg.Tools` 自由组装，内置工具见 `internal/miniagent/tool_*.go`；项目专用工具经 `.miniagent/scripts.json` 注册。
+- **工具**：`Tool.Call` 函数字段，由 `cfg.Tools` 自由组装，内置工具见 `internal/miniagent/tools/tool_*.go`（read/write/edit/grep/glob/shell）。
 
 核心库化（移出 `internal/` 开放外部导入）计划于 5.0.0；当前 `internal/` 下代码 Go 禁止外部模块导入。

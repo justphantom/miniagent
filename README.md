@@ -97,7 +97,7 @@ make test       # go test -race ./...
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
 -thinking string         思考级别（默认 off；启用时 provider 必声明 thinking{field,map}，wire 必经映射，见 config.example.json）
 -version                 显示版本号并退出
--workdir string          工作目录（default 模式写工具边界 + shell 的 cwd；也是 .miniagent/ 规则发现根）
+-workdir string          工作目录（default 模式写工具边界 + shell 的 cwd）
 ```
 
 > 破坏性变更（-list-models 输出）：由纯文本 `provider/model_id` 行改为逐行 NDJSON 事件 `{"type":"model","provider":"...","model":"..."}`（model id 含 `/` 时文本拆分有歧义）；解析该输出的消费方需改为逐行 JSON 解析。部分失败语义不变：成功条目照常输出，退出码 1。
@@ -428,7 +428,7 @@ echo "用一句话解释 goroutine" | \
 # 显式指定配置文件
 MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -config /path/to/miniagent.json ...
 
-# 带工具 + 指定工作目录（default 模式：写工具限 ./repo，shell cwd 为 ./repo，.miniagent/ 从 ./repo 发现）
+# 带工具 + 指定工作目录（default 模式：写工具限 ./repo，shell cwd 为 ./repo）
 echo "在当前目录跑测试并总结失败原因" | \
   MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir ./repo
 
