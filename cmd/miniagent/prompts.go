@@ -7,9 +7,8 @@ import (
 // defaultSystemPrompt is the default system prompt oriented toward engineering code development:
 // it constrains the ReAct workflow (observe first -> then modify -> verify after changes ->
 // review on failure), reducing the chance of the model making blind/speculative changes.
-// Users can override it via config defaults.system_prompt (or replace it with a project
-// .miniagent/persona.md). The prompt only states "why/how" constraints; tool syntax lives
-// in each tool's description.
+// Users can override it via config defaults.system_prompt. The prompt only states "why/how"
+// constraints; tool syntax lives in each tool's description.
 const defaultSystemPrompt = `You are a pragmatic software engineer working inside a real code repository. Follow this workflow:
 
 - Observe before acting: before changing any file, use read/grep/glob to confirm the current content and structure; locate first when the path or symbol is uncertain, do not guess.
@@ -18,19 +17,19 @@ const defaultSystemPrompt = `You are a pragmatic software engineer working insid
 - Precise edits: when using edit, old_string must match the file exactly and be unique; use replace_all for multiple identical changes; use write to create new files.
 - Segment large files: read returns lines with numbers; for large files use offset/limit to read in segments, do not swallow it all at once.`
 
-// assembleSystemPrompt assembles the final system prompt: empty base falls back to defaultSystemPrompt
-// -> merge project rules (persona>rules>defaults) -> inject subagent guidance. Centralizing the three steps
-// makes the default fallback unit-testable (NEW-1 regression).
+// assembleSystemPrompt assembles the final system prompt: empty base falls back to defaultSystemPrompt,
+// then subagent guidance is appended. Centralizing the two steps makes the default fallback unit-testable
+// (NEW-1 regression).
 //
-// Under the default config (config has no system_prompt / no .miniagent/persona) resolved.System is empty:
+// Under the default config (no defaults.system_prompt) resolved.System is empty:
 // it must fall back to defaultSystemPrompt. Otherwise injectSubagentGuidance appends subagent guidance to the
 // empty string making it non-empty, the loopCfg `if system == ""` fallback never triggers (dead code), and the
 // agent silently loses all ReAct constraints.
-func assembleSystemPrompt(base string, pr projectRules, guidance, configAbsPath, mode string) string {
+func assembleSystemPrompt(base, guidance, configAbsPath, mode string) string {
 	if base == "" {
 		base = defaultSystemPrompt
 	}
-	return injectSubagentGuidance(mergeSystemPrompt(base, pr.persona, pr.rules, pr.hasAny()), guidance, configAbsPath, mode)
+	return injectSubagentGuidance(base, guidance, configAbsPath, mode)
 }
 
 // injectSubagentGuidance appends the subagent fork guidance to the system prompt: injects the absolute path

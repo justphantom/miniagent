@@ -143,9 +143,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	// P0: discover .miniagent/ project rules and merge them into the system prompt (persona>rules>defaults + builtin fallback, see assembleSystemPrompt).
-	pr := loadProjectRules(workdir)
-	resolved.System = assembleSystemPrompt(resolved.System, pr, resolved.SubagentGuidance, absConfigPath(*f.configPath), resolved.Mode)
+	// System prompt: config defaults.system_prompt with the built-in defaultSystemPrompt fallback, then subagent guidance (see assembleSystemPrompt).
+	resolved.System = assembleSystemPrompt(resolved.System, resolved.SubagentGuidance, absConfigPath(*f.configPath), resolved.Mode)
 
 	// Apply runtime config overrides (precedence: config>builtin).
 	limits := miniagent.Limits{

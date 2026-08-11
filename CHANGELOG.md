@@ -27,6 +27,7 @@
 - **`codemap` 工具移除**：递归目录树概览与 glob+read 功能重叠，是专用工具里边际最低的一个；不符合极简默认工具集定位。模型改用 glob（结构）+ read（内容）组合感知仓库布局。
 - **`todo` 工具移除（`todo_create`/`todo_update`/`todo_list`）**：进程内任务清单是纯内存脚手架（每 Run 新建、不持久、无 loop 逻辑读取它），属认知策略而非原语能力，与核心零策略/极简定位冲突。模型可在正文跟踪任务。
 - **breaking（工具面契约）**：内置工具 10 → 6（`read`/`write`/`edit`/`grep`/`glob`/`shell`）。无配置迁移（此前无 per-tool 开关）；下游若依赖这两个工具，改用 glob/read 组合或在调用方自行装配等价工具经 `LoopConfig.Tools` 注入。
+- **`.miniagent/persona.md`/`rules.md` 自动加载移除（breaking）**：system prompt 来源统一为 config-only（`defaults.system_prompt`，未配则内置默认 `defaultSystemPrompt`），不再启动期读 `workdir/.miniagent/` 下的 persona/rules 文件。删 `cmd/miniagent/project.go`（`loadProjectRules`/`mergeSystemPrompt`/`projectRules`/`readTrimmedFile`）+ `project_test.go`；`assembleSystemPrompt` 砍 `pr` 参数、简化为「base 兜底 + 注入 subagent guidance」。继全局 `~/.miniagent/` 层（已删）之后的第二次收口。**迁移**：原 persona 内容直进 `defaults.system_prompt`（「取代默认」语义等价）；原 rules 为「追加」语义，物进 `system_prompt` 文本时需自行保留内置默认的工作流约束（或接受其丢失）。`.miniagent/` 目录保留用于 session 存储。
 
 ## [4.3.1] - 2026-08-10
 

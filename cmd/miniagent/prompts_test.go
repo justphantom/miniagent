@@ -80,22 +80,14 @@ func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
 	}
 }
 
-// NEW-1 regression: under the default config (empty base + no project rules), assembleSystemPrompt must fall
-// back to defaultSystemPrompt, and the final prompt contains the ReAct constraints; otherwise injectSubagentGuidance
+// NEW-1 regression: under the default config (empty base), assembleSystemPrompt must fall back to
+// defaultSystemPrompt, and the final prompt contains the ReAct constraints; otherwise injectSubagentGuidance
 // appends to the empty string making the loopCfg empty-string fallback fail (dead code), and the agent silently
 // loses all workflow constraints.
 func TestAssembleSystemPrompt_DefaultApplied(t *testing.T) {
-	got := assembleSystemPrompt("", projectRules{}, "", "/abs/miniagent.json", "default")
+	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "default")
 	if !strings.Contains(got, "Observe before acting") {
 		t.Errorf("under default config system prompt should contain the ReAct constraints from defaultSystemPrompt: %q", got)
-	}
-	// persona replaces the default prompt (priority persona>defaults)
-	got = assembleSystemPrompt("", projectRules{persona: "You are the dedicated assistant"}, "", "/abs/miniagent.json", "default")
-	if !strings.Contains(got, "You are the dedicated assistant") {
-		t.Errorf("persona should enter the prompt: %q", got)
-	}
-	if strings.Contains(got, "Observe before acting") {
-		t.Errorf("persona should replace the default prompt (default constraints no longer present): %q", got)
 	}
 }
 

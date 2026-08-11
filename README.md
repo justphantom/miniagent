@@ -336,29 +336,11 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 | `fileOpTimeout` | 30s | `run.file_op_timeout` | read/edit/grep/glob 文件操作超时（默认值，可被 config 覆盖） |
 | `writeOpTimeout` | 30s | `run.write_timeout` | write 原子写入超时（默认值，可被 config 覆盖） |
 
-## 项目专属配置（`.miniagent/`）
+## 项目专属配置
 
-在 `workdir` 下放 `.miniagent/` 目录，agent 启动时自动发现并把项目专属行为注入——核心引擎本身不感知任何具体项目，只「知道如何发现项目规则」：
+system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认 `defaultSystemPrompt`），不再从 `.miniagent/persona.md`/`rules.md` 自动加载。`.miniagent/` 目录现仅用于 session 存储（见「会话」节）。
 
-项目规则文件（`persona.md`/`rules.md`）单层查找：仅从 `workdir/.miniagent/` 读（不再回退 `~/.miniagent/`）。全局 system 定制改用 config `defaults.system_prompt`。
-
-| 文件 | 作用 |
-|------|------|
-| `.miniagent/persona.md` | 角色/语气/回答格式。存在时取代默认 system prompt 作身份基线（优先级 persona > rules > defaults.system_prompt） |
-| `.miniagent/rules.md` | 项目专属约束（编码规范、禁止事项、审查清单），追加到 system prompt 的「## 项目规则」段 |
-
-任一文件存在即触发 system prompt 末尾追加「（已加载 .miniagent/ 项目规则）」。该目录通常应加入 `.gitignore` 或按团队约定纳入版本控制。
-
-> **破坏性变更**：`-system` CLI 与全局 `~/.miniagent/persona.md`/`rules.md` 已移除。system prompt 现仅来自 config `defaults.system_prompt`（未配则内置默认）+ 项目级 `workdir/.miniagent/`。原全局 persona/rules 迁移到 `defaults.system_prompt`（persona「取代默认」的语义与 config system_prompt 等价；rules 为追加语义，需物进 `system_prompt` 文本）。
-
-```bash
-# 项目仓库结构示例
-repo/
-  miniagent.json            # provider/defaults/run 配置
-  .miniagent/
-    persona.md              # 「你是 repo 的 Go 维护者…」
-    rules.md                # 「禁止提交未跑 go test 的改动…」
-```
+> **破坏性变更**：项目级 `workdir/.miniagent/persona.md`/`rules.md` 自动加载已移除（继全局 `~/.miniagent/` 层之后的第二次收口，system prompt 来源统一为 config-only）。迁移：原 persona 内容直进 `defaults.system_prompt`（「取代默认」语义与 system_prompt 等价）；原 rules 为「追加」语义，物进 `system_prompt` 文本时需自行保留内置默认的工作流约束（或接受其丢失）。
 
 ### 提示词模板（config `defaults`）
 
@@ -366,7 +348,7 @@ repo/
 
 | 字段 | 占位符 | 说明 |
 |------|--------|------|
-| `system_prompt` | — | 主 system prompt（未配则内置默认；可被项目 `.miniagent/persona.md` 取代） |
+| `system_prompt` | — | 主 system prompt（未配则内置默认） |
 | `summary_request` | — | 撞迭代上限时注入的总结请求 |
 | `summarizer_prompt` | `{max_chars}` | 摘要 system 全量 override（非空时忽略下列字段） |
 | `summary_create_instruction` | `{max_chars}` | 摘要 CREATE 指令 |
