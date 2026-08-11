@@ -3,8 +3,12 @@ package anthropic
 import (
 	"net/http"
 	"testing"
-	"time"
 )
+
+// Provider-specific retry classification: the 529 overloaded_error is Anthropic's
+// canonical transient under load (no stdlib constant; the common 429/5xx baseline
+// plus ParseRetryAfter/CapRetryDelay/SleepCtx lives in the httpretry package, whose
+// baseline + extra-parameterization is unit-tested there).
 
 func TestShouldRetryStatus(t *testing.T) {
 	cases := []struct {
@@ -25,39 +29,6 @@ func TestShouldRetryStatus(t *testing.T) {
 		if got := shouldRetryStatus(c.code); got != c.want {
 			t.Errorf("shouldRetryStatus(%d) = %v, want %v", c.code, got, c.want)
 		}
-	}
-}
-
-func TestParseRetryAfter(t *testing.T) {
-	cases := []struct {
-		hdr  string
-		want time.Duration
-	}{
-		{"", -1},
-		{"0", 0},
-		{"2", 2 * time.Second},
-		{"junk", -1},
-	}
-	for _, c := range cases {
-		h := http.Header{}
-		if c.hdr != "" {
-			h.Set("Retry-After", c.hdr)
-		}
-		if got := parseRetryAfter(h); got != c.want {
-			t.Errorf("parseRetryAfter(%q) = %v, want %v", c.hdr, got, c.want)
-		}
-	}
-}
-
-func TestCapRetryDelay(t *testing.T) {
-	if got := capRetryDelay(retryBaseDelay, -1); got != retryBaseDelay {
-		t.Errorf("capRetryDelay(backoff,-1) = %v, want backoff", got)
-	}
-	if got := capRetryDelay(retryBaseDelay, 0); got != 0 {
-		t.Errorf("capRetryDelay(backoff,0) = %v, want 0 (Retry-After precedence)", got)
-	}
-	if got := capRetryDelay(retryMaxDelay*2, -1); got != retryMaxDelay {
-		t.Errorf("capRetryDelay(>max,-1) = %v, want retryMaxDelay cap", got)
 	}
 }
 

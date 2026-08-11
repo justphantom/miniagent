@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent/config"
+	"github.com/justphantom/miniagent/internal/provider/httpretry"
 )
 
 const maxModelsBodyBytes = 1 << 20 // 1 MiB; the models list is far smaller than the chat body, cap prevents OOM
@@ -24,8 +25,8 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	backoff := retryBaseDelay
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	backoff := httpretry.RetryBaseDelay
+	for attempt := 0; attempt <= httpretry.MaxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -33,17 +34,17 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 		if err == nil {
 			return ids, nil
 		}
-		if !retryable || attempt == maxRetries {
+		if !retryable || attempt == httpretry.MaxRetries {
 			if attempt > 0 {
 				return nil, fmt.Errorf("after %d retries: %w", attempt, err)
 			}
 			return nil, err
 		}
-		delay := capRetryDelay(backoff, retryAfter)
+		delay := httpretry.CapRetryDelay(backoff, retryAfter)
 		if c.Logger != nil {
 			c.Logger.Warn("list models failed, retrying", "failed_attempt", attempt+1, "delay_ms", delay.Milliseconds(), "error", err)
 		}
-		if waitErr := sleepCtx(ctx, delay); waitErr != nil {
+		if waitErr := httpretry.SleepCtx(ctx, delay); waitErr != nil {
 			return nil, waitErr
 		}
 		backoff *= 2
@@ -79,7 +80,7 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 		// The response body is not echoed — a malicious/debug proxy may echo the URL/Authorization in
 		// the error body, and the error flows through -list-models stdout leaking the key (same as
 		// doOnce, only the status code is surfaced).
-		retryAfter := parseRetryAfter(resp.Header)
+		retryAfter := httpretry.ParseRetryAfter(resp.Header)
 		if _, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, maxModelsBodyBytes+1)); readErr != nil {
 			return nil, shouldRetryStatus(resp.StatusCode), retryAfter, fmt.Errorf("llm returned %d: read body: %w", resp.StatusCode, readErr)
 		}

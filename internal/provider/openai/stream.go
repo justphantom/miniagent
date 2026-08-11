@@ -14,6 +14,7 @@ import (
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/miniagent/config"
+	"github.com/justphantom/miniagent/internal/provider/httpretry"
 )
 
 // StreamClient calls the OpenAI-compatible chat completions endpoint (streaming SSE).
@@ -104,8 +105,8 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 		}
 		return nil
 	}
-	backoff := retryBaseDelay
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	backoff := httpretry.RetryBaseDelay
+	for attempt := 0; attempt <= httpretry.MaxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return miniagent.Response{}, err
 		}
@@ -130,10 +131,10 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 			if c.Logger != nil {
 				c.Logger.Warn("llm stream request failed", "error", err, "failed_attempt", attempt+1)
 			}
-			if attempt == maxRetries {
+			if attempt == httpretry.MaxRetries {
 				return miniagent.Response{}, fmt.Errorf("after %d retries: llm request: %w", attempt, err)
 			}
-			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, -1)); waitErr != nil {
+			if waitErr := httpretry.SleepCtx(ctx, httpretry.CapRetryDelay(backoff, -1)); waitErr != nil {
 				return miniagent.Response{}, waitErr
 			}
 			backoff *= 2
@@ -157,13 +158,13 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 			if resp.StatusCode == http.StatusBadRequest && isThinkingError(raw) {
 				return miniagent.Response{}, fmt.Errorf("%s%w (status %d)", prefix, miniagent.ErrThinkingUnsupported, resp.StatusCode)
 			}
-			if !shouldRetryStatus(resp.StatusCode) || attempt == maxRetries {
+			if !shouldRetryStatus(resp.StatusCode) || attempt == httpretry.MaxRetries {
 				return miniagent.Response{}, errors.New(prefix + fmt.Sprintf("llm returned %d", resp.StatusCode))
 			}
 			if c.Logger != nil {
 				c.Logger.Warn("llm stream non-200, retrying", "status", resp.StatusCode, "failed_attempt", attempt+1)
 			}
-			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, parseRetryAfter(resp.Header))); waitErr != nil {
+			if waitErr := httpretry.SleepCtx(ctx, httpretry.CapRetryDelay(backoff, httpretry.ParseRetryAfter(resp.Header))); waitErr != nil {
 				return miniagent.Response{}, waitErr
 			}
 			backoff *= 2
@@ -191,11 +192,11 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 		// and the error is transient, retry transparently: mirrors the non-streaming client's network retry with zero delta
 		// duplication. Once a delta has streamed the call is irrevocable (P2-4): live UX already received partial content,
 		// so surface the error as-is rather than replaying a half-stream.
-		if deltaSent == 0 && isTransientStreamError(perr) && attempt < maxRetries {
+		if deltaSent == 0 && isTransientStreamError(perr) && attempt < httpretry.MaxRetries {
 			if c.Logger != nil {
 				c.Logger.Warn("llm stream ended pre-delta, retrying", "error", perr, "failed_attempt", attempt+1)
 			}
-			if waitErr := sleepCtx(ctx, capRetryDelay(backoff, -1)); waitErr != nil {
+			if waitErr := httpretry.SleepCtx(ctx, httpretry.CapRetryDelay(backoff, -1)); waitErr != nil {
 				return miniagent.Response{}, waitErr
 			}
 			backoff *= 2

@@ -14,6 +14,7 @@ import (
 
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/miniagent/config"
+	"github.com/justphantom/miniagent/internal/provider/httpretry"
 )
 
 const maxChatBodyBytes = 4 << 20 // 4 MiB; mirrors openai — exactly at the limit so it does not truncate
@@ -99,8 +100,8 @@ func (c *Client) Do(ctx context.Context, req miniagent.Request) (miniagent.Respo
 	if c.Logger != nil {
 		c.Logger.Debug("llm request", "url", u.String(), "model", req.Model, "messages", len(req.Messages))
 	}
-	backoff := retryBaseDelay
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	backoff := httpretry.RetryBaseDelay
+	for attempt := 0; attempt <= httpretry.MaxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return miniagent.Response{}, err
 		}
@@ -108,17 +109,17 @@ func (c *Client) Do(ctx context.Context, req miniagent.Request) (miniagent.Respo
 		if err == nil {
 			return resp, nil
 		}
-		if !retryable || attempt == maxRetries {
+		if !retryable || attempt == httpretry.MaxRetries {
 			if attempt > 0 {
 				return miniagent.Response{}, fmt.Errorf("after %d retries: %w", attempt, err)
 			}
 			return miniagent.Response{}, err
 		}
-		delay := capRetryDelay(backoff, retryAfter)
+		delay := httpretry.CapRetryDelay(backoff, retryAfter)
 		if c.Logger != nil {
 			c.Logger.Warn("llm call failed, retrying", "failed_attempt", attempt+1, "delay_ms", delay.Milliseconds(), "error", err)
 		}
-		if waitErr := sleepCtx(ctx, delay); waitErr != nil {
+		if waitErr := httpretry.SleepCtx(ctx, delay); waitErr != nil {
 			return miniagent.Response{}, waitErr
 		}
 		backoff *= 2
@@ -159,7 +160,7 @@ func (c *Client) doOnce(ctx context.Context, client *http.Client, u *url.URL, bo
 		}
 		msg := fmt.Sprintf("llm returned %d", resp.StatusCode)
 		if shouldRetryStatus(resp.StatusCode) {
-			return miniagent.Response{}, true, parseRetryAfter(resp.Header), errors.New(msg)
+			return miniagent.Response{}, true, httpretry.ParseRetryAfter(resp.Header), errors.New(msg)
 		}
 		return miniagent.Response{}, false, 0, errors.New(msg)
 	}

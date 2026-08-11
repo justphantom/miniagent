@@ -1,35 +1,25 @@
 package anthropic
 
 import (
-	"context"
-	"net/http"
-	"strconv"
 	"strings"
-	"time"
+
+	"github.com/justphantom/miniagent/internal/provider/httpretry"
 )
 
-// Retry: applies only to transient failures (429/5xx + network errors), up to maxRetries times.
-// Vendor-agnostic, HTTP-status-code level — mirrored verbatim from the openai provider (the constants
-// and helpers are not wire-specific), so the two providers share identical retry semantics.
-const (
-	maxRetries     = 2
-	retryBaseDelay = 500 * time.Millisecond
-	retryMaxDelay  = 8 * time.Second // per-attempt backoff cap, includes the parsed Retry-After value
-)
+// Retry semantics — the constants (MaxRetries / RetryBaseDelay / RetryMaxDelay)
+// and the Retry-After / backoff / sleep helpers — live in the vendor-agnostic
+// httpretry package, shared verbatim with the openai provider. This file holds
+// only Anthropic-specific classification: the retryable-status set (Anthropic
+// adds 529 overloaded_error to the common 429/5xx baseline) and the
+// thinking-error 400-body heuristic.
 
+// shouldRetryStatus is the Anthropic retryable-status set: the common 429/5xx
+// baseline plus 529 (overloaded_error) — the canonical Anthropic transient under
+// load (Retryable=Yes in their error reference, retried by the official SDKs). No
+// Go stdlib http.Status constant exists, and OpenAI has no equivalent, so this
+// code is Anthropic-specific.
 func shouldRetryStatus(code int) bool {
-	switch code {
-	case http.StatusTooManyRequests, // 429
-		http.StatusInternalServerError, // 500
-		http.StatusBadGateway,          // 502
-		http.StatusServiceUnavailable,  // 503
-		http.StatusGatewayTimeout,      // 504
-		529:                            // Anthropic overloaded_error — the canonical Anthropic transient under load (Retryable=Yes in their error
-		// reference, retried by the official SDKs). No Go stdlib http.Status constant exists, and OpenAI has no
-		// equivalent, so this is Anthropic-specific (NOT mirrored from the openai provider's retry.go).
-		return true
-	}
-	return false
+	return httpretry.ShouldRetryStatus(code, 529)
 }
 
 // isThinkingError identifies a 400 indicating the thinking parameter is the wrong shape for the target
@@ -50,46 +40,4 @@ func isThinkingError(raw []byte) bool {
 	hasThinking := strings.Contains(lower, "thinking") || strings.Contains(lower, "budget_tokens")
 	hasUnknown := strings.Contains(lower, "is not supported") || strings.Contains(lower, "unrecognized") || strings.Contains(lower, "unknown parameter")
 	return hasThinking && hasUnknown
-}
-
-// parseRetryAfter parses the Retry-After header: seconds (RFC 7231 §7.1.3) or an HTTP-date.
-// Returns -1 (sentinel) when absent or unparseable, to distinguish an explicit "Retry-After: 0"
-// (retry immediately). The return value is not capped (capping happens at the call site).
-func parseRetryAfter(h http.Header) time.Duration {
-	v := strings.TrimSpace(h.Get("Retry-After"))
-	if v == "" {
-		return -1
-	}
-	if sec, err := strconv.Atoi(v); err == nil && sec >= 0 {
-		return time.Duration(sec) * time.Second
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d
-		}
-		return 0 // HTTP-date in the past ≡ retry now
-	}
-	return -1
-}
-
-// capRetryDelay: an explicit Retry-After (>=0, including 0=immediate) takes precedence over exponential
-// backoff, then is capped at retryMaxDelay. retryAfter<0 means absent.
-func capRetryDelay(backoff, retryAfter time.Duration) time.Duration {
-	if retryAfter >= 0 {
-		backoff = retryAfter
-	}
-	if backoff > retryMaxDelay {
-		backoff = retryMaxDelay
-	}
-	return backoff
-}
-
-// sleepCtx waits for delay or until ctx is canceled.
-func sleepCtx(ctx context.Context, delay time.Duration) error {
-	select {
-	case <-time.After(delay):
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

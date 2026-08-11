@@ -1,7 +1,7 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-11T20:18:00+08:00
+updated: 2026-08-11T22:40:37+08:00
 ---
 
 # 当前会话
@@ -26,6 +26,7 @@ updated: 2026-08-11T20:18:00+08:00
 - system prompt 来源再收口：移除 `workdir/.miniagent/persona.md`/`rules.md` 自动加载（继全局 `~/.miniagent/` 之后的第二次收口），system prompt 彻底统一为 config `defaults.system_prompt`（未配则内置 `defaultSystemPrompt`）+ subagent guidance。删 `cmd/miniagent/project.go` + `project_test.go`，`assembleSystemPrompt` 砍 `pr` 参数简化为两步；README/CHANGELOG 同步。→ 提交 `bebaf1c`。
 - 发版前完善实施（31-agent 对抗式审计定版 v4.4.0，逐条独立复核）：①删杂散轻量 tag `list`（在 HEAD 致 `git describe --tags`=list、`make build` 烧 version=list）+ Makefile/release.sh `git describe` 加 `--match "v*"` 防御未来杂散非-v tag；②CHANGELOG 重构——`[Unreleased]` 置顶且空、两 breaking（codemap/todo 移除、.miniagent 收口）合入 `[4.4.0]` Removed、fcbf64c 补 `Fixed`（compaction tail 预算回归 + system_prompt 去重）、补 deploy install / loopCfg 空兜底移除 `Changed`；③`config.example.json` 删 19 行 `//` 注释成合法 JSON（原 LoadConfig 直接拒、cp 即崩）；④扫清 `script`/`rule files` 残留注释（config.go×2 / tool_shell.go / history_util.go / loop_api.go / trim.go / SECURITY.md×2 / ARCHITECTURE.md×2 / README shellTimeout）；⑤README 补三处（L116 .miniagent 过期来源加前向指针、工具清单加 codemap/todo 迁移说明、内嵌配置示例 `models` 改对象数组 + `thinking` off）。verify-gate 全绿（gofmt 空 / build / vet / test -race / lint 0）。环境：沙箱 Go 1.24.4 + go.mod 1.25 + 无网，`go env -w GOPROXY=https://goproxy.cn,direct` 解工具链拉取阻塞。待用户审 diff / 决定提交。
 - P2 补完：①anthropic `TestStreamClient_AllowUnterminatedAcceptsPartial`（flag=true 接受 content-then-EOF 半截回复，镜像 openai）——首版误把 `NewStreamClient` 第 6 参当 flag，实为 `cache`（flag 须构造后赋值，与 setup.go wiring 一致），测试当场抓出；②`TestClient_CacheTokensFoldedIntoInput`（非流式 parseResponse cache-token 折叠，镜像 sse_test）；③`TestBuildTools_AlwaysRegisters6` 加名称集断言（防一换一替换漏检）；④Makefile `verify` 目标聚合五步 gate + release.sh 改 `make verify`。CI（.github/workflows）经用户否决未加（贴合 AGENTS.md 反工程化立场，项目维持零 CI）。verify-gate 全绿。
+- 精简评估 + 机会1 实施：抽 `internal/provider/httpretry` 共享包——openai/anthropic 两 provider 原各自复制的厂商无关重试原语（常量 MaxRetries/RetryBaseDelay/RetryMaxDelay + ParseRetryAfter/CapRetryDelay/SleepCtx + 状态码分类）抽到共享包；ShouldRetryStatus 参数化（公共 429/5xx 基线 + 厂商 extra 码，anthropic 传 529），各 provider 私留 isThinkingError（协议本质不同）+ shouldRetryStatus 薄包装。两 retry.go 95→38/43 行，生产代码净减约 80 行。结构根治 copy-asymmetry 对称维护（L2 incident 起因）。lint 修 2 处（slices.Contains + errors.Is）。verify-gate 全绿（build/vet/test -race/lint 0/gofmt 空）。CHANGELOG [Unreleased] 落 Changed。待用户审 diff/决定提交。
 
 ## 未决问题
 无。

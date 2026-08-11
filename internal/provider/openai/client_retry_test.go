@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/provider/httpretry"
 )
 
 // Retry tests: use httptest.Server + atomic counters to precisely control each response.
@@ -94,8 +95,8 @@ func TestChatClient_Do_RetriesExhaustedOn503(t *testing.T) {
 	if !strings.Contains(err.Error(), "after 2 retries") {
 		t.Errorf("err should mention retry count: %v", err)
 	}
-	if got := atomic.LoadInt32(calls); got != int32(1+maxRetries) {
-		t.Errorf("calls = %d, want %d", got, 1+maxRetries)
+	if got := atomic.LoadInt32(calls); got != int32(1+httpretry.MaxRetries) {
+		t.Errorf("calls = %d, want %d", got, 1+httpretry.MaxRetries)
 	}
 }
 
@@ -215,33 +216,6 @@ func TestChatClient_Do_RetriesOnNetworkError(t *testing.T) {
 	}
 }
 
-// parseRetryAfter must distinguish "not provided" (-1, use backoff) from "explicit 0" (0, retry immediately);
-// otherwise a legitimate Retry-After: 0 would be mistaken for not provided and fall back to backoff, violating server intent.
-// P3-3: an HTTP-date already in the past is semantically equivalent to retrying immediately, returning 0 (rather than -1 to use backoff).
-func TestParseRetryAfter(t *testing.T) {
-	cases := []struct {
-		name   string
-		header string
-		want   time.Duration
-	}{
-		{"absent", "", -1},
-		{"explicit-zero", "0", 0},
-		{"seconds", "2", 2 * time.Second},
-		{"garbage", "not-a-date", -1},
-		// P3-3: past HTTP-date → 0 (retry immediately), rather than -1 (use backoff).
-		{"past-http-date", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), 0},
-	}
-	for _, c := range cases {
-		h := http.Header{}
-		if c.header != "" {
-			h.Set("Retry-After", c.header)
-		}
-		if got := parseRetryAfter(h); got != c.want {
-			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
 // P2-4: DoStream pre-delta phase returns 503 once then a 200 SSE stream, successfully aggregated (pre-delta failures can be retried).
 func TestStreamClient_DoStream_RetriesOn503ThenSucceeds(t *testing.T) {
 	const okSSE = `data: {"choices":[{"delta":{"content":"recovered"}}]}
@@ -288,7 +262,7 @@ func TestStreamClient_DoStream_RetriesExhaustedOn503(t *testing.T) {
 	if !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "after 2 retries") {
 		t.Errorf("err = %v", err)
 	}
-	if got := atomic.LoadInt32(calls); got != int32(1+maxRetries) {
-		t.Errorf("calls = %d, want %d", got, 1+maxRetries)
+	if got := atomic.LoadInt32(calls); got != int32(1+httpretry.MaxRetries) {
+		t.Errorf("calls = %d, want %d", got, 1+httpretry.MaxRetries)
 	}
 }
