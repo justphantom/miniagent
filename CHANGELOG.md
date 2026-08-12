@@ -14,6 +14,9 @@
 ### Changed
 - **retry 基础设施抽公共包 `internal/provider/httpretry`**：openai 与 anthropic 两 provider 原各自复制一份厂商无关的重试原语（常量 `MaxRetries`/`RetryBaseDelay`/`RetryMaxDelay` + `ParseRetryAfter`/`CapRetryDelay`/`SleepCtx` + 可重试状态码分类），现抽到共享包；`ShouldRetryStatus` 参数化为「公共 429/5xx 基线 + 厂商 `extra` 码」，anthropic 经此传入 529（overloaded_error），各 provider 仅私留厂商特定的 `isThinkingError`（thinking 协议本质不同，不可合并）与 `shouldRetryStatus` 薄包装。从结构上根治「复制后改一漏一」的对称维护负担（L2 incident `anthropic-provider-copy-asymmetry` 的起因），生产代码净减约 80 行。纯内部重构——对外契约（LLM 接口 / NDJSON / config / CLI）零变化。
 
+### Fixed
+- **default 模式 confineWrap 误伤只读工具的 workdir 根路径**：`checkConfine` 的「path 指向 workdir 根即拒」（防 write/edit 的 MkdirAll/Rename 覆盖整个 workdir，review P3-8）被无差别套用到 read/grep/glob，致 `grep path=<workdir>` 或 `path="."`（解析为根）在 default 模式被拒——读/列举整个 workdir 本是合法操作。`confineWrap`/`checkConfine` 加 `readOnly` 形参（显式必填，置于 `evalSymlinks` 可变参前）：read/grep/glob 传 true 跳过根覆盖检查（越界 / symlink 检查不变），write/edit 传 false 保持原拒。继 v4.4.0「空 path 直通」后再修一类只读工具误伤。
+
 ## [4.4.0] - 2026-08-11
 
 > minor：首个非 openai 上游——`anthropic` provider（Messages API）正式落地，含流式 / prompt caching / interleaved-thinking / 签名跨轮；配套 core 层「LLM 端点 400 硬错」补丁。另含两项 breaking：内置工具 10→6（移除 codemap/todo）、`.miniagent/` persona/rules 自动加载收口（system prompt 统一 config-only）。新增 provider / 配置项均 opt-in，既有 openai 行为零改动。

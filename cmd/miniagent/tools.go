@@ -33,15 +33,15 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		edit.ResultLimit = fileResultLimit
 	}
 	if confine && workdir != "" {
-		read = confineWrap(read, workdir, evalSymlinks)
-		write = confineWrap(write, workdir, evalSymlinks)
-		edit = confineWrap(edit, workdir, evalSymlinks)
+		read = confineWrap(read, workdir, true, evalSymlinks)
+		write = confineWrap(write, workdir, false, evalSymlinks)
+		edit = confineWrap(edit, workdir, false, evalSymlinks)
 	}
 	grep := tools.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
 	glob := tools.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
 	if confine && workdir != "" {
-		grep = confineWrap(grep, workdir, evalSymlinks)
-		glob = confineWrap(glob, workdir, evalSymlinks)
+		grep = confineWrap(grep, workdir, true, evalSymlinks)
+		glob = confineWrap(glob, workdir, true, evalSymlinks)
 	}
 	shell := tools.ShellTool(workdir, shellTimeout, shellMode, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes)
 	// Opt-in default-mode shell guardrails (allowlist + cd-confine). Applied only in ModeDefault with a real workdir,

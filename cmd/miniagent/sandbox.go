@@ -27,14 +27,14 @@ import (
 // as stated in the README), so capability is not increased — this is only a guardrail against misoperation,
 // without forcibly calling EvalSymlinks (which would change default semantics and introduce new failure modes).
 // True isolation relies on a low-privilege user + container + OS layer (see README "Runtime isolation").
-func confineWrap(tool miniagent.Tool, root string, evalSymlinks ...bool) miniagent.Tool {
+func confineWrap(tool miniagent.Tool, root string, readOnly bool, evalSymlinks ...bool) miniagent.Tool {
 	orig := tool.Call
 	tool.Call = func(ctx context.Context, args string) miniagent.ToolResult {
 		var p struct {
 			Path string `json:"path"`
 		}
 		if json.Unmarshal([]byte(args), &p) == nil && p.Path != "" {
-			if err := checkConfine(root, p.Path, evalSymlinks...); err != nil {
+			if err := checkConfine(root, p.Path, readOnly, evalSymlinks...); err != nil {
 				return miniagent.ToolResult{IsError: true, Output: err.Error()}
 			}
 		}
@@ -46,7 +46,7 @@ func confineWrap(tool miniagent.Tool, root string, evalSymlinks ...bool) miniage
 // checkConfine is a lightweight path validation: p (relative to root or absolute) after Clean+Abs must fall within the root subtree.
 // It additionally checks that existing path components from root to target are not symlinks, narrowing the TOCTOU window.
 // It does not do an EvalSymlinks follow-up — default is a thin soft constraint, symlink escapes are mitigated by the caller's OS isolation.
-func checkConfine(root, p string, evalSymlinks ...bool) error {
+func checkConfine(root, p string, readOnly bool, evalSymlinks ...bool) error {
 	full := p
 	if !filepath.IsAbs(p) {
 		full = filepath.Join(root, p)
@@ -60,9 +60,10 @@ func checkConfine(root, p string, evalSymlinks ...bool) error {
 		return fmt.Errorf("resolve workdir %q failed: %w", root, err)
 	}
 	sep := string(filepath.Separator)
-	// Reject path="." or path equal to the workdir absolute path: rename over a directory would EISDIR (ambiguous error),
-	// and if MkdirAll/Rename actually took effect it would destroy the entire workdir (review P3-8).
-	if absTarget == rootAbs {
+	// Reject path="." or path equal to the workdir absolute path for WRITE tools: rename over a directory would EISDIR
+	// (ambiguous error), and if MkdirAll/Rename actually took effect it would destroy the entire workdir (review P3-8).
+	// Read-only tools (read/grep/glob) skip this: targeting the whole workdir to read/list is a legitimate operation.
+	if !readOnly && absTarget == rootAbs {
 		return fmt.Errorf("path %q points to the workdir root itself, cannot overwrite", p)
 	}
 	if !strings.HasPrefix(absTarget+sep, rootAbs+sep) {

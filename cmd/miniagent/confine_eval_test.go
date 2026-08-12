@@ -18,7 +18,7 @@ func TestCheckConfine_EvalSymlinks_NormalPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sub, "f.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkConfine(root, filepath.Join("sub", "f.txt"), true); err != nil {
+	if err := checkConfine(root, filepath.Join("sub", "f.txt"), false, true); err != nil {
 		t.Errorf("eval on normal in-workdir path: %v, want nil", err)
 	}
 }
@@ -27,7 +27,7 @@ func TestCheckConfine_EvalSymlinks_NormalPath(t *testing.T) {
 // errors on a non-existent path, so the eval branch falls back to the lexical result, preserving create semantics.
 func TestCheckConfine_EvalSymlinks_NonExistentFallsBack(t *testing.T) {
 	root := t.TempDir()
-	if err := checkConfine(root, filepath.Join("new", "deep", "file.txt"), true); err != nil {
+	if err := checkConfine(root, filepath.Join("new", "deep", "file.txt"), false, true); err != nil {
 		t.Errorf("eval on non-existent in-workdir path: %v, want nil (ENOENT fallback for create)", err)
 	}
 }
@@ -39,7 +39,7 @@ func TestCheckConfine_EvalSymlinks_SymlinkComponentCaught(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	if err := checkConfine(root, filepath.Join("link", "file"), true); err == nil {
+	if err := checkConfine(root, filepath.Join("link", "file"), false, true); err == nil {
 		t.Error("symlink component in path: want error, got nil")
 	}
 }

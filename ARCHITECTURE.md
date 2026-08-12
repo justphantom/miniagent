@@ -20,7 +20,7 @@ cmd/miniagent/        CLI 入口层：flag 解析 → 组装 → 调 Run → 落
   setup_http.go       buildLLM / buildChatClient（HTTP client 注入）
   tools.go            buildTools：注册内置工具（read/write/edit/grep/glob/shell），按 mode 调约束
   session.go          session 解析（-save-session/-session 互斥、load/write）
-  sandbox.go          confineWrap：default 模式写工具路径越界拒绝
+  sandbox.go          confineWrap：default 模式文件工具路径越界拒绝；只读工具放行 workdir 根
   prompts.go          默认 system prompt、subagent 引导注入
   stdin.go            读 prompt（空 stdin 交互引导）
 
