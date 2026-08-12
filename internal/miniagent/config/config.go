@@ -73,11 +73,15 @@ type ModelRef struct {
 
 // DefaultsConfig's Provider/Model are both required (after provider/model split, the "provider/id" string is no longer parsed).
 type DefaultsConfig struct {
-	Provider         string `json:"provider"`
-	Model            string `json:"model"`
-	Thinking         string `json:"thinking,omitempty"`
-	Mode             string `json:"mode,omitempty"`
-	SystemPrompt     string `json:"system_prompt,omitempty"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	Thinking     string `json:"thinking,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
+	// RulesFile is a bare filename under workdir (e.g. "AGENTS.md"); when the file exists its text is appended to the
+	// system prompt after the base (built-in default or system_prompt), before subagent guidance. Empty = no file source
+	// (config-only, the default). Must be a bare filename (no path separators) — resolved strictly under workdir.
+	RulesFile        string `json:"rules_file,omitempty"`
 	SummaryRequest   string `json:"summary_request,omitempty"`
 	SummarizerPrompt string `json:"summarizer_prompt,omitempty"`
 	// SubagentGuidance is the subagent fork bootstrap template, injected at the end of the system prompt; placeholders {config_path}/{mode}

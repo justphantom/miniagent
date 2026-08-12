@@ -34,6 +34,10 @@ system prompt 来源从「config `defaults.system_prompt` + `workdir/.miniagent/
 - 核心引擎仍不感知任何具体项目，只拼 system prompt；config-first 裁决优先级 `cli > config > builtin` 不变。
 - NDJSON 事件契约、session 存储、tool 契约均不受影响。
 
+## 补充：opt-in 规则文件（2026-08-12）
+
+`defaults.rules_file`（opt-in，默认空）允许 workdir 下一个**纯 basename**（拒 `..`/绝对/子目录）的规则文件追加到 system prompt（base 后/guidance 前）。受控回归——默认行为仍 config-only（不变量默认下成立），仅显式配置时引入文件来源；满足原 rules.md「追加」语义需求（迁移指引点名的风险点），改 basename-only + opt-in 收窄「来源分散/越界」。实现：`assembleSystemPrompt` 加 workdir/rulesFile 形参 + `appendProjectRules`（限 64KiB + stderr 不致命）。
+
 ## 备注
 
 本项目记忆自身用 `.agent/` 目录（非 `.miniagent/`），本轮改动不影响 .agent/ 的读取与写入。

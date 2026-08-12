@@ -341,9 +341,11 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 ## 项目专属配置
 
-system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认 `defaultSystemPrompt`），不再从 `.miniagent/persona.md`/`rules.md` 自动加载。`.miniagent/` 目录现仅用于 session 存储（见「会话」节）。
+system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `defaultSystemPrompt`）加上可选的 workdir 规则文件（`defaults.rules_file`，见下）；不再从 `.miniagent/persona.md`/`rules.md` 无条件自动加载。`.miniagent/` 目录现仅用于 session 存储（见「会话」节）。
 
 > **破坏性变更**：项目级 `workdir/.miniagent/persona.md`/`rules.md` 自动加载已移除（继全局 `~/.miniagent/` 层之后的第二次收口，system prompt 来源统一为 config-only）。迁移：原 persona 内容直进 `defaults.system_prompt`（「取代默认」语义与 system_prompt 等价）；原 rules 为「追加」语义，物进 `system_prompt` 文本时需自行保留内置默认的工作流约束（或接受其丢失）。
+
+**可选项目规则文件**（opt-in `defaults.rules_file`）：设为 workdir 下的纯文件名（如 `AGENTS.md`，**不含路径分隔符**）——文件存在则其文本追加到 system prompt（base 之后、subagent guidance 之前），不存在静默跳过；默认空 = 不启用（纯 config-only）。这是 v4.4.0 移除无条件 `.miniagent/rules.md` 后的 opt-in 回归：满足「项目规则 + 保留内置默认工作流约束」，且仅限 workdir 内纯文件名（拒 `..`/绝对路径/子目录，防越界读注入 prompt——default 的 workdir 约束在工具层，管不到此 main 层装配）；>64KiB 截断并 stderr 警告，读失败不致命。
 
 ### 提示词模板（config `defaults`）
 
@@ -352,6 +354,7 @@ system prompt 仅来自 config `defaults.system_prompt`（未配则内置默认 
 | 字段 | 占位符 | 说明 |
 |------|--------|------|
 | `system_prompt` | — | 主 system prompt（未配则内置默认） |
+| `rules_file` | — | workdir 下纯文件名（如 `AGENTS.md`）；存在则追加到 system prompt（base 后/guidance 前），默认空=不启用 |
 | `summary_request` | — | 撞迭代上限时注入的总结请求 |
 | `summarizer_prompt` | `{max_chars}` | 摘要 system 全量 override（非空时忽略下列字段） |
 | `summary_create_instruction` | `{max_chars}` | 摘要 CREATE 指令 |

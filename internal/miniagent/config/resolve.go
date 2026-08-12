@@ -38,6 +38,7 @@ type Resolved struct {
 	Thinking                 string
 	Mode                     string
 	System                   string
+	RulesFile                string
 	SummaryRequest           string
 	SummarizerPrompt         string
 	SubagentGuidance         string
@@ -142,6 +143,7 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 		return nil, fmt.Errorf("mode %q is invalid (%s|%s)", r.Mode, miniagent.ModeDefault, miniagent.ModeAuto)
 	}
 	r.System = cfg.Defaults.SystemPrompt
+	r.RulesFile = cfg.Defaults.RulesFile
 	// summary_request / summarizer_prompt are config-only sources (moved out of CLI in P2).
 	if cfg.Defaults.SummaryRequest != "" {
 		r.SummaryRequest = cfg.Defaults.SummaryRequest

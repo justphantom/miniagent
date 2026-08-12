@@ -10,6 +10,7 @@
   - `shell_allowlist`（`[]string`）：命令名白名单，管道/链式（`a | b && c; d`）**每段**都校验，**精确匹配**（`/usr/bin/git` 不命中 `git`，须逐字列入，避免路径混淆绕过）。词法分词器处理引号/`VAR=val` 前缀/`&&`/`;`/`|`/`&`/子 shell `()`，并把 `2>&1` 等 fd 重定向保持在词内不误切。
   - `shell_confine_cd`（bool）：词法拦 `cd`/`pushd` 越出 workdir（绝对路径、`..`、`~`、`$VAR`、裸 `cd`→HOME、`cd -`→上一目录）。
   - **性质**：best-effort **词法 guardrail，非安全边界**——可被 `eval`/`$()`/反引号/别名绕过，与既有 sudo/su 拒绝名单同框架（不变量 #13 不变）。经 `buildTools` 在 default 模式条件包装 shell 工具（镜像 `confineWrap`），不改 `ShellTool` 签名；真隔离仍靠调用方 OS 层。
+- **config `defaults.rules_file`（opt-in）**：workdir 下的规则文件追加到 system prompt（base 之后、subagent guidance 之前），默认空 = 不启用（现状 config-only 不变）。须为纯 basename（拒 `..`/绝对路径/子目录，防越界读注入 prompt——default 的 workdir 约束在工具层、管不到 main 层装配）；不存在静默跳过，读失败/>64KiB stderr 警告不致命（截断）。v4.4.0 移除无条件 `.miniagent/rules.md` 后的 opt-in 回归，满足「项目规则 + 保留内置默认工作流约束」（L2 `system-prompt-config-only.md` 迁移指引点名的风险点）。
 
 ### Changed
 - **retry 基础设施抽公共包 `internal/provider/httpretry`**：openai 与 anthropic 两 provider 原各自复制一份厂商无关的重试原语（常量 `MaxRetries`/`RetryBaseDelay`/`RetryMaxDelay` + `ParseRetryAfter`/`CapRetryDelay`/`SleepCtx` + 可重试状态码分类），现抽到共享包；`ShouldRetryStatus` 参数化为「公共 429/5xx 基线 + 厂商 `extra` 码」，anthropic 经此传入 529（overloaded_error），各 provider 仅私留厂商特定的 `isThinkingError`（thinking 协议本质不同，不可合并）与 `shouldRetryStatus` 薄包装。从结构上根治「复制后改一漏一」的对称维护负担（L2 incident `anthropic-provider-copy-asymmetry` 的起因），生产代码净减约 80 行。纯内部重构——对外契约（LLM 接口 / NDJSON / config / CLI）零变化。

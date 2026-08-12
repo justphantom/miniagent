@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -26,11 +29,44 @@ const defaultSystemPrompt = `You are a pragmatic software engineer working insid
 // empty string, leaving resolved.System guidance-only; loopCfg uses resolved.System verbatim (it no longer
 // re-defaults an empty System), so the agent would run on guidance-only text and silently lose all ReAct
 // constraints.
-func assembleSystemPrompt(base, guidance, configAbsPath, mode string) string {
+func assembleSystemPrompt(base, guidance, configAbsPath, mode, workdir, rulesFile string) string {
 	if base == "" {
 		base = defaultSystemPrompt
 	}
+	base = appendProjectRules(base, workdir, rulesFile)
 	return injectSubagentGuidance(base, guidance, configAbsPath, mode)
+}
+
+// maxRulesFileBytes caps the rules file injected into the system prompt; an oversized file is truncated (with a stderr
+// notice) rather than rejected, so a large rules file never blocks startup.
+const maxRulesFileBytes = 64 * 1024 // 64KiB
+
+// appendProjectRules appends the optional workdir rules file to the system prompt. rulesFile must be a bare filename
+// (no separators, no "."/"..") resolved strictly under workdir — prevents reading files outside workdir into the prompt
+// (default mode's workdir confinement lives at the tool layer, not this main-layer assembly). Missing file is silently
+// skipped; a read error is reported on stderr but not fatal. Appended before subagent guidance so project rules sit
+// atop the base workflow constraints.
+func appendProjectRules(system, workdir, rulesFile string) string {
+	if rulesFile == "" || workdir == "" {
+		return system
+	}
+	if filepath.Base(rulesFile) != rulesFile || rulesFile == "." || rulesFile == ".." {
+		fmt.Fprintf(os.Stderr, "miniagent: rules_file %q must be a bare filename under workdir, skipped\n", rulesFile)
+		return system
+	}
+	path := filepath.Join(workdir, rulesFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "miniagent: read rules_file %q: %v\n", path, err)
+		}
+		return system
+	}
+	if len(data) > maxRulesFileBytes {
+		data = data[:maxRulesFileBytes]
+		fmt.Fprintf(os.Stderr, "miniagent: rules_file %q exceeds %d bytes, truncated\n", path, maxRulesFileBytes)
+	}
+	return system + "\n\n" + string(data)
 }
 
 // injectSubagentGuidance appends the subagent fork guidance to the system prompt: injects the absolute path

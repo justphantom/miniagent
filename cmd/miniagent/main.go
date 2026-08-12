@@ -144,7 +144,7 @@ func main() {
 		}
 	}
 	// System prompt: config defaults.system_prompt with the built-in defaultSystemPrompt fallback, then subagent guidance (see assembleSystemPrompt).
-	resolved.System = assembleSystemPrompt(resolved.System, resolved.SubagentGuidance, absConfigPath(*f.configPath), resolved.Mode)
+	resolved.System = assembleSystemPrompt(resolved.System, resolved.SubagentGuidance, absConfigPath(*f.configPath), resolved.Mode, workdir, resolved.RulesFile)
 
 	// Apply runtime config overrides (precedence: config>builtin).
 	limits := miniagent.Limits{

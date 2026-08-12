@@ -57,6 +57,7 @@
     "thinking": "off",
     "mode": "default",
     "system_prompt": "",
+    "rules_file": "",
     "summary_request": "Summarize the completed tools and key results; do not continue calling tools.",
     "summarizer_prompt": "You are a context compression assistant; summarize the middle section of the conversation concisely in Chinese."
   },

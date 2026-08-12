@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -85,7 +87,7 @@ func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
 // appends to the empty string, leaving the system guidance-only — loopCfg uses resolved.System verbatim (no
 // re-default), so the agent would silently lose all workflow constraints.
 func TestAssembleSystemPrompt_DefaultApplied(t *testing.T) {
-	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "default")
+	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "default", "", "")
 	if !strings.Contains(got, "Observe before acting") {
 		t.Errorf("under default config system prompt should contain the ReAct constraints from defaultSystemPrompt: %q", got)
 	}
@@ -96,5 +98,60 @@ func TestRenderSubagentGuidance_CustomTemplate(t *testing.T) {
 	got := renderSubagentGuidance("fork={config_path}|mode={mode}", "/x y/z.json", "auto")
 	if want := "fork='/x y/z.json'|mode=auto"; got != want {
 		t.Errorf("custom template placeholder replacement = %q, want %q", got, want)
+	}
+}
+
+// appendProjectRules: a bare filename under workdir is appended; a missing file (and empty rulesFile/workdir) is a silent no-op.
+func TestAppendProjectRules_AppendsAndSkipsMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Project rule\nPrefer early returns."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := appendProjectRules("BASE", dir, "AGENTS.md")
+	if !strings.HasPrefix(got, "BASE") || !strings.Contains(got, "Project rule") {
+		t.Errorf("existing rules file should be appended: %q", got)
+	}
+	if got := appendProjectRules("BASE", dir, "MISSING.md"); got != "BASE" {
+		t.Errorf("missing rules file should be a no-op, got: %q", got)
+	}
+	if got := appendProjectRules("BASE", dir, ""); got != "BASE" {
+		t.Errorf("empty rulesFile should be a no-op, got: %q", got)
+	}
+	if got := appendProjectRules("BASE", "", "AGENTS.md"); got != "BASE" {
+		t.Errorf("empty workdir should be a no-op, got: %q", got)
+	}
+}
+
+// appendProjectRules rejects non-basename rules_file (separators / absolute / "." / "..") — never resolves outside workdir.
+func TestAppendProjectRules_RejectsNonBasename(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{"docs/rules.md", "/etc/passwd", "..", ".", "a/b"} {
+		if got := appendProjectRules("BASE", dir, bad); got != "BASE" {
+			t.Errorf("rules_file %q should be rejected (non-basename), got: %q", bad, got)
+		}
+	}
+}
+
+// assembleSystemPrompt layers base (default fallback or config) + rules file + subagent guidance in that order.
+func TestAssembleSystemPrompt_LayersRulesThenGuidance(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("RULE-TEXT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "default", dir, "AGENTS.md")
+	if !strings.Contains(got, "Observe before acting") {
+		t.Errorf("default base lost: %q", got)
+	}
+	idxRule := strings.Index(got, "RULE-TEXT")
+	idxGuidance := strings.Index(got, "-config ")
+	if idxRule < 0 || idxGuidance < 0 {
+		t.Fatalf("rules or guidance missing: %q", got)
+	}
+	if idxRule >= idxGuidance {
+		t.Errorf("rules must precede guidance: rule@%d guidance@%d", idxRule, idxGuidance)
+	}
+	got2 := assembleSystemPrompt("MYBASE", "", "/abs/miniagent.json", "default", dir, "AGENTS.md")
+	if !strings.HasPrefix(got2, "MYBASE") || !strings.Contains(got2, "RULE-TEXT") {
+		t.Errorf("custom base should also get rules appended: %q", got2)
 	}
 }
