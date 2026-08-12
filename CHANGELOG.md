@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-08-12
+
+> minor：default 模式新增两个 opt-in shell guardrail（`run.shell_allowlist`/`run.shell_confine_cd`）+ opt-in 项目规则文件（`defaults.rules_file`）；workdir 收口为 `-workdir` 单一来源（**breaking**：删 config `run.workdir`、所有模式必填且须绝对路径、去 cwd 回落）；retry 原语抽 `internal/provider/httpretry` 公共包。新增项均 opt-in、默认关；既有 openai 行为零改动。
+
 ### Added
 - **default 模式 shell guardrail（opt-in）：`run.shell_allowlist` + `run.shell_confine_cd`**（`internal/miniagent/tools/tool_shell_guard.go`，`tools.GuardShell`）。两个独立开关，默认关、保持现状；仅 ModeDefault + 非空 workdir 生效（auto 仍无约束）。
   - `shell_allowlist`（`[]string`）：命令名白名单，管道/链式（`a | b && c; d`）**每段**都校验，**精确匹配**（`/usr/bin/git` 不命中 `git`，须逐字列入，避免路径混淆绕过）。词法分词器处理引号/`VAR=val` 前缀/`&&`/`;`/`|`/`&`/子 shell `()`，并把 `2>&1` 等 fd 重定向保持在词内不误切。
@@ -14,6 +18,9 @@
 
 ### Changed
 - **retry 基础设施抽公共包 `internal/provider/httpretry`**：openai 与 anthropic 两 provider 原各自复制一份厂商无关的重试原语（常量 `MaxRetries`/`RetryBaseDelay`/`RetryMaxDelay` + `ParseRetryAfter`/`CapRetryDelay`/`SleepCtx` + 可重试状态码分类），现抽到共享包；`ShouldRetryStatus` 参数化为「公共 429/5xx 基线 + 厂商 `extra` 码」，anthropic 经此传入 529（overloaded_error），各 provider 仅私留厂商特定的 `isThinkingError`（thinking 协议本质不同，不可合并）与 `shouldRetryStatus` 薄包装。从结构上根治「复制后改一漏一」的对称维护负担（L2 incident `anthropic-provider-copy-asymmetry` 的起因），生产代码净减约 80 行。纯内部重构——对外契约（LLM 接口 / NDJSON / config / CLI）零变化。
+
+### Removed
+- **`run.workdir` 配置项删除 + `-workdir` 收口为单一来源（breaking，config + CLI 双面）**：workdir 不再可从 config `run.workdir` 取（`RunConfig.Workdir` 字段移除、`CLIOverrides.Workdir` 移除），也不再回落进程 cwd（`absWorkdir` 去 `os.Getwd()` 兜底）——唯一来源是 `-workdir` flag。同时 `-workdir` 由「仅 default 模式必填」收紧为**所有模式必填**（`-mode auto` 也不能省），且**须绝对路径**（`-workdir .` / 相对路径报错退出 1）。理由：config 取 + cwd 回落会让 session 元数据的 workdir 字段随运行环境漂移、且与 default 模式工具边界所用的 workdir 可能不一致，单源化后可预测、可审计。**迁移**：config `run.workdir` → `-workdir` flag；`-workdir .` 或相对路径 → `-workdir "$PWD"`；auto 模式脚本里省略 `-workdir` 的需显式补绝对路径。
 
 ### Fixed
 - **default 模式 confineWrap 误伤只读工具的 workdir 根路径**：`checkConfine` 的「path 指向 workdir 根即拒」（防 write/edit 的 MkdirAll/Rename 覆盖整个 workdir，review P3-8）被无差别套用到 read/grep/glob，致 `grep path=<workdir>` 或 `path="."`（解析为根）在 default 模式被拒——读/列举整个 workdir 本是合法操作。`confineWrap`/`checkConfine` 加 `readOnly` 形参（显式必填，置于 `evalSymlinks` 可变参前）：read/grep/glob 传 true 跳过根覆盖检查（越界 / symlink 检查不变），write/edit 传 false 保持原拒。继 v4.4.0「空 path 直通」后再修一类只读工具误伤。
