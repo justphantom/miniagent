@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
-	"github.com/justphantom/miniagent/internal/text"
 )
 
 // maxIterations: default upper bound on LLM calls per turn, to prevent tool loops burning tokens; overridable via MaxIterations.
@@ -218,87 +216,4 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	}
 	// Iteration limit reached: return nil error so the caller can still consume the accumulated Usage. Finish=FinishMaxIterations is the termination signal.
 	return Result{Steps: iterLimit, Finish: FinishMaxIterations}, nil
-}
-
-// applyBeforeLLM invokes hooks.BeforeLLM (nil=pass-through, minimal mode) and folds its side effects on
-// transcript / persistence / usage / compaction flags back into the loop's local state. Returns the message view (toSend) actually sent to the LLM this turn.
-func applyBeforeLLM(ctx context.Context, hooks LoopHooks, step int, msgs, newMsgs *[]Message, total *Usage, compacted *bool, cfg LoopConfig) ([]Message, int, error) {
-	if hooks.BeforeLLM == nil {
-		return *msgs, 0, nil
-	}
-	out, err := hooks.BeforeLLM(ctx, StepInput{Step: step, Msgs: *msgs, System: cfg.System, Tools: cfg.Tools})
-	if err != nil {
-		return nil, 0, err
-	}
-	toSend := out.View
-	if len(toSend) == 0 {
-		// Both nil and empty slice fall back to *msgs: under Commit=true an empty View (including []Message{}) would silently clear the transcript;
-		// the core does not require View to be non-empty, so guard here (a legitimate compaction keeps at least the recent turn + user prompt; an empty View is always misuse).
-		toSend = *msgs
-	}
-	if out.Commit {
-		// Compaction scenario: the shrunk View is the new running transcript (len guard already applied, will not clear).
-		*msgs = toSend
-	}
-	if len(out.Persist) > 0 {
-		mergePersisted(newMsgs, out.Persist)
-	}
-	if out.ExtraUsage != nil {
-		total.InputTokens += out.ExtraUsage.InputTokens
-		total.OutputTokens += out.ExtraUsage.OutputTokens
-	}
-	if out.Compacted {
-		*compacted = true
-	}
-	// Thread the compaction pass's request-side estimate (out.ViewEstimate, 0 on non-compaction) to OnBudget, so the zero-usage
-	// streaming path can reuse it instead of a duplicate EstimateTokens scan of toSend (st2).
-	return toSend, out.ViewEstimate, nil
-}
-
-// mergePersisted bulk-merges persisted into newMsgs: entries with a non-empty Kind replace the old entry of the same Kind in newMsgs
-// (e.g. multiple compactions keep only the latest summary), then prepends the batch to the front of newMsgs — preserving the semantics
-// of the cross-turn barrier hitting the latest summary (generalized to any persisted entry carrying a Kind).
-func mergePersisted(newMsgs *[]Message, persisted []Message) {
-	kinds := make(map[string]bool, len(persisted))
-	for _, m := range persisted {
-		if m.Kind != "" {
-			kinds[m.Kind] = true
-		}
-	}
-	filtered := make([]Message, 0, len(*newMsgs)+len(persisted))
-	for _, m := range *newMsgs {
-		if m.Kind != "" && kinds[m.Kind] {
-			continue
-		}
-		filtered = append(filtered, m)
-	}
-	merged := make([]Message, 0, len(filtered)+len(persisted))
-	merged = append(merged, persisted...)
-	merged = append(merged, filtered...)
-	*newMsgs = merged
-}
-
-// appendMsg appends to both msgs (LLM context) and newMsgs (persisted). All producers go through this uniformly,
-// keeping session persistence consistent with the context. Messages with Ts==0 get a Unix-millisecond timestamp (for external strategies'
-// "real usage anti-staleness" check); an explicitly set Ts (e.g. a compaction summaryMsg) is not overwritten — 0 reliably means "not carried".
-func appendMsg(msgs, newMsgs *[]Message, m Message) {
-	if m.Ts == 0 {
-		m.Ts = text.NowMs()
-	}
-	*msgs = append(*msgs, m)
-	*newMsgs = append(*newMsgs, m)
-}
-
-// recordStepUsage accumulates a single step's real usage into total and runs the zero-usage estimation fallback + budget check via the OnBudget hook.
-// Shared by the main path and the summary path, eliminating the duplicated three-part logic in two places (AfterLLM stays at each caller because its Steps
-// semantics and Result construction are coupled). toSend is the message view actually sent to the LLM this turn, used by OnBudget for estimation.
-func recordStepUsage(ctx context.Context, hooks LoopHooks, step int, resp Response, toSend []Message, viewEstimate int, cfg LoopConfig, total *Usage) error {
-	total.InputTokens += resp.Usage.InputTokens
-	total.OutputTokens += resp.Usage.OutputTokens
-	if hooks.OnBudget != nil {
-		if berr := hooks.OnBudget(ctx, step, BudgetInput{ToSend: toSend, System: cfg.System, Tools: cfg.Tools, Resp: resp, PreEstimate: viewEstimate}, total); berr != nil {
-			return berr
-		}
-	}
-	return nil
 }
