@@ -26,5 +26,6 @@ verify:
 clean:
 	rm -rf bin/
 
-deploy: build
+# deploy only installs; run make build first (dependency deliberately omitted so deploy never rebuilds).
+deploy:
 	sudo install -m 0755 bin/miniagent /usr/local/bin/miniagent
