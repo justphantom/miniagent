@@ -1,12 +1,12 @@
 ---
 layer: L0
 version: 1
-updated: 2026-08-09
+updated: 2026-08-13
 ---
 
 # 流程策略
 
-1. **verify-gate**：代码改后必跑全绿（缺一不可）——`gofmt -s -l .`（输出必空）/ `go build ./...` / `go vet ./...` / `go test -race ./...` / `golangci-lint run ./...`。`-race` 必跑。
+1. **verify-gate**：编码标准见根目录 `AGENTS.md`（gofmt 空 / build / vet / test -race / lint 五步，缺一不可、`-race` 必跑），本层不重复。
 2. **config-first**：config 必须存在（v4.2.0 删裸模式）；裁决优先级 `cli > config > builtin`。新能力默认 config 化，CLI flag 仅便捷覆盖；参数膨胀优先扩 config 而非加 flag。
 3. **钩子红线**：`LoopHooks` / `CompactingHook` 调用点无核心 recover——自定义 / 第三方钩子须自行 `defer recover()` 或恒不 panic；钩子经返回值（`StepOutput` / `CompactingOutput`）表达意图，禁直接改入参 `msgs` 元素（直接改不生效）。
 4. **CHANGELOG 纪律**：改 API / 配置 / CLI 行为后同步更新 `CHANGELOG.md`（Keep a Changelog + SemVer）；breaking 单列并附迁移说明。

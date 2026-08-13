@@ -1,7 +1,7 @@
 ---
 layer: L0
 version: 1
-updated: 2026-08-09
+updated: 2026-08-13
 ---
 
 # 约束
@@ -25,7 +25,6 @@ updated: 2026-08-09
 14. **依赖单向无环**：`cmd → core`、子包（compaction/event/provider/tools/policy/config/session）`→ core`，反向禁止；领域类型 `Message/Response/Usage/Request/Delta` 必须留核心包。
 
 ## 记忆系统元规则
-15. 涉及本项目历史决策、陌生报错或选型时，先查 `.agent/L2/` 再猜。
-16. 引用文件须用已纳入版本跟踪的路径；未跟踪路径（如 `docs/`）内联说明或删除，不作为跟踪文件的依赖。
+15. 遇历史决策/陌生报错/选型时的检索路由见根目录 `AGENTS.md`「路由」，本层不重复。
+16. 版本跟踪引用纪律见根目录 `AGENTS.md`（跟踪文件不引用未跟踪内容），本层不重复。
 17. L0 更新需用户显式授权或手动编辑。
-18. 仅输出重点，避免冗余解释。
