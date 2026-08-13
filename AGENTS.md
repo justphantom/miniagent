@@ -15,6 +15,7 @@
 - 回复 ≤1500 字符
 
 ## 路由
+- 会话启动：读 `.agent/L0/`（永久约束：角色/架构不变量/流程策略，每次加载）
 - 架构/钩子契约/不变量时序：读 `ARCHITECTURE.md` §4–§5 与 `HOOKS.md`
 - 历史决策/陌生报错/选型：先查 `.agent/L2/` 再猜
-- 当前会话上下文/任务进展：`.agent/L1/active/session.md`
+- 当前会话上下文/任务进展：`.agent/L1/active/session.md`（L1 唯一文件）

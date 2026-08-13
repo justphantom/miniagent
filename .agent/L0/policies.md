@@ -12,4 +12,4 @@ updated: 2026-08-13
 4. **CHANGELOG 纪律**：改 API / 配置 / CLI 行为后同步更新 `CHANGELOG.md`（Keep a Changelog + SemVer）；breaking 单列并附迁移说明。
 5. **改动落点检查**：改 compaction 逻辑查 `internal/miniagent/compaction` 及调用方；改 session 查 `internal/miniagent/session`；改 NDJSON 事件契约须评估外部消费方。
 6. 不确定实现路径时，先给方案与利弊，待用户确认再写代码。
-7. **记忆闭环**：每轮交互后更新 `.agent/L1/active/session.md` 及对应 `L1/tasks/*.md`；任务完成归档到 `L1/archive/`；任务结束评估是否沉淀到 `L2/`。
+7. **记忆闭环**：每轮交互后更新 `.agent/L1/active/session.md`（L1 单文件）；任务结束评估是否沉淀到 `L2/`。
