@@ -132,6 +132,17 @@ func TestAppendProjectRules_RejectsNonBasename(t *testing.T) {
 	}
 }
 
+// appendWorkdirLine: a non-empty workdir is injected as an absolute-path line; empty workdir is a no-op.
+func TestAppendWorkdirLine_InjectsAndSkipsEmpty(t *testing.T) {
+	got := appendWorkdirLine("BASE", "/abs/work")
+	if !strings.HasPrefix(got, "BASE") || !strings.Contains(got, "/abs/work") {
+		t.Errorf("workdir should be injected: %q", got)
+	}
+	if got := appendWorkdirLine("BASE", ""); got != "BASE" {
+		t.Errorf("empty workdir should be a no-op, got: %q", got)
+	}
+}
+
 // assembleSystemPrompt layers base (default fallback or config) + rules file + subagent guidance in that order.
 func TestAssembleSystemPrompt_LayersRulesThenGuidance(t *testing.T) {
 	dir := t.TempDir()
@@ -149,6 +160,13 @@ func TestAssembleSystemPrompt_LayersRulesThenGuidance(t *testing.T) {
 	}
 	if idxRule >= idxGuidance {
 		t.Errorf("rules must precede guidance: rule@%d guidance@%d", idxRule, idxGuidance)
+	}
+	idxWd := strings.Index(got, "Working directory (absolute): "+dir)
+	if idxWd < 0 {
+		t.Fatalf("workdir line missing: %q", got)
+	}
+	if idxRule >= idxWd || idxWd >= idxGuidance {
+		t.Errorf("order must be rules < workdir < guidance: rule@%d workdir@%d guidance@%d", idxRule, idxWd, idxGuidance)
 	}
 	got2 := assembleSystemPrompt("MYBASE", "", "/abs/miniagent.json", "default", dir, "AGENTS.md")
 	if !strings.HasPrefix(got2, "MYBASE") || !strings.Contains(got2, "RULE-TEXT") {

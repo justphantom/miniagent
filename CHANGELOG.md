@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Added
+- **workdir 绝对路径注入 system prompt**：`assembleSystemPrompt` 在 rules 之后、subagent guidance 之前无条件追加一行 `Working directory (absolute): <wd>`（workdir 为空则跳过）。workdir 来自 `-workdir` flag（非文件来源），与已注入 configAbsPath 的 guidance 同属运行时信息；此前模型只能 `pwd` 才获知自身工作目录。实现：`appendWorkdirLine`（prompts.go）。
+
 ## [4.5.0] - 2026-08-12
 
 > minor：default 模式新增两个 opt-in shell guardrail（`run.shell_allowlist`/`run.shell_confine_cd`）+ opt-in 项目规则文件（`defaults.rules_file`）；workdir 收口为 `-workdir` 单一来源（**breaking**：删 config `run.workdir`、所有模式必填且须绝对路径、去 cwd 回落）；retry 原语抽 `internal/provider/httpretry` 公共包。新增项均 opt-in、默认关；既有 openai 行为零改动。

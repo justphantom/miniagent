@@ -34,7 +34,18 @@ func assembleSystemPrompt(base, guidance, configAbsPath, mode, workdir, rulesFil
 		base = defaultSystemPrompt
 	}
 	base = appendProjectRules(base, workdir, rulesFile)
+	base = appendWorkdirLine(base, workdir)
 	return injectSubagentGuidance(base, guidance, configAbsPath, mode)
+}
+
+// appendWorkdirLine tells the model the absolute workdir so it does not need a pwd round-trip; all tools
+// resolve relative paths against it. Empty workdir (unit-test degenerate case) is skipped; it sits after
+// project rules so environment info stays adjacent, with subagent guidance always last.
+func appendWorkdirLine(system, workdir string) string {
+	if workdir == "" {
+		return system
+	}
+	return system + "\n\nWorking directory (absolute): " + workdir + "\nRelative paths in all tools resolve against it."
 }
 
 // maxRulesFileBytes caps the rules file injected into the system prompt; an oversized file is truncated (with a stderr
