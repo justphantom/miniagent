@@ -1,7 +1,7 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-12T00:00:00+08:00
+updated: 2026-08-13T00:00:00+08:00
 ---
 
 # 当前会话
@@ -10,6 +10,9 @@ updated: 2026-08-12T00:00:00+08:00
 无。
 
 ## 已完成
+- v4.6.0 发版前完善（3 项）：①CHANGELOG `[Unreleased]` → `[4.6.0]`（含 workdir 注入 Added + `make deploy` install-only Changed，空 `[Unreleased]` 置顶）；②版本号定为 4.6.0（向后兼容 Added 无 breaking，semver minor）；③本 session 同步。待用户审 diff / 决定提交 + 打 annotated tag v4.6.0。
+- `make deploy` 改为 install-only（移除对 `build` 的隐式依赖）：原 `make deploy` 自动触发 `make build`，一步到位；现仅 `sudo install -m 0755 bin/miniagent /usr/local/bin/miniagent`。构建须显式 `make build` 先行，消除「安装前用旧二进制」的隐患，部署意图更明确。Makefile 注释同步。→ 提交 `8934910`。
+- CLAUDE.md 简化为引用 AGENTS.md：删 4 行重复约束正文，保留「禁止提交」标题 + `@AGENTS.md` include 指令。→ 提交 `d44e1fe`。
 - system prompt opt-in 规则文件叠加（`defaults.rules_file`）：workdir 下纯 basename 文件存在则追加到 system prompt（base 后/guidance 前），默认空=config-only 现状不变。这是 v4.4.0 移除无条件 `.miniagent/rules.md` 后的 opt-in 回归（L2 `system-prompt-config-only.md` 迁移指引点名的「追加语义」风险点）。basename-only（拒 `..`/绝对/子目录，防越界读注入——default workdir 约束在工具层管不到 main 层装配）；不存在静默跳过，读失败/>64KiB(64*1024) stderr 警告不致命（截断）。改动：config.go Defaults+Resolved 加 RulesFile + resolve passthrough；prompts.go `assembleSystemPrompt` 加 workdir/rulesFile 形参 + `appendProjectRules` + `maxRulesFileBytes`；main.go:147 传入。测试 3 用例（追加/缺失空 no-op、basename 拒绝、layered 顺序 base→rules→guidance）+ 更新 NEW-1 回归调用签名。verify-gate 全绿（gofmt 空/build/vet/test -race/lint 0）。CHANGELOG Added + README + config.example.json + L2 同步。待审 diff/决定提交。
 - default 模式 confineWrap 只读工具放行 workdir 根：`checkConfine`「path 指向 workdir 根即拒」原为防 write/edit 的 MkdirAll/Rename 覆盖整个 workdir（review P3-8），但无差别套用到 read/grep/glob 致 `grep path=<workdir>` / `path="."` 被拒——读/列举整个 workdir 本合法。`confineWrap`/`checkConfine` 加 `readOnly` 形参（置于 `evalSymlinks` 可变参前）：read/grep/glob 传 true 跳过根覆盖检查（越界/symlink 不变），write/edit 传 false 保持原拒。涟漪：checkConfine 12 处 + confineWrap 10 处调用点（含 confine_eval_test 3 处 `true`→`false,true` 语义迁移）+ 新增 2 用例（只读放行根仍拒越界 / grep 只读放行根且匹配 + write 仍拒根）。verify-gate 全绿（gofmt 空/build/vet/test -race/lint 0）。CHANGELOG Fixed + ARCHITECTURE + L2 同步。待用户审 diff/决定提交。
 - default 模式 shell guardrail（opt-in `run.shell_allowlist` + `run.shell_confine_cd`）：新增 `internal/miniagent/tools/tool_shell_guard.go`（`GuardShell` 包装 + 词法分词器 `tokenize` + `checkAllowlist`/`checkConfineCD`/`targetEscapesWorkdir`）；config RunConfig 加两字段（纯 passthrough，未改 resolve.go）；`buildTools` 在 ModeDefault+非空 workdir 条件包装 shell（镜像 `confineWrap`），**不改 `ShellTool` 签名**——涟漪仅 buildTools 6 处测试调用点 + main.go:162。设计抉择：wrapper 而非改签名（零 churn on 21 处 ShellTool 测试）；白名单精确匹配（`/usr/bin/git` 不命中 `git`，防路径混淆）；分词器处理 `2>&1`/引号/`VAR=val`/子 shell，可被 `eval`/`$()` 绕过（best-effort，非安全边界，不变量 #13 不变）。测试：guard 单元+集成（26 用例）+ config round-trip。文档：config.example/README/ARCHITECTURE/CHANGELOG。verify-gate 全绿（gofmt 空/build/vet/test -race/lint 0）。L2 `default-mode-not-security-boundary.md` 已补记。待用户审 diff / 决定提交。

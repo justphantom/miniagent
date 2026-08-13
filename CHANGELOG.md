@@ -5,8 +5,13 @@
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-08-13
+
 ### Added
 - **workdir 绝对路径注入 system prompt**：`assembleSystemPrompt` 在 rules 之后、subagent guidance 之前无条件追加一行 `Working directory (absolute): <wd>`（workdir 为空则跳过）。workdir 来自 `-workdir` flag（非文件来源），与已注入 configAbsPath 的 guidance 同属运行时信息；此前模型只能 `pwd` 才获知自身工作目录。实现：`appendWorkdirLine`（prompts.go）。
+
+### Changed
+- `make deploy` 不再自动构建（移除对 `build` 的隐式依赖），仅执行 `sudo install`。原先 `make deploy` 一步到位构建+安装，现须先 `make build` 再 `make deploy`。安装前用旧二进制的风险消除，部署意图更明确。
 
 ## [4.5.0] - 2026-08-12
 
