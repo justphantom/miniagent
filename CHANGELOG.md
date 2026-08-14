@@ -5,6 +5,17 @@
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-08-14
+
+> patch：纯重构与文档对齐，无 API / 配置 / CLI 行为变化。
+
+### Changed
+- **8 个超 300 行文件拆分至限额内**（纯重构，行为零变化）：`cmd/miniagent/main.go`（拆出 `setup_run.go`）、`compaction/assemble.go`（拆出 `budget_const.go`、`compacting.go`）、`compaction/history_dedup.go`（拆出 `history_dedup_shell.go`）、`config/config.go`（拆出 `config_load.go`）、`loop.go`（拆出 `loop_extra.go`）、`looptest/llm.go`（拆出 `llm_wire.go`）、`session/session.go`（拆出 `session_rewrite.go`）。
+- **verify-gate 纳入行数硬检查**：`make verify` 新增非 `_test.go` 文件 ≤300 行强制项（超标即失败），与 AGENTS.md 编码标准对齐。
+
+### Fixed
+- 文档过期事实修正：HOOKS.md 钩子调用点路径（文件拆分后 `compaction/assemble.go` → `compaction/compacting.go` 等）、`OnStep` error 契约补全；ARCHITECTURE.md 对齐拆分后核心子包结构；`loop.go` 顶层 panic 兜底注释同步。
+
 ## [4.6.0] - 2026-08-13
 
 ### Added

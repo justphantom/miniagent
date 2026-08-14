@@ -10,6 +10,7 @@ updated: 2026-08-13T00:00:00+08:00
 无。
 
 ## 已完成
+- v4.6.1 发版：CHANGELOG 补记 v4.6.0 后 6 提交（8 文件拆分重构 + verify-gate 300 行硬检查 → Changed；HOOKS/ARCHITECTURE/loop.go 注释过期事实 → Fixed）并定版 `[4.6.1] 2026-08-14`（patch：纯重构无行为变化）；本 session 同步。verify-gate 全绿 + make build 重编 bin。→ 提交 + annotated tag v4.6.1 + push。
 - v4.6.0 发版前完善（3 项）：①CHANGELOG `[Unreleased]` → `[4.6.0]`（含 workdir 注入 Added + `make deploy` install-only Changed，空 `[Unreleased]` 置顶）；②版本号定为 4.6.0（向后兼容 Added 无 breaking，semver minor）；③本 session 同步。待用户审 diff / 决定提交 + 打 annotated tag v4.6.0。
 - `make deploy` 改为 install-only（移除对 `build` 的隐式依赖）：原 `make deploy` 自动触发 `make build`，一步到位；现仅 `sudo install -m 0755 bin/miniagent /usr/local/bin/miniagent`。构建须显式 `make build` 先行，消除「安装前用旧二进制」的隐患，部署意图更明确。Makefile 注释同步。→ 提交 `8934910`。
 - CLAUDE.md 简化为引用 AGENTS.md：删 4 行重复约束正文，保留「禁止提交」标题 + `@AGENTS.md` include 指令。→ 提交 `d44e1fe`。
