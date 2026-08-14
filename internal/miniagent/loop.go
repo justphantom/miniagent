@@ -38,8 +38,8 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 	// Usage/Messages/NewMessages/thinkingDowngraded/compacted are written into the named return result uniformly via defer — eliminating the three-piece duplication across 12 returns, and new returns need not write it by hand (preventing omitted fields that would drop messages during session persistence). Each return sets only the differing fields (Steps/Text/Finish). The early return for llm==nil happens before this defer is registered and is unaffected (result is zero-valued).
 	defer func() {
 		// Top-level panic backstop: safeCall (loop_tools.go) and callLLMOnce (loop_extra.go) each recover their own
-		// panics, but Run had none — so a panic in any of the 7 user hooks (BeforeLLM/AfterLLM/OnBudget/OnLLMError/
-		// OnToolUse/OnToolResult/ShapeToolResult) or in the applyBeforeLLM/recordStepUsage helpers would crash the
+		// panics, but Run had none — so a panic in any of the 9 user hooks (BeforeLLM/AfterLLM/OnBudget/OnLLMError/
+		// OnToolUse/OnToolResult/ShapeToolResult/OnDelta/OnStep) or in the applyBeforeLLM/recordStepUsage helpers would crash the
 		// process and lose the turn's un-persisted NewMessages. recover() runs first so the field assignments below
 		// still execute (the transcript survives for session persistence); the named err converts the panic into a
 		// normal error return. Folded into this existing defer rather than wrapping each hook call site — strictly

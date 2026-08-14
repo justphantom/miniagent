@@ -8,7 +8,7 @@
 
 **可正确集成的三个前提**（开发者必须先理解）：
 
-1. **钩子无 panic 兜底**：`recover()` 只覆盖 LLM 调用（`loop_extra.go callLLMOnce`）与工具调用（`loop_tools.go safeCall`）。8 个 `LoopHooks` 字段与 `CompactingHook` 的调用点（`loop.go`：OnLLMError / AfterLLM / BeforeLLM、`loop_extra.go callLLMOnce 内 OnDelta`、`loop_tools.go`：OnToolUse / OnToolResult / ShapeToolResult、`compaction/assemble.go:applyCompactingHook`）全是裸 error 检查、无 defer recover。**钩子 panic 会崩进程**——这是与 tool/LLM 调用最显著的不对称。（取舍：核心自带的默认钩子 `NewCompaction`/`NewDefault*` 经审查 panic-free，故核心装配下无实际风险；第三方钩子的 recover 责任在实现者，见 §6.1 红线 1。核心若统一包 `safeInvoke` 兜底会静默吞掉钩子 bug，与「错误尽早暴露」相悖，故未加——这是刻意的对称性取舍，非遗漏。）
+1. **钩子无 panic 兜底**：`recover()` 只覆盖 LLM 调用（`loop_extra.go callLLMOnce`）与工具调用（`loop_tools.go safeCall`）。9 个 `LoopHooks` 字段与 `CompactingHook` 的调用点（`loop.go`：OnStep / OnLLMError / AfterLLM / BeforeLLM、`loop_extra.go callLLMOnce 内 OnDelta`、`loop_tools.go`：OnToolUse / OnToolResult / ShapeToolResult、`compaction/compacting.go:NewCompaction` 内部 `applyCompactingHook`）全是裸 error 检查、无 defer recover。**钩子 panic 会崩进程**——这是与 tool/LLM 调用最显著的不对称。（取舍：核心自带的默认钩子 `NewCompaction`/`NewDefault*` 经审查 panic-free，故核心装配下无实际风险；第三方钩子的 recover 责任在实现者，见 §6.1 红线 1。核心若统一包 `safeInvoke` 兜底会静默吞掉钩子 bug，与「错误尽早暴露」相悖，故未加——这是刻意的对称性取舍，非遗漏。）
 2. **钩子不直接改 transcript**：意图经返回值（`StepOutput`/content/`CompactingOutput`）表达，由核心折叠副作用。直接改入参 `msgs` 不会生效（核心用返回值）。
 3. **`NewCompaction` 无共享可变状态**：`before` 闭包捕获的 `budget`（`compaction/assemble.go`）初始化后只读；每步 `Force` 推断到局部变量、拷贝传入 `FitHistory`，闭包不写共享状态——多 `Run` 并发复用同一对钩子实例亦无 race。（旧版 `overflowPending` 跨步状态已在 4.2.0 移除：溢出判定改为 `before` 从 `in.Msgs` 的真实 usage 推断，`after=nil`。）
 
@@ -104,7 +104,16 @@ handleToolCalls ──                                                    [loop_
 - **error**：立即中止流、沿 `DoStream` 返回该 error。
 - **nil**：非流式不触发；流式但 nil 时核心丢弃增量（`return nil`）。
 
-### 2.9 `CompactingHook(ctx, CompactingInput) (CompactingOutput, error)`（关联钩子）
+### 2.9 `OnStep(ctx, StepSnapshot) error`
+
+- **职责**：每步**观察**缝口——输出该步的 transcript 长度、输入/输出 token、是否压缩、累计 LLM 请求数、本步新增消息数。observe-only（无 error 返回），典型消费者是 `metrics.NewStepEmitter`（NDJSON 到 stderr）。
+- **触发时序**：每步顶部，`BeforeLLM` 之前（`loop.go:128`），step 编号从 0 起、随每一步推进。
+- **入参** `StepSnapshot`：只读快照，不含可写副作用。
+- **error 契约**：`OnStep` 无 error 返回（`func(ctx, snap)`），实现者不得抛出——异常靠 §6.1 的 panic 自保。
+- **nil**：不通知（核心零开销短路）。
+- **红线**：不得依赖快照字段顺序做精确匹配；`Compacted` 为**截至本步**是否压缩过（含历史步）。
+
+### 2.10 `CompactingHook(ctx, CompactingInput) (CompactingOutput, error)`（关联钩子）
 
 - **职责**：摘要前注入 context（领域知识 / 文件清单）或一次性替换 `summarizerPrompt`。
 - **入参** `CompactingInput`：`SessionID`、只读 `Middle`、`Model`。
@@ -142,9 +151,10 @@ handleToolCalls ──                                                    [loop_
 | OnToolResult | 终止 Run | — | ✅ 剩余 calls 补占位 |
 | ShapeToolResult | 终止 Run | — | ✅ 剩余 calls 补占位 |
 | OnDelta | 中止流、返回该 error | — | — |
+| OnStep | observe-only，无 error 返回（panic 才异常） | — | — |
 | CompactingHook | 中止本次压缩→有损 fallback | — | — |
 
-补占位消息固定为 `{Role:tool, ToolCallID, Content:"工具未提交结果：上游管道错误", IsError:true}`（`fillPlaceholderTail`，`loop_tools.go`），保证 `Messages` 配对完整、续跑不被端点 400。
+补占位消息固定为 `{Role:tool, ToolCallID, Content:"tool result not submitted: upstream pipeline error", IsError:true}`（`fillPlaceholderTail`，`loop_tools.go`），保证 `Messages` 配对完整、续跑不被端点 400。
 
 ## 5. 并发与生命周期
 
@@ -167,11 +177,12 @@ handleToolCalls ──                                                    [loop_
 
 核心提供的默认外挂，可叠加自定义钩子：
 
-- **`NewCompaction(opts) → (before, after)`**（`compaction/assemble.go`）：返回一对钩子挂 `BeforeLLM`/`AfterLLM`，恢复完整压缩能力。`opts.Chat` 必须非 nil（摘要 LLM 调用需 client）。
+- **`NewCompaction(opts) → (before, after)`**（`compaction/compacting.go`）：返回一对钩子挂 `BeforeLLM`/`AfterLLM`，恢复完整压缩能力。`opts.Chat` 必须非 nil（摘要 LLM 调用需 client）。
 - **`OnBudget` 外挂**：main 用闭包把 `MaxTotalTokens` 判定从核心搬出（`main.go`）。自定义预算/熔断逻辑替换此闭包即可。
+- **`OnStep` 外挂**：main 用 `metrics.NewStepEmitter(os.Stderr).Emit` 挂 `OnStep`（`main.go:179`），每步输出 NDJSON。自定义观测（指标、日志）替换此闭包即可。
 - **`buildHooks(resultOnly)`**（`setup.go`）：组装事件输出钩子（`OnToolUse`/`OnToolResult`/`OnDelta`）。`resultOnly=true` 返回空 hooks（subagent fork 纯文本模式）。
 
-叠加自定义钩子时：压缩与预算必须各自独占 `BeforeLLM`/`OnBudget`（核心单字段）；事件类（`OnToolUse`/`OnToolResult`/`ShapeToolResult`/`OnDelta`）如需叠加，在外层闭包内串联调用（如先调默认事件钩子再调自定义），不得互相覆盖。
+叠加自定义钩子时：压缩与预算必须各自独占 `BeforeLLM`/`OnBudget`（核心单字段）；事件类（`OnToolUse`/`OnToolResult`/`ShapeToolResult`/`OnDelta`/`OnStep`）如需叠加，在外层闭包内串联调用（如先调默认事件钩子再调自定义），不得互相覆盖。
 
 ## 8. 测试要求（AGENTS.md：用例即需求文档）
 
