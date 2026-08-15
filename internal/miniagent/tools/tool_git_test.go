@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -10,9 +12,9 @@ import (
 func TestGit_RejectsDestructiveCommand(t *testing.T) {
 	dir := t.TempDir()
 	git := GitTool(dir, 0)
-	// 写操作子命令 + 曾在旧 allow-list 里的“裸调用只读、带参即写”子命令，全部必须拒绝
-	cases := []string{"push", "pull", "fetch", "clone", "reset", "commit", "merge", "rebase",
-		"checkout", "rm", "add", "mv", "tag -d", "branch -D", "restore", "switch",
+	// 历史改写 / 仓库管理 / 配置类子命令仍被拒
+	cases := []string{"fetch", "clone", "reset", "merge", "rebase",
+		"checkout", "rm", "mv", "tag -d", "branch -D", "restore", "switch",
 		"stash", "config", "worktree", "clean", "grep"}
 	for _, c := range cases {
 		res := git.Call(context.Background(), `{"subcommand":"`+c+`"}`)
@@ -57,6 +59,27 @@ func TestGit_DeniesFileWritingOptions(t *testing.T) {
 		if !res.IsError || !strings.Contains(res.Output, "blocked") {
 			t.Errorf("diff %q should be blocked, got: %s", opt, res.Output)
 		}
+	}
+}
+
+func TestGit_AddCommitWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	if err := exec.CommandContext(context.Background(), "git", "init", dir).Run(); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	_ = exec.CommandContext(context.Background(), "git", "-C", dir, "config", "user.email", "t@t").Run()
+	_ = exec.CommandContext(context.Background(), "git", "-C", dir, "config", "user.name", "t").Run()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := GitTool(dir, 0)
+	res := git.Call(context.Background(), `{"subcommand":"add","args":"f.txt"}`)
+	if res.IsError {
+		t.Fatalf("git add failed: %s", res.Output)
+	}
+	res = git.Call(context.Background(), `{"subcommand":"commit","args":"-m test"}`)
+	if res.IsError {
+		t.Fatalf("git commit failed: %s", res.Output)
 	}
 }
 
