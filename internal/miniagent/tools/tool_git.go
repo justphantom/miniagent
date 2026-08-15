@@ -28,7 +28,9 @@ var allowedGitSubcommands = map[string]bool{
 	"ls-tree": true, "rev-parse": true, "shortlog": true, "cat-file": true,
 }
 
-// 只读子命令中仍能写文件或调起外部程序的选项前缀，一律拒绝。
+// rtkGitSubcommands lists the subcommands that rtk git supports (compact output).
+// Only these route through rtk; the rest exec native git for raw output.
+var rtkGitSubcommands = map[string]bool{"status": true, "diff": true, "log": true, "show": true}
 var deniedGitArgPrefixes = []string{"--output", "-O", "--ext-diff"}
 
 func GitTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
@@ -79,7 +81,11 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	}
 	cmdArgs := []string{"-C", dir, "--no-pager", a.Subcommand}
 	cmdArgs = append(cmdArgs, fields...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	bin, argv := "git", cmdArgs
+	if rtkGitSubcommands[a.Subcommand] {
+		bin, argv = rtkWrap("git", []string{"git", "-C", dir, "--no-pager", a.Subcommand}, fields)
+	}
+	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = dir
 	cmd.Env = scrubEnv(os.Environ())
 	body, err := runLimitedOutput(ctx, cmd, maxShellOutputChars)

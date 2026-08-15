@@ -56,7 +56,8 @@ func runNpm(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	}
 	fields := strings.Fields(a.Args)
 	cmdArgs := append([]string{a.Subcommand}, fields...)
-	cmd := exec.CommandContext(ctx, "npm", cmdArgs...)
+	bin, argv := rtkWrap("npm", []string{"npm"}, cmdArgs)
+	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
 	setPGID(cmd)

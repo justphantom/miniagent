@@ -10,8 +10,10 @@ import (
 	"context"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,6 +54,25 @@ func resolveConfinedPath(root, p string, readOnly bool) (string, error) {
 		return "", fmt.Errorf("path %q escapes workdir (default mode)", p)
 	}
 	return absTarget, nil
+}
+
+// rtkBin caches the lookup of the rtk output-compacting proxy ("" = not deployed). rtk is optional:
+// when present, git/go/npm commands route through it for token-compact output; otherwise they exec natively.
+var rtkBin = sync.OnceValue(func() string {
+	if p, err := exec.LookPath("rtk"); err == nil {
+		return p
+	}
+	return ""
+})
+
+// rtkWrap returns ("rtk", prefix+args) when rtk is deployed, else (bin, args) unchanged.
+// The caller decides which subcommands are worth proxying (rtk covers only a subset per tool);
+// prefix is the rtk subcommand chain (e.g. []string{"git", "status"}).
+func rtkWrap(bin string, prefix, args []string) (string, []string) {
+	if rtkBin() == "" {
+		return bin, args
+	}
+	return "rtk", append(append([]string{}, prefix...), args...)
 }
 
 // maxFileResultInHistory is the character cap for results of code-content tools like read/edit entering history:

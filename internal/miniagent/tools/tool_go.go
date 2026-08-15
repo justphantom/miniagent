@@ -68,7 +68,11 @@ func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult
 	}
 	cmdArgs := []string{a.Subcommand}
 	cmdArgs = append(cmdArgs, fields...)
-	cmd := exec.CommandContext(ctx, "go", cmdArgs...)
+	bin, argv := "go", cmdArgs
+	if rtkGoSubcommands[a.Subcommand] {
+		bin, argv = rtkWrap("go", []string{"go", a.Subcommand}, cmdArgs)
+	}
+	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
 	body, err := runLimitedOutput(ctx, cmd, maxShellOutputChars)
@@ -83,6 +87,9 @@ func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult
 
 // 拒绝写文件/写模块树之外/改源码的 go build/test 选项前缀。
 var deniedGoArgPrefixes = []string{"-w", "-write", "-fix", "-modfile"}
+
+// rtkGoSubcommands lists the subcommands that rtk go supports (compact output).
+var rtkGoSubcommands = map[string]bool{"build": true, "test": true, "vet": true}
 
 // resolveModuleRoot 从 startDir 向上找 go.mod；找不到时返回 startDir 本身，
 // 让 go 命令自行报错（此前误返回字面量 "."，会跑到进程 cwd 上执行）。

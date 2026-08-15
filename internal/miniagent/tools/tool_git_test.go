@@ -40,7 +40,7 @@ func TestGit_ReadOnlySubcommandRuns(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "On branch") {
+	if !strings.Contains(res.Output, "On branch") && !strings.Contains(res.Output, "No commits yet") {
 		t.Errorf("expected branch info, got: %s", res.Output)
 	}
 }
