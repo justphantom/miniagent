@@ -71,5 +71,3 @@ func TestGit_MissingSubcommand(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.Output, "missing argument: subcommand") {
 		t.Errorf("expected missing subcommand error: %s", res.Output)
 	}
-}
-EOF

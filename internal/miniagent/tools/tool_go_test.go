@@ -56,5 +56,3 @@ func TestGo_UnknownSubcommandRejected(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.Output, "not allowed in default mode") {
 		t.Errorf("unknown command should be rejected: %s", res.Output)
 	}
-}
-EOF
