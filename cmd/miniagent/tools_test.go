@@ -73,3 +73,4 @@ func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 			t.Errorf("%s escape should be rejected: %s", c.name, r.Output)
 		}
 	}
+}

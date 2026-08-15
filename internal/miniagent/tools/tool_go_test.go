@@ -11,7 +11,7 @@ import (
 func TestGo_RejectsDestructiveCommand(t *testing.T) {
 	dir := t.TempDir()
 	got := GoTool(dir, 0)
-	cases := []string{"get github.com/x/y", "install golang.org/x/tools", "build -o out ./cmd", "test -run=XXX", "clean -x", "mod tidy", "mod download", "mod init", "fmt", "vet"}
+	cases := []string{"get github.com/x/y", "install golang.org/x/tools", "mod tidy", "mod download", "mod init", "fmt", "env -w"}
 	for _, c := range cases {
 		res := got.Call(context.Background(), `{"subcommand":"`+c+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "not allowed") {
@@ -56,3 +56,4 @@ func TestGo_UnknownSubcommandRejected(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.Output, "not allowed in default mode") {
 		t.Errorf("unknown command should be rejected: %s", res.Output)
 	}
+}

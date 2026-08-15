@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io"
@@ -23,7 +24,7 @@ var allowedGitSubcommands = map[string]bool{
 	"tag": true, "remote": true, "ls-files": true, "blame": true, "grep": true,
 	"worktree": true, "stash": true, "reflog": true, "config": true,
 	"whatchanged": true, "describe": true, "check-attr": true, "ls-tree": true,
-	"rev-parse": true, "shortlog": true, "cat-file": true,
+	"rev-parse": true, "shortlog": true, "cat-file": true, "clean": true,
 }
 
 func GitTool(workspaceRoot string, timeout time.Duration, confineSymlinks bool) miniagent.Tool {
@@ -102,7 +103,7 @@ func resolveGitRoot(startDir string) (string, error) {
 		}
 		dir = parent
 	}
-	return "", fmt.Errorf("not a git repository")
+	return "", errors.New("not a git repository")
 }
 
 func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (string, error) {
@@ -135,7 +136,7 @@ func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (s
 		}
 	}
 	_ = accum.closeSink()
-	<-waitErr
+	werr := <-waitErr
 	killProcessGroup(cmd)
-	return accum.finalize(maxOutputChars), nil
+	return accum.finalize(maxOutputChars), werr
 }
