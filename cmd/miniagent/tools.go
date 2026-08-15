@@ -7,7 +7,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/tools"
 )
 
-// buildTools registers 11 builtin tools and adjusts constraints by mode:
+// buildTools registers 12 builtin tools and adjusts constraints by mode:
 //   - default: file tools (read/write/edit/grep/glob) are confined to the workdir subtree via confineWrap;
 //     shell is registered with mode=default (rejects sudo/su). workdir is required (validated at the main entry).
 //   - auto: no constraints (shell mode=auto, file tools are not wrapped) unless confineAuto is opted in.
@@ -51,6 +51,7 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	git := tools.GitTool(workdir, shellTimeout)
 	goT := tools.GoTool(workdir, shellTimeout)
 	npm := tools.NpmTool(workdir, shellTimeout)
+	lint := tools.LintTool(workdir, shellTimeout)
 	rename := tools.RenameTool(workdir, writeTimeout)
 	deleteT := tools.DeleteTool(workdir, writeTimeout)
 	if confine && workdir != "" {
@@ -58,6 +59,6 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		deleteT = confineWrap(deleteT, workdir, false, evalSymlinks)
 	}
 	return []miniagent.Tool{
-		read, write, edit, grep, glob, shell, git, goT, npm, rename, deleteT,
+		read, write, edit, grep, glob, shell, git, goT, npm, lint, rename, deleteT,
 	}
 }

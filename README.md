@@ -9,7 +9,7 @@
 - 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、shell 拒 sudo/su 等 11 个提权器；另有两个 opt-in shell guardrail `run.shell_allowlist`/`run.shell_confine_cd`，默认关）；auto = 无限制。default 不构成安全边界——shell 可经 `cd`/绝对路径越界、写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`internal/miniagent/platform_windows.go`）
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：`read` / `write` / `edit` / `grep` / `glob` / `shell`
+- 工具：`read` / `write` / `edit` / `grep` / `glob` / `shell` / `git` / `go` / `npm` / `golangci-lint` / `rename` / `delete`（12 个内置工具）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行；**session 保存期间临时忽略信号**，避免截断 session 文件
 
 ## 架构：极简核心 + 开放钩子

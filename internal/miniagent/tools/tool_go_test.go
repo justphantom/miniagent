@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,7 +13,7 @@ import (
 func TestGo_RejectsDestructiveCommand(t *testing.T) {
 	got := GoTool(t.TempDir(), 0)
 	cases := []string{"run .", "get github.com/x/y", "install golang.org/x/tools",
-		"mod tidy", "mod download", "mod init", "generate", "fmt", "env -w", "bug", "foobar"}
+		"mod tidy", "mod download", "mod init", "generate", "env -w", "bug", "foobar"}
 	for _, c := range cases {
 		res := got.Call(context.Background(), `{"subcommand":"`+c+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "not allowed in default mode") {
@@ -45,6 +47,35 @@ func TestGo_ModuleRootResolution(t *testing.T) {
 	res := GoTool(moduleDir, 0).Call(context.Background(), `{"subcommand":"list","args":"-m"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
+	}
+}
+
+// fmt 是 verify-gate 首步（gofmt -s -l）的修复手段，允许列表成员必须有正向用例锁住
+func TestGo_FmtFormatsMalformedFile(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not available")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("path/portability handling differs on windows")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/fmttest\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(dir, "bad.go")
+	if err := os.WriteFile(bad, []byte("package p\n\nfunc  f( )  {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := GoTool(dir, 0).Call(context.Background(), `{"subcommand":"fmt"}`)
+	if res.IsError {
+		t.Fatalf("go fmt should succeed, got: %s", res.Output)
+	}
+	body, err := os.ReadFile(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "package p\n\nfunc f() {}\n" {
+		t.Errorf("file not formatted, got %q", string(body))
 	}
 }
 

@@ -69,8 +69,10 @@ internal/miniagent/session/     会话持久化子包
   lock_*.go           平台锁原语
 
 internal/miniagent/tools/       内置工具实现
-  tool_read/write/edit/grep/glob/shell.go  六个内置工具
-  tool_shell_guard.go default 模式 shell 护栏（opt-in allowlist / cd-confine）
+  tool_read/write/edit/grep/glob/shell.go  六个文件与 shell 工具
+  tool_git/go/npm/lint.go    语言生态工具（git 版本控制 / go 编译测试 / npm JS 生态 / golangci-lint 静态检查）
+  tool_rename/delete.go      文件重命名与删除
+  tool_shell_guard.go       default 模式 shell 护栏（opt-in allowlist / cd-confine）
   tool_helpers.go     路径解析、schema 构造
   output_accum.go     shell 输出字节滑窗累积器（保尾部）
 

@@ -17,10 +17,11 @@ type goArgs struct {
 	Args       string `json:"args,omitempty"`
 }
 
-// 开发测试所需的最小集：编译、测试、静态检查、文档、列举、版本。
+// 开发测试所需的最小集：格式化、编译、测试、静态检查、文档、列举、版本。
 // run 等同 shell 执行任意代码、bug 打开浏览器、info 非标准命令，均排除（收紧原则）。
+// fmt 写入模块树内 .go 文件（verify-gate 首步 gofmt 的等价物），无越界写风险。
 var allowedGoSubcommands = map[string]bool{
-	"build": true, "test": true, "vet": true,
+	"fmt": true, "build": true, "test": true, "vet": true,
 	"doc": true, "list": true, "version": true, "clean": true,
 }
 

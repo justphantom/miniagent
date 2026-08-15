@@ -4,6 +4,11 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+### Added
+- golangci-lint 工具（subcommand allowlist: run/version/linters; --fix/--write/--enable-all/--new* 被拒），default 模式禁 shell 下可闭环 verify-gate 末步。
+
+### Changed
+- `go` 工具白名单加入 `fmt`：default 模式禁 shell 下可执行 gofmt 等价格式化，补齐 verify-gate 首步。
 
 ## [4.6.1] - 2026-08-14
 
