@@ -10,13 +10,13 @@ import (
 
 func TestBuildTools_AlwaysRegisters8(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
-	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true, "git": true, "go": true}
+	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true, "git": true, "go": true, "npm": true, "rename": true, "delete": true}
 	got := map[string]bool{}
 	for _, tl := range tools {
 		got[tl.Name] = true
 	}
 	if len(tools) != len(want) {
-		t.Fatalf("got %d tools %v, want %d (read/write/edit/grep/glob/shell/git/go)", len(tools), got, len(want))
+		t.Fatalf("got %d tools %v, want %d (read/write/edit/grep/glob/shell/git/go/npm/rename/delete)", len(tools), got, len(want))
 	}
 	for name := range want {
 		if !got[name] {
@@ -32,8 +32,8 @@ func TestBuildTools_AlwaysRegisters8(t *testing.T) {
 
 func TestBuildTools_EmptyWorkdirStillRegisters8(t *testing.T) {
 	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
-	if len(tools) != 8 {
-		t.Fatalf("got %d tools, want 8 (read/write/edit/grep/glob/shell/git/go)", len(tools))
+	if len(tools) != 11 {
+		t.Fatalf("got %d tools, want 11 (read/write/edit/grep/glob/shell/git/go/npm/rename/delete)", len(tools))
 	}
 }
 

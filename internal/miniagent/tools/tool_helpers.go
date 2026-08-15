@@ -8,8 +8,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -23,6 +25,33 @@ func resolveToolPath(workspaceRoot, p string) string {
 		return p
 	}
 	return filepath.Join(workspaceRoot, p)
+}
+
+// resolveConfinedPath checks that p (relative to root or absolute) stays within root's subtree.
+// Returns the absolute resolved path and nil on success, or "" and an error if it escapes.
+// When readOnly is false (write tools), targeting the workdir root itself is rejected
+// (would destroy the entire workdir); read-only tools may target the root (e.g. listing it).
+func resolveConfinedPath(root, p string, readOnly bool) (string, error) {
+	full := p
+	if !filepath.IsAbs(p) {
+		full = filepath.Join(root, p)
+	}
+	absTarget, err := filepath.Abs(filepath.Clean(full))
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q failed: %w", p, err)
+	}
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", fmt.Errorf("resolve workdir %q failed: %w", root, err)
+	}
+	sep := string(filepath.Separator)
+	if !readOnly && absTarget == rootAbs {
+		return "", fmt.Errorf("path %q points to the workdir root itself, cannot overwrite", p)
+	}
+	if !strings.HasPrefix(absTarget+sep, rootAbs+sep) {
+		return "", fmt.Errorf("path %q escapes workdir (default mode)", p)
+	}
+	return absTarget, nil
 }
 
 // maxFileResultInHistory is the character cap for results of code-content tools like read/edit entering history:
