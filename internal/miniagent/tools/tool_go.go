@@ -53,7 +53,7 @@ func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult
 	if !allowedGoSubcommands[a.Subcommand] {
 		return miniagent.ToolResult{
 			IsError: true,
-			Output: fmt.Sprintf("go %q is not allowed in default mode; use one of: build, test, vet, run, doc, list, info, bug, version, clean", a.Subcommand),
+			Output:  fmt.Sprintf("go %q is not allowed in default mode; use one of: build, test, vet, run, doc, list, info, bug, version, clean", a.Subcommand),
 		}
 	}
 	modDir := resolveModuleRoot(workspaceRoot)
@@ -95,4 +95,3 @@ func resolveModuleRoot(startDir string) string {
 	}
 	return "."
 }
-EOF

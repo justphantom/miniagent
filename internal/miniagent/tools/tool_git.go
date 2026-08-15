@@ -56,7 +56,7 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	if !allowedGitSubcommands[a.Subcommand] {
 		return miniagent.ToolResult{
 			IsError: true,
-			Output: fmt.Sprintf("git %q is not in the allow-list; blocked as potentially destructive. Use allowed read-only subcommands: status, diff, log, show, branch, tag, remote, ls-files, blame, grep, worktree, stash, reflog, config, whatchanged, describe, check-attr, ls-tree, rev-parse", a.Subcommand),
+			Output:  fmt.Sprintf("git %q is not in the allow-list; blocked as potentially destructive. Use allowed read-only subcommands: status, diff, log, show, branch, tag, remote, ls-files, blame, grep, worktree, stash, reflog, config, whatchanged, describe, check-attr, ls-tree, rev-parse", a.Subcommand),
 		}
 	}
 	if a.Subcommand == "clean" && a.Args != "--dry-run" {
@@ -139,4 +139,3 @@ func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (s
 	killProcessGroup(cmd)
 	return accum.finalize(maxOutputChars), nil
 }
-EOF

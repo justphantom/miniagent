@@ -11,7 +11,7 @@ import (
 func TestGit_RejectsDestructiveCommand(t *testing.T) {
 	dir := t.TempDir()
 	git := GitTool(dir, 0, false)
-	cases := []string{"push", "pull", "fetch", "clone", "reset", "commit", "merge", "rebase", "checkout", "rm", "add", "clean", "mv", "tag -d", "branch -D", "reset HEAD", "restore", "switch", "checkout -b"}
+	cases := []string{"push", "pull", "fetch", "clone", "reset", "commit", "merge", "rebase", "checkout", "rm", "add", "mv", "tag -d", "branch -D", "reset HEAD", "restore", "switch", "checkout -b"}
 	for _, c := range cases {
 		res := git.Call(context.Background(), `{"subcommand":"`+c+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "not in the allow-list") {
