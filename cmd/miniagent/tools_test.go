@@ -8,15 +8,15 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-func TestBuildTools_AlwaysRegisters6(t *testing.T) {
+func TestBuildTools_AlwaysRegisters8(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
-	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true}
+	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true, "git": true, "go": true}
 	got := map[string]bool{}
 	for _, tl := range tools {
 		got[tl.Name] = true
 	}
 	if len(tools) != len(want) {
-		t.Fatalf("got %d tools %v, want %d (read/write/edit/grep/glob/shell)", len(tools), got, len(want))
+		t.Fatalf("got %d tools %v, want %d (read/write/edit/grep/glob/shell/git/go)", len(tools), got, len(want))
 	}
 	for name := range want {
 		if !got[name] {
@@ -30,14 +30,13 @@ func TestBuildTools_AlwaysRegisters6(t *testing.T) {
 	}
 }
 
-func TestBuildTools_EmptyWorkdirStillRegisters(t *testing.T) {
+func TestBuildTools_EmptyWorkdirStillRegisters8(t *testing.T) {
 	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
-	if len(tools) != 6 {
-		t.Fatalf("got %d tools, want 6 (read/write/edit/grep/glob/shell)", len(tools))
+	if len(tools) != 8 {
+		t.Fatalf("got %d tools, want 8 (read/write/edit/grep/glob/shell/git/go)", len(tools))
 	}
 }
 
-// S4: fileResultLimit>0 overrides read/edit's ResultLimit; <=0 keeps the constructor builtin default.
 func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	dir := t.TempDir()
 	byName := map[string]int{}
@@ -49,7 +48,6 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 			t.Errorf("%s ResultLimit = %d, want 4242", name, byName[name])
 		}
 	}
-	// <=0: keeps the builtin maxFileResultInHistory (8000).
 	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil) {
 		if tl.Name == "read" && tl.ResultLimit != 8000 {
 			t.Errorf("read ResultLimit = %d, want builtin 8000 when limit<=0", tl.ResultLimit)
@@ -57,7 +55,6 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	}
 }
 
-// After buildTools(default), write tools return IsError for an out-of-bounds path (containing "default mode").
 func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
 	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false, false, nil)
@@ -77,3 +74,4 @@ func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 		}
 	}
 }
+EOF
