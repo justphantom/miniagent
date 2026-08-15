@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-11T16:00:00+08:00
+updated: 2026-08-15T23:59:00+08:00
 ---
 
 # .agent 记忆索引
@@ -29,3 +29,6 @@ updated: 2026-08-11T16:00:00+08:00
 - [incidents/corrupted-summary-prompt-injection.md](L2/incidents/corrupted-summary-prompt-injection.md) — 损坏摘要注入（P0，v4.3.0 已修：isSummaryGarbage 校验 + prose-only 重试 + lossy 回落）
 - [incidents/compaction-headadj-override-stale-clause.md](L2/incidents/compaction-headadj-override-stale-clause.md) — jointTailBudget override 路径误扣 headAdj（SummarizerPrompt 过时子句，生产者契约改消费者未同步）
 - [incidents/anthropic-provider-copy-asymmetry.md](L2/incidents/anthropic-provider-copy-asymmetry.md) — anthropic 复制 openai 漏的 5 对称项（role=system/max_tokens/529/StreamAllowUnterminated/thinking.map）+ 跨 provider 复制清单
+- [incidents/tools-rewrite-lost-logic.md](L2/incidents/tools-rewrite-lost-logic.md) — tools.go 重写丢三段逻辑（confine/result-limit/runLimitedOutput 吞错）+ 测试文件截断 + 语义重写不该碰的文件碰了
+- [decisions/default-mode-dev-tools-allowlist.md](L2/decisions/default-mode-dev-tools-allowlist.md) — default 模式外部命令工具集（git/go/npm/rename/delete）allow-list + rtk 代理 + 各工具决策依据
+- [patterns/allowlist-deny-arg-prefix.md](L2/patterns/allowlist-deny-arg-prefix.md) — 子命令白名单 + 参数前缀拒绝（default 收紧双…[args omitted]
