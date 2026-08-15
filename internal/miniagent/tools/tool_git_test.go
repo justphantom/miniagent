@@ -9,8 +9,11 @@ import (
 
 func TestGit_RejectsDestructiveCommand(t *testing.T) {
 	dir := t.TempDir()
-	git := GitTool(dir, 0, false)
-	cases := []string{"push", "pull", "fetch", "clone", "reset", "commit", "merge", "rebase", "checkout", "rm", "add", "mv", "tag -d", "branch -D", "reset HEAD", "restore", "switch", "checkout -b"}
+	git := GitTool(dir, 0)
+	// 写操作子命令 + 曾在旧 allow-list 里的“裸调用只读、带参即写”子命令，全部必须拒绝
+	cases := []string{"push", "pull", "fetch", "clone", "reset", "commit", "merge", "rebase",
+		"checkout", "rm", "add", "mv", "tag -d", "branch -D", "restore", "switch",
+		"stash", "config", "worktree", "clean", "grep"}
 	for _, c := range cases {
 		res := git.Call(context.Background(), `{"subcommand":"`+c+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "not in the allow-list") {
@@ -20,20 +23,19 @@ func TestGit_RejectsDestructiveCommand(t *testing.T) {
 }
 
 func TestGit_AllowedCommandsRequireGitRepo(t *testing.T) {
-	dir := t.TempDir()
-	git := GitTool(dir, 0, false)
+	git := GitTool(t.TempDir(), 0)
 	res := git.Call(context.Background(), `{"subcommand":"status"}`)
 	if !res.IsError || !strings.Contains(res.Output, "not a git repository") {
 		t.Errorf("expected 'not a git repository', got: %s", res.Output)
 	}
 }
 
-func TestGit_GitRepoOperations(t *testing.T) {
+func TestGit_ReadOnlySubcommandRuns(t *testing.T) {
 	dir := t.TempDir()
 	if err := exec.CommandContext(context.Background(), "git", "init", dir).Run(); err != nil {
 		t.Skipf("git not available: %v", err)
 	}
-	git := GitTool(dir, 0, false)
+	git := GitTool(dir, 0)
 	res := git.Call(context.Background(), `{"subcommand":"status"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
@@ -43,26 +45,25 @@ func TestGit_GitRepoOperations(t *testing.T) {
 	}
 }
 
-func TestGit_CleanWithoutDryRunBlocked(t *testing.T) {
+func TestGit_DeniesFileWritingOptions(t *testing.T) {
 	dir := t.TempDir()
 	if err := exec.CommandContext(context.Background(), "git", "init", dir).Run(); err != nil {
 		t.Skipf("git not available: %v", err)
 	}
-	git := GitTool(dir, 0, false)
-	res := git.Call(context.Background(), `{"subcommand":"clean","args":"-f"}`)
-	if !res.IsError || !strings.Contains(res.Output, "--dry-run") {
-		t.Errorf("clean without --dry-run should be rejected: %s", res.Output)
-	}
-	res = git.Call(context.Background(), `{"subcommand":"clean","args":"--dry-run"}`)
-	if res.IsError {
-		t.Fatalf("unexpected error with --dry-run: %s", res.Output)
+	git := GitTool(dir, 0)
+	cases := []string{"--output=/tmp/x", "-O/tmp/x", "--ext-diff"}
+	for _, opt := range cases {
+		res := git.Call(context.Background(), `{"subcommand":"diff","args":"`+opt+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "blocked") {
+			t.Errorf("diff %q should be blocked, got: %s", opt, res.Output)
+		}
 	}
 }
 
 func TestGit_MissingSubcommand(t *testing.T) {
-	git := GitTool(t.TempDir(), 0, false)
+	git := GitTool(t.TempDir(), 0)
 	res := git.Call(context.Background(), `{}`)
 	if !res.IsError || !strings.Contains(res.Output, "missing argument: subcommand") {
-		t.Errorf("expected missing subcommand error: %s", res.Output)
+		t.Errorf("expected missing subcommand error, got: %s", res.Output)
 	}
 }

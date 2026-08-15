@@ -11,6 +11,10 @@ import (
 //   - default: file tools (read/write/edit/grep/glob) are confined to the workdir subtree via confineWrap;
 //     shell is registered with mode=default (rejects sudo/su). workdir is required (validated at the main entry).
 //   - auto: no constraints (shell mode=auto, file tools are not wrapped) unless confineAuto is opted in.
+//
+// git and go tools are inherently read-only/constrained by their own allow-list, so they are NOT wrapped
+// in confineWrap (which only understands a "path" JSON field, not "subcommand"). Their timeout aligns
+// with shellTimeout (120s) rather than fileOpTimeout (30s), since go test/build can exceed 30s.
 func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration,
 	mode string, fileResultLimit int, limits miniagent.Limits,
 	confineAuto, evalSymlinks, shellConfineCD bool, shellAllowlist []string) []miniagent.Tool {
@@ -44,12 +48,8 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	if shellMode == miniagent.ModeDefault && workdir != "" && (shellConfineCD || len(shellAllowlist) > 0) {
 		shell = tools.GuardShell(shell, workdir, shellAllowlist, shellConfineCD)
 	}
-	git := tools.GitTool(workdir, fileOpTimeout, false)
-	goT := tools.GoTool(workdir, fileOpTimeout)
-	if confine && workdir != "" {
-		git = confineWrap(git, workdir, true, evalSymlinks)
-		goT = confineWrap(goT, workdir, false, evalSymlinks)
-	}
+	git := tools.GitTool(workdir, shellTimeout)
+	goT := tools.GoTool(workdir, shellTimeout)
 	return []miniagent.Tool{
 		read, write, edit, grep, glob, shell, git, goT,
 	}

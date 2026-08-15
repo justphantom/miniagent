@@ -19,25 +19,30 @@ type gitArgs struct {
 	Args       string `json:"args,omitempty"`
 }
 
+// 只收录无条件只读的子命令：任何参数组合都不改仓库状态、不落盘。
+// branch/tag/remote/stash/config/worktree 裸调用虽只读，但带参数即写，全部排除（收紧原则）。
 var allowedGitSubcommands = map[string]bool{
-	"status": true, "diff": true, "log": true, "show": true, "branch": true,
-	"tag": true, "remote": true, "ls-files": true, "blame": true, "grep": true,
-	"worktree": true, "stash": true, "reflog": true, "config": true,
-	"whatchanged": true, "describe": true, "check-attr": true, "ls-tree": true,
-	"rev-parse": true, "shortlog": true, "cat-file": true, "clean": true,
+	"status": true, "diff": true, "log": true, "show": true,
+	"ls-files": true, "blame": true, "reflog": true,
+	"whatchanged": true, "describe": true, "check-attr": true,
+	"ls-tree": true, "rev-parse": true, "shortlog": true, "cat-file": true,
 }
 
-func GitTool(workspaceRoot string, timeout time.Duration, confineSymlinks bool) miniagent.Tool {
+// 只读子命令中仍能写文件或调起外部程序的选项前缀，一律拒绝。
+var deniedGitArgPrefixes = []string{"--output", "-O", "--ext-diff"}
+
+func GitTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	if timeout <= 0 {
-		timeout = fileOpTimeout
+		timeout = shellTimeout
 	}
 	return miniagent.Tool{
 		Name:        "git",
-		Description: "Read-only git operations. Blocks destructive commands like push/pull/commit/reset.",
+		Description: "Read-only git operations (status/diff/log/show/ls-tree etc). Every allowed subcommand is unconditionally read-only; commands that modify the repository (commit/push/stash/branch/...) are blocked.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "Git subcommand"},
-			"args":       map[string]any{"type": "string", "description": "Additional arguments"},
+			"args":       map[string]any{"type": "string", "description": "Additional arguments (whitespace-split; options that write files are rejected)"},
 		}, "subcommand"),
+		ResultLimit: miniagent.MaxToolResultInHistory,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "git", func(rctx context.Context) miniagent.ToolResult {
 				return runGit(rctx, workspaceRoot, args)
@@ -57,20 +62,23 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	if !allowedGitSubcommands[a.Subcommand] {
 		return miniagent.ToolResult{
 			IsError: true,
-			Output:  fmt.Sprintf("git %q is not in the allow-list; blocked as potentially destructive. Use allowed read-only subcommands: status, diff, log, show, branch, tag, remote, ls-files, blame, grep, worktree, stash, reflog, config, whatchanged, describe, check-attr, ls-tree, rev-parse", a.Subcommand),
+			Output:  fmt.Sprintf("git %q is not in the allow-list; only unconditionally read-only subcommands are permitted: status, diff, log, show, ls-files, blame, reflog, whatchanged, describe, check-attr, ls-tree, rev-parse, shortlog, cat-file", a.Subcommand),
 		}
 	}
-	if a.Subcommand == "clean" && a.Args != "--dry-run" {
-		return miniagent.ToolResult{IsError: true, Output: "git clean without --dry-run is blocked; use --dry-run to preview"}
+	fields := strings.Fields(a.Args)
+	for _, f := range fields {
+		for _, p := range deniedGitArgPrefixes {
+			if strings.HasPrefix(f, p) {
+				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("git %s option %q writes a file or runs an external program; blocked", a.Subcommand, f)}
+			}
+		}
 	}
 	dir, err := resolveGitRoot(workspaceRoot)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("not a git repository: %v", err)}
 	}
 	cmdArgs := []string{"-C", dir, "--no-pager", a.Subcommand}
-	if a.Args != "" {
-		cmdArgs = append(cmdArgs, strings.Fields(a.Args)...)
-	}
+	cmdArgs = append(cmdArgs, fields...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	cmd.Dir = dir
 	cmd.Env = scrubEnv(os.Environ())
@@ -114,14 +122,14 @@ func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (s
 		_ = pw.Close()
 		return "", err
 	}
-	go func() {
-		<-ctx.Done()
-		killProcessGroup(cmd)
-		_ = pw.Close()
-	}()
 	waitErr := make(chan error, 1)
 	go func() {
 		waitErr <- cmd.Wait()
+		_ = pw.Close()
+	}()
+	go func() {
+		<-ctx.Done()
+		killProcessGroup(cmd)
 		_ = pw.Close()
 	}()
 	accum := newOutputAccum(maxOutputChars, 0, "", "miniagent_git_")

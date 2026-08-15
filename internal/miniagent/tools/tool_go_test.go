@@ -9,51 +9,52 @@ import (
 )
 
 func TestGo_RejectsDestructiveCommand(t *testing.T) {
-	dir := t.TempDir()
-	got := GoTool(dir, 0)
-	cases := []string{"get github.com/x/y", "install golang.org/x/tools", "mod tidy", "mod download", "mod init", "fmt", "env -w"}
+	got := GoTool(t.TempDir(), 0)
+	cases := []string{"run .", "get github.com/x/y", "install golang.org/x/tools",
+		"mod tidy", "mod download", "mod init", "generate", "fmt", "env -w", "bug", "foobar"}
 	for _, c := range cases {
 		res := got.Call(context.Background(), `{"subcommand":"`+c+`"}`)
-		if !res.IsError || !strings.Contains(res.Output, "not allowed") {
+		if !res.IsError || !strings.Contains(res.Output, "not allowed in default mode") {
 			t.Errorf("go %q should be rejected, got: %s", c, res.Output)
 		}
 	}
 }
 
-func TestGo_KnownCmdNotInAllowList(t *testing.T) {
-	dir := t.TempDir()
-	got := GoTool(dir, 0)
-	res := got.Call(context.Background(), `{"subcommand":"foobar"}`)
-	if !res.IsError || !strings.Contains(res.Output, "not allowed") {
-		t.Errorf("unknown command should be rejected: %s", res.Output)
+func TestGo_MissingSubcommand(t *testing.T) {
+	res := GoTool(t.TempDir(), 0).Call(context.Background(), `{}`)
+	if !res.IsError || !strings.Contains(res.Output, "missing argument: subcommand") {
+		t.Errorf("expected missing subcommand error, got: %s", res.Output)
 	}
 }
 
-func TestGo_MissingSubcommand(t *testing.T) {
+func TestGo_DeniesFileWritingOptions(t *testing.T) {
 	got := GoTool(t.TempDir(), 0)
-	res := got.Call(context.Background(), `{}`)
-	if !res.IsError || !strings.Contains(res.Output, "missing argument: subcommand") {
-		t.Errorf("expected missing subcommand error: %s", res.Output)
+	for _, opt := range []string{"-w", "-write", "-fix", "-modfile=x"} {
+		res := got.Call(context.Background(), `{"subcommand":"build","args":"`+opt+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "blocked") {
+			t.Errorf("build %q should be blocked, got: %s", opt, res.Output)
+		}
 	}
 }
 
 func TestGo_ModuleRootResolution(t *testing.T) {
 	dir := t.TempDir()
 	moduleDir := filepath.Join(dir, "module")
-	os.MkdirAll(moduleDir, 0755)
-	os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.com/test\n\ngo 1.21\n"), 0644)
-	got := GoTool(moduleDir, 0)
-	res := got.Call(context.Background(), `{"subcommand":"list","args":"-m"}`)
+	os.MkdirAll(moduleDir, 0o755)
+	os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.com/test\n\ngo 1.21\n"), 0o644)
+	res := GoTool(moduleDir, 0).Call(context.Background(), `{"subcommand":"list","args":"-m"}`)
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
 }
 
-func TestGo_UnknownSubcommandRejected(t *testing.T) {
+// resolveModuleRoot 找不到 go.mod 时必须返回 startDir（而非字面量 "."），让 go 在 workdir 报错而非跑到进程 cwd
+func TestGo_ModuleRootFallbackIsStartDir(t *testing.T) {
 	dir := t.TempDir()
-	got := GoTool(dir, 0)
-	res := got.Call(context.Background(), `{"subcommand":"foobar"}`)
-	if !res.IsError || !strings.Contains(res.Output, "not allowed in default mode") {
-		t.Errorf("unknown command should be rejected: %s", res.Output)
+	if got := resolveModuleRoot(dir); got != dir {
+		t.Errorf("resolveModuleRoot = %q, want %q", got, dir)
+	}
+	if got := resolveModuleRoot(""); got == "" {
+		t.Errorf("resolveModuleRoot(\"\") should fall back to cwd, got empty")
 	}
 }
