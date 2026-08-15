@@ -54,7 +54,7 @@ func runNpm(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	if !allowedNpmSubcommands[a.Subcommand] {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %q is not allowed in default mode; use one of: install, ci, test, run, ls, outdated, audit, version", a.Subcommand)}
 	}
-	fields := strings.Fields(a.Args)
+	fields := splitArgs(a.Args)
 	cmdArgs := append([]string{a.Subcommand}, fields...)
 	bin, argv := rtkWrap("npm", []string{"npm"}, cmdArgs)
 	cmd := exec.CommandContext(ctx, bin, argv...)

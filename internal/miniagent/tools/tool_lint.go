@@ -55,7 +55,7 @@ func runLint(ctx context.Context, workspaceRoot, args string) miniagent.ToolResu
 	if !allowedLintSubcommands[a.Subcommand] {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("golangci-lint %q is not allowed in default mode; use one of: run, version, linters", a.Subcommand)}
 	}
-	fields := strings.Fields(a.Args)
+	fields := splitArgs(a.Args)
 	for _, f := range fields {
 		for _, p := range deniedLintArgPrefixes {
 			if strings.HasPrefix(f, p) {

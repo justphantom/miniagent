@@ -75,6 +75,71 @@ func rtkWrap(bin string, prefix, args []string) (string, []string) {
 	return "rtk", append(append([]string{}, prefix...), args...)
 }
 
+// splitArgs tokenizes an argument string the way a shell would split words, so that quoted values
+// containing spaces survive intact (e.g. `-m "feat: add thing"` -> ["-m","feat: add thing"]).
+//
+// Semantics (deliberately POSIX-ish but minimal — the git/go/npm/lint tools pass argv directly to
+// exec, so this is the ONLY quoting layer; previously strings.Fields split every word apart and
+// multi-word commit messages / grep patterns broke):
+//   - unquoted whitespace (space/tab/CR/LF) separates words
+//   - 'single quotes' preserve everything literally, no escapes
+//   - "double quotes" preserve spaces; backslash escapes only " and \ (other chars stay literal)
+//   - outside quotes a backslash escapes the next char (so -m one\ word == -m "one word")
+//   - quotes are stripped; adjacent segments concatenate (a"b c"d -> ab cd)
+//
+// An unterminated quote yields the remainder as one word rather than an error: args come from an
+// LLM's JSON string, and a hard failure would block the call over cosmetics.
+func splitArgs(s string) []string {
+	var out []string
+	var buf []rune
+	hasWord := false // a word is "active" once we have buffered a char or entered a quote (so "" makes an empty word)
+	flush := func() {
+		if hasWord {
+			out = append(out, string(buf))
+			buf = buf[:0]
+			hasWord = false
+		}
+	}
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case r == '\'':
+			hasWord = true
+			for i++; i < len(runes); i++ {
+				if runes[i] == '\'' {
+					break
+				}
+				buf = append(buf, runes[i])
+			}
+		case r == '"':
+			hasWord = true
+			for i++; i < len(runes); i++ {
+				if runes[i] == '"' {
+					break
+				}
+				if runes[i] == '\\' && i+1 < len(runes) && (runes[i+1] == '"' || runes[i+1] == '\\') {
+					i++ // backslash only escapes " and \ inside double quotes; for any other char it is literal
+				}
+				buf = append(buf, runes[i])
+			}
+		case r == '\\':
+			hasWord = true
+			if i+1 < len(runes) {
+				i++
+				buf = append(buf, runes[i])
+			} // trailing backslash: dropped, no panic
+		case r == ' ' || r == '\t' || r == '\r' || r == '\n':
+			flush()
+		default:
+			hasWord = true
+			buf = append(buf, r)
+		}
+	}
+	flush()
+	return out
+}
+
 // maxFileResultInHistory is the character cap for results of code-content tools like read/edit entering history:
 // code truncation means losing accuracy, so a higher quota than the default policy.MaxToolResultInHistory is given
 // (still constrained by read's own maxReadFileChars output cap). miniagent.Tool.ResultLimit takes this value.

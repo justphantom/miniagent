@@ -68,7 +68,7 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 			Output:  fmt.Sprintf("git %q is not in the allow-list; permitted: status, diff, log, show, ls-files, blame, reflog, whatchanged, describe, check-attr, ls-tree, rev-parse, shortlog, cat-file, add, commit, pull, push", a.Subcommand),
 		}
 	}
-	fields := strings.Fields(a.Args)
+	fields := splitArgs(a.Args)
 	for _, f := range fields {
 		for _, p := range deniedGitArgPrefixes {
 			if strings.HasPrefix(f, p) {
