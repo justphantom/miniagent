@@ -35,4 +35,5 @@ go.work.sum
 .codegraph/
 docs/
 cmd/miniagent/.miniagent/
+.miniagent/
 .claude/
