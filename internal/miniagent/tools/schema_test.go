@@ -62,7 +62,7 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 		ReadFileTool(workdir, 0, 0),
 		WriteFileTool(workdir, 0),
 		EditFileTool(workdir, 0),
-		ShellTool(workdir, 0, miniagent.ModeAuto, 0, 0),
+		ShellTool(workdir, 0, 0, 0),
 	}
 
 	for _, tk := range tools {

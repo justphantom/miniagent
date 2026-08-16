@@ -253,36 +253,6 @@ func TestLoadConfig_StrategyConstants(t *testing.T) {
 	}
 }
 
-// shell_allowlist ([]string) and shell_confine_cd (*bool) round-trip through run.*.
-func TestLoadConfig_ShellGuardrails(t *testing.T) {
-	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"},"compaction":{"provider":"p","model":"m"},"run":{"shell_allowlist":["ls","git"],"shell_confine_cd":true}}`
-	cfg, err := LoadConfig(writeTmpConfig(t, body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Run.ShellAllowlist) != 2 || cfg.Run.ShellAllowlist[0] != "ls" || cfg.Run.ShellAllowlist[1] != "git" {
-		t.Errorf("shell_allowlist = %v, want [ls git]", cfg.Run.ShellAllowlist)
-	}
-	if cfg.Run.ShellConfineCd == nil || !*cfg.Run.ShellConfineCd {
-		t.Errorf("shell_confine_cd = %v, want true", cfg.Run.ShellConfineCd)
-	}
-}
-
-// Unset shell guardrails default to off (empty list / nil), preserving current behavior.
-func TestLoadConfig_ShellGuardrailsDefaultOff(t *testing.T) {
-	body := `{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"},"compaction":{"provider":"p","model":"m"}}`
-	cfg, err := LoadConfig(writeTmpConfig(t, body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Run.ShellAllowlist) != 0 {
-		t.Errorf("shell_allowlist default = %v, want empty", cfg.Run.ShellAllowlist)
-	}
-	if cfg.Run.ShellConfineCd != nil {
-		t.Errorf("shell_confine_cd default = %v, want nil", cfg.Run.ShellConfineCd)
-	}
-}
-
 // config.example.json is the release flagship sample: after stripping // comments it must be loadable by LoadConfig
 // (after pinning, the openai provider explicitly declares thinking{field:reasoning_effort,map:identity}; defaults.thinking=off is not enforced).
 func TestLoadConfig_ExampleFile(t *testing.T) {

@@ -8,15 +8,21 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-func TestBuildTools_AlwaysRegisters12(t *testing.T) {
-	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
-	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true, "git": true, "go": true, "npm": true, "golangci-lint": true, "rename": true, "delete": true}
-	got := map[string]bool{}
+func toolNames(tools []miniagent.Tool) map[string]bool {
+	names := map[string]bool{}
 	for _, tl := range tools {
-		got[tl.Name] = true
+		names[tl.Name] = true
 	}
+	return names
+}
+
+// auto mode registers all 12 builtin tools including shell.
+func TestBuildTools_AutoRegisters12(t *testing.T) {
+	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
+	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true, "git": true, "go": true, "npm": true, "golangci-lint": true, "rename": true, "delete": true}
+	got := toolNames(tools)
 	if len(tools) != len(want) {
-		t.Fatalf("got %d tools %v, want %d (read/write/edit/grep/glob/shell/git/go/npm/lint/rename/delete)", len(tools), got, len(want))
+		t.Fatalf("got %d tools %v, want %d (auto: read/write/edit/grep/glob/shell/git/go/npm/lint/rename/delete)", len(tools), got, len(want))
 	}
 	for name := range want {
 		if !got[name] {
@@ -30,17 +36,40 @@ func TestBuildTools_AlwaysRegisters12(t *testing.T) {
 	}
 }
 
-func TestBuildTools_EmptyWorkdirStillRegisters12(t *testing.T) {
-	tools := buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil)
-	if len(tools) != 12 {
-		t.Fatalf("got %d tools, want 12 (read/write/edit/grep/glob/shell/git/go/npm/lint/rename/delete)", len(tools))
+// default mode registers 11 tools WITHOUT shell: a misfired shell call fails dispatch with "unknown tool"
+// (loop_tools), not an executed command — the registration gate replaces the old sudo/su denylist.
+func TestBuildTools_DefaultRegisters11NoShell(t *testing.T) {
+	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)
+	if len(tools) != 11 {
+		t.Fatalf("got %d tools %v, want 11 (default: read/write/edit/grep/glob/git/go/npm/lint/rename/delete)", len(tools), toolNames(tools))
+	}
+	if got := toolNames(tools); got["shell"] {
+		t.Fatal("default mode must not register shell")
+	}
+}
+
+// Empty workdir keeps the same mode-dependent counts (workdir is required at the main entry; this is the degenerate unit case).
+func TestBuildTools_EmptyWorkdirModeCounts(t *testing.T) {
+	if n := len(buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)); n != 12 {
+		t.Errorf("auto empty workdir: got %d tools, want 12", n)
+	}
+	if n := len(buildTools("", 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)); n != 11 {
+		t.Errorf("default empty workdir: got %d tools, want 11", n)
+	}
+}
+
+// Empty mode resolves to default at the config layer (resolve.go always yields default|auto); an empty string
+// passed directly (degenerate caller) must not accidentally register shell.
+func TestBuildTools_EmptyModeTreatedAsDefault(t *testing.T) {
+	if got := toolNames(buildTools(t.TempDir(), 0, 0, 0, "", 0, miniagent.Limits{}, false, false)); got["shell"] {
+		t.Fatal("empty mode must not register shell (only explicit auto does)")
 	}
 }
 
 func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 	dir := t.TempDir()
 	byName := map[string]int{}
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, miniagent.Limits{}, false, false, false, nil) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 4242, miniagent.Limits{}, false, false) {
 		byName[tl.Name] = tl.ResultLimit
 	}
 	for _, name := range []string{"read", "edit"} {
@@ -48,7 +77,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 			t.Errorf("%s ResultLimit = %d, want 4242", name, byName[name])
 		}
 	}
-	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false, false, nil) {
+	for _, tl := range buildTools(dir, 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false) {
 		if tl.Name == "read" && tl.ResultLimit != 8000 {
 			t.Errorf("read ResultLimit = %d, want builtin 8000 when limit<=0", tl.ResultLimit)
 		}
@@ -57,7 +86,7 @@ func TestBuildTools_FileResultLimitOverride(t *testing.T) {
 
 func TestBuildTools_DefaultConfineRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
-	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false, false, nil)
+	tools := buildTools(dir, 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)
 	byName := map[string]miniagent.Tool{}
 	for _, tk := range tools {
 		byName[tk.Name] = tk

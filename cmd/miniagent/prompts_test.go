@@ -26,7 +26,7 @@ func TestShellSingleQuote(t *testing.T) {
 	}
 }
 func TestDefaultSystemPrompt_CoversWorkflow(t *testing.T) {
-	for _, want := range []string{"read", "grep", "shell", "edit", "replace_all", "Verify", "test"} {
+	for _, want := range []string{"read", "grep", "go build", "golangci-lint", "edit", "replace_all", "Verify", "test"} {
 		if !strings.Contains(defaultSystemPrompt, want) {
 			t.Errorf("default prompt missing %q", want)
 		}
@@ -60,9 +60,9 @@ func TestSubagentGuidance_AutoMode(t *testing.T) {
 	}
 }
 
-// injectSubagentGuidance passes through mode; empty falls back to default (consistent with resolved.Mode fallback);
-// empty configAbsPath is not injected (review v3 P3).
-func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
+// injectSubagentGuidance is auto-only (the fork channel is shell, registered in auto mode only);
+// default and empty mode do not inject — the guidance would point at a tool that fails dispatch.
+func TestInjectSubagentGuidance_AutoOnly(t *testing.T) {
 	const base = "SYS"
 	out := injectSubagentGuidance(base, "", "/abs/miniagent.json", "auto")
 	if !strings.Contains(out, "-mode auto") {
@@ -71,10 +71,10 @@ func TestInjectSubagentGuidance_PassesMode(t *testing.T) {
 	if !strings.HasPrefix(out, base) {
 		t.Errorf("system prompt should be prefix, got: %s", out)
 	}
-	// Empty value falls back to default.
-	out2 := injectSubagentGuidance(base, "", "/abs/miniagent.json", "")
-	if !strings.Contains(out2, "-mode default") {
-		t.Errorf("empty mode should fall back to default:\n%s", out2)
+	for _, mode := range []string{"default", ""} {
+		if got := injectSubagentGuidance(base, "", "/abs/miniagent.json", mode); got != base {
+			t.Errorf("mode %q should not inject (no shell to fork with), got: %s", mode, got)
+		}
 	}
 	// Empty configAbsPath is not injected.
 	if got := injectSubagentGuidance(base, "", "", "auto"); got != base {
@@ -144,12 +144,13 @@ func TestAppendWorkdirLine_InjectsAndSkipsEmpty(t *testing.T) {
 }
 
 // assembleSystemPrompt layers base (default fallback or config) + rules file + subagent guidance in that order.
+// Uses mode=auto because guidance injection is auto-only (shell fork channel).
 func TestAssembleSystemPrompt_LayersRulesThenGuidance(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("RULE-TEXT"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "default", dir, "AGENTS.md")
+	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "auto", dir, "AGENTS.md")
 	if !strings.Contains(got, "Observe before acting") {
 		t.Errorf("default base lost: %q", got)
 	}
@@ -168,7 +169,7 @@ func TestAssembleSystemPrompt_LayersRulesThenGuidance(t *testing.T) {
 	if idxRule >= idxWd || idxWd >= idxGuidance {
 		t.Errorf("order must be rules < workdir < guidance: rule@%d workdir@%d guidance@%d", idxRule, idxWd, idxGuidance)
 	}
-	got2 := assembleSystemPrompt("MYBASE", "", "/abs/miniagent.json", "default", dir, "AGENTS.md")
+	got2 := assembleSystemPrompt("MYBASE", "", "/abs/miniagent.json", "auto", dir, "AGENTS.md")
 	if !strings.HasPrefix(got2, "MYBASE") || !strings.Contains(got2, "RULE-TEXT") {
 		t.Errorf("custom base should also get rules appended: %q", got2)
 	}

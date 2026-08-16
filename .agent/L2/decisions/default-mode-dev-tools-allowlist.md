@@ -10,7 +10,7 @@ confidence: high
 # default 模式外部命令工具集：allow-list 收紧策略 + rtk 代理
 
 ## 背景
-default 模式（禁 shell）下需覆盖 go/js/css/html 代码开发全链路。工具必须是「执行→输出→退出」模型（无常驻进程），通过 allow-list 收紧到仅开发必需的子命令。
+default 模式（2026-08-16 起 shell 不注册，此前为词法 guardrail 禁用）下需覆盖 go/js/css/html 代码开发全链路。工具必须是「执行→输出→退出」模型（无常驻进程），通过 allow-list 收紧到仅开发必需的子命令。
 
 ## 决策
 

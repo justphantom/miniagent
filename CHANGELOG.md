@@ -10,6 +10,12 @@
 ### Changed
 - `go` 工具白名单加入 `fmt`：default 模式禁 shell 下可执行 gofmt 等价格式化，补齐 verify-gate 首步。
 
+### Removed
+- **breaking：shell 工具仅 `-mode auto` 注册**。default 模式不再注册 `shell`（11 工具，误调返回 `unknown tool`），auto 模式不变（12 工具）。注册门替代两级词法过滤，同批删除：
+  - `ShellTool` 的 mode 形参与 sudo/su 等 11 提权器拒绝名单（`sudoSuRe`）——经 cmd 装配后不可达（auto 不触发该检查）。
+  - `GuardShell` 及 opt-in config 键 `run.shell_allowlist` / `run.shell_confine_cd`（v4.5.0 引入）——仅 default shell 生效，shell 不注册后成死代码；已配该键的 config 加载不再生效（字段已删，JSON 中残留键被忽略）。
+  - subagent fork 引导（经 shell fork）改 **auto-only 注入**；default 模式 system prompt 不再含 fork 指引。验证句措辞改工具中立（dev tools，auto 下另有 shell）。
+
 ## [4.6.1] - 2026-08-14
 
 > patch：纯重构与文档对齐，无 API / 配置 / CLI 行为变化。

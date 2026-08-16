@@ -69,10 +69,9 @@ internal/miniagent/session/     会话持久化子包
   lock_*.go           平台锁原语
 
 internal/miniagent/tools/       内置工具实现
-  tool_read/write/edit/grep/glob/shell.go  六个文件与 shell 工具
+  tool_read/write/edit/grep/glob/shell.go  六个文件与 shell 工具（shell 仅 auto 注册）
   tool_git/go/npm/lint.go    语言生态工具（git 版本控制 / go 编译测试 / npm JS 生态 / golangci-lint 静态检查）
   tool_rename/delete.go      文件重命名与删除
-  tool_shell_guard.go       default 模式 shell 护栏（opt-in allowlist / cd-confine）
   tool_helpers.go     路径解析、schema 构造
   output_accum.go     shell 输出字节滑窗累积器（保尾部）
 
@@ -194,7 +193,7 @@ return finishMaxIterations
 | `glob` | 路径匹配 | filepath.Match 模式 |
 | `shell` | 命令执行 | 默认超时 **120s**，进程组隔离、按 shell_timeout |
 
-**default 模式 shell 护栏**（`tool_shell_guard.go`，opt-in）：`GuardShell` 包装器提供两个独立开关——`run.shell_allowlist`（命令名白名单，管道/链式每段精确匹配）+ `run.shell_confine_cd`（`cd` 目标不得越出 workdir）。仅 ModeDefault + 非空 workdir 生效（auto 仍无约束，default 模式非安全边界）。词法分词器可处理 `2>&1`/引号/`VAR=val`/子 shell，但可被 `eval`/`$()` 绕过（best-effort）。
+**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 11 工具无 shell，误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
 
 工具执行经 `handleToolCalls` + `runToolsParallel`（并行度受 `MaxParallelTools` 约束，默认 5）+ `safeCall`（panic 兜底）。
 
@@ -223,13 +222,13 @@ return finishMaxIterations
 - **config 文件查找**：`-config` 显式路径，否则 `$MINIAGENT_CONFIG`，否则 `~/.miniagent/miniagent.json`（找不到即报错，无静默回落）。
 - **Defaults 叠加**：`defaults.system_prompt`（未配则内置 defaultSystemPrompt）+ opt-in `defaults.rules_file`（工作目录内 basename 规则文件，追加到 system prompt 中段；防越界/注入）。
 - **Provider**：`kind` 枚举（openai|anthropic）、`name`/`chat_url`/`key`、`thinking`（level + provider 映射）、model 列表。
-- **Run/Compaction**：`max_iterations`/`max_total_tokens`/`max_duration`/`stream`/`shell_allowlist`/`shell_confine_cd`/`confirm_destructive`/`tool_output_dir`/`context_*`/`summary_*`/`preserve_recent_tokens` 等。
+- **Run/Compaction**：`max_iterations`/`max_total_tokens`/`max_duration`/`stream`/`confirm_destructive`/`tool_output_dir`/`context_*`/`summary_*`/`preserve_recent_tokens` 等。
 
 ## 10. 安全模型
 
 - **workdir 约束**（必填、绝对路径）：写工具边界 + shell cwd 基准。
-- **default 模式**（非安全边界）：`confineWrap` 按读写分流——write/edit 拒绝指向 workdir 根（防 MkdirAll/Rename 覆盖整个 workdir），read/grep/glob 放行 workdir 根；shell opt-in 护栏（allowlist/cd-confine）。
-- **auto 模式**：无约束，用于可信子任务。
+- **default 模式**（非安全边界）：`confineWrap` 按读写分流——write/edit 拒绝指向 workdir 根（防 MkdirAll/Rename 覆盖整个 workdir），read/grep/glob 放行 workdir 根；`shell` 不注册（误调 `unknown tool`）。
+- **auto 模式**：`shell` 注册且无约束，用于可信子任务。
 - **路径越界**：`..`/绝对路径/子目录统一拒绝（basename-only 对 rules_file 同样适用，防越界读注入）。
 - **凭证剥离**：shell 子进程剥离所有 `MINIAGENT_*` 前缀环境变量（含 key/URL），避免密钥泄漏给 LLM 派生命令；其他环境变量按原样继承。
 - **破坏性工具确认**（opt-in `confirm_destructive`）：write/edit + 危险 shell 前提示，非交互/子 agent 模式拒绝（可 `$MINIAGENT_AUTO_APPROVE=1` 放行）。

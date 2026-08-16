@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,17 +20,11 @@ const maxShellOutputChars = 100000
 
 const shellTimeout = 120 * time.Second
 
-// sudoSuRe word-boundary matches common privilege escalators (sudo/su/doas/pkexec/gsudo/run0) and proprietary
-// privilege/namespace tools (setpriv/nsenter/unshare/chroot/machinectl): covers mid-segment commands like
-// "cd /x && sudo ...". setpriv et al. are low-frequency proprietary tools; their false-positive cost is far
-// smaller than the value of catching them as escalation/escape tools. This can still be bypassed by variable
-// concatenation/splitting or unlisted escalators — default is a thin soft constraint, not a security boundary
-// (review v2 #10, P2-12, three rounds of P3). Does not include please: a common English word whose false-positive cost outweighs the benefit.
-var sudoSuRe = regexp.MustCompile(`\b(sudo|su|doas|pkexec|gsudo|run0|setpriv|nsenter|unshare|chroot|machinectl)\b`)
-
 // ShellTool returns a shell tool bound to workspaceRoot. timeout<=0 uses the default shellTimeout.
-// When workspaceRoot is empty cmd.Dir is left empty and exec inherits the parent process's cwd. mode=default rejects sudo/su.
-func ShellTool(workspaceRoot string, timeout time.Duration, mode string, maxOutputChars, streamWindow int) miniagent.Tool {
+// When workspaceRoot is empty cmd.Dir is left empty and exec inherits the parent process's cwd.
+// The caller decides whether to register it at all (cmd/miniagent buildTools: auto-only — default
+// mode does not register shell), so there is no mode parameter here.
+func ShellTool(workspaceRoot string, timeout time.Duration, maxOutputChars, streamWindow int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}
@@ -59,18 +52,15 @@ func ShellTool(workspaceRoot string, timeout time.Duration, mode string, maxOutp
 			if strings.TrimSpace(a.Command) == "" {
 				return miniagent.ToolResult{IsError: true, Output: "missing argument: command"}
 			}
-			return runShellCommand(ctx, workspaceRoot, mode, a.Command, timeout, maxOutputChars, streamWindow)
+			return runShellCommand(ctx, workspaceRoot, a.Command, timeout, maxOutputChars, streamWindow)
 		},
 	}
 }
 
-// runShellCommand executes command (via sh -c), including the mode blacklist / env scrubbing / process group / timeout / output truncation / exit-code mapping.
+// runShellCommand executes command (via sh -c), including env scrubbing / process group / timeout / output truncation / exit-code mapping.
 // timeout<=0 uses the default shellTimeout. Distinguishes the shell's own timeout from parent ctx cancellation: only when the parent ctx is not cancelled
 // and runCtx expires is it the shell's own timeout; a non-zero exit is a legitimate command result (IsError=false, the LLM decides success via ExitCode).
-func runShellCommand(ctx context.Context, workdir, mode, command string, timeout time.Duration, maxOutputChars, streamWindow int) miniagent.ToolResult {
-	if mode == miniagent.ModeDefault && sudoSuRe.MatchString(command) {
-		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: "default mode forbids privilege escalators sudo/su/doas/pkexec/gsudo/run0/setpriv/nsenter/unshare/chroot/machinectl (use -mode auto to allow)"}
-	}
+func runShellCommand(ctx context.Context, workdir, command string, timeout time.Duration, maxOutputChars, streamWindow int) miniagent.ToolResult {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // defaultSystemPrompt is the default system prompt oriented toward engineering code development:
@@ -15,7 +17,7 @@ import (
 const defaultSystemPrompt = `You are a pragmatic software engineer working inside a real code repository. Follow this workflow:
 
 - Observe before acting: before changing any file, use read/grep/glob to confirm the current content and structure; locate first when the path or symbol is uncertain, do not guess.
-- Verify after changes: after code changes, run the relevant build/test via shell (e.g. go build, go test); do not claim "done" without verification.
+- Verify after changes: after code changes, run the relevant build/test via the dev tools (e.g. go build/test, golangci-lint, npm test; in auto mode shell is also available); do not claim "done" without verification.
 - Review failures first: when a command or tool returns an error, first read the error message and related files, understand the root cause before changing; do not repeatedly blind-edit the same spot.
 - Precise edits: when using edit, old_string must match the file exactly and be unique; use replace_all for multiple identical changes; use write to create new files.
 - Segment large files: read returns lines with numbers; for large files use offset/limit to read in segments, do not swallow it all at once.`
@@ -86,12 +88,11 @@ func appendProjectRules(system, workdir, rulesFile string) string {
 // forked from an auto parent session inherits auto; an empty value falls back to default.
 // The subagent is a stateless single invocation (session is not persisted, stdout is the result), so the parent
 // session id is no longer injected.
+// Auto-only: the guidance tells the model to fork via shell, and shell is registered in auto mode only —
+// injecting it under default would point at a tool that fails dispatch with "unknown tool".
 func injectSubagentGuidance(system, guidance, configAbsPath, mode string) string {
-	if configAbsPath == "" {
+	if configAbsPath == "" || mode != miniagent.ModeAuto {
 		return system
-	}
-	if mode == "" {
-		mode = "default"
 	}
 	return system + "\n\n" + renderSubagentGuidance(guidance, configAbsPath, mode)
 }
