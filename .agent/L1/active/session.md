@@ -10,6 +10,7 @@ updated: 2026-08-13T00:00:00+08:00
 无。
 
 ## 已完成
+- 工具层加固三提交（verify-gate 全绿：gofmt 零重写 / build / vet / test -race 604 passed / lint 0）：①`f3f7392` .gitignore 加 `.miniagent/`（本地状态不入库）；②`1f6cff4` git 工具非交互加固——拒 `--amend/--force/--force-with-lease/--delete`（闭合描述承诺的 history-rewrite 缺口）、commit 强制 `-m`（`hasGitMessageFlag`）、env 注入 `GIT_EDITOR=true/GIT_PAGER=cat/PAGER=cat/GIT_TERMINAL_PROMPT=0` + `cmd.Stdin=nil`（防编辑器/凭证提示挂死 120s）、push/pull 经 `restoreGitCredentials` 回补 GITHUB_TOKEN/SSH_AUTH_SOCK 等 6 变量（输出不回显 env，无外泄通道；其余子命令含 commit 保持全 scrub），tool_shell.go 新增 29 行 + scrub_env_test/tool_git_test 新用例；③`d5dca01` go/lint/npm 工具启 `SplitTruncate`（FAIL/ELIFECYCLE 结论在输出尾部，head 截断丢失）+ go clean 拒 `-cache/-modcache/-testcache`（全局缓存越界）+ `runWithTimeout` 区分 cancelled(父 ctx)/timed out(带时长+重试指引) + go/npm/lint 参数解析错误提示 JSON 示例 + maxParallelTools==1 串行退化注释。
 - v4.6.1 发版：CHANGELOG 补记 v4.6.0 后 6 提交（8 文件拆分重构 + verify-gate 300 行硬检查 → Changed；HOOKS/ARCHITECTURE/loop.go 注释过期事实 → Fixed）并定版 `[4.6.1] 2026-08-14`（patch：纯重构无行为变化）；本 session 同步。verify-gate 全绿 + make build 重编 bin。→ 提交 + annotated tag v4.6.1 + push。
 - v4.6.0 发版前完善（3 项）：①CHANGELOG `[Unreleased]` → `[4.6.0]`（含 workdir 注入 Added + `make deploy` install-only Changed，空 `[Unreleased]` 置顶）；②版本号定为 4.6.0（向后兼容 Added 无 breaking，semver minor）；③本 session 同步。待用户审 diff / 决定提交 + 打 annotated tag v4.6.0。
 - `make deploy` 改为 install-only（移除对 `build` 的隐式依赖）：原 `make deploy` 自动触发 `make build`，一步到位；现仅 `sudo install -m 0755 bin/miniagent /usr/local/bin/miniagent`。构建须显式 `make build` 先行，消除「安装前用旧二进制」的隐患，部署意图更明确。Makefile 注释同步。→ 提交 `8934910`。
