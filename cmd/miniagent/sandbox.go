@@ -69,6 +69,13 @@ func checkConfine(root, p string, readOnly bool, evalSymlinks ...bool) error {
 	if !strings.HasPrefix(absTarget+sep, rootAbs+sep) {
 		return fmt.Errorf("path %q escapes workdir (default mode)", p)
 	}
+	// Reject <root>/.git/** for all tools (read included): direct file access to .git bypasses the git tool's
+	// allow-list (write .git/hooks/* → hook execution via git commit/pull; edit .git/config remote → push
+	// exfiltration; read .git/config leaks remote URLs/credentials-in-config). Mirrors resolveConfinedPath
+	// (tools package) for the rename/delete pair. Guardrail, not a security boundary.
+	if rel, err := filepath.Rel(rootAbs, absTarget); err == nil && dotGitWithinRoot(rel) {
+		return fmt.Errorf("path %q targets the .git directory (default mode); use the git tool instead", p)
+	}
 	// Check whether existing path components contain symlinks: an attacker may replace some directory level with a symlink
 	// to make the final IO land outside workdir. This check runs before IO and narrows but cannot fully eliminate TOCTOU.
 	rel, err := filepath.Rel(rootAbs, absTarget)
@@ -111,4 +118,17 @@ func checkConfine(root, p string, readOnly bool, evalSymlinks ...bool) error {
 		}
 	}
 	return nil
+}
+
+// dotGitWithinRoot reports whether rel (relative to workdir root) is or is under a ".git" directory
+// at any depth — covers ".git", ".git/config", and nested "sub/.git/HEAD" (submodule/worktree layouts).
+// Duplicated from tools.resolveConfinedPath's helper rather than exported: cmd → core must not add a
+// reverse dependency for one predicate (invariant #14; the two confine layers already mirror each other).
+func dotGitWithinRoot(rel string) bool {
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		if part == ".git" {
+			return true
+		}
+	}
+	return false
 }

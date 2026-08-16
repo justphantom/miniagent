@@ -22,7 +22,41 @@ confidence: high
 ## 关键局限（取舍）
 该防护对 `/proc/<pid>/environ` **无效**——procfs 暴露 exec 时刻环境快照，`cat /proc/$PPID/environ` 仍可读 key。auto 模式 shell 可经 `cd` / 绝对路径越界、写工具可符号链接逃逸、auto 模式无任何约束。default 模式 git/go/npm 工具的子命令白名单也是防误调 guardrail，非沙箱（npm run/test 本身即任意代码执行，已接受）。
 
-**真隔离（防越界 / 逃逸 / 凭证泄漏）责任在调用方 OS 层**（低权用户 + 容器 + 只读 rootfs + cgroup）；代码侧仅 guardrail 防 misfired 工具调用，越界 / 逃逸不视为漏洞。安全漏洞走 GitHub Security Advisory 私有上报，禁公开 issue。
+## 攻击面记账（2026-08-16 评估；同日两轮收紧后）
+default 拦「一步直呼危险命令」+「直接文件路径绕过」（.git 封锁、参数级收紧），不拦「两步构造执行」——与开发闭环互斥，不可能全堵。已知通道全录：
+
+**一档：开发闭环的定义内行为（等价 shell）**
+1. `npm run/test` 经 package.json scripts 执行任意命令（1a 决策）；`npm install <pkg>` 触发依赖包 pre/postinstall 任意代码。
+2. `go test` 编译并执行测试代码（含 init/TestMain）——本机任意代码执行。
+3. 任一代码执行通道可读 `/proc/$PPID/environ` 或 `~/.miniagent/miniagent.json` 拿全部 key（scrubEnv 只防直读）。
+
+**二档：间接执行/外传链（2026-08-16 二轮收紧，见下「.git 封锁」与「参数级收紧」）**
+4. ~~**git hooks 执行链**~~ 已堵：write/edit/rename/delete/read 均拒 `.git/**`。
+5. ~~**git push 外传**~~ 已堵（两路径）：改 `.git/config` remote（.git 封锁）+ `git push <url>` 位置参数（`checkGitPositionalArgs`：push/pull 首个非选项位置参数含 `://` 或绝对路径即拒）。
+6. ~~**golangci-lint custom linter**~~ 已堵：`.golangci.yml` 属 workdir 可写文件但经 lint 工具执行的 custom linter 路径——**注：本轮未实现 config 拦截**，custom linter 声明仍可达（lint run 执行 `.golangci.yml` 声明的外部程序）。残余，接受（与 npm run 同类：执行开发工具链声明的程序）。
+7. ~~**resolveModuleRoot 向上逃逸**~~ 已堵：上溯不得越出 workdir（见「参数级收紧」6）。
+8. **无网络出口控制**（部分收窄）：npm install/audit、git pull/push 仍可出网到**配置的** registry/remote；`--registry` 重定向已拒，`.npmrc` 覆写残余。真出口控制靠调用方网络层。
+
+**三档：残余词法窗口**
+9. 写工具 confine 纯词法不追 symlink（`confine_eval_symlinks` 仅 opt-in 收窄 TOCTOU）；rename/delete 拒 symlink 源。
+
+## 参数级收紧（2026-08-16 二轮，.git 封锁后残余通道）
+1. **git 外读**：deny 前缀加 `--no-index`（diff 比较仓库外任意文件）、`-F`（commit message 从任意文件读，log/show 回读）。
+2. **git push/pull URL 位置参数**：`checkGitPositionalArgs`——首个非选项位置参数含 `://` 或绝对路径即拒（refspec 不会有 `://`）；堵不改 config 的外传路径。
+3. **.gitattributes 外部驱动**：`checkGitAttributes`——每次 git 工具调用前扫 repo 根 `.gitattributes`，`filter=`/`diff=`/`textconv=` 属性 token 即拒（workdir 内可写文件即可声明，`git add/diff` 触发执行，绕过 .git 封锁）。保守方向：内置 diff 驱动的误报代价是一次手动编辑，漏报是代码执行。pull 进来的恶意 attributes 不可预检（供应链面，接受）。
+4. **go 参数级写出/执行**：deny 前缀加 `-o`（编译产物写子树外）、`-toolexec`（构建期执行外部程序）。
+5. **npm 重定向**：拒 `--prefix`/`-C`（cwd 移出模块树）、`--registry`（依赖流指向攻击者服务器）。残余：workdir 内 `.npmrc` 同样可覆写 registry——接受（文件工具白名单化 .npmrc 的成本 > 收益，guardrail 定位）。
+6. **resolveModuleRoot 限界**：从 workdir 向上找 go.mod 不得越出 workdir（`tool_go.go`，前缀判停）。堵 go/npm/lint cwd 上溯到父模块、模块级写越出子树。已知代价：workdir 在模块子目录内（repo/cmd/x 布局）时 npm 找不到 package.json 会报错（保守方向）。
+
+## .git 封锁（2026-08-16）
+文件工具直接访问 `.git/**` 绕过 git 工具 allow-list（hooks 执行链 / remote 改写外传 / config 凭证泄漏），已封：
+- **两层检查**：`cmd/miniagent/sandbox.go checkConfine`（confineWrap 侧：read/write/edit/grep/glob）+ `internal/miniagent/tools/tool_helpers.go resolveConfinedPath`（rename/delete 侧）各加 `.git` 前缀拒绝（`dotGitWithinRoot`：rel 路径任一分量 == `.git` 即拒，覆盖嵌套 submodule 布局；两处同名 helper 各自私有，维持 cmd→core 依赖单向）。
+- **读也拒**（read/grep/glob/grep 显式 path 指向 `.git/config` 会泄漏 remote URL/凭证）；grep/glob 递归遍历本就 SkipDir `.git`（`tool_glob.go`/`tool_grep.go`），显式 path 现在同拒。
+- **auto 模式不套 confineWrap，不拦**（auto 本就无约束，语义一致）；仅 default + confineAuto 生效。
+- 拒绝信息指向 git 工具：`path %q targets the .git directory (default mode); use the git tool instead`。
+- 注：`git add -f`/`git clean` 等可再次引入 `.git` 内文件的方式已在 git allow-list 外（clean/add -f 不涉及 `.git` 内部写）。
+
+**真隔离（防越界 / 逃逸 / 凭证泄漏）责任在调用方 OS 层**（低权用户 + 容器 + 只读 rootfs + cgroup + 网络出口白名单）；代码侧仅 guardrail 防 misfired 工具调用，越界 / 逃逸不视为漏洞。安全漏洞走 GitHub Security Advisory 私有上报，禁公开 issue。
 
 ## 参考
 - `cmd/miniagent/tools.go`（`buildTools`，shell auto-only 注册门）

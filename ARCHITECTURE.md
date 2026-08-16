@@ -227,7 +227,7 @@ return finishMaxIterations
 ## 10. 安全模型
 
 - **workdir 约束**（必填、绝对路径）：写工具边界 + shell cwd 基准。
-- **default 模式**（非安全边界）：`confineWrap` 按读写分流——write/edit 拒绝指向 workdir 根（防 MkdirAll/Rename 覆盖整个 workdir），read/grep/glob 放行 workdir 根；`shell` 不注册（误调 `unknown tool`）。
+- **default 模式**（非安全边界）：`confineWrap` 按读写分流——write/edit 拒绝指向 workdir 根（防 MkdirAll/Rename 覆盖整个 workdir），read/grep/glob 放行 workdir 根；`shell` 不注册（误调 `unknown tool`）；`.git/**` 全工具拒绝（`checkConfine`/`resolveConfinedPath` 的 `dotGitWithinRoot`，含嵌套 submodule 布局，读也拒——防 hooks 执行/remote 改写/config 泄漏绕过 git 工具白名单）；参数级：git 拒 `--no-index`/`-F`/push-pull URL 位置参数/`.gitattributes` 外部驱动（`checkGitPositionalArgs`/`checkGitAttributes`），go 拒 `-o`/`-toolexec`，npm 拒 `--prefix`/`-C`/`--registry`，`resolveModuleRoot` 上溯不越 workdir。
 - **auto 模式**：`shell` 注册且无约束，用于可信子任务。
 - **路径越界**：`..`/绝对路径/子目录统一拒绝（basename-only 对 rules_file 同样适用，防越界读注入）。
 - **凭证剥离**：shell 子进程剥离所有 `MINIAGENT_*` 前缀环境变量（含 key/URL），避免密钥泄漏给 LLM 派生命令；其他环境变量按原样继承。

@@ -7,14 +7,25 @@
 ### Added
 - golangci-lint 工具（subcommand allowlist: run/version/linters; --fix/--write/--enable-all/--new* 被拒），default 模式禁 shell 下可闭环 verify-gate 末步。
 
-### Changed
-- `go` 工具白名单加入 `fmt`：default 模式禁 shell 下可执行 gofmt 等价格式化，补齐 verify-gate 首步。
-
 ### Removed
 - **breaking：shell 工具仅 `-mode auto` 注册**。default 模式不再注册 `shell`（11 工具，误调返回 `unknown tool`），auto 模式不变（12 工具）。注册门替代两级词法过滤，同批删除：
   - `ShellTool` 的 mode 形参与 sudo/su 等 11 提权器拒绝名单（`sudoSuRe`）——经 cmd 装配后不可达（auto 不触发该检查）。
   - `GuardShell` 及 opt-in config 键 `run.shell_allowlist` / `run.shell_confine_cd`（v4.5.0 引入）——仅 default shell 生效，shell 不注册后成死代码；已配该键的 config 加载不再生效（字段已删，JSON 中残留键被忽略）。
   - subagent fork 引导（经 shell fork）改 **auto-only 注入**；default 模式 system prompt 不再含 fork 指引。验证句措辞改工具中立（dev tools，auto 下另有 shell）。
+
+### Changed
+- `go` 工具白名单加入 `fmt`：default 模式禁 shell 下可执行 gofmt 等价格式化，补齐 verify-gate 首步。
+- **default 模式封锁 `.git` 目录**：read/write/edit/grep/glob（`checkConfine`）与 rename/delete（`resolveConfinedPath`）拒绝指向 `.git` 及其子树的路径（含嵌套 submodule 布局；读也拒，防 config 凭证泄漏）。堵 git hooks 执行链（写 `.git/hooks/*` 后 `git commit`/`git pull` 触发）与 remote 改写外传（改 `.git/config` 后 `git push`）两条绕过 git 工具 allow-list 的通道；`.git` 内操作经 `git` 工具子命令白名单进行。auto 模式不套 confine，不受影响。
+- **default 模式参数级收紧**（.git 封锁后残余通道）：
+  - git deny 前缀加 `--no-index`/`-F`（仓库外任意文件读：diff 比较 / commit message 注入回读）；`git push/pull <url>` 位置参数拒绝（首个非选项位置参数含 `://` 或绝对路径即拒，堵不改 config 的外传路径）。
+  - `.gitattributes` 外部驱动拒绝：每次 git 工具调用前扫 repo 根 `.gitattributes`，`filter=`/`diff=`/`textconv=` 属性即拒（workdir 可写文件声明 clean/smudge/diff 驱动 → `git add/diff` 执行外部命令，绕过 .git 封锁）。
+  - go deny 前缀加 `-o`/`-toolexec`（编译产物写子树外 / 构建期执行外部程序）。
+  - npm 拒 `--prefix`/`-C`/`--registry`（cwd 移出模块树 / 依赖流指向他方 registry）。残余：workdir 内 `.npmrc` 可覆写 registry，接受（guardrail 定位）。
+  - `resolveModuleRoot` 上溯不得越出 workdir：父目录有 go.mod 时不再把 go/npm/lint 的 cwd 定到 workdir 外（模块级写越出子树）。已知保守代价：workdir 为模块子目录（repo/cmd/x）时 npm 报找不到 package.json。
+
+### Fixed
+- `go` 工具经 rtk 代理时子命令重复（`rtk go build build ./...` → `package build is not in std`）：`rtkWrap` 的 prefix 含 subcommand 而 `cmdArgs` 也以 subcommand 开头，rtk 路径改传 `fields`（不含 subcommand），与 git 一致。
+- `runLimitedOutput` 移除恒为 `maxShellOutputChars` 的冗余参数（unparam）；`git_splitargs_test.go` 的 `exec.Command` 改 `exec.CommandContext`（noctx）。
 
 ## [4.6.1] - 2026-08-14
 

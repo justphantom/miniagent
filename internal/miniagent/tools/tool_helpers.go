@@ -33,6 +33,9 @@ func resolveToolPath(workspaceRoot, p string) string {
 // Returns the absolute resolved path and nil on success, or "" and an error if it escapes.
 // When readOnly is false (write tools), targeting the workdir root itself is rejected
 // (would destroy the entire workdir); read-only tools may target the root (e.g. listing it).
+// All paths reject <root>/.git/** (default mode): direct file access to .git bypasses the git tool's
+// allow-list (write .git/hooks/* → hook execution via git commit/pull; edit .git/config remote →
+// push exfiltration). Not a security boundary — npm run et al. remain equivalent-shell channels.
 func resolveConfinedPath(root, p string, readOnly bool) (string, error) {
 	full := p
 	if !filepath.IsAbs(p) {
@@ -53,7 +56,21 @@ func resolveConfinedPath(root, p string, readOnly bool) (string, error) {
 	if !strings.HasPrefix(absTarget+sep, rootAbs+sep) {
 		return "", fmt.Errorf("path %q escapes workdir (default mode)", p)
 	}
+	if rel, err := filepath.Rel(rootAbs, absTarget); err == nil && dotGitWithinRoot(rel) {
+		return "", fmt.Errorf("path %q targets the .git directory (default mode); use the git tool instead", p)
+	}
 	return absTarget, nil
+}
+
+// dotGitWithinRoot reports whether rel (relative to workdir root) is or is under a ".git" directory
+// at any depth — covers ".git", ".git/config", and nested "sub/.git/HEAD" (submodule/worktree layouts).
+func dotGitWithinRoot(rel string) bool {
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		if part == ".git" {
+			return true
+		}
+	}
+	return false
 }
 
 // rtkBin caches the lookup of the rtk output-compacting proxy ("" = not deployed). rtk is optional:
@@ -103,8 +120,8 @@ func splitArgs(s string) []string {
 	runes := []rune(s)
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
-		switch {
-		case r == '\'':
+		switch r {
+		case '\'':
 			hasWord = true
 			for i++; i < len(runes); i++ {
 				if runes[i] == '\'' {
@@ -112,7 +129,7 @@ func splitArgs(s string) []string {
 				}
 				buf = append(buf, runes[i])
 			}
-		case r == '"':
+		case '"':
 			hasWord = true
 			for i++; i < len(runes); i++ {
 				if runes[i] == '"' {
@@ -123,13 +140,13 @@ func splitArgs(s string) []string {
 				}
 				buf = append(buf, runes[i])
 			}
-		case r == '\\':
+		case '\\':
 			hasWord = true
 			if i+1 < len(runes) {
 				i++
 				buf = append(buf, runes[i])
 			} // trailing backslash: dropped, no panic
-		case r == ' ' || r == '\t' || r == '\r' || r == '\n':
+		case ' ', '\t', '\r', '\n':
 			flush()
 		default:
 			hasWord = true

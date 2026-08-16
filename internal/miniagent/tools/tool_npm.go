@@ -55,13 +55,22 @@ func runNpm(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %q is not allowed in default mode; use one of: install, ci, test, run, ls, outdated, audit, version", a.Subcommand)}
 	}
 	fields := splitArgs(a.Args)
+	// --prefix/-C redirects npm's working root outside the module tree (out-of-subtree writes);
+	// --registry overrides the registry endpoint (exfiltration of the dependency stream to an
+	// attacker-controlled server that can serve malicious tarballs). .npmrc in workdir achieves the
+	// same registry override — accepted residual (guardrail against misfired calls, not a boundary).
+	for _, f := range fields {
+		if strings.HasPrefix(f, "--prefix") || strings.HasPrefix(f, "-C") || strings.HasPrefix(f, "--registry") {
+			return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %s option %q redirects npm outside the module or to another registry; blocked (default mode)", a.Subcommand, f)}
+		}
+	}
 	cmdArgs := append([]string{a.Subcommand}, fields...)
 	bin, argv := rtkWrap("npm", []string{"npm"}, cmdArgs)
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
 	setPGID(cmd)
-	body, err := runLimitedOutput(ctx, cmd, maxShellOutputChars)
+	body, err := runLimitedOutput(ctx, cmd)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %s failed: %v\n%s", a.Subcommand, err, body)}
 	}

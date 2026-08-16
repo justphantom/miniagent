@@ -50,6 +50,23 @@ func TestRename_EscapeRejected(t *testing.T) {
 	}
 }
 
+// Renaming into or out of .git must be rejected: moving a file into .git/hooks/ is the hook-execution
+// bypass of the git tool's allow-list (git commit/pull then executes it). Both from and to are checked.
+func TestRename_DotGitRejected(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o600)
+	for _, c := range []struct{ name, args string }{
+		{"into .git/hooks", `{"from":"a.txt","to":".git/hooks/pre-commit"}`},
+		{"out of .git", `{"from":".git/config","to":"config.bak"}`},
+		{"nested .git", `{"from":"a.txt","to":"sub/.git/hooks/x"}`},
+	} {
+		res := RenameTool(dir, 0).Call(context.Background(), c.args)
+		if !res.IsError || !strings.Contains(res.Output, ".git") {
+			t.Errorf("%s should be rejected with .git message: %s", c.name, res.Output)
+		}
+	}
+}
+
 func TestRename_SymlinkSourceRejected(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.txt")

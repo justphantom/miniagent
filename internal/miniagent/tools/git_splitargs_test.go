@@ -16,9 +16,10 @@ func TestGit_CommitMultiWordMessageViaQuotes(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir()
-	_ = exec.Command("git", "init", dir).Run()
-	_ = exec.Command("git", "-C", dir, "config", "user.email", "t@t").Run()
-	_ = exec.Command("git", "-C", dir, "config", "user.name", "t").Run()
+	ctx := context.Background()
+	_ = exec.CommandContext(ctx, "git", "init", dir).Run()
+	_ = exec.CommandContext(ctx, "git", "-C", dir, "config", "user.email", "t@t").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", dir, "config", "user.name", "t").Run()
 	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi"), 0o644)
 
 	git := GitTool(dir, 0)
@@ -31,7 +32,7 @@ func TestGit_CommitMultiWordMessageViaQuotes(t *testing.T) {
 		t.Fatalf("git commit with quoted multi-word message failed: %s", res.Output)
 	}
 
-	out, _ := exec.Command("git", "-C", dir, "log", "--format=%s").Output()
+	out, _ := exec.CommandContext(ctx, "git", "-C", dir, "log", "--format=%s").Output()
 	got := strings.TrimSpace(string(out))
 	if got != "feat: add new feature with details" {
 		t.Errorf("commit subject = %q, want %q", got, "feat: add new feature with details")

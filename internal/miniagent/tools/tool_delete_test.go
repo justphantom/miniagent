@@ -61,6 +61,21 @@ func TestDelete_RootRejected(t *testing.T) {
 	}
 }
 
+// Deleting inside .git must be rejected: it bypasses the git tool's allow-list (removing
+// hooks/config/refs corrupts repo state the git tool then operates on).
+func TestDelete_DotGitRejected(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{".git/config", ".git/hooks/pre-commit", "sub/.git/HEAD"} {
+		res := DeleteTool(dir, 0).Call(context.Background(), `{"path":"`+p+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, ".git") {
+			t.Errorf("%s delete should be rejected with .git message: %s", p, res.Output)
+		}
+	}
+}
+
 func TestDelete_MissingParam(t *testing.T) {
 	res := DeleteTool(t.TempDir(), 0).Call(context.Background(), `{}`)
 	if !res.IsError || !strings.Contains(res.Output, "missing parameter") {

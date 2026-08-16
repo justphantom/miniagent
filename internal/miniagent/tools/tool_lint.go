@@ -69,7 +69,7 @@ func runLint(ctx context.Context, workspaceRoot, args string) miniagent.ToolResu
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
 	setPGID(cmd)
-	body, err := runLimitedOutput(ctx, cmd, maxShellOutputChars)
+	body, err := runLimitedOutput(ctx, cmd)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("golangci-lint %s failed: %v\n%s", a.Subcommand, err, body)}
 	}

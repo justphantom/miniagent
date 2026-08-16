@@ -46,6 +46,33 @@ func TestCheckConfine_RootItselfRejected(t *testing.T) {
 	}
 }
 
+// .git and everything under it must be rejected for ALL tools (read included): direct file access
+// bypasses the git tool's allow-list (write .git/hooks/* → hook execution; edit .git/config remote →
+// push exfiltration; read .git/config leaks remote URLs). Covers nested submodule layouts too.
+func TestCheckConfine_DotGitRejected(t *testing.T) {
+	root := t.TempDir()
+	cases := []struct {
+		path     string
+		readOnly bool
+	}{
+		{".git", false},
+		{".git/config", false},
+		{".git/hooks/pre-commit", false},
+		{".git/config", true}, // read-only tools are also rejected (leaks remote URLs/credentials)
+		{"sub/.git/HEAD", false},
+		{filepath.Join(root, ".git", "config"), false}, // absolute form
+	}
+	for _, c := range cases {
+		if err := checkConfine(root, c.path, c.readOnly); err == nil {
+			t.Errorf("expected %q to be rejected (readOnly=%v)", c.path, c.readOnly)
+		}
+	}
+	// A directory merely NAMED like git (not ".git") stays usable.
+	if err := checkConfine(root, "github/config.txt", false); err != nil {
+		t.Errorf("github/config.txt should pass: %v", err)
+	}
+}
+
 // Existing path components containing symlinks must be rejected.
 func TestCheckConfine_SymlinkComponentRejected(t *testing.T) {
 	root := t.TempDir()

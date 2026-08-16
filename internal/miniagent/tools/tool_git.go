@@ -32,7 +32,11 @@ var allowedGitSubcommands = map[string]bool{
 // rtkGitSubcommands lists the subcommands that rtk git supports (compact output).
 // Only these route through rtk; the rest exec native git for raw output.
 var rtkGitSubcommands = map[string]bool{"status": true, "diff": true, "log": true, "show": true, "add": true, "commit": true, "pull": true, "push": true}
-var deniedGitArgPrefixes = []string{"--output", "-O", "--ext-diff"}
+
+// deniedGitArgPrefixes: --output/-O write report files anywhere; --ext-diff runs an arbitrary diff driver.
+// --no-index makes diff compare arbitrary files OUTSIDE the repo (out-of-tree read); -F reads the commit
+// message from an arbitrary file whose content then surfaces via log/show (out-of-tree read channel).
+var deniedGitArgPrefixes = []string{"--output", "-O", "--ext-diff", "--no-index", "-F"}
 
 func GitTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	if timeout <= 0 {
@@ -76,9 +80,15 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 			}
 		}
 	}
+	if err := checkGitPositionalArgs(a.Subcommand, fields); err != nil {
+		return miniagent.ToolResult{IsError: true, Output: err.Error()}
+	}
 	dir, err := resolveGitRoot(workspaceRoot)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("not a git repository: %v", err)}
+	}
+	if err := checkGitAttributes(dir); err != nil {
+		return miniagent.ToolResult{IsError: true, Output: err.Error()}
 	}
 	cmdArgs := []string{"-C", dir, "--no-pager", a.Subcommand}
 	cmdArgs = append(cmdArgs, fields...)
@@ -89,7 +99,7 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = dir
 	cmd.Env = scrubEnv(os.Environ())
-	body, err := runLimitedOutput(ctx, cmd, maxShellOutputChars)
+	body, err := runLimitedOutput(ctx, cmd)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("git %s failed: %v\n%s", a.Subcommand, err, body)}
 	}
@@ -97,6 +107,54 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 		body = "(no output)\n"
 	}
 	return miniagent.ToolResult{Output: body}
+}
+
+// checkGitPositionalArgs rejects a repository URL where a refspec is expected. `git push <url> ...` /
+// `git pull <url> ...` would target a remote other than the configured one — the exfiltration channel that
+// remains after .git/config writes were blocked (the deny-prefix list cannot see positional args).
+// A refspec never contains "://"; absolute local paths are rejected the same way (push to a local repo copy).
+func checkGitPositionalArgs(subcommand string, fields []string) error {
+	if subcommand != "push" && subcommand != "pull" {
+		return nil
+	}
+	for _, f := range fields {
+		if strings.HasPrefix(f, "-") {
+			continue
+		}
+		if strings.Contains(f, "://") || filepath.IsAbs(f) {
+			return fmt.Errorf("git %s: %q looks like a repository URL/path, not a refspec; push/pull operate on the configured remote only (default mode)", subcommand, f)
+		}
+		break // first non-option positional is the only URL slot; the rest are refspecs
+	}
+	return nil
+}
+
+// checkGitAttributes rejects git operations whose clean/smudge filters or diff drivers would execute an
+// external program: a workdir-writable .gitattributes declaring `filter=<name>` / `diff=<driver>` /
+// `textconv=<cmd>` attributes turns `git add`/`git diff` into arbitrary-command execution — no .git access
+// needed, so the .git lock does not cover it. Checks the repo-root .gitattributes (repo-wide scope;
+// per-directory files affect only their subtree and the common case is the root file). The attribute VALUE
+// is what names the driver, so any `filter=`/`diff=`/`textconv=` token is rejected conservatively —
+// built-in `diff` drivers are rare in attributes and a false positive costs one manual edit, while a missed
+// one costs code execution. Guardrail, not a boundary — incoming attributes via pull are supply-chain
+// exposure by definition and are not pre-checkable.
+func checkGitAttributes(dir string) error {
+	data, err := os.ReadFile(filepath.Join(dir, ".gitattributes"))
+	if err != nil {
+		return nil // absent/unreadable: no extra drivers declared
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		for tok := range strings.FieldsSeq(line) {
+			if strings.HasPrefix(tok, "filter=") || strings.HasPrefix(tok, "diff=") || strings.HasPrefix(tok, "textconv=") {
+				return fmt.Errorf(".gitattributes declares external driver %q (filter/diff/textconv execute commands; default mode) — remove the line or use -mode auto", tok)
+			}
+		}
+	}
+	return nil
 }
 
 func resolveGitRoot(startDir string) (string, error) {
@@ -121,7 +179,7 @@ func resolveGitRoot(startDir string) (string, error) {
 	return "", errors.New("not a git repository")
 }
 
-func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (string, error) {
+func runLimitedOutput(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw
@@ -139,7 +197,7 @@ func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (s
 		killProcessGroup(cmd)
 		_ = pw.Close()
 	}()
-	accum := newOutputAccum(maxOutputChars, 0, "", "miniagent_git_")
+	accum := newOutputAccum(maxShellOutputChars, 0, "", "miniagent_git_")
 	buf := make([]byte, 32*1024)
 	for {
 		n, rerr := pr.Read(buf)
@@ -153,5 +211,5 @@ func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (s
 	_ = accum.closeSink()
 	werr := <-waitErr
 	killProcessGroup(cmd)
-	return accum.finalize(maxOutputChars), werr
+	return accum.finalize(maxShellOutputChars), werr
 }

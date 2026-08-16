@@ -199,7 +199,7 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 ## 工具清单
 
-工具集与约束取决于 `-mode`：default 模式注册 11 个工具（无 `shell`），写工具（write/edit）限定在 workdir 子树；auto 模式注册全部 12 个工具（含 `shell`），无任何约束。工具参数为 JSON 对象。
+工具集与约束取决于 `-mode`：default 模式注册 11 个工具（无 `shell`），写工具（write/edit）限定在 workdir 子树，文件工具（read/write/edit/grep/glob/rename/delete）拒绝 `.git` 目录及内容（防绕过 git 工具白名单：hooks 执行链 / remote 改写），git/go/npm 工具另拒参数级通道（`--no-index`/`-F`/push-pull URL 位置参数/`.gitattributes` 驱动/`-o`/`-toolexec`/`--prefix`/`--registry`，模块根上溯不越 workdir）；auto 模式注册全部 12 个工具（含 `shell`），无任何约束。工具参数为 JSON 对象。
 
 > **v4.4.0 破坏性变更**：移除内置工具 `codemap`（目录树概览，与 glob+read 功能重叠）与 `todo`（`todo_create`/`todo_update`/`todo_list`，进程内任务清单，与核心零策略冲突），内置工具 10→6。迁移：`codemap` 改用 `glob`（结构）+ `read`（内容）组合；`todo` 改由模型在正文跟踪任务。详见 [CHANGELOG](./CHANGELOG.md)。
 
@@ -308,7 +308,7 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 ## 运行隔离（工程实践）
 
-miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、`read`/`grep`/`glob` 在 default 模式下被限制在 workdir 内、**`shell` 工具不注册**（误调返回 `unknown tool`；外部命令仅经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具，防 misfired 调用，非沙箱）。`-mode auto` 注册 `shell` 且无任何限制（shell 可经 `cd`/绝对路径访问 workdir 外）。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
+miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、`read`/`grep`/`glob` 在 default 模式下被限制在 workdir 内、**`shell` 工具不注册**（误调返回 `unknown tool`；外部命令仅经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具，防 misfired 调用，非沙箱）、**`.git` 目录被封锁**（文件工具读写均拒，`.git` 内操作仅经 `git` 工具白名单，防 hooks 执行/remote 改写绕过；但 `npm run`/`go test` 本身即任意代码执行，属开发闭环定义内行为）。`-mode auto` 注册 `shell` 且无任何限制（shell 可经 `cd`/绝对路径访问 workdir 外）。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
 
 - 用**专用低权限用户**运行；workdir 属该用户（或只读挂载），无关路径靠文件系统权限隔离。
 - 密钥经 `$MINIAGENT_API_KEY` 环境变量或 config `provider.key` 注入。**注意：无论哪种方式，shell 子进程都可经 `/proc/$PPID/environ` 或读 config 文件拿到 key**（环境变量剥离只挡 `echo $VAR` 这类直读，挡不住 procfs）。因此密钥隔离**依赖运行用户的 OS 权限**：专用低权限用户、config 文件 `0600`、必要时容器/独立 UID。不要再依赖已移除的 `-key-file`。

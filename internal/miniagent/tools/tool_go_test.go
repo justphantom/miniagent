@@ -31,11 +31,29 @@ func TestGo_MissingSubcommand(t *testing.T) {
 
 func TestGo_DeniesFileWritingOptions(t *testing.T) {
 	got := GoTool(t.TempDir(), 0)
-	for _, opt := range []string{"-w", "-write", "-fix", "-modfile=x"} {
+	// -o writes the binary outside the module tree; -toolexec runs an external build tool.
+	for _, opt := range []string{"-w", "-write", "-fix", "-modfile=x", "-o=/tmp/evil", "-toolexec=/tmp/tool"} {
 		res := got.Call(context.Background(), `{"subcommand":"build","args":"`+opt+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "blocked") {
 			t.Errorf("build %q should be blocked, got: %s", opt, res.Output)
 		}
+	}
+}
+
+// resolveModuleRoot must not climb above startDir: a parent-module go.mod would place go/npm's cwd
+// (and module-level writes: go.mod/go.sum) outside the workdir subtree (default-mode escape).
+func TestGo_ModuleRootNeverEscapesStartDir(t *testing.T) {
+	base := t.TempDir()
+	inner := filepath.Join(base, "workdir")
+	os.MkdirAll(inner, 0o750)
+	os.WriteFile(filepath.Join(base, "go.mod"), []byte("module parent\n"), 0o600) // parent has go.mod, inner does not
+	if got := resolveModuleRoot(inner); got != inner {
+		t.Errorf("resolveModuleRoot climbed to %q, want %q (no upward escape)", got, inner)
+	}
+	// go.mod inside startDir is still found.
+	os.WriteFile(filepath.Join(inner, "go.mod"), []byte("module inner\n"), 0o600)
+	if got := resolveModuleRoot(inner); got != inner {
+		t.Errorf("resolveModuleRoot = %q, want %q", got, inner)
 	}
 }
 

@@ -71,12 +71,12 @@ func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult
 	cmdArgs = append(cmdArgs, fields...)
 	bin, argv := "go", cmdArgs
 	if rtkGoSubcommands[a.Subcommand] {
-		bin, argv = rtkWrap("go", []string{"go", a.Subcommand}, cmdArgs)
+		bin, argv = rtkWrap("go", []string{"go", a.Subcommand}, fields)
 	}
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
-	body, err := runLimitedOutput(ctx, cmd, maxShellOutputChars)
+	body, err := runLimitedOutput(ctx, cmd)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("go %s failed: %v\n%s", a.Subcommand, err, body)}
 	}
@@ -87,13 +87,18 @@ func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult
 }
 
 // 拒绝写文件/写模块树之外/改源码的 go build/test 选项前缀。
-var deniedGoArgPrefixes = []string{"-w", "-write", "-fix", "-modfile"}
+// -o writes the build/test binary to an arbitrary path (outside the workdir subtree);
+// -toolexec runs an arbitrary build-tool program during build/test — same class as -w/-modfile.
+var deniedGoArgPrefixes = []string{"-w", "-write", "-fix", "-modfile", "-o", "-toolexec"}
 
 // rtkGoSubcommands lists the subcommands that rtk go supports (compact output).
 var rtkGoSubcommands = map[string]bool{"build": true, "test": true, "vet": true}
 
-// resolveModuleRoot 从 startDir 向上找 go.mod；找不到时返回 startDir 本身，
-// 让 go 命令自行报错（此前误返回字面量 "."，会跑到进程 cwd 上执行）。
+// resolveModuleRoot 从 startDir 向上找 go.mod，但**不越过 startDir**（default 模式）：
+// 越界上溯会把 go/npm/lint 的 cwd 定到 workdir 外的父模块，模块级写（go.mod/go.sum/构建缓存
+// 落点）越出子树。找不到时返回 startDir 本身，让 go 命令自行报错。
+// 注：workdir 本身在模块子目录内（如 workdir=repo/cmd/x、go.mod 在 repo/）是常见布局——此时
+// npm 在 workdir 找不到 package.json 会报错，属保守方向的已知代价；go 工具经 -C 语义不受影响。
 func resolveModuleRoot(startDir string) string {
 	dir := startDir
 	if dir == "" {
@@ -104,15 +109,21 @@ func resolveModuleRoot(startDir string) string {
 		}
 	}
 	orig := dir
+	sep := string(filepath.Separator)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break
+			break // filesystem root — no go.mod anywhere up the chain
 		}
 		dir = parent
+		if dir != orig && !strings.HasPrefix(dir, orig+sep) {
+			// dir climbed ABOVE startDir (no longer startDir or a descendant): stop — startDir's
+			// own go.mod was the first iteration's check. No upward escape (default mode).
+			break
+		}
 	}
 	return orig
 }
