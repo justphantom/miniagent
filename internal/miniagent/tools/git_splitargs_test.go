@@ -22,7 +22,7 @@ func TestGit_CommitMultiWordMessageViaQuotes(t *testing.T) {
 	_ = exec.CommandContext(ctx, "git", "-C", dir, "config", "user.name", "t").Run()
 	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi"), 0o644)
 
-	git := GitTool(dir, 0)
+	git := GitTool(dir, 0, 0)
 	if res := git.Call(context.Background(), `{"subcommand":"add","args":"f.txt"}`); res.IsError {
 		t.Fatalf("git add failed: %s", res.Output)
 	}

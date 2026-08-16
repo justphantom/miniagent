@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
@@ -22,15 +21,24 @@ type lintArgs struct {
 var allowedLintSubcommands = map[string]bool{
 	"run": true, "version": true, "linters": true,
 }
-var deniedLintArgPrefixes = []string{"--fix", "-fix", "--write", "-w", "--enable-all", "--new", "--new-from-rev"}
 
-func LintTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
+// lintDeniedOptions：改写源码（--fix/-f 与 --fix 粘合）或洪水级启用（--enable-all/--new*）。
+// 旧前缀 "-w" 误杀 golangci-lint run -w 之类无关注法且 golangci-lint 无 -w 改写语义，删除。
+var lintDeniedOptions = []optSpec{
+	// -f 是 golangci-lint 的 --fix 短形（无粘合值），全等匹配不误杀 -fix 类外推。
+	{shorts: []string{"-f"}, longs: []string{"fix", "write", "enable-all", "new", "new-from-rev"}, reason: reasonWrite},
+}
+
+func LintTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}
+	if maxOutputChars <= 0 {
+		maxOutputChars = maxShellOutputChars
+	}
 	return miniagent.Tool{
 		Name:        "golangci-lint",
-		Description: "Constrained golangci-lint for Go static analysis: run/version/linters. run executes enabled linters on the workspace (verify-gate last step). --fix/--write/--enable-all/--new* are blocked (auto-rewrites source or floods).",
+		Description: "Constrained golangci-lint for Go static analysis: " + sortedNames(allowedLintSubcommands) + ". run executes enabled linters on the workspace (verify-gate last step). --fix/--write/--enable-all/--new* are blocked (auto-rewrites source or floods). Timeout " + timeout.String() + "; lint findings exit non-zero — that is a normal result, not a tool failure.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "golangci-lint subcommand"},
 			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact. --fix/--write/--enable-all/--new* are rejected`},
@@ -40,40 +48,40 @@ func LintTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 		SplitTruncate: true,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "golangci-lint", func(rctx context.Context) miniagent.ToolResult {
-				return runLint(rctx, workspaceRoot, args)
+				return runLint(rctx, workspaceRoot, args, maxOutputChars)
 			})
 		},
 	}
 }
 
-func runLint(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
+func runLint(ctx context.Context, workspaceRoot, args string, maxOutputChars int) miniagent.ToolResult {
 	var a lintArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields, e.g. {\"subcommand\":\"run\",\"args\":\"./...\"}): %v", err)}
+	if err := decodeStrict(args, &a); err != nil {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields subcommand/args, e.g. {\"subcommand\":\"run\",\"args\":\"./...\"}): %v", err)}
 	}
-	if strings.TrimSpace(a.Subcommand) == "" {
+	sub := strings.TrimSpace(a.Subcommand)
+	if sub == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}
 	}
-	if !allowedLintSubcommands[a.Subcommand] {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("golangci-lint %q is not allowed in default mode; use one of: run, version, linters", a.Subcommand)}
+	if !allowedLintSubcommands[sub] {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("golangci-lint %q is not allowed in default mode; use one of: %s", sub, sortedNames(allowedLintSubcommands))}
 	}
-	fields := splitArgs(a.Args)
-	for _, f := range fields {
-		for _, p := range deniedLintArgPrefixes {
-			if strings.HasPrefix(f, p) {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("golangci-lint %s option %q rewrites source or floods linters; blocked", a.Subcommand, f)}
-			}
-		}
+	fields, qerr := splitArgsStrict(a.Args)
+	if qerr != "" {
+		return miniagent.ToolResult{IsError: true, Output: "args " + qerr}
 	}
-	cmdArgs := append([]string{a.Subcommand}, fields...)
+	if tok, spec, hit := checkDeniedOptions(fields, lintDeniedOptions); hit {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("golangci-lint %s option %q (%s) %s; blocked", sub, tok, spec.joinNames(), spec.reason)}
+	}
+	cmdArgs := append([]string{sub}, fields...)
 	bin, argv := rtkWrap("golangci-lint", []string{"golangci-lint"}, cmdArgs)
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
 	setPGID(cmd)
-	body, err := runLimitedOutput(ctx, cmd)
+	body, err := runLimitedOutput(ctx, cmd, maxOutputChars)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("golangci-lint %s failed: %v\n%s", a.Subcommand, err, body)}
+		return exitAwareResult("golangci-lint", sub, body, err)
 	}
 	if body == "" {
 		body = "(no output)\n"

@@ -8,6 +8,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os/exec"
@@ -75,6 +76,7 @@ func dotGitWithinRoot(rel string) bool {
 
 // rtkBin caches the lookup of the rtk output-compacting proxy ("" = not deployed). rtk is optional:
 // when present, git/go/npm commands route through it for token-compact output; otherwise they exec natively.
+// withRtkBin (rtk_wrap_test.go) swaps the cached lookup in tests.
 var rtkBin = sync.OnceValue(func() string {
 	if p, err := exec.LookPath("rtk"); err == nil {
 		return p
@@ -82,14 +84,29 @@ var rtkBin = sync.OnceValue(func() string {
 	return ""
 })
 
-// rtkWrap returns ("rtk", prefix+args) when rtk is deployed, else (bin, args) unchanged.
-// The caller decides which subcommands are worth proxying (rtk covers only a subset per tool);
-// prefix is the rtk subcommand chain (e.g. []string{"git", "status"}).
+// rtkWrap returns ("rtk", prefix+args) when rtk is deployed, else (bin, prefix[1:]+args).
+// prefix is the full native argv head — prefix[0] is bin itself, so the no-rtk fallback keeps
+// every argument (dropping prefix, as an earlier version did, turned `git status` into a bare
+// `git` usage dump on rtk-less hosts). The caller decides which subcommands are worth proxying
+// (rtk covers only a subset per tool).
 func rtkWrap(bin string, prefix, args []string) (string, []string) {
 	if rtkBin() == "" {
-		return bin, args
+		out := append([]string{}, prefix[1:]...)
+		return bin, append(out, args...)
 	}
 	return "rtk", append(append([]string{}, prefix...), args...)
+}
+
+// decodeStrict unmarshals a tool-args JSON object rejecting unknown fields: a field-name typo
+// (`{"subcommand":"add","command":"x"}`) used to fall through to EMPTY args, silently turning
+// `git add` into a whole-repo stage. The error names the offending key so the LLM self-corrects.
+func decodeStrict(args string, dst any) error {
+	dec := json.NewDecoder(strings.NewReader(args))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	return nil
 }
 
 // splitArgs tokenizes an argument string the way a shell would split words, so that quoted values
@@ -104,11 +121,22 @@ func rtkWrap(bin string, prefix, args []string) (string, []string) {
 //   - outside quotes a backslash escapes the next char (so -m one\ word == -m "one word")
 //   - quotes are stripped; adjacent segments concatenate (a"b c"d -> ab cd)
 //
-// An unterminated quote yields the remainder as one word rather than an error: args come from an
-// LLM's JSON string, and a hard failure would block the call over cosmetics.
+// splitArgsStrict additionally reports an unterminated quote instead of silently gluing the
+// remainder into one word: `--grep=won't --oneline` used to collapse into a single bogus token
+// (apostrophe dropped, later flags swallowed) — a hard error points the LLM at the quoting fix.
 func splitArgs(s string) []string {
+	fields, _ := splitArgsE(s)
+	return fields
+}
+
+func splitArgsStrict(s string) ([]string, string) {
+	return splitArgsE(s)
+}
+
+func splitArgsE(s string) (fields []string, unterminated string) {
 	var out []string
 	var buf []rune
+	open := byte(0)  // 0 = none, '\'' or '"' = currently open quote kind
 	hasWord := false // a word is "active" once we have buffered a char or entered a quote (so "" makes an empty word)
 	flush := func() {
 		if hasWord {
@@ -123,38 +151,54 @@ func splitArgs(s string) []string {
 		switch r {
 		case '\'':
 			hasWord = true
-			for i++; i < len(runes); i++ {
-				if runes[i] == '\'' {
-					break
-				}
-				buf = append(buf, runes[i])
+			switch open {
+			case 0:
+				open = '\''
+			case '\'':
+				open = 0
+			default:
+				buf = append(buf, r) // inside double quotes: literal
 			}
 		case '"':
 			hasWord = true
-			for i++; i < len(runes); i++ {
-				if runes[i] == '"' {
-					break
-				}
-				if runes[i] == '\\' && i+1 < len(runes) && (runes[i+1] == '"' || runes[i+1] == '\\') {
-					i++ // backslash only escapes " and \ inside double quotes; for any other char it is literal
-				}
-				buf = append(buf, runes[i])
+			switch open {
+			case 0:
+				open = '"'
+			case '"':
+				open = 0
+			default:
+				buf = append(buf, r) // inside single quotes: literal
 			}
 		case '\\':
 			hasWord = true
+			if open == '\'' {
+				buf = append(buf, r) // single quotes: no escapes
+				continue
+			}
 			if i+1 < len(runes) {
 				i++
+				if open == '"' && runes[i] != '"' && runes[i] != '\\' {
+					buf = append(buf, '\\') // inside double quotes backslash escapes only " and \; other chars stay literal
+				}
 				buf = append(buf, runes[i])
 			} // trailing backslash: dropped, no panic
 		case ' ', '\t', '\r', '\n':
-			flush()
+			if open == 0 {
+				flush()
+			} else {
+				buf = append(buf, r)
+			}
 		default:
 			hasWord = true
 			buf = append(buf, r)
 		}
 	}
 	flush()
-	return out
+	if open != 0 {
+		u := fmt.Sprintf("has an unterminated %c quote — quote the whole value (e.g. args: \"-m 'feat: won''t break'\") or drop the stray %c; got: %s", open, open, s)
+		return out, u
+	}
+	return out, ""
 }
 
 // maxFileResultInHistory is the character cap for results of code-content tools like read/edit entering history:
@@ -213,6 +257,19 @@ func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn
 		if ctx.Err() != nil {
 			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: label + " cancelled: " + ctx.Err().Error()}
 		}
-		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: fmt.Sprintf("%s timed out after %s — narrow the scope (fewer packages / smaller command) and retry", label, timeout)}
+		// Grace window: fn's kill path (runLimitedOutput closes the pipe on ctx.Done) unblocks the read
+		// loop almost immediately — the partial output captured so far (last test names, progress) is the
+		// only clue to WHERE it hung, so prefer a late result with body over an instant bare timeout line.
+		// Hard-cancel (SIGINT) keeps the fast path: parent ctx above already returned.
+		select {
+		case r := <-done:
+			if r.IsError && strings.Contains(r.Output, "timed out") {
+				return r
+			}
+			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet,
+				Output: fmt.Sprintf("%s timed out after %s — partial output follows\n%s", label, timeout, r.Output)}
+		case <-time.After(2 * time.Second):
+			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: fmt.Sprintf("%s timed out after %s — narrow the scope (fewer packages / smaller command) and retry", label, timeout)}
+		}
 	}
 }

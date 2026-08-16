@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
@@ -25,62 +24,99 @@ var allowedGoSubcommands = map[string]bool{
 	"doc": true, "list": true, "version": true, "clean": true,
 }
 
-func GoTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
+func GoTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}
+	if maxOutputChars <= 0 {
+		maxOutputChars = maxShellOutputChars
+	}
 	return miniagent.Tool{
 		Name:        "go",
-		Description: "Constrained go operations for building and testing (build/test/vet/doc/list/version/clean; clean may NOT touch -cache/-modcache/-testcache). run/get/install/mod/env-w are blocked. When the rtk proxy is deployed, build/test/vet output is compact and NOT native go format.",
+		Description: "Constrained go operations for building and testing (" + sortedNames(allowedGoSubcommands) + "; clean may NOT touch -cache/-modcache/-testcache/-fuzzcache/-i). run/get/install/mod/env -w are blocked, as are -exec/-vettool/-toolexec/-C and out-of-tree write flags (-o/-coverprofile/-memprofile … accept workdir-relative paths only). Note: private-module auth (GOPRIVATE) is not available in default mode. When the rtk proxy is deployed, build/test/vet output is compact and NOT native go format. Timeout " + timeout.String() + "; non-zero exit (e.g. test failure) is a normal result, not a tool failure.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "Go subcommand"},
-			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact. Output-writing options are rejected`},
+			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact. Out-of-tree options are rejected`},
 		}, "subcommand"),
 		ResultLimit: miniagent.MaxToolResultInHistory,
 		// test/build 的 FAIL 明细在输出尾部，head 截断只剩包列表；与 shell/grep 同取 head+tail。
 		SplitTruncate: true,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "go", func(rctx context.Context) miniagent.ToolResult {
-				return runGo(rctx, workspaceRoot, args)
+				return runGo(rctx, workspaceRoot, args, maxOutputChars)
 			})
 		},
 	}
 }
 
-func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
+// goExecDeniedOptions：执行外部程序的构建期选项，任何子命令都拒。
+// -toolexec build/test、-vettool vet、-exec test（用指定程序包装/运行测试二进制）。
+var goExecDeniedOptions = []optSpec{
+	{longs: []string{"toolexec", "vettool", "exec"}, reason: reasonExec},
+}
+
+// goGlobalDeniedOptions：所有子命令都拒的写类/越界类选项。
+var goGlobalDeniedOptions = []optSpec{
+	// -w 写 go env 配置（--write 等价长形）；-modfile 换用任意 go.mod（模块树外读写）；-fix 改源码。
+	{longs: []string{"w", "write", "modfile", "fix"}, reason: reasonWrite},
+	// -C 先 chdir 再执行：任何后续路径判定（含 deny 表的 workdir 相对豁免）都被整体搬走，唯一安全处理是全局禁。
+	{longs: []string{"C"}, reason: reasonOutOfTree},
+}
+
+// goCleanDeniedOptions：clean 专属——全局缓存/安装产物在模块树外，误清不应惩罚宿主构建状态。
+// -cache/-modcache/-testcache/-fuzzcache 全覆盖（长选项唯一缩写由 matchOption 处理）。
+var goCleanDeniedOptions = []optSpec{
+	{longs: []string{"cache", "modcache", "testcache", "fuzzcache", "i"}, reason: reasonOutOfTree},
+}
+
+// goWritePathFlags：build/test 会按参数值写文件的旗标。-o 等产物、-coverprofile/-memprofile 等
+// profile、-trace；这些旗标本身合法（AGENTS 要求二进制落 bin/），只对「值在 workdir 子树外」拒绝：
+// 绝对路径须在 workdir 内，相对路径不得以 ../ 开头。-outputdir 被 -o 前缀规则顺带覆盖（合法，
+// 因其值同样必须是输出目录）。值既可独立 token（下一位）也可 =value 粘合。
+var goWritePathFlags = []string{"-o", "-coverprofile", "-memprofile", "-cpuprofile", "-blockprofile", "-mutexprofile", "-trace"}
+
+func runGo(ctx context.Context, workspaceRoot, args string, maxOutputChars int) miniagent.ToolResult {
 	var a goArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields, e.g. {\"subcommand\":\"test\",\"args\":\"./...\"}): %v", err)}
+	if err := decodeStrict(args, &a); err != nil {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields subcommand/args, e.g. {\"subcommand\":\"test\",\"args\":\"./...\"}): %v", err)}
 	}
-	if strings.TrimSpace(a.Subcommand) == "" {
+	sub := strings.TrimSpace(a.Subcommand)
+	if sub == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}
 	}
-	if !allowedGoSubcommands[a.Subcommand] {
+	if !allowedGoSubcommands[sub] {
 		return miniagent.ToolResult{
 			IsError: true,
-			Output:  fmt.Sprintf("go %q is not allowed in default mode; use one of: fmt, build, test, vet, doc, list, version, clean", a.Subcommand),
+			Output:  fmt.Sprintf("go %q is not allowed in default mode; use one of: %s", sub, sortedNames(allowedGoSubcommands)),
 		}
 	}
-	fields := splitArgs(a.Args)
-	for _, f := range fields {
-		for _, p := range deniedGoArgPrefixes {
-			if strings.HasPrefix(f, p) {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("go %s option %q writes outside the module tree or edits files; blocked", a.Subcommand, f)}
-			}
-		}
+	fields, qerr := splitArgsStrict(a.Args)
+	if qerr != "" {
+		return miniagent.ToolResult{IsError: true, Output: "args " + qerr}
 	}
-	cmdArgs := []string{a.Subcommand}
+	specs := append(append([]optSpec{}, goGlobalDeniedOptions...), goExecDeniedOptions...)
+	if sub == "clean" {
+		specs = append(specs, goCleanDeniedOptions...)
+	}
+	if tok, spec, hit := checkDeniedOptions(fields, specs); hit {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("go %s option %q (%s) %s; blocked", sub, tok, spec.joinNames(), spec.reason)}
+	}
+	if err := checkGoWritePaths(sub, fields, workspaceRoot); err != nil {
+		return miniagent.ToolResult{IsError: true, Output: err.Error()}
+	}
+	cmdArgs := []string{sub}
 	cmdArgs = append(cmdArgs, fields...)
 	bin, argv := "go", cmdArgs
-	if rtkGoSubcommands[a.Subcommand] {
-		bin, argv = rtkWrap("go", []string{"go", a.Subcommand}, fields)
+	if rtkGoSubcommands[sub] {
+		bin, argv = rtkWrap("go", []string{"go", sub}, fields)
 	}
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
-	body, err := runLimitedOutput(ctx, cmd)
+	setPGID(cmd)
+	body, err := runLimitedOutput(ctx, cmd, maxOutputChars)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("go %s failed: %v\n%s", a.Subcommand, err, body)}
+		return exitAwareResult("go", sub, body, err)
 	}
 	if body == "" {
 		body = "(no output)\n"
@@ -88,21 +124,59 @@ func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult
 	return miniagent.ToolResult{Output: body}
 }
 
-// 拒绝写文件/写模块树之外/改源码的 go build/test 选项前缀。
-// -o writes the build/test binary to an arbitrary path (outside the workdir subtree);
-// -toolexec runs an arbitrary build-tool program during build/test — same class as -w/-modfile;
-// -cache/-modcache/-testcache (go clean) wipe GLOBAL caches outside the workdir — a misfired
-// clean must not punish the host's build state; -n (print but don't execute) is harmless and kept.
-var deniedGoArgPrefixes = []string{"-w", "-write", "-fix", "-modfile", "-o", "-toolexec", "-cache", "-modcache", "-testcache"}
+// checkGoWritePaths 对 goWritePathFlags 的每个出现：取值（=value 粘合或下一位 token），
+// 绝对路径须在 workdir 子树内、相对路径不得 ../ 越出；两者之外的写路径拒绝。
+// 缺值（旗标是末位 token）不在此处理，交给 go 本体报错。
+func checkGoWritePaths(sub string, fields []string, workdir string) error {
+	if sub != "build" && sub != "test" {
+		return nil
+	}
+	for i, f := range fields {
+		var name, value string
+		hit := false
+		for _, p := range goWritePathFlags {
+			if f == p {
+				name, hit = p, true
+				if i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
+					value = fields[i+1]
+				}
+				break
+			}
+			if strings.HasPrefix(f, p+"=") {
+				name, value, hit = p, f[len(p)+1:], true
+				break
+			}
+		}
+		if !hit || value == "" {
+			continue
+		}
+		if filepath.IsAbs(value) {
+			if !withinDir(workdir, value) {
+				return fmt.Errorf("go %s option %s %q writes outside the workdir; blocked (use a workdir-relative path)", sub, name, value)
+			}
+			continue
+		}
+		if strings.HasPrefix(value, "../") || value == ".." {
+			return fmt.Errorf("go %s option %s %q writes outside the workdir; blocked (use a workdir-relative path)", sub, name, value)
+		}
+	}
+	return nil
+}
+
+// withinDir 报告 path（绝对）是否在 root（绝对）子树内或等于 root。
+func withinDir(root, path string) bool {
+	sep := string(filepath.Separator)
+	return path == root || strings.HasPrefix(path+sep, root+sep)
+}
 
 // rtkGoSubcommands lists the subcommands that rtk go supports (compact output).
 var rtkGoSubcommands = map[string]bool{"build": true, "test": true, "vet": true}
 
-// resolveModuleRoot 从 startDir 向上找 go.mod，但**不越过 startDir**（default 模式）：
-// 越界上溯会把 go/npm/lint 的 cwd 定到 workdir 外的父模块，模块级写（go.mod/go.sum/构建缓存
-// 落点）越出子树。找不到时返回 startDir 本身，让 go 命令自行报错。
-// 注：workdir 本身在模块子目录内（如 workdir=repo/cmd/x、go.mod 在 repo/）是常见布局——此时
-// npm 在 workdir 找不到 package.json 会报错，属保守方向的已知代价；go 工具经 -C 语义不受影响。
+// resolveModuleRoot 定位 go 命令的 cwd：workdir 有 go.mod 用 workdir；否则交给 go 二进制自身的
+// 向上查找（go -C 语义不变，cmd.Dir 只决定起点）。default 模式下 npm/lint 同用此函数：
+// workdir 为模块子目录时 npm 找不到 package.json 属保守方向的已知代价。
+// （旧版「向上找但不得越出 startDir」的循环：dir 只会向上走，第二轮起必触发 break，
+// 等价于只查 startDir——死代码，已删。）
 func resolveModuleRoot(startDir string) string {
 	dir := startDir
 	if dir == "" {
@@ -112,22 +186,8 @@ func resolveModuleRoot(startDir string) string {
 			return "."
 		}
 	}
-	orig := dir
-	sep := string(filepath.Separator)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break // filesystem root — no go.mod anywhere up the chain
-		}
-		dir = parent
-		if dir != orig && !strings.HasPrefix(dir, orig+sep) {
-			// dir climbed ABOVE startDir (no longer startDir or a descendant): stop — startDir's
-			// own go.mod was the first iteration's check. No upward escape (default mode).
-			break
-		}
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		return dir
 	}
-	return orig
+	return dir
 }

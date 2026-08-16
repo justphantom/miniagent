@@ -2,6 +2,7 @@ package tools
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,38 @@ func TestSplitArgs(t *testing.T) {
 	for _, c := range cases {
 		if got := splitArgs(c.in); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("splitArgs(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// splitArgsStrict：未闭合引号报错（曾静默吞并后续 token：--grep=won't --oneline 成单参数），
+// 引号内的空白/另一类引号保留字面量。
+func TestSplitArgsStrict(t *testing.T) {
+	cases := []struct {
+		in        string
+		want      []string
+		wantErrOn string
+	}{
+		{`-m "feat: x"`, []string{"-m", "feat: x"}, ""},
+		{`--grep='won''t' -F`, []string{"--grep=wont", "-F"}, ""},
+		{`-m "it's here"`, []string{"-m", "it's here"}, ""},
+		{`-m 'say "hi"'`, []string{"-m", `say "hi"`}, ""},
+		{`--grep=won't --oneline`, nil, "unterminated '"},
+		{`-m "open ended`, nil, `unterminated "`},
+	}
+	for _, c := range cases {
+		got, err := splitArgsStrict(c.in)
+		if c.wantErrOn != "" {
+			if err == "" || !strings.Contains(err, c.wantErrOn) {
+				t.Errorf("splitArgsStrict(%q) err = %q, want containing %q", c.in, err, c.wantErrOn)
+			}
+			continue
+		}
+		if err != "" {
+			t.Errorf("splitArgsStrict(%q) unexpected err: %q", c.in, err)
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("splitArgsStrict(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
