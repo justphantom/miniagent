@@ -11,14 +11,17 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// confineWrap wraps a tool's Call: before execution it checks that args.path falls within the root subtree; rejects out-of-bounds.
-// Used for read/write/edit/grep/glob — read/write/edit require path, grep/glob path is optional
-// (defaults to workdir, already constrained by workspaceRoot).
+// confineWrap wraps a tool's Call: before execution it checks that every path field carried by args
+// falls within the root subtree; rejects out-of-bounds. Used for read/write/edit/grep/glob/rename/delete —
+// read/write/edit/delete carry a single path (required); grep/glob path is optional (defaults to workdir,
+// already constrained by workspaceRoot); rename carries {from,to} instead of path.
 //
-// It performs the out-of-bounds check only when args can be parsed into a non-empty path; when path is
-// absent/empty or JSON is invalid it passes through to orig: each tool validates path itself (write/edit
-// errors on empty path; read requires it; grep/glob with empty path falls back to workspaceRoot). Previously
-// rejecting all empty paths would incorrectly break grep/glob (path is optional), making default mode essentially unusable.
+// It performs the out-of-bounds check only on non-empty fields; when path is absent/empty or JSON is
+// invalid it passes through to orig: each tool validates path itself (write/edit errors on empty path;
+// read requires it; grep/glob with empty path falls back to workspaceRoot). Previously rejecting all
+// empty paths would incorrectly break grep/glob (path is optional), making default mode essentially unusable.
+// rename's from/to are checked with readOnly=false: both endpoints are write surfaces (MkdirAll on the
+// destination parent, os.Rename landing spot) — an unvalidated to is exactly the escape the wrap exists to stop.
 //
 // TOCTOU trade-off (review P2-11): checkConfine is pure lexical validation (Clean+Abs+HasPrefix), with a
 // window between it and the subsequent MkdirAll/Rename; under runToolsParallel parallel execution, shell can
@@ -32,10 +35,24 @@ func confineWrap(tool miniagent.Tool, root string, readOnly bool, evalSymlinks .
 	tool.Call = func(ctx context.Context, args string) miniagent.ToolResult {
 		var p struct {
 			Path string `json:"path"`
+			From string `json:"from"`
+			To   string `json:"to"`
 		}
-		if json.Unmarshal([]byte(args), &p) == nil && p.Path != "" {
-			if err := checkConfine(root, p.Path, readOnly, evalSymlinks...); err != nil {
-				return miniagent.ToolResult{IsError: true, Output: err.Error()}
+		if json.Unmarshal([]byte(args), &p) == nil {
+			// rename sends {from,to} rather than {path}; both need the write-side check or rename
+			// is a silent no-op pass-through (review: cmd-layer confine did not apply to it).
+			for _, target := range []string{p.From, p.To} {
+				if target == "" {
+					continue
+				}
+				if err := checkConfine(root, target, false, evalSymlinks...); err != nil {
+					return miniagent.ToolResult{IsError: true, Output: err.Error()}
+				}
+			}
+			if p.Path != "" {
+				if err := checkConfine(root, p.Path, readOnly, evalSymlinks...); err != nil {
+					return miniagent.ToolResult{IsError: true, Output: err.Error()}
+				}
 			}
 		}
 		return orig(ctx, args)
@@ -122,11 +139,14 @@ func checkConfine(root, p string, readOnly bool, evalSymlinks ...bool) error {
 
 // dotGitWithinRoot reports whether rel (relative to workdir root) is or is under a ".git" directory
 // at any depth — covers ".git", ".git/config", and nested "sub/.git/HEAD" (submodule/worktree layouts).
-// Duplicated from tools.resolveConfinedPath's helper rather than exported: cmd → core must not add a
-// reverse dependency for one predicate (invariant #14; the two confine layers already mirror each other).
+// Compared case-insensitively: on Windows/macOS filesystems .GIT IS the gitdir (git opens .git
+// case-insensitively there), so an exact compare would let .GIT/hooks bypass the guard. Windows 8.3
+// short names (GIT~1) remain a known accepted gap. Duplicated from tools.resolveConfinedPath's helper
+// rather than exported: cmd → core must not add a reverse dependency for one predicate (invariant #14;
+// the two confine layers already mirror each other).
 func dotGitWithinRoot(rel string) bool {
 	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
-		if part == ".git" {
+		if strings.EqualFold(part, ".git") {
 			return true
 		}
 	}

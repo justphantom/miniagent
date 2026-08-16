@@ -2,12 +2,12 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -116,7 +116,9 @@ func runEditFile(workspaceRoot, args string, locks *pathLocks) miniagent.ToolRes
 	}
 	// Hold the lock across the entire read-modify-write: prevents a later parallel edit to the same file from overwriting an earlier write (lost update).
 	// defer releases it after applyEdit/applyEdits returns (including on error).
-	defer locks.acquire(full)()
+	// Key is Cleaned: resolveToolPath returns absolute inputs verbatim (no Clean), so "/w/./f" and "f"
+	// would take different locks on the same file and lose updates.
+	defer locks.acquire(filepath.Clean(full))()
 	if len(a.Edits) > 0 {
 		return applyEdits(full, info, a.Path, a.Edits)
 	}
@@ -127,7 +129,7 @@ func runEditFile(workspaceRoot, args string, locks *pathLocks) miniagent.ToolRes
 // The single-segment form requires old_string to be non-empty and different from new_string; each multi-segment entry likewise.
 func parseEditArgs(args string) (editFileArgs, error) {
 	var a editFileArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
+	if err := decodeStrict(args, &a); err != nil {
 		return editFileArgs{}, fmt.Errorf("argument parsing failed: %w (received %q)", err, args)
 	}
 	if a.Path == "" {

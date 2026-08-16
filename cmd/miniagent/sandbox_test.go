@@ -73,6 +73,68 @@ func TestCheckConfine_DotGitRejected(t *testing.T) {
 	}
 }
 
+// On case-insensitive filesystems (Windows/macOS) .GIT IS the repo gitdir — git opens .git
+// case-insensitively there — so the guard must not depend on exact case to hold.
+func TestCheckConfine_DotGitCaseInsensitive(t *testing.T) {
+	root := t.TempDir()
+	for _, path := range []string{".GIT", ".GIT/config", ".Git/hooks/pre-commit", "sub/.GIT/HEAD"} {
+		if err := checkConfine(root, path, false); err == nil {
+			t.Errorf("expected %q to be rejected (case-insensitive .git)", path)
+		}
+	}
+	// A directory named e.g. "gitstuff" (not a case variant of .git) stays usable.
+	if err := checkConfine(root, "gitstuff/config.txt", false); err != nil {
+		t.Errorf("gitstuff/config.txt should pass: %v", err)
+	}
+}
+
+// rename sends {from,to} rather than {path}: the wrap must confine BOTH endpoints or rename is a
+// no-op pass-through at the cmd layer. The escape here is a symlinked destination parent (lexical
+// checkConfine catches it); resolveConfinedPath inside the tools package is purely lexical and would not.
+func TestConfineWrap_RenameConfinesFromAndTo(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkdir := filepath.Join(root, "sub")
+	if err := os.Symlink(outside, linkdir); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	wrapped := confineWrap(tools.RenameTool(root, 0), root, false)
+	r := wrapped.Call(context.Background(), `{"from":"a.txt","to":"sub/b.txt"}`)
+	if !r.IsError || !strings.Contains(r.Output, "symlink") {
+		t.Errorf("rename into symlinked dir should be rejected by the wrap, got: %+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "b.txt")); err == nil {
+		t.Error("rename landed outside workdir despite confineWrap")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
+		t.Errorf("source should be intact after rejected rename: %v", err)
+	}
+	// An out-of-workdir `from` is caught too (the tools layer resolves it confined, the cmd layer must not be a no-op).
+	r = wrapped.Call(context.Background(), fmt.Sprintf(`{"from":%q,"to":"ok.txt"}`, filepath.Join(outside, "secret.txt")))
+	if !r.IsError || !strings.Contains(r.Output, "escapes workdir") {
+		t.Errorf("rename from outside workdir should be rejected, got: %+v", r)
+	}
+}
+
+// A rename whose both endpoints are inside workdir still works after the from/to check was added.
+func TestConfineWrap_RenameInsideWorkdir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := confineWrap(tools.RenameTool(root, 0), root, false)
+	r := wrapped.Call(context.Background(), `{"from":"a.txt","to":"sub/b.txt"}`)
+	if r.IsError {
+		t.Fatalf("in-workdir rename should pass, got: %s", r.Output)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sub", "b.txt")); err != nil {
+		t.Errorf("renamed file missing: %v", err)
+	}
+}
+
 // Existing path components containing symlinks must be rejected.
 func TestCheckConfine_SymlinkComponentRejected(t *testing.T) {
 	root := t.TempDir()

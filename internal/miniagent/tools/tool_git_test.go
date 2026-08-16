@@ -187,6 +187,16 @@ func TestGit_DeniesHistoryRewriteOptions(t *testing.T) {
 		{"push", "--receive-pack=/tmp/rp.sh origin"},
 		{"push", "--repo=../evil.git"},
 		{"pull", "--receive-pack=/tmp/rp.sh"},
+		// --upload-pack 使 git 把给定命令当 fetch 辅助程序执行（RCE）；本工具把 args 拼在
+		// 子命令后，git 按 pre-command 选项解释，任意子命令入口都生效，故全局拦截。
+		{"pull", "--upload-pack=/tmp/rp.sh"},
+		{"pull", "--upload-pack /tmp/rp.sh origin"},
+		{"push", "--upload-pack=/tmp/rp.sh origin"},
+		{"log", "--upload-pack=/tmp/rp.sh"},
+		// git 布尔短旗标可簇写（-qf ≡ -q -f）：只做全等匹配时 force/delete 经簇形绕过。
+		{"push", "-qf origin main"},
+		{"push", "-df origin main"},
+		{"push", "-vf origin main"},
 	}
 	for _, c := range cases {
 		res := git.Call(context.Background(), `{"subcommand":"`+c.sub+`","args":"`+c.args+`"}`)
@@ -231,6 +241,31 @@ func TestGit_CommitRequiresMessage(t *testing.T) {
 func TestGit_SplitTruncateSet(t *testing.T) {
 	if !GitTool(t.TempDir(), 0, 0).SplitTruncate {
 		t.Fatal("git tool must set SplitTruncate (tail carries conflict/error conclusions)")
+	}
+}
+
+// refspec 槽位的选项等价形：前导 '+' ≡ --force、前导 ':' ≡ --delete（git-push(1) 明文），
+// 曾只查第一个位置参数（仓库槽），后续 refspec 全部漏检。
+func TestGit_PushRefspecForceAndDeleteRejected(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	git := GitTool(dir, 0, 0)
+	for _, args := range []string{"origin +master", "origin :refs/heads/other", "origin master:refs/heads/y +master"} {
+		res := git.Call(context.Background(), `{"subcommand":"push","args":"`+args+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "equivalent") {
+			t.Errorf("git push %q should be rejected as --force/--delete equivalent, got: %s", args, res.Output)
+		}
+	}
+	// 合法 src:dst refspec（不含前导 +/:）不受影响：经 git 实跑只应得到远端交互结果，
+	// 不得命中 +/: 拦截（no-upstream 报错属正常 git 语义）。
+	res := git.Call(context.Background(), `{"subcommand":"push","args":"origin master:refs/heads/y"}`)
+	if res.IsError && strings.Contains(res.Output, "equivalent") {
+		t.Errorf("plain src:dst refspec must not hit the +/: check: %s", res.Output)
+	}
+	// 单独一个 refspec（仓库槽缺省 = 上游）：`+x` 被当仓库地址报 fatal 属 git 自身行为，
+	// 与本拦截无关；本工具只在含仓库槽的形态上保证 +/: 语义拦截。
+	if res.IsError && strings.Contains(res.Output, "equivalent") {
+		t.Errorf("plain src:dst refspec must not hit the +/: check: %s", res.Output)
 	}
 }
 
@@ -300,9 +335,10 @@ func TestGit_PathspecResolvesAgainstWorkdir(t *testing.T) {
 		t.Fatalf("add same.txt from subdir failed: %s", res.Output)
 	}
 	ls := git.Call(context.Background(), `{"subcommand":"ls-files","args":"--cached"}`)
-	if ls.IsError || strings.Contains(ls.Output, "\n") || strings.Contains(ls.Output, "same.txt") == false {
-		// staged 文件应只有 sub/same.txt 的相对形态 same.txt（cwd=sub），不能出现根下其他文件
-		t.Logf("staged: %q", ls.Output)
+	if ls.IsError || !strings.Contains(ls.Output, "same.txt") || strings.Count(ls.Output, "\n") != 1 {
+		// staged 应只有 sub/same.txt 的相对形态 same.txt（cwd=sub）：两行及以上即说明
+		// pathspec 又按 repo 根解析暂存了根下 same.txt（-C 移除前正是该回归）。
+		t.Errorf("staged files unexpected: %q", ls.Output)
 	}
 	if ls.IsError {
 		t.Fatalf("ls-files failed: %s", ls.Output)

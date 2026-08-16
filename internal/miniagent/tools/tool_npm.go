@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
 	"os/exec"
@@ -20,6 +19,13 @@ type npmArgs struct {
 var allowedNpmSubcommands = map[string]bool{
 	"install": true, "ci": true, "test": true, "run": true,
 	"ls": true, "outdated": true, "audit": true, "version": true,
+}
+
+// npmDeniedOptions：越出模块树（--prefix/-C）或改写 registry 端点（--registry）的选项。
+// matchOption 对单/双破折号归一化，-registry=URL 与 --registry=URL 同 hit；-C 以单字母长名
+// 列入 longs（而非 shorts）——npm 实测双横线 --C 同样重定向前缀，shorts 分支不认双横线形。
+var npmDeniedOptions = []optSpec{
+	{longs: []string{"prefix", "registry", "C"}, reason: reasonOutOfTree},
 }
 
 func NpmTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) miniagent.Tool {
@@ -50,27 +56,27 @@ func NpmTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) mi
 func runNpm(ctx context.Context, workspaceRoot, args string, maxOutputChars int) miniagent.ToolResult {
 	var a npmArgs
 	if err := decodeStrict(args, &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields subcommand/args, e.g. {\"subcommand\":\"test\"}): %v", err)}
+		return denyResult("argument parsing failed (args must be a JSON object with string fields subcommand/args, e.g. {\"subcommand\":\"test\"}): %v", err)
 	}
 	sub := strings.TrimSpace(a.Subcommand)
 	if sub == "" {
-		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}
+		return denyResult("missing argument: subcommand")
 	}
 	if !allowedNpmSubcommands[sub] {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %q is not allowed in default mode; use one of: %s", sub, sortedNames(allowedNpmSubcommands))}
+		return denyResult("npm %q is not allowed in default mode; use one of: %s", sub, sortedNames(allowedNpmSubcommands))
 	}
 	fields, qerr := splitArgsStrict(a.Args)
 	if qerr != "" {
-		return miniagent.ToolResult{IsError: true, Output: "args " + qerr}
+		return denyResult("args %s", qerr)
 	}
 	// --prefix/-C redirects npm's working root outside the module tree (out-of-subtree writes);
 	// --registry overrides the registry endpoint (exfiltration of the dependency stream to an
-	// attacker-controlled server that can serve malicious tarballs). .npmrc in workdir achieves the
-	// same registry override — accepted residual (guardrail against misfired calls, not a boundary).
-	for _, f := range fields {
-		if strings.HasPrefix(f, "--prefix") || strings.HasPrefix(f, "-C") || strings.HasPrefix(f, "--registry") {
-			return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %s option %q redirects npm outside the module or to another registry; blocked (default mode)", a.Subcommand, f)}
-		}
+	// attacker-controlled server that can serve malicious tarballs). npm 接受单破折号长名
+	// （-registry=URL 实测等价），故用 optSpec 归一化匹配而非手写 HasPrefix（后者漏单破折形）。
+	// .npmrc in workdir achieves the same registry override — accepted residual (guardrail against
+	// misfired calls, not a boundary).
+	if tok, spec, hit := checkDeniedOptions(fields, npmDeniedOptions); hit {
+		return denyResult("npm %s option %q (%s) redirects npm outside the module or to another registry; blocked (default mode)", sub, tok, spec.joinNames())
 	}
 	cmdArgs := append([]string{sub}, fields...)
 	bin, argv := rtkWrap("npm", []string{"npm"}, cmdArgs)

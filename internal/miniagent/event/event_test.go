@@ -133,6 +133,46 @@ func TestEmitToolResult_NonShellOmitsExitCode(t *testing.T) {
 	}
 }
 
+// A denied/validation result of an exec-backed tool never ran a command: ExitCode is the zero value 0
+// there, and emitting it would read as is_error:true + exit_code:0 ("succeeded") simultaneously. The
+// field must be omitted for such results.
+func TestEmitToolResult_ExecToolValidationErrorOmitsExitCode(t *testing.T) {
+	for name, code := range map[string]int{"git": 0, "go": 0, "npm": miniagent.ExitCodeNotSet, "golangci-lint": miniagent.ExitCodeNotSet} {
+		var buf bytes.Buffer
+		if err := EmitToolResult(&buf, name, "c4", miniagent.ToolResult{IsError: true, ExitCode: code, Output: "git: option rejected"}); err != nil {
+			t.Fatalf("EmitToolResult: %v", err)
+		}
+		var ev map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if ev["is_error"] != true {
+			t.Errorf("%s: is_error = %v, want true", name, ev["is_error"])
+		}
+		if _, ok := ev["exit_code"]; ok {
+			t.Errorf("%s: error result without a trustworthy code must omit exit_code: %s", name, buf.String())
+		}
+	}
+}
+
+// A non-zero exit of an exec-backed command stays a normal (is_error:false) result carrying its code.
+func TestEmitToolResult_ExecNonZeroExitKeepsCode(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EmitToolResult(&buf, "go", "c5", miniagent.ToolResult{Output: "FAIL", ExitCode: 1}); err != nil {
+		t.Fatalf("EmitToolResult: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev["is_error"] != false {
+		t.Errorf("is_error = %v, want false (non-zero exit is a command conclusion)", ev["is_error"])
+	}
+	if ev["exit_code"] != float64(1) {
+		t.Errorf("exit_code = %v, want 1", ev["exit_code"])
+	}
+}
+
 func TestEmitToolResult_TruncatesLongOutput(t *testing.T) {
 	var buf bytes.Buffer
 	long := strings.Repeat("x", maxToolResultEventChars+50)

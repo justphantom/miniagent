@@ -56,12 +56,22 @@ func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 }
 
 // After serializing the Parameters of all built-in tools, the required field must never be null.
+// Covers every constructor registered by cmd/miniagent buildTools (11 default-mode tools + shell),
+// so a regression in any object(...) call (e.g. a nil required) fails here.
 func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 	workdir := t.TempDir()
 	tools := []miniagent.Tool{
 		ReadFileTool(workdir, 0, 0),
 		WriteFileTool(workdir, 0),
 		EditFileTool(workdir, 0),
+		GrepTool(workdir, 0, 0, 0),
+		GlobTool(workdir, 0, 0),
+		GitTool(workdir, 0, 0),
+		GoTool(workdir, 0, 0),
+		NpmTool(workdir, 0, 0),
+		LintTool(workdir, 0, 0),
+		RenameTool(workdir, 0),
+		DeleteTool(workdir, 0),
 		ShellTool(workdir, 0, 0, 0),
 	}
 
@@ -91,6 +101,3 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 		}
 	}
 }
-
-// validateConfig rejects ThinkingMapping.Field pointing at a reserved payload key: testBuildChatBody writes the thinking
-// level via payload[field]=val (wire.go), and hitting a reserved key (e.g. max_tokens) would clobber a standard field (review v3 P3).

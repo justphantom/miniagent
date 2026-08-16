@@ -5,6 +5,51 @@
 
 ## [Unreleased]
 ### Fixed
+- **shell 挂起**（setsid 孤儿持有管道）：`sleep 30 &` 类后台任务逃逸进程组后持有 stdout fd，`cmd.Wait` 等待 exec copier 的 EOF 直到孤儿退出（实测 500ms 超时 6s+ 才返回）。`waitOutputTimeout` 按 ctx 剩余期限+2s 有界等待，孤儿场景按时放弃（泄漏进程为已知残留，见 platform.go）。
+- **非 UTF-8 输出击穿滑动窗口**：无首字节的字节流（二进制/GBK）使 `utf8FullRune` 恒 false，pending 无界增长 + 每次 Read 全量重拷（4MB 输入实测 552MB 分配）+ 全部输出变 U+FFFD。pending 封顶 4 字节，超限残片按十六进制转义呈现。另修复 cut 循环误用 `chunk[cut-1:]`（该切片恒以 chunk 末尾结束，与 cut 无关）导致的有效 UTF-8 尾部错位。
+- **孤立首字节误判完整 rune**：`utf8FullRune` 对尾字节为首字节（0x80+ 且非续字节）返回 false，跨 Read 边界的 rune 不再被拆写。
+- **shell 缺跨块 UTF-8 缓冲**：`drainPipe` 抽出共享（含 pending 缓冲），shell 与 git/go/npm/lint 同一保护。
+- **grep 根不可达误报 "no matches"**：打错路径/无权限的搜索根与真空结果不可区分（glob 侧正确传播）。根错误现传播为真实错误。
+- **`git pull --upload-pack=<cmd>` RCE**：pull deny 表漏项，且 fetch 族辅助程序与任意子命令组合均可执行（args 拼在子命令后由 git 按 pre-command 选项解释）。`--receive-pack/--upload-pack/--exec/--repo` 入全局 deny 表。
+- **git 聚簇短旗标绕过**：`push -qf`/`-df`（≡`--force`/`--delete`）经簇拼写绕过短旗标 deny。无 `=` 的多字母单破折号 token 簇内含被拒布尔短旗即拒。
+- **`git push origin +main`/`:x` 绕过 force/delete 拒绝**：refspec 前导 `+`（≡`--force`）与 `:`（≡`--delete`）现被拒（git-push(1) 文档语义）。
+- **子目录 `.gitattributes` 绕过外部驱动守卫**：只读仓库根的属性文件，子目录声明 `filter=` 即绕过。属性源扩为祖先链 + `<gitdir>/info/attributes`（`rev-parse --git-path`）+ 树内全部 `.gitattributes`（新 `tool_gitattr.go`）。
+- **`go build --o /tmp/x` 绕过写路径约束**：`checkGoWritePaths` 只匹配单横线形，go 的 flag 包双横线等价接受。`matchTokenOption` 归一化匹配；`-outputdir` 入列表（旧注释称被 -o 前缀覆盖不成立）。
+- **`go build -o sub/../../X` 中间 `..` 越界**：相对分支只拒 `../` 前缀、绝对分支 `withinDir` 无 Clean。`resolveWriteFlagValue` 统一按 Join/Abs+Clean+`filepath.Rel` 判界。
+- **`go fmt <abs-outside>.go` 越界改写**：fmt 实参不经写路径校验（旧注释称"无越界写风险"）。fmt 的 FILE 位置实参现走同一校验。
+- **npm `-registry=URL` 单横线绕过**：手写 HasPrefix 只查双横线形。改 `optSpec` + `checkDeniedOptions`（归一化匹配）。
+- **lint deny 漏项**：`--new-from-patch`/`--new-from-merge-base`/`-n` 与 `--output.json.path`（任意路径写报告）补拦。
+- **rtk 吞 lint findings 退出码**：rtk 的 golangci-lint wrapper 有 findings 也 exit 0（实测 6/6），exit_code 契约（22fac84）失效。lint 改原生 exec golangci-lint。
+- **write/edit/read/shell 宽松解码静默毁数据**：`{"contents":...}` typo 曾清空整个文件并报成功、`{"new_str":...}` 曾把匹配文本替换为空串。四工具统一 `decodeStrict`；write 另拒空 content（空文件不可经 write 表达）。
+- **read 1MiB 截断无标记**：截断点在行中间时最后一行是碎片（据此构造 edit old_string 必失配）、行数虚报。读 maxBytes+1 检测截断，去尾部残行并追加显式标记。
+- **read limit>10000 静默钳制**：显式超限现报错（钳制返回行数少于默认全读且无标记）。
+- **grep 恰好 N 条误报截断**：入口预检查在还有可走查文件时即置 truncated。改为只有超出上限的真实匹配才标记。
+- **runWithTimeout 宽限窗改写晚到结果**：已落盘的 edit/write 成功被重贴 timeout 标签（LLM 据此对成功操作采取恢复动作）、exec 真实退出码被丢弃。晚到结果原样透传；删除只有命令输出才能偶然命中的 "timed out" 快路径。
+- **shell 后台任务超时不可见**：leader 已 exit 0 而后台任务占管道到超时（组被杀、Wait 报旧状态 nil）时静默成功。现返回超时提示。
+- **go/npm/lint 字节窗口按字符上限设置**：`maxOutputChars`（runes）被直接当字节窗口 keep，CJK 输出过度逐出（66666 汉字只剩 12208）。窗口改 8 倍。
+- **预执行拒绝路径 exit_code=0**：deny/校验失败/解码错误未执行命令却发 `exit_code:0`（事件层读作成功）。`denyResult` 助手统一 ExitCodeNotSet；事件层仅在 `!IsError || ExitCode>0` 时置字段。
+- **decodeStrict 不拒尾部垃圾**：`{...}{...}` 双拼 payload 静默取首个。第二个 Decode 须 io.EOF。
+- **splitArgs 反斜杠-换行**：POSIX 行续接被当作转义换行，产出内嵌 `\n` 的 argv token（git 报 ambiguous argument）。行续接现正确移除。
+- **confineWrap 对 rename 裸奔**：包装层只解析 `path` 字段，rename 的 `{from,to}` 零校验直通（symlink 目录逃逸仅在 write 侧被拦）。from/to 现各自走写侧检查。
+- **`.git` 守卫大小写敏感**：Windows/macOS 文件系统 `.GIT` 即 gitdir，精确比较可绕过。两处 `dotGitWithinRoot` 改 EqualFold（8.3 短名为已知残留）。
+- **edit 锁键未归一化**：`/w/./f` 与 `f` 两拼写各持一把锁，并行编辑丢失更新。锁键经 Clean。
+- **writeFileAtomic 无 fsync**：崩溃窗口内 rename 先于数据块落盘会导致目标空/半文件（与 session_rewrite 同源的崩溃持久性问题）。补 tmp.Sync + 父目录 best-effort Sync。
+- **glob 畸形括号漏检**：`q*a[` 类通配符后缀经单字符探针不报错（Match 惰性解析）。双探针验证。
+- **grep 二进制嗅探窗口实际 4096**：默认 bufio 缓冲限制 Peek(8192)，4096-8191 区间的 NUL 漏检。`NewReaderSize(f, 8192)`。
+- **schema 测试只覆盖 4/11 工具**、**git pathspec 测试死断言**（t.Logf 不失败）：补齐/改 t.Errorf。
+
+### Fixed
+- **glob 畸形括号漏检（复验补充）**：双探针法对任意长度探针都被字面量前缀短路（实测 `q*a[` 对 1..255 长度 x 探针全 nil）。补结构扫描器 `globPatternMalformed`（未闭合 `[`/尾部孤立反斜杠）。
+- **npm `--C` 双横线绕过（复验新发现）**：`-C` 原列 shorts 分支不认双横线形，实测 `--C /tmp` 重定向前缀成功。改列 longs。
+- **shell 纯二进制输出 U+FFFD 墙（复验补充）**：无效字节逐个变 3 字节替换符，字符上限被放大 3 倍且不可读。`escapeNonUTF8` 按十六进制转义无效序列，有效文本原样保留。
+- **read 截断标记分页语义**：offset/limit 已收窄视图时标记改为 "this page shows only part of..."（原 "showing the first N bytes" 对分页读不准确）。
+
+### Changed
+- **lint 不再经 rtk 代理**：rtk wrapper 吞退出码（见上），exit_code 契约优先于输出紧凑；git/go/npm 的 rtk 路由不变。
+- **`drainPipe`/`waitOutputTimeout` 抽入 `run_limited.go`**：shell 与 git/go/npm/lint 共享同一跨块 UTF-8 缓冲与有界等待。
+- **`.gitattributes` 防线拆 `tool_gitattr.go`**、**`runWithTimeout` 拆 `tool_timeout.go`**（300 行预算）。
+
+### Fixed
 - **`rtkWrap` 无 rtk 主机上丢 prefix**：fallback 返回 `(bin, args)` 丢弃 prefix，`git status` 实际 exec 裸 `git`（usage dump + exit 1）、`go build ./...` → `go ./...` unknown command——rtk 覆盖的 8 git 子命令与 build/test/vet 在无 rtk 环境全坏。fallback 改拼 `prefix[1:]+args` 保住完整 argv。
 - **git 短旗标/长选项缩写绕过 deny 前缀**（HasPrefix 精确匹配的系统性缺口，实测复现）：`push -f`/`-d`（--force/--delete 最高频短形）、`commit --am`（≡`--amend`，实测改写 HEAD）、`push --dele` 全部放行。重构为 `optSpec` 匹配器（flagmatch.go）：短旗标全等+等号粘合、go 单破折长名全等、git 双破折唯一前缀缩写识别；新增 `--mirror`/`--receive-pack`/`--exec`/`--repo`/`--pathspec-from-file` 入禁（push --receive-pack 实测 RCE 通道）。
 - **push/pull 位置参数守卫漏相对路径与 scp 风格**：`../evil.git`（无 `://` 非绝对）实测整库推出、`--mirror` 强同步全部 ref；守卫改拒含 `:`/`/`/`\`/`..` 的首位置参数。

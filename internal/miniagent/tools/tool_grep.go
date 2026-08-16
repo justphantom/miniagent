@@ -153,6 +153,9 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 			return err
 		}
 		if walkErr != nil {
+			if path == root {
+				return walkErr // root missing/inaccessible: a typo'd path must not masquerade as "no matches" (aligned with glob)
+			}
 			return nil //nolint:nilerr // skip inaccessible subtrees, keep results from accessible parts
 		}
 		if d.IsDir() {
@@ -172,20 +175,18 @@ func grepWalk(ctx context.Context, root string, re *regexp.Regexp, globFn func(s
 		if globFn != nil && !globFn(d.Name()) {
 			return nil
 		}
-		if len(matches) >= maxMatches {
-			truncated = true
-			return filepath.SkipAll
-		}
 		rel := path
 		if r, err := filepath.Rel(root, path); err == nil {
 			rel = r
 		}
 		// A grepFile error (binary/too-large/ErrTooLong etc.) only skips the rest of that file; ms still contains partial matches collected before ErrTooLong and remains usable.
+		// Always call grepFile even at cap: only a match found BEYOND the cap proves truncation — a later
+		// merely-walkable file must not flag it (exactly maxMatches matches + more files is a complete result).
 		ms, _ := grepFile(path, rel, re, maxMatches)
 		for _, m := range ms {
 			if len(matches) >= maxMatches {
 				truncated = true
-				break
+				return filepath.SkipAll
 			}
 			matches = append(matches, m)
 		}
@@ -215,7 +216,9 @@ func grepFile(path, display string, re *regexp.Regexp, maxMatches int) ([]grepMa
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	br := bufio.NewReader(f)
+	// NewReaderSize, not NewReader: the default 4096 buffer caps Peek, so NULs in bytes 4096..8191
+	// escaped the sniff and the "binary" file was searched line by line.
+	br := bufio.NewReaderSize(f, 8192)
 	head, _ := br.Peek(8192)
 	if bytes.IndexByte(head, 0) >= 0 {
 		return nil, errors.New("binary")

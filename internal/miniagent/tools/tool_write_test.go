@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,37 @@ import (
 	"testing"
 	"time"
 )
+
+// A field-name typo (contents vs content) or an omitted content must be a loud error, not a silent
+// truncate-to-zero reported as success: decodeStrict rejects the unknown key, and empty content is
+// refused outright (empty-file creation is not expressible via write).
+func TestWriteFile_RejectsTypoAndEmptyContent(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "old.txt")
+	if err := os.WriteFile(existing, []byte("real body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := WriteFileTool(dir, 0).Call(context.Background(), `{"path":"old.txt","contents":"new body"}`)
+	if !res.IsError {
+		t.Fatal("typo'd field name should be rejected by strict decoding")
+	}
+	res = WriteFileTool(dir, 0).Call(context.Background(), `{"path":"old.txt"}`)
+	if !res.IsError || !strings.Contains(res.Output, "missing parameter: content") {
+		t.Errorf("omitted content should error, got: %s", res.Output)
+	}
+	res = WriteFileTool(dir, 0).Call(context.Background(), `{"path":"old.txt","content":""}`)
+	if !res.IsError || !strings.Contains(res.Output, "missing parameter: content") {
+		t.Errorf("empty content should error, got: %s", res.Output)
+	}
+	// the existing file must survive all three attempts
+	got, _ := os.ReadFile(existing)
+	if string(got) != "real body" {
+		t.Errorf("existing file was clobbered: %q", got)
+	}
+	if res.ExitCode != miniagent.ExitCodeNotSet {
+		t.Errorf("ExitCode = %d, want ExitCodeNotSet (no command ran)", res.ExitCode)
+	}
+}
 
 // write must reject a FIFO at the Lstat stage (IsRegular check), rather than reporting an ambiguous
 // error at Rename; aligned with edit (review P3-7).

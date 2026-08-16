@@ -227,7 +227,7 @@ return finishMaxIterations
 ## 10. 安全模型
 
 - **workdir 约束**（必填、绝对路径）：写工具边界 + shell cwd 基准。
-- **default 模式**（非安全边界）：`confineWrap` 按读写分流——write/edit 拒绝指向 workdir 根（防 MkdirAll/Rename 覆盖整个 workdir），read/grep/glob 放行 workdir 根；`shell` 不注册（误调 `unknown tool`）；`.git/**` 全工具拒绝（`checkConfine`/`resolveConfinedPath` 的 `dotGitWithinRoot`，含嵌套 submodule 布局，读也拒——防 hooks 执行/remote 改写/config 泄漏绕过 git 工具白名单）；参数级：git 拒 `--no-index`/`-F`/push-pull URL 位置参数/`.gitattributes` 外部驱动（`checkGitPositionalArgs`/`checkGitAttributes`），go 拒 `-o`/`-toolexec`，npm 拒 `--prefix`/`-C`/`--registry`，`resolveModuleRoot` 上溯不越 workdir。
+- **default 模式**（非安全边界）：`confineWrap` 按读写分流——write/edit 拒绝指向 workdir 根（防 MkdirAll/Rename 覆盖整个 workdir），read/grep/glob 放行 workdir 根；`shell` 不注册（误调 `unknown tool`）；`.git/**` 全工具拒绝（`checkConfine`/`resolveConfinedPath` 的 `dotGitWithinRoot`，含嵌套 submodule 布局，读也拒——防 hooks 执行/remote 改写/config 泄漏绕过 git 工具白名单）（`dotGitWithinRoot` 大小写不敏感比较——Windows/macOS 文件系统下 `.GIT` 即 gitdir；8.3 短名为已知残留）；参数级：git 拒 `--no-index`/`-F`/push-pull URL 位置参数/`+refspec`（≡`--force`）与 `:refspec`（≡`--delete`）/短旗标簇（`-qf`）/`--upload-pack` 全局 RCE 族/`.gitattributes` 外部驱动（`checkGitPositionalArgs`/`checkGitAttributes`——属性源含祖先链、`<gitdir>/info/attributes` 与树内全部 `.gitattributes`），go 拒 `-o`/`--o` 双横线形/`-toolexec`/中间 `..` 写路径（`resolveWriteFlagValue` 按 `filepath.Rel` 判界，fmt 的 FILE 实参同规则），npm 拒 `--prefix`/`-C`/`--registry`（`optSpec` 归一化匹配，单横线长形同拒），golangci-lint 拒 `--fix`/`-n`/`--new*` 全族/`--output.json.path`，`resolveModuleRoot` 上溯不越 workdir。
 - **auto 模式**：`shell` 注册且无约束，用于可信子任务。
 - **路径越界**：`..`/绝对路径/子目录统一拒绝（basename-only 对 rules_file 同样适用，防越界读注入）。
 - **凭证剥离**：shell 子进程剥离所有 `MINIAGENT_*` 前缀环境变量（含 key/URL），避免密钥泄漏给 LLM 派生命令；其他环境变量按原样继承。
@@ -235,7 +235,7 @@ return finishMaxIterations
 
 ## 11. 事件协议（NDJSON，`internal/miniagent/event/`）
 
-stdout 一行一个 NDJSON 事件，类型：`session`（新建会话首条，含 id）/ `llm_request`（每次 LLM 调用）/ `tool_use` / `tool_result`（含 ExitCode/IsError）/ `delta`（流式增量，含 kind=text/reasoning）/ `result`（最终）/ `error`（含 code）。
+stdout 一行一个 NDJSON 事件，类型：`session`（新建会话首条，含 id）/ `llm_request`（每次 LLM 调用）/ `tool_use` / `tool_result`（含 ExitCode/IsError；exit_code 仅在结果携带可信退出码时出现——命令语义性非零退出（IsError=false）或错误但 ExitCode>0，校验拒绝/超时等未真正执行命令的路径省略该字段，避免 is_error:true 与 exit_code:0 并存的矛盾）/ `delta`（流式增量，含 kind=text/reasoning）/ `result`（最终）/ `error`（含 code）。
 
 辅助：`-replay` 离线重放会话（读 jsonl、不呼 LLM、不落盘、不读 stdin）；`-metrics-step` 通过 `OnStep` 把 per-step 观测写 stderr NDJSON（transcript 增长、token 斜率、压缩次数、LLM 请求数）。
 

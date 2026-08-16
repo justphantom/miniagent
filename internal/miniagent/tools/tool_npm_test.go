@@ -25,10 +25,16 @@ func TestNpm_MissingSubcommand(t *testing.T) {
 }
 
 // --prefix/-C redirect npm's working root outside the module tree; --registry redirects the dependency
-// stream to an attacker-controlled server. All three are rejected regardless of subcommand.
+// stream to an attacker-controlled server. npm accepts single-dash long spellings (-registry=URL is
+// equivalent), so the optSpec dash-normalizing matcher must catch both forms.
 func TestNpm_DeniesRedirectOptions(t *testing.T) {
 	got := NpmTool(t.TempDir(), 0, 0)
-	for _, opt := range []string{"--prefix /tmp/other", "--prefix=/tmp/other", "-C /tmp/other", "--registry https://evil.reg"} {
+	for _, opt := range []string{
+		"--prefix /tmp/other", "--prefix=/tmp/other", "-C /tmp/other",
+		"--C /tmp/other", "--C=/tmp/other", "-C=/tmp/other",
+		"--registry https://evil.reg", "--registry=https://evil.reg",
+		"-prefix=/tmp/other", "-prefix /tmp/other", "-registry=https://evil.reg",
+	} {
 		res := got.Call(context.Background(), `{"subcommand":"install","args":"`+opt+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "blocked") {
 			t.Errorf("npm install %q should be blocked, got: %s", opt, res.Output)

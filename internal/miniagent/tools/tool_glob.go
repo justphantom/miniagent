@@ -55,7 +55,19 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 	if strings.TrimSpace(a.Pattern) == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: pattern"}
 	}
+	// Two layers: (1) a structural scan for unclosed brackets / trailing lonely backslash —
+	// filepath.Match reports syntax errors lazily, only while a chunk still matches the probe, so a
+	// malformed tail after a literal prefix (`q*a[`) short-circuits EVERY fabricated probe (verified:
+	// all-x probes of length 1..255 return nil error) and the typo silently yields "no matches".
+	// (2) the two-name probes catch the shapes Match does report for any input (empty class, `[a-`,
+	// nested-bracket-adjacent forms). Shapes Go treats as literals (`x]y`, `[[]]`) stay legal.
+	if globPatternMalformed(a.Pattern) {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("invalid glob pattern: %q (unclosed bracket or trailing backslash)", a.Pattern)}
+	}
 	if _, err := filepath.Match(a.Pattern, "x"); err != nil {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("invalid glob pattern: %v", err)}
+	}
+	if _, err := filepath.Match(a.Pattern, "xxxxxxxxxx"); err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("invalid glob pattern: %v", err)}
 	}
 	root := resolveToolPath(workspaceRoot, a.Path)
@@ -106,4 +118,48 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 		out += fmt.Sprintf("\n…(over %d entries, collection stopped)", maxGlobEntries)
 	}
 	return miniagent.ToolResult{Output: out}
+}
+
+// globPatternMalformed reports the bracket/backslash structural errors that fabricated-name probes
+// cannot reach: a probe fails the leading literal chunk of `q*a[` before the parser ever reaches the
+// unclosed '[', so filepath.Match returns nil error for every probe length (measured 1..255). The
+// scan walks classes the way Match's parser does — ']' outside a class and '[' inside one are
+// literals (verified against filepath.Match), '\' escapes exactly one byte everywhere — and flags an
+// unclosed class or a trailing lonely escape, both of which are ErrBadPattern for any input.
+func globPatternMalformed(p string) bool {
+	i := 0
+	for i < len(p) {
+		switch p[i] {
+		case '\\':
+			if i+1 >= len(p) {
+				return true // trailing escape with nothing to escape
+			}
+			i += 2
+		case '[':
+			j := i + 1
+			closed := false
+			for j < len(p) {
+				if p[j] == '\\' {
+					if j+1 >= len(p) {
+						return true
+					}
+					j += 2
+					continue
+				}
+				if p[j] == ']' {
+					closed = true
+					j++
+					break
+				}
+				j++
+			}
+			if !closed {
+				return true
+			}
+			i = j
+		default:
+			i++
+		}
+	}
+	return false
 }

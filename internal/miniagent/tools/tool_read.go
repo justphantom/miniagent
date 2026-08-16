@@ -1,8 +1,8 @@
 package tools
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
@@ -87,7 +87,7 @@ func runReadFile(workspaceRoot, args string, maxBytes int) miniagent.ToolResult 
 		// to openNoFollow's O_NOFOLLOW errno.
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("%q is not a regular file (mode=%s); only regular files are supported", a.Path, info.Mode().String())}
 	}
-	content, err := readFileContent(full, maxBytes)
+	content, truncated, err := readFileContent(full, maxBytes)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to read %q: %v", a.Path, err)}
 	}
@@ -103,12 +103,24 @@ func runReadFile(workspaceRoot, args string, maxBytes int) miniagent.ToolResult 
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: err.Error()}
 	}
-	return miniagent.ToolResult{Output: text.Truncate(formatted, maxBytes/4, "…")}
+	out := text.Truncate(formatted, maxBytes/4, "…")
+	// Cap marker goes at the very END and AFTER the char truncate (else the char cap can cut it off):
+	// without it the byte cap is silent — the model cannot distinguish "file ends here" from
+	// "output was cut", and would build edit old_strings from lines that only look complete.
+	// offset/limit paging already narrows the view, so the marker names the WINDOW, not the byte count.
+	if truncated {
+		if a.Offset > 1 || a.Limit > 0 {
+			out += fmt.Sprintf("\n…[file exceeds the %d-byte read cap; this page shows only part of the first %d bytes]", maxBytes, maxBytes)
+		} else {
+			out += fmt.Sprintf("\n…[file exceeds the %d-byte read cap; showing the first %d bytes]", maxBytes, maxBytes)
+		}
+	}
+	return miniagent.ToolResult{Output: out}
 }
 
 func parseReadArgs(args string) (readFileArgs, error) {
 	var a readFileArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
+	if err := decodeStrict(args, &a); err != nil {
 		return readFileArgs{}, fmt.Errorf("argument parsing failed: %w (received %q)", err, args)
 	}
 	if a.Path == "" {
@@ -120,23 +132,36 @@ func parseReadArgs(args string) (readFileArgs, error) {
 	return a, nil
 }
 
-// LimitReader naturally handles oversized files: content beyond maxReadFileBytes is discarded;
-// no need to pre-branch on file size.
-func readFileContent(full string, maxBytes int) (string, error) {
+// readFileContent reads at most maxBytes and reports whether the file is larger (maxBytes+1 probe):
+// truncation must be DETECTED, not silently applied — the caller drops the trailing partial line
+// and appends a visible marker, so the last rendered line is never a mid-line fragment the model
+// would otherwise copy into edit old_strings.
+func readFileContent(full string, maxBytes int) (string, bool, error) {
 	f, err := openNoFollow(full, os.O_RDONLY, 0)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)))
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)+1))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return string(data), nil
+	truncated := len(data) > maxBytes
+	if truncated {
+		data = data[:maxBytes]
+		// Drop the trailing partial line: the cut is a byte cut, so the tail after the last '\n'
+		// is a fragment of a real line, not a line.
+		if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
+			data = data[:i+1]
+		} else {
+			data = nil // single line longer than the cap: keep nothing rather than a fragment
+		}
+	}
+	return string(data), truncated, nil
 }
 
 // formatLines prefixes content with "N │ line" and extracts the range [offset, offset+limit-1].
-// offset<=0 is treated as 1; limit<=0 or out of range is treated as read-to-end; limit>maxLineLimit is truncated.
+// offset<=0 is treated as 1; limit<=0 or out of range is treated as read-to-end.
 // When offset exceeds the file's line count, returns an error (so the caller marks IsError, rather than silently
 // emitting empty output).
 // Empty file (content=="") returns an empty string directly, avoiding a spurious empty line "1 │ ".
@@ -144,9 +169,10 @@ func formatLines(content string, offset, limit int) (string, error) {
 	if content == "" {
 		return "", nil
 	}
-	// limit<=0 (including negatives) means read-to-end (no truncation); only limit>maxLineLimit is truncated. Consistent with doc "limit<=0 ... read to end".
+	// Explicit limit>maxLineLimit is a hard error, not a silent clamp: a clamped read returns fewer
+	// lines than limit=0 (read-to-end) would, with no marker — the model concludes the file ends there.
 	if limit > maxLineLimit {
-		limit = maxLineLimit
+		return "", fmt.Errorf("limit %d exceeds the maximum of %d lines per read", limit, maxLineLimit)
 	}
 	lines := strings.Split(content, "\n")
 	// POSIX text files ending with a newline make Split produce a trailing empty string; treating it as a line

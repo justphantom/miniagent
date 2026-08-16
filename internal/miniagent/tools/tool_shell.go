@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
@@ -46,8 +45,8 @@ func ShellTool(workspaceRoot string, timeout time.Duration, maxOutputChars, stre
 			var a struct {
 				Command string `json:"command"`
 			}
-			if err := json.Unmarshal([]byte(args), &a); err != nil {
-				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed: %v (received %q)", err, args)}
+			if err := decodeStrict(args, &a); err != nil {
+				return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (strict decoding, unknown fields rejected — args must be a JSON object with the single string field command): %v (received %q)", err, args)}
 			}
 			if strings.TrimSpace(a.Command) == "" {
 				return miniagent.ToolResult{IsError: true, Output: "missing argument: command"}
@@ -98,6 +97,12 @@ func runShellCommand(ctx context.Context, workdir, command string, timeout time.
 		}
 		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\nexecution failed: %v", err)}
 	}
+	// Background & jobs can hold the inherited stdout past the shell leader's clean exit: cmd.Wait
+	// blocks until timeout, the group is SIGKILLed, and Wait then reports the leader's OLD status nil —
+	// without this branch a 1ms command silently consumes the whole timeout as a clean success.
+	if ctx.Err() == nil && runCtx.Err() != nil {
+		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\n⏱ command timed out (>%s), background output holders terminated.", timeout)}
+	}
 	return miniagent.ToolResult{Output: body, ExitCode: 0}
 }
 
@@ -126,18 +131,16 @@ func runShellLimited(ctx context.Context, cmd *exec.Cmd, maxOutputChars, streamW
 	// the subprocess never blocks because the pipe is continuously drained, and is not interrupted by output volume (removing the old LimitReader+volume-kill), running until Wait returns a trustworthy ExitCode.
 	// phase-1 disk spill is off by default (headSpillBytes=0).
 	accum := newOutputAccum(streamWindow, 0, "", "miniagent_shell_")
-	buf := make([]byte, 32*1024)
-	for {
-		n, rerr := pr.Read(buf)
-		if n > 0 {
-			_ = accum.write(string(buf[:n])) // disk-spill failure is best-effort (phase-1 off, won't trigger)
-		}
-		if rerr != nil {
-			break // EOF (pw closed) or read error
-		}
-	}
+	// drainPipe 的跨块 UTF-8 pending 缓冲同样适用于 shell：逐块 string(buf[:n]) 会把跨 Read 边界的
+	// rune 拆成两段无效字节，窗口逐出后尾部以半个 rune 开头（与 git/go/npm/lint 同一缺陷类）。
+	drainPipe(pr, accum)
 	_ = accum.closeSink()
-	err := <-waitErr
+	// 有界等待的基线取 ctx 剩余期限；waitOutputTimeout 处理 setsid 孤孙子进程持管道导致的挂死。
+	budget := time.Duration(0)
+	if dl, ok := ctx.Deadline(); ok {
+		budget = max(time.Until(dl), 0)
+	}
+	err := waitOutputTimeout(waitErr, budget)
 	// Fallback: clean up the whole group once more after normal exit, to prevent leftover background & jobs (no longer for volume kill).
 	killProcessGroup(cmd)
 	return accum.finalize(maxOutputChars), err

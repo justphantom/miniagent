@@ -102,8 +102,10 @@ func EmitModel(w io.Writer, provider, model string) error {
 const maxToolResultEventChars = 2000
 
 // toolResultEvent is the result event after tool execution. exit_code is set by exec-backed tools
-// (shell/git/go/npm/golangci-lint; pointer, omitted when nil) — other tools have no exit-code
-// semantics, avoiding the zero value 0 being misread as "success".
+// (shell/git/go/npm/golangci-lint; pointer, omitted when nil) and only when the result carries a
+// trustworthy code — other tools have no exit-code semantics, and validation/denied/timeout results
+// of exec-backed tools never ran a command, so emitting the zero value there would read as
+// is_error:true + exit_code:0 ("succeeded") simultaneously.
 type toolResultEvent struct {
 	Type      string `json:"type"` // tool_result
 	Name      string `json:"name"`
@@ -121,6 +123,9 @@ var execBackedTools = map[string]bool{
 
 // EmitToolResult writes a tool_result event. output is truncated to maxToolResultEventChars;
 // only exec-backed tools emit exit_code (other tools' ExitCode is a semantically-empty zero value).
+// An IsError result is admitted only when ExitCode>0: exitAwareResult et al. set ExitCodeNotSet (-1)
+// on error paths, and validation-time rejections (denied option, decode failure) never execute a
+// command at all — the field is omitted instead of asserting a bogus 0.
 func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) error {
 	out := text.Truncate(r.Output, maxToolResultEventChars, "…[tool_result truncated]")
 	ev := toolResultEvent{
@@ -131,7 +136,7 @@ func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) er
 		Truncated: len([]rune(r.Output)) > maxToolResultEventChars,
 		IsError:   r.IsError,
 	}
-	if execBackedTools[name] {
+	if execBackedTools[name] && (!r.IsError || r.ExitCode > 0) {
 		ec := r.ExitCode
 		ev.ExitCode = &ec
 	}

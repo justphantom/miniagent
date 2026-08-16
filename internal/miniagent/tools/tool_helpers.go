@@ -7,16 +7,22 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
+
+// denyResult builds a pre-execution rejection: no command ran, so ExitCode must be ExitCodeNotSet —
+// the zero value 0 would be misread by the event layer as success (P3-4).
+func denyResult(format string, a ...any) miniagent.ToolResult {
+	return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: fmt.Sprintf(format, a...)}
+}
 
 // resolveToolPath resolves a tool path: returns p unchanged when workspaceRoot is empty or p is already absolute;
 // otherwise join(workspaceRoot, p) (join includes Clean, but ../ escaping upwards may resolve outside workdir).
@@ -65,9 +71,12 @@ func resolveConfinedPath(root, p string, readOnly bool) (string, error) {
 
 // dotGitWithinRoot reports whether rel (relative to workdir root) is or is under a ".git" directory
 // at any depth — covers ".git", ".git/config", and nested "sub/.git/HEAD" (submodule/worktree layouts).
+// Compared case-insensitively: on Windows/macOS filesystems .GIT IS the gitdir (git opens .git
+// case-insensitively there), so an exact compare would let .GIT/hooks bypass the guard. Windows 8.3
+// short names (GIT~1) remain a known accepted gap.
 func dotGitWithinRoot(rel string) bool {
 	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
-		if part == ".git" {
+		if strings.EqualFold(part, ".git") {
 			return true
 		}
 	}
@@ -100,11 +109,17 @@ func rtkWrap(bin string, prefix, args []string) (string, []string) {
 // decodeStrict unmarshals a tool-args JSON object rejecting unknown fields: a field-name typo
 // (`{"subcommand":"add","command":"x"}`) used to fall through to EMPTY args, silently turning
 // `git add` into a whole-repo stage. The error names the offending key so the LLM self-corrects.
+// Trailing data after the object is likewise rejected: providers emit duplicated/concatenated
+// payloads under retry/fragmentation, and silently keeping only the first object would make the
+// LLM believe both invocations executed.
 func decodeStrict(args string, dst any) error {
 	dec := json.NewDecoder(strings.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected trailing data after JSON object")
 	}
 	return nil
 }
@@ -119,6 +134,8 @@ func decodeStrict(args string, dst any) error {
 //   - 'single quotes' preserve everything literally, no escapes
 //   - "double quotes" preserve spaces; backslash escapes only " and \ (other chars stay literal)
 //   - outside quotes a backslash escapes the next char (so -m one\ word == -m "one word")
+//   - backslash+newline (LF or CRLF) is a POSIX line continuation: both chars are removed, gluing
+//     the surrounding text into one word (no token ever carries an embedded newline)
 //   - quotes are stripped; adjacent segments concatenate (a"b c"d -> ab cd)
 //
 // splitArgsStrict additionally reports an unterminated quote instead of silently gluing the
@@ -170,13 +187,28 @@ func splitArgsE(s string) (fields []string, unterminated string) {
 				buf = append(buf, r) // inside single quotes: literal
 			}
 		case '\\':
-			hasWord = true
 			if open == '\'' {
+				hasWord = true
 				buf = append(buf, r) // single quotes: no escapes
 				continue
 			}
 			if i+1 < len(runes) {
+				// POSIX line continuation: backslash + newline (LF, or CRLF) is REMOVED — no character
+				// emitted, no word break. An LLM formatting a long args string writes `... \<LF>--flag`,
+				// which used to become a token starting with the raw newline: corrupted argv plus the
+				// deny matcher (inspects only dash-prefixed tokens) never saw what sh parses as an option.
+				if runes[i+1] == '\n' || (runes[i+1] == '\r' && i+2 < len(runes) && runes[i+2] == '\n') {
+					// consume the line terminator: i lands ON the '\n' (LF) or after it (CRLF),
+					// the loop's i++ then moves past it — no character emitted, no word break.
+					if runes[i+1] == '\r' {
+						i += 2
+					} else {
+						i++
+					}
+					continue
+				}
 				i++
+				hasWord = true
 				if open == '"' && runes[i] != '"' && runes[i] != '\\' {
 					buf = append(buf, '\\') // inside double quotes backslash escapes only " and \; other chars stay literal
 				}
@@ -219,57 +251,4 @@ func object(props map[string]any, required ...string) map[string]any {
 		out["required"] = required
 	}
 	return out
-}
-
-// runWithTimeout wraps "ctx cancellation check + WithTimeout + goroutine + select fallback" into a single helper,
-// reused by file-type tools like read/write/edit/grep/glob (previously 5 near-verbatim boilerplate copies).
-// label goes into the timeout/cancellation message (e.g. "read", "search"). fn receives runCtx (with timeout) and
-// can check runCtx during long operations/traversals to return early — but Go cannot forcibly terminate a goroutine:
-// single-file syscalls (read/write/edit) stuck in D-state are uninterruptible (OS-level limitation); only the
-// WalkDir traversals of grep/glob can be terminated promptly via runCtx. fn must return promptly, otherwise
-// after the select fallback the goroutine still runs until fn ends naturally (done buffered=1 guarantees the send
-// won't block, but does not guarantee fn is interruptible).
-func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn func(ctx context.Context) miniagent.ToolResult) miniagent.ToolResult {
-	if err := ctx.Err(); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: "cancelled: " + err.Error()}
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	done := make(chan miniagent.ToolResult, 1)
-	// self-recover inside the goroutine: fn runs in this goroutine, so the caller's safeCall recover cannot catch it —
-	// symmetric with safeCall (loop_tools.go)/callLLMOnce; a panic inside file tools is converted to an IsError result
-	// instead of crashing the process.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				done <- miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: label + " internal error"}
-			}
-		}()
-		done <- fn(runCtx)
-	}()
-	select {
-	case r := <-done:
-		return r
-	case <-runCtx.Done():
-		// Timeout message carries the duration (the LLM cannot infer it from ctx error strings), and distinguishes
-		// the two causes: a parent cancellation surfaces ctx.Err(), a tool's own timeout names the duration — the LLM
-		// can then decide "split the command / narrow the test set" instead of mistaking it for a command failure.
-		if ctx.Err() != nil {
-			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: label + " cancelled: " + ctx.Err().Error()}
-		}
-		// Grace window: fn's kill path (runLimitedOutput closes the pipe on ctx.Done) unblocks the read
-		// loop almost immediately — the partial output captured so far (last test names, progress) is the
-		// only clue to WHERE it hung, so prefer a late result with body over an instant bare timeout line.
-		// Hard-cancel (SIGINT) keeps the fast path: parent ctx above already returned.
-		select {
-		case r := <-done:
-			if r.IsError && strings.Contains(r.Output, "timed out") {
-				return r
-			}
-			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet,
-				Output: fmt.Sprintf("%s timed out after %s — partial output follows\n%s", label, timeout, r.Output)}
-		case <-time.After(2 * time.Second):
-			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: fmt.Sprintf("%s timed out after %s — narrow the scope (fewer packages / smaller command) and retry", label, timeout)}
-		}
-	}
 }

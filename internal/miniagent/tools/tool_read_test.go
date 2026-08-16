@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -179,5 +180,89 @@ func TestReadFile_TextWithLateNULPasses(t *testing.T) {
 	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"late.txt"}`)
 	if res.IsError {
 		t.Fatalf("late-NUL text should pass: %s", res.Output)
+	}
+}
+
+// A typo'd offset/limit field must error instead of silently returning the wrong page: the unknown
+// key is ignored by permissive decoding, Offset stays 0, and the model gets the file HEAD labeled
+// as the requested page.
+func TestReadFile_RejectsTypoedArgs(t *testing.T) {
+	dir := writeTemp(t, "a.txt", "line1\nline2\n")
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"a.txt","ofset":2,"limit":1}`)
+	if !res.IsError {
+		t.Fatal("typo'd ofset field should be rejected by strict decoding")
+	}
+	res = ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"a.txt","limt":1}`)
+	if !res.IsError {
+		t.Fatal("typo'd limt field should be rejected by strict decoding")
+	}
+	if !strings.Contains(res.Output, "limt") || !strings.Contains(res.Output, "argument parsing failed") {
+		t.Errorf("error should name the offending key, got: %s", res.Output)
+	}
+}
+
+// The byte cap must be audible: the last rendered line may not be a mid-line fragment (the model
+// copies it into edit old_strings), and a visible marker must state that the file continues.
+func TestReadFile_TruncationMarkerAndNoPartialLine(t *testing.T) {
+	capBytes := 1024
+	// 64-byte lines x 200 = 12800 bytes: the cap cuts inside a line, so a fragment MUST be dropped.
+	// char cap = capBytes/4 = 256 runes: 4 file lines (5+64 runes each with the gutter) fill it,
+	// leaving the LAST rendered file line cut by the CHAR cap only — never by the byte cap.
+	line := "line " + strings.Repeat("x", 58) + "\n" // 5 + 58 + 1 = 64
+	content := strings.Repeat(line, 200)
+	dir := writeTemp(t, "big.txt", content)
+	res := ReadFileTool(dir, 0, capBytes).Call(context.Background(), `{"path":"big.txt"}`)
+	if res.IsError {
+		t.Fatalf("capped read should not error: %s", res.Output)
+	}
+	marker := fmt.Sprintf("…[file exceeds the %d-byte read cap; showing the first %d bytes]", capBytes, capBytes)
+	if !strings.Contains(res.Output, marker) {
+		t.Errorf("missing truncation marker %q, tail: %q", marker, res.Output[len(res.Output)-200:])
+	}
+	// the marker must be the very last rendered content — never a fragment line after it
+	if !strings.HasSuffix(strings.TrimRight(res.Output, "\n"), marker) {
+		t.Errorf("marker must end the output, tail: %q", res.Output[len(res.Output)-120:])
+	}
+	// The byte-cut tail is dropped, so every FILE line rendered before the char cap must be a
+	// complete 64-byte line: the last file line before the markers ends with the full 58 x's
+	// (the old code rendered a partial like "line xxxxx…p" that exists nowhere in the file).
+	lastFile, sawFile := "", false
+	for l := range strings.SplitSeq(res.Output, "\n") {
+		if i := strings.Index(l, "│ "); i >= 0 {
+			l = l[i+len("│ "):] // strip the "N │ " gutter (width varies with the rendered line count)
+		}
+		l = strings.TrimSuffix(l, "…") // char-cap marker on the final rendered line
+		if strings.HasPrefix(l, "line ") {
+			lastFile, sawFile = l, true
+		}
+	}
+	if !sawFile {
+		t.Fatal("no file lines rendered")
+	}
+	want := "line " + strings.Repeat("x", 58)
+	if lastFile != want && !strings.HasPrefix(want, lastFile) {
+		t.Errorf("last rendered file line = %q, want the complete 64-byte line %q (or its char-cap prefix)", lastFile, want)
+	}
+}
+
+// limit > maxLineLimit is an explicit error, not a silent clamp: a clamped read returns fewer lines
+// than limit=0 (read-to-end) would, with no marker — the model concludes the file ends there.
+func TestReadFile_LimitOverMaxIsError(t *testing.T) {
+	var sb strings.Builder
+	for i := range maxLineLimit + 5000 {
+		fmt.Fprintf(&sb, "l%06d\n", i)
+	}
+	dir := writeTemp(t, "many.txt", sb.String())
+	res := ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"many.txt","limit":20000}`)
+	if !res.IsError {
+		t.Fatal("limit above maxLineLimit must be an error, not a silent clamp")
+	}
+	if !strings.Contains(res.Output, fmt.Sprintf("exceeds the maximum of %d lines per read", maxLineLimit)) {
+		t.Errorf("error must name the maximum, got: %s", res.Output)
+	}
+	// limit=0 still reads to end
+	res = ReadFileTool(dir, 0, 0).Call(context.Background(), `{"path":"many.txt"}`)
+	if res.IsError {
+		t.Fatalf("default limit should read to end: %s", res.Output)
 	}
 }

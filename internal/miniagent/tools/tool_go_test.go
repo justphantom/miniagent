@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +56,141 @@ func TestGo_DeniesFileWritingOptions(t *testing.T) {
 	res := got.Call(context.Background(), `{"subcommand":"build","args":"-o bin/app ."}`)
 	if res.IsError && strings.Contains(res.Output, "outside the workdir") {
 		t.Errorf("in-tree -o should not be blocked, got: %s", res.Output)
+	}
+}
+
+// go 的 flag 包对 -flag/--flag 等价接受：写路径校验必须按剥去前导破折号后的名字比较，
+// 否则 --o/--coverprofile= 绕过（deny 表的 optSpec 匹配早已归一化，此处曾漏）。
+func TestGo_DeniesDoubleDashWriteFlags(t *testing.T) {
+	got := GoTool(t.TempDir(), 0, 0)
+	for _, opt := range []string{"--o /tmp/evil", "--o=/tmp/evil", "--coverprofile=/tmp/c.out", "--coverprofile /tmp/c.out"} {
+		res := got.Call(context.Background(), `{"subcommand":"build","args":"`+opt+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "outside the workdir") {
+			t.Errorf("build %q should be blocked as out-of-tree write, got: %s", opt, res.Output)
+		}
+	}
+	for _, c := range []struct{ sub, opt string }{{"test", "--coverprofile=/tmp/c.out"}, {"test", "--memprofile=/tmp/m.out"}} {
+		res := got.Call(context.Background(), `{"subcommand":"`+c.sub+`","args":"`+c.opt+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "outside the workdir") {
+			t.Errorf("%s %q should be blocked as out-of-tree write, got: %s", c.sub, c.opt, res.Output)
+		}
+	}
+	// in-tree double-dash spellings still pass the write-path check
+	for _, c := range []struct{ sub, opt string }{{"build", "--o bin/app"}, {"test", "--coverprofile=c.out"}} {
+		res := got.Call(context.Background(), `{"subcommand":"`+c.sub+`","args":"`+c.opt+`"}`)
+		if res.IsError && strings.Contains(res.Output, "outside the workdir") {
+			t.Errorf("%s %q in-tree value should not be blocked, got: %s", c.sub, c.opt, res.Output)
+		}
+	}
+}
+
+// 值内部的 .. 逃逸：相对分支只查 ../ 前缀会漏 sub/../../X；绝对分支的词法前缀测试
+// 会漏 <workdir>/../c.out。Clean+Rel 统一两条分支后均须拒绝。
+func TestGo_DeniesInteriorDotDot(t *testing.T) {
+	dir := t.TempDir()
+	got := GoTool(dir, 0, 0)
+	for _, opt := range []string{"-o sub/../../evil", "-o sub/../..", "--coverprofile=sub/../../c.out"} {
+		res := got.Call(context.Background(), `{"subcommand":"build","args":"`+opt+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "outside the workdir") {
+			t.Errorf("build %q should be blocked, got: %s", opt, res.Output)
+		}
+	}
+	abs := filepath.Join(dir, "..", "c2.out")
+	res := got.Call(context.Background(), `{"subcommand":"test","args":"-coverprofile=`+abs+`"}`)
+	if !res.IsError || !strings.Contains(res.Output, "outside the workdir") {
+		t.Errorf("absolute interior-dotdot %q should be blocked, got: %s", abs, res.Output)
+	}
+	// plain in-tree values must keep passing: relative sub/x.out and absolute inside workdir
+	if err := resolveWriteFlagValue(dir, "sub/x.out"); err != nil {
+		t.Errorf("relative sub/x.out should pass: %v", err)
+	}
+	if err := resolveWriteFlagValue(dir, filepath.Join(dir, "x")); err != nil {
+		t.Errorf("absolute inside workdir should pass: %v", err)
+	}
+}
+
+// -outputdir 越界拒：profile 实际落该目录，与 -o 同源（旧注释称被 -o 前缀规则覆盖不成立）。
+func TestGo_DeniesOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	got := GoTool(dir, 0, 0)
+	res := got.Call(context.Background(), `{"subcommand":"test","args":"-outputdir /tmp -coverprofile x.out ."}`)
+	if !res.IsError || !strings.Contains(res.Output, "outside the workdir") {
+		t.Errorf("test -outputdir /tmp should be blocked, got: %s", res.Output)
+	}
+	res = got.Call(context.Background(), `{"subcommand":"test","args":"-outputdir profdir -coverprofile x.out ."}`)
+	if res.IsError && strings.Contains(res.Output, "outside the workdir") {
+		t.Errorf("in-tree -outputdir should not be blocked, got: %s", res.Output)
+	}
+}
+
+// fmt 的 FILE 实参在 workdir 外时拒：fmt 会重写实参文件，越界写风险与 -o 同源。
+func TestGo_FmtRejectsOutOfTreeFileArg(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not available")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("path/portability handling differs on windows")
+	}
+	base := t.TempDir()
+	dir := filepath.Join(base, "workdir")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/fmtconf\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(base, "victim.go")
+	if err := os.WriteFile(victim, []byte("package p\n\nfunc  f( )  {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// absolute outside
+	res := GoTool(dir, 0, 0).Call(context.Background(), `{"subcommand":"fmt","args":"`+victim+`"}`)
+	if !res.IsError || !strings.Contains(res.Output, "outside the workdir") {
+		t.Errorf("fmt with outside absolute FILE arg should be blocked, got: %s", res.Output)
+	}
+	// ../ relative form
+	res = GoTool(dir, 0, 0).Call(context.Background(), `{"subcommand":"fmt","args":"../victim.go"}`)
+	if !res.IsError || !strings.Contains(res.Output, "outside the workdir") {
+		t.Errorf("fmt with ../ FILE arg should be blocked, got: %s", res.Output)
+	}
+	body, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "package p\n\nfunc  f( )  {}\n" {
+		t.Errorf("outside victim.go must stay unformatted, got %q", string(body))
+	}
+	// in-tree FILE positional still formats (the allowed use)
+	inTree := filepath.Join(dir, "in.go")
+	if err := os.WriteFile(inTree, []byte("package p\n\nfunc  g( )  {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res = GoTool(dir, 0, 0).Call(context.Background(), `{"subcommand":"fmt","args":"in.go"}`)
+	if res.IsError && strings.Contains(res.Output, "outside the workdir") {
+		t.Errorf("fmt with in-tree FILE arg should not be blocked, got: %s", res.Output)
+	}
+}
+
+// 预执行拒绝路径必须携带 ExitCodeNotSet：零值 0 会被事件层误读为成功（P3-4）。
+func TestGo_PreExecutionRejectionExitCodeNotSet(t *testing.T) {
+	got := GoTool(t.TempDir(), 0, 0)
+	cases := []string{
+		`{"subcommand":"run","args":"."}`,
+		`{"subcommand":"build","args":"-o /tmp/evil ."}`,
+		`{"subcommand":"build","args":"-w"}`,
+		`{"subcommand":"unknown"}`,
+		`{"subcommand":"build","args":"-o /tmp/ev\"il ."}`,
+		`{"subcommand":"status","extra":"x"}`,
+	}
+	for _, c := range cases {
+		res := got.Call(context.Background(), c)
+		if !res.IsError {
+			t.Errorf("%s: expected IsError", c)
+			continue
+		}
+		if res.ExitCode != miniagent.ExitCodeNotSet {
+			t.Errorf("%s: ExitCode = %d, want ExitCodeNotSet", c, res.ExitCode)
+		}
 	}
 }
 

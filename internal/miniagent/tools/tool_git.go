@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -71,39 +70,36 @@ func GitTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) mi
 func runGit(ctx context.Context, workspaceRoot, args string, maxOutputChars int) miniagent.ToolResult {
 	var a gitArgs
 	if err := decodeStrict(args, &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields subcommand/args, e.g. {\"subcommand\":\"status\",\"args\":\"-m \\\"msg\\\"\"}): %v", err)}
+		return denyResult("argument parsing failed (args must be a JSON object with string fields subcommand/args, e.g. {\"subcommand\":\"status\",\"args\":\"-m \\\"msg\\\"\"}): %v", err)
 	}
 	sub := strings.TrimSpace(a.Subcommand)
 	if sub == "" {
-		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}
+		return denyResult("missing argument: subcommand")
 	}
 	if !allowedGitSubcommands[sub] {
-		return miniagent.ToolResult{
-			IsError: true,
-			Output:  fmt.Sprintf("git %q is not in the allow-list; permitted: %s", sub, sortedNames(allowedGitSubcommands)),
-		}
+		return denyResult("git %q is not in the allow-list; permitted: %s", sub, sortedNames(allowedGitSubcommands))
 	}
 	fields, qerr := splitArgsStrict(a.Args)
 	if qerr != "" {
-		return miniagent.ToolResult{IsError: true, Output: "args " + qerr}
+		return denyResult("args %s", qerr)
 	}
 	if tok, spec, hit := checkDeniedOptions(fields, gitDeniedFor(sub)); hit {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("git %s option %q (%s) %s; blocked", sub, tok, spec.joinNames(), spec.reason)}
+		return denyResult("git %s option %q (%s) %s; blocked", sub, tok, spec.joinNames(), spec.reason)
 	}
 	if err := checkGitPositionalArgs(sub, fields); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: err.Error()}
+		return denyResult("%s", err.Error())
 	}
 	// commit without -m would open the configured editor (blocked non-interactively above → empty-message abort);
 	// rejecting up front gives the LLM an actionable message instead of a confusing editor failure.
 	if sub == "commit" && !hasGitMessageFlag(fields) {
-		return miniagent.ToolResult{IsError: true, Output: `git commit requires -m "message" (or -am) in args`}
+		return denyResult("git commit requires -m \"message\" (or -am) in args")
 	}
 	dir, err := resolveGitRoot(workspaceRoot)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("not a git repository: %v", err)}
+		return denyResult("not a git repository: %v", err)
 	}
 	if err := checkGitAttributes(ctx, dir); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: err.Error()}
+		return denyResult("%s", err.Error())
 	}
 	// cwd 定 workdir（pathspec 与系统提示"相对路径基于 workdir"一致），不再 -C 仓库根——
 	// 曾按 repo 根解析，子目录 workdir 下 add/diff 静默命中根下同名文件或假空 diff。
@@ -166,123 +162,36 @@ func hasGitMessageFlag(fields []string) bool {
 	return false
 }
 
-// checkGitPositionalArgs rejects a repository URL where a refspec is expected. `git push <url> ...` /
-// `git pull <url> ...` would target a remote other than the configured one — the exfiltration channel that
-// remains after .git/config writes were blocked (the option check cannot see positional args).
-// A refspec never contains "://", ":", or a path separator; anything that looks like a path
-// (absolute, relative with / or \, or scp-style host:path) is rejected.
+// checkGitPositionalArgs rejects a repository URL in the repository slot and refspec spellings that
+// smuggle in the semantics of denied options (the option check cannot see positional args):
+//   - `git push <url> ...` / `git pull <url> ...` targets a remote other than the configured one — the
+//     exfiltration channel that remains after .git/config writes were blocked. Only the FIRST non-option
+//     positional is the repository slot; a refspec may legitimately contain ':' (src:dst is the canonical
+//     form), so URL detection stays on that slot alone.
+//   - a leading '+' on a later refspec is documented as equivalent to --force, and a leading ':' (empty
+//     src) as equivalent to --delete (git-push(1)) — both re-enter exactly what push -f/-d deny.
 func checkGitPositionalArgs(subcommand string, fields []string) error {
 	if subcommand != "push" && subcommand != "pull" {
 		return nil
 	}
+	first := true
 	for _, f := range fields {
 		if strings.HasPrefix(f, "-") {
 			continue
 		}
-		if strings.ContainsAny(f, ":/\\") || filepath.IsAbs(f) || strings.Contains(f, "..") {
-			return fmt.Errorf("git %s: %q looks like a repository URL/path, not a refspec; push/pull operate on the configured remote only (default mode)", subcommand, f)
-		}
-		break // first non-option positional is the only URL slot; the rest are refspecs
-	}
-	return nil
-}
-
-// checkGitAttributes rejects git operations whose clean/smudge filters or diff drivers would execute an
-// external program: a workdir-writable .gitattributes declaring `filter=<name>` / `diff=<driver>` /
-// `textconv=<cmd>` attributes turns `git add`/`git diff` into arbitrary-command execution — no .git access
-// needed, so the .git lock does not cover it. Only drivers actually DEFINED (filter.<name>.clean /
-// diff.<name>.command / textconv under [diff "<name>"] in git config) can execute; bare attribute tokens
-// like `diff=java` (hunk-header only) are common and harmless, so an undefined driver passes. Guardrail,
-// not a boundary — incoming attributes via pull are supply-chain exposure by definition and are not
-// pre-checkable.
-func checkGitAttributes(ctx context.Context, dir string) error {
-	data, err := os.ReadFile(filepath.Join(dir, ".gitattributes"))
-	if err != nil {
-		//nolint:nilerr // absent/unreadable attributes file: nothing declared, not an error
-		return nil
-	}
-	var declared []string
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if first {
+			first = false
+			if strings.ContainsAny(f, ":/\\") || filepath.IsAbs(f) || strings.Contains(f, "..") {
+				return fmt.Errorf("git %s: %q looks like a repository URL/path, not a refspec; push/pull operate on the configured remote only (default mode)", subcommand, f)
+			}
 			continue
 		}
-		for tok := range strings.FieldsSeq(line) {
-			name, value, ok := strings.Cut(tok, "=")
-			if !ok {
-				continue
-			}
-			if v := strings.TrimSpace(value); v != "" && (name == "filter" || name == "diff" || name == "textconv") {
-				declared = append(declared, v)
-			}
+		if strings.HasPrefix(f, "+") {
+			return fmt.Errorf("git %s: refspec %q has a leading '+' (equivalent of --force; default mode)", subcommand, f)
 		}
-	}
-	if len(declared) == 0 {
-		return nil
-	}
-	defined, err := definedGitDrivers(ctx, dir)
-	if err != nil {
-		// git config 不可读时保守拒绝：驱动属性在场而无法证伪。
-		return fmt.Errorf(".gitattributes declares external driver(s) %v but git config could not be read to verify them: %w (default mode)", declared, err)
-	}
-	for _, d := range declared {
-		if defined[d] {
-			return fmt.Errorf(".gitattributes declares external driver %q which is defined in git config (filter/diff/textconv execute commands; default mode) — remove the line or use -mode auto", d)
+		if strings.HasPrefix(f, ":") {
+			return fmt.Errorf("git %s: refspec %q has an empty source (leading ':', equivalent of --delete; default mode)", subcommand, f)
 		}
 	}
 	return nil
-}
-
-// definedGitDrivers 解析 `git config -l --null` 输出，返回已定义的 filter.<name>.* 与 diff.<name>.*
-// 驱动名集合。-l 含 system/global/local 三级，覆盖驱动定义的所有来源。
-func definedGitDrivers(ctx context.Context, dir string) (map[string]bool, error) {
-	cfgCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(cfgCtx, "git", "-C", dir, "config", "-l", "--null", "--includes")
-	cmd.Env = scrubEnv(os.Environ())
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return nil, err
-	}
-	defined := map[string]bool{}
-	for entry := range strings.SplitSeq(out.String(), "\x00") {
-		key, _, ok := strings.Cut(entry, "\n")
-		if !ok {
-			key = entry
-		}
-		key = strings.ToLower(key)
-		// filter.<name>.clean/smudge → name；diff.<name>.command/textconv → name（diff.textconv 顶层键无驱动语义，跳过）
-		for _, prefix := range []string{"filter.", "diff."} {
-			if strings.HasPrefix(key, prefix) {
-				rest := key[len(prefix):]
-				if dot := strings.IndexByte(rest, '.'); dot > 0 {
-					defined[rest[:dot]] = true
-				}
-			}
-		}
-	}
-	return defined, nil
-}
-
-func resolveGitRoot(startDir string) (string, error) {
-	dir := startDir
-	if dir == "" {
-		var err error
-		dir, err = os.Getwd()
-		if err != nil {
-			return "", err
-		}
-	}
-	for {
-		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && (fi.IsDir() || fi.Mode().IsRegular()) {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return "", errors.New("not a git repository")
 }

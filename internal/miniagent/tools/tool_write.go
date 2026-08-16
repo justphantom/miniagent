@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
@@ -25,7 +24,7 @@ func WriteFileTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = writeOpTimeout
 	}
-	desc := fmt.Sprintf("Overwrite the entire file (auto-creating parent directories, preserving original file permissions). content limit 10MiB. path is relative to workdir or absolute. Use only for creating new files or full rewrites; for partial changes use edit. Timeout %s.", timeout)
+	desc := fmt.Sprintf("Overwrite the entire file (auto-creating parent directories, preserving original file permissions). content is required and must be non-empty (an empty file is not expressible via write; use edit or bash if ever needed). content limit 10MiB. path is relative to workdir or absolute. Use only for creating new files or full rewrites; for partial changes use edit. Timeout %s.", timeout)
 	return miniagent.Tool{
 		Name:        "write",
 		Description: desc,
@@ -41,11 +40,17 @@ func WriteFileTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 
 func runWriteFile(workspaceRoot, args string) miniagent.ToolResult {
 	var a writeFileArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("failed to parse args: %v (received %q)", err, args)}
+	if err := decodeStrict(args, &a); err != nil {
+		return denyResult("argument parsing failed: %v (received %q)", err, args)
 	}
 	if a.Path == "" {
-		return miniagent.ToolResult{IsError: true, Output: "missing parameter: path"}
+		return denyResult("missing parameter: path")
+	}
+	// Empty content must be an explicit error, not a silent truncate-to-zero: a field-name typo
+	// (contents vs content) or an omitted content used to overwrite an existing file with 0 bytes
+	// and report success — unrecoverable data loss presented as a normal result.
+	if a.Content == "" {
+		return denyResult("missing parameter: content (must be non-empty; an empty file is not expressible via write — use edit or bash if ever needed)")
 	}
 	if len(a.Content) > maxWriteFileBytes {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("content exceeds the maximum limit of %d bytes", maxWriteFileBytes)}
@@ -87,6 +92,14 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		cleanup()
 		return err
 	}
+	// Sync before Chmod/Close: without an fsync the rename can be durable while the data blocks
+	// are not, so a crash in that window leaves the target empty/partial despite the atomicity
+	// promise (mirrors session_rewrite.go's temp+rename crash-durability handling).
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
 		cleanup()
@@ -96,5 +109,16 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		cleanup()
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return err
+	}
+	// fsync the parent directory to commit rename's directory metadata: prevents a crash falling
+	// in the window between rename and directory metadata commit causing rewrite loss. Failure is
+	// best-effort (rename already succeeded).
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
