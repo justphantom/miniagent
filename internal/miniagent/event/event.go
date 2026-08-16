@@ -101,8 +101,9 @@ func EmitModel(w io.Writer, provider, model string) error {
 // the full result still enters the history via trimForHistory for LLM refill. Decoupled from the history truncation limit.
 const maxToolResultEventChars = 2000
 
-// toolResultEvent is the result event after tool execution. exit_code is only set by the shell tool (pointer,
-// omitted when nil) — other tools have no exit-code semantics, avoiding the zero value 0 being misread as "success".
+// toolResultEvent is the result event after tool execution. exit_code is set by exec-backed tools
+// (shell/git/go/npm/golangci-lint; pointer, omitted when nil) — other tools have no exit-code
+// semantics, avoiding the zero value 0 being misread as "success".
 type toolResultEvent struct {
 	Type      string `json:"type"` // tool_result
 	Name      string `json:"name"`
@@ -113,8 +114,13 @@ type toolResultEvent struct {
 	ExitCode  *int   `json:"exit_code,omitempty"`
 }
 
+// execBackedTools 报告哪些工具有真实退出码语义（非零退出 = 命令结论而非工具故障）。
+var execBackedTools = map[string]bool{
+	"shell": true, "git": true, "go": true, "npm": true, "golangci-lint": true,
+}
+
 // EmitToolResult writes a tool_result event. output is truncated to maxToolResultEventChars;
-// only the shell tool emits exit_code (other tools' ExitCode is a semantically-empty zero value).
+// only exec-backed tools emit exit_code (other tools' ExitCode is a semantically-empty zero value).
 func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) error {
 	out := text.Truncate(r.Output, maxToolResultEventChars, "…[tool_result truncated]")
 	ev := toolResultEvent{
@@ -125,7 +131,7 @@ func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) er
 		Truncated: len([]rune(r.Output)) > maxToolResultEventChars,
 		IsError:   r.IsError,
 	}
-	if name == "shell" {
+	if execBackedTools[name] {
 		ec := r.ExitCode
 		ev.ExitCode = &ec
 	}

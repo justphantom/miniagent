@@ -4,6 +4,31 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+### Fixed
+- **`rtkWrap` 无 rtk 主机上丢 prefix**：fallback 返回 `(bin, args)` 丢弃 prefix，`git status` 实际 exec 裸 `git`（usage dump + exit 1）、`go build ./...` → `go ./...` unknown command——rtk 覆盖的 8 git 子命令与 build/test/vet 在无 rtk 环境全坏。fallback 改拼 `prefix[1:]+args` 保住完整 argv。
+- **git 短旗标/长选项缩写绕过 deny 前缀**（HasPrefix 精确匹配的系统性缺口，实测复现）：`push -f`/`-d`（--force/--delete 最高频短形）、`commit --am`（≡`--amend`，实测改写 HEAD）、`push --dele` 全部放行。重构为 `optSpec` 匹配器（flagmatch.go）：短旗标全等+等号粘合、go 单破折长名全等、git 双破折唯一前缀缩写识别；新增 `--mirror`/`--receive-pack`/`--exec`/`--repo`/`--pathspec-from-file` 入禁（push --receive-pack 实测 RCE 通道）。
+- **push/pull 位置参数守卫漏相对路径与 scp 风格**：`../evil.git`（无 `://` 非绝对）实测整库推出、`--mirror` 强同步全部 ref；守卫改拒含 `:`/`/`/`\`/`..` 的首位置参数。
+- **.gitattributes 误杀**：`diff=java` 类 hunk-header 属性（无驱动定义）曾一票禁用全部 git 操作含只读；现仅在驱动名**已定义**于 git config（`git config -l --null` 解析 `filter.<n>.*`/`diff.<n>.*`）时拒绝。
+- **pathspec 按 repo 根解析**（子目录 workdir 静默错行为）：git 曾 `git -C <repoRoot>` 执行，`add x.txt` 在 workdir=repo/sub 时命中根下同名文件或假空 diff，与系统提示「相对路径基于 workdir」矛盾；cwd 改定 workdir。
+- **非零退出码误报故障**：git/go/npm/lint 曾把 `git diff --exit-code`（有差异 exit 1）、`go vet` 告警、测试失败整段标 `IsError=true` 且 ExitCode 恒 0；对齐 shell 语义——语义性非零退出为正常结果（IsError=false + ExitCode + 完整输出），event 层 `exit_code` 同步放开到 git/go/npm/golangci-lint。
+- **超时丢弃已捕获输出**：`runWithTimeout` 超时分支立即返回裸文案，已累积的尾部输出（挂在哪个测试/最后进度）全部丢弃；改 2s 宽限优先收 `runLimitedOutput` 的 kill-path 结果，带 `partial output follows` 前缀返回。
+- **git/go 超时杀不掉孙进程**：npm/lint/shell 均已 `setPGID` 而 git/go 漏调，`killProcessGroup` 的 `kill(-pid)` ESRCH 回退只杀直接子进程，`go test` 超时后测试二进制孤儿化；补齐。
+- **`splitArgs` 未闭合引号静默吞并后续 token**：`--grep=won't --oneline` 曾产出单参数 `--grep=wont --oneline`（撇号丢弃+吞 flag）；`splitArgsStrict` 报 `unterminated ' quote` 指引修复。
+- **未知 JSON 字段静默忽略**：`{"subcommand":"add","command":"x"}` typo 曾落到空 args，`git add` 无 pathspec 即整仓暂存；`decodeStrict`（DisallowUnknownFields）拒并点名未知键。
+- **deny 前缀误杀合法旗标**：`commit -am`/`-m"msg"` 粘合被 `requires -m` 拒（git 最高频写法）；`go test -work`/`-overlay`/`-cache=off` 被 `-w`/`-o`/`-cache` 前缀误拦；`log -F`（fixed-strings 只读）被全局 `-F` 拦；`diff -O<orderfile>`（只读排序）被当"写文件"拦；golangci-lint `-w` 前缀无对应语义。全部按作用域/精确匹配修正，`-m`/`-am`/`-mmsg` 粘合、`-o bin/app` 树内相对路径放行。
+- **`go` 工具 deny 漏项**：`test -exec <prog>`/`vet -vettool <prog>`（任意程序执行，同 -toolexec 级）、`build -C <dir>`（chdir 越过模块根 confinement）、`clean -fuzzcache`/`-i`（全局缓存/安装产物）补拦；`-coverprofile/-memprofile/-trace` 等写路径旗标改值感知（树外拒、树内放行）。
+- **输出上限配置不透传**：`run.shell_timeout` 同源的 `max_shell_output_chars` 只达 shell/grep/glob，git/go/npm/lint 硬编码 100KB；经 `buildTools` 透传 `Limits.MaxShellOutputChars`。
+- **UTF-8 跨块截断**：32KB pipe Read 可停在多字节字符中间，滑窗起点半个 rune 序列化成 U+FFFD；`runLimitedOutput` 加 pending 残片缓冲（`utf8FullRune` 判界）。
+- **`resolveModuleRoot` 死代码**：上溯循环第二轮必 break（dir 已越 startDir 前缀），等价只查 startDir 的 go.mod；删循环留单查。
+- **subcommand 前后空白**：判空用 TrimSpace 但查表用原值，`" status"` 被拒且错误列表看似一致不可自诊；统一 trim 后查表。
+- **描述漂移**：go 描述漏 `fmt`、npm 漏 `version`、git 只点名 18 子命令中 9 个；allow-list 列表改 `sortedNames(map)` 同源生成，描述/错误共用，并补超时时长与非零退出语义说明。
+
+### Changed
+- **git/go/npm/lint 工具签名加 `maxOutputChars int`**（`GitTool`/`GoTool`/`NpmTool`/`LintTool`）：输出上限从硬编码常量改为调用方注入（cmd 层接 `Limits.MaxShellOutputChars`）；库直接调用方传 `0` 走默认。
+- **`decodeStrict` 拒未知字段 + `splitArgsStrict` 拒未闭合引号**：git/go/npm/lint 四工具的 args 解析收紧，字段 typo 与引号笔误从静默错行为改为带指引的显式报错。
+- lint deny `-w` 前缀删除（无对应改写语义，纯误杀）；git 全局 `-O`/`-F` 收敛为 commit 专属 `-F`（diff 的 `-O<orderfile>` 只读）。
+- `runLimitedOutput`/`utf8FullRune` 抽出 `run_limited.go`（共享 exec 基建独立成文件，tool_git.go 回到 300 行内）。
+
 ### Added
 - golangci-lint 工具（subcommand allowlist: run/version/linters; --fix/--write/--enable-all/--new* 被拒），default 模式禁 shell 下可闭环 verify-gate 末步。
 
