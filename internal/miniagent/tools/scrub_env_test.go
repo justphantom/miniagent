@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -86,6 +87,33 @@ func TestHasSecretKeyword(t *testing.T) {
 	for _, c := range cases {
 		if got := hasSecretKeyword(c.name); got != c.want {
 			t.Errorf("hasSecretKeyword(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// restoreGitCredentials：push/pull 需要的远端凭证（https token / ssh agent）从原环境回补到已 scrub 的 env，
+// 其余 secret 命名变量不回流；MINIAGENT_* 永不回流。
+func TestRestoreGitCredentials(t *testing.T) {
+	raw := []string{
+		"GITHUB_TOKEN=ghp_x", "SSH_AUTH_SOCK=/tmp/agent.sock", "MINIAGENT_API_KEY=sk-mini",
+		"AWS_ACCESS_KEY_ID=AKIA", "PATH=/usr/bin",
+	}
+	scrubbed := scrubEnv(raw)
+	got := restoreGitCredentials(scrubbed, raw)
+	have := map[string]string{}
+	for _, kv := range got {
+		k, v, _ := strings.Cut(kv, "=")
+		have[k] = v
+	}
+	if have["GITHUB_TOKEN"] != "ghp_x" {
+		t.Errorf("GITHUB_TOKEN should be restored for push/pull, got env: %v", got)
+	}
+	if have["SSH_AUTH_SOCK"] != "/tmp/agent.sock" {
+		t.Errorf("SSH_AUTH_SOCK should be restored for push/pull, got env: %v", got)
+	}
+	for _, banned := range []string{"MINIAGENT_API_KEY", "AWS_ACCESS_KEY_ID"} {
+		if _, ok := have[banned]; ok {
+			t.Errorf("%s must NOT be restored", banned)
 		}
 	}
 }

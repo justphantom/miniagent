@@ -36,7 +36,10 @@ var rtkGitSubcommands = map[string]bool{"status": true, "diff": true, "log": tru
 // deniedGitArgPrefixes: --output/-O write report files anywhere; --ext-diff runs an arbitrary diff driver.
 // --no-index makes diff compare arbitrary files OUTSIDE the repo (out-of-tree read); -F reads the commit
 // message from an arbitrary file whose content then surfaces via log/show (out-of-tree read channel).
-var deniedGitArgPrefixes = []string{"--output", "-O", "--ext-diff", "--no-index", "-F"}
+// --amend rewrites the last commit (history rewriting, matching the blocked reset/rebase class);
+// --force/--force-with-lease let push overwrite remote refs (remote history rewrite); --delete lets push
+// remove a remote ref. Descriptions promise "history-rewriting blocked" — these close the in-subcommand gap.
+var deniedGitArgPrefixes = []string{"--output", "-O", "--ext-diff", "--no-index", "-F", "--amend", "--force", "--force-with-lease", "--delete"}
 
 func GitTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	if timeout <= 0 {
@@ -44,12 +47,14 @@ func GitTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	}
 	return miniagent.Tool{
 		Name:        "git",
-		Description: "Git operations: read-only (status/diff/log/show/ls-tree etc) plus basic versioning (add/commit/pull/push). History-rewriting commands (reset/rebase/merge/checkout) and config/branch/tag management are blocked.",
+		Description: "Git operations: read-only (status/diff/log/show/ls-tree etc) plus basic versioning (add/commit/pull/push). History-rewriting commands (reset/rebase/merge/checkout, commit --amend, push --force/--delete) and config/branch/tag management are blocked. Scope is the WHOLE repository (upward .git discovery), not just the workdir — pass explicit pathspecs (e.g. add -- <subdir>) to limit range. When the rtk proxy is deployed, output is compact and NOT native git format. Commit requires -m.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "Git subcommand"},
-			"args":       map[string]any{"type": "string", "description": "Additional arguments (whitespace-split; options that write files are rejected)"},
+			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact (e.g. args: "-m \"feat: add thing\""). Options that write files are rejected`},
 		}, "subcommand"),
 		ResultLimit: miniagent.MaxToolResultInHistory,
+		// 错误结论（conflict/failed hunk/summary）在输出尾部，head 截断会丢失；与 shell/grep 同取 head+tail。
+		SplitTruncate: true,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "git", func(rctx context.Context) miniagent.ToolResult {
 				return runGit(rctx, workspaceRoot, args)
@@ -61,7 +66,7 @@ func GitTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
 	var a gitArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed: %v", err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields, e.g. {\"subcommand\":\"status\",\"args\":\"-m \\\"msg\\\"\"}): %v", err)}
 	}
 	if strings.TrimSpace(a.Subcommand) == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}
@@ -83,6 +88,11 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	if err := checkGitPositionalArgs(a.Subcommand, fields); err != nil {
 		return miniagent.ToolResult{IsError: true, Output: err.Error()}
 	}
+	// commit without -m would open the configured editor (blocked non-interactively above → empty-message abort);
+	// rejecting up front gives the LLM an actionable message instead of a confusing editor failure.
+	if a.Subcommand == "commit" && !hasGitMessageFlag(fields) {
+		return miniagent.ToolResult{IsError: true, Output: `git commit requires -m "message" in args`}
+	}
 	dir, err := resolveGitRoot(workspaceRoot)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("not a git repository: %v", err)}
@@ -98,7 +108,20 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 	}
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = dir
-	cmd.Env = scrubEnv(os.Environ())
+	cmd.Env = append(scrubEnv(os.Environ()),
+		// Non-interactive hardening: a repo with core.editor set (or EDITOR inherited) makes commit/tag
+		// open an editor that blocks until the 120s timeout with no useful output. GIT_EDITOR=true makes
+		// git accept the message as-is; GIT_TERMINAL_PROMPT=0 turns credential prompts into an immediate
+		// error instead of a TTY hang; empty stdin makes a hook/prompt waiting on input see EOF.
+		"GIT_EDITOR=true", "GIT_PAGER=cat", "PAGER=cat", "GIT_TERMINAL_PROMPT=0",
+	)
+	if a.Subcommand == "push" || a.Subcommand == "pull" {
+		// push/pull need remote auth (GITHUB_TOKEN/SSH_AUTH_SOCK were scrubbed as secret-named);
+		// their output never echoes env, so restoring just these keeps the allow-listed workflow
+		// functional — every other subcommand (incl. commit, which runs hooks) stays fully scrubbed.
+		cmd.Env = restoreGitCredentials(cmd.Env, os.Environ())
+	}
+	cmd.Stdin = nil
 	body, err := runLimitedOutput(ctx, cmd)
 	if err != nil {
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("git %s failed: %v\n%s", a.Subcommand, err, body)}
@@ -107,6 +130,17 @@ func runGit(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 		body = "(no output)\n"
 	}
 	return miniagent.ToolResult{Output: body}
+}
+
+// hasGitMessageFlag reports whether args carry a commit message flag (-m or -F's short form is
+// deny-listed, so only -m/--message= apply). Bare `git commit` would open an editor.
+func hasGitMessageFlag(fields []string) bool {
+	for _, f := range fields {
+		if f == "-m" || f == "--message" || strings.HasPrefix(f, "--message=") {
+			return true
+		}
+	}
+	return false
 }
 
 // checkGitPositionalArgs rejects a repository URL where a refspec is expected. `git push <url> ...` /

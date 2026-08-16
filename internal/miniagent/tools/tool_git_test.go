@@ -145,3 +145,65 @@ func TestGit_MissingSubcommand(t *testing.T) {
 		t.Errorf("expected missing subcommand error, got: %s", res.Output)
 	}
 }
+
+// 防误改历史：allow-list 内子命令携带改写参数（amend/force/delete）必须被拒，与 description 的承诺一致。
+func TestGit_DeniesHistoryRewriteOptions(t *testing.T) {
+	dir := t.TempDir()
+	if err := exec.CommandContext(context.Background(), "git", "init", dir).Run(); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	git := GitTool(dir, 0)
+	cases := []struct{ sub, args string }{
+		{"commit", "--amend"},
+		{"commit", "--amend -m x"},
+		{"push", "--force"},
+		{"push", "--force-with-lease"},
+		{"push", "--delete origin main"},
+	}
+	for _, c := range cases {
+		res := git.Call(context.Background(), `{"subcommand":"`+c.sub+`","args":"`+c.args+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "blocked") {
+			t.Errorf("git %s %q should be blocked, got: %s", c.sub, c.args, res.Output)
+		}
+	}
+}
+
+// commit 缺 -m 会在无终端环境下走 editor 分支；前置拒绝给出可行动报文。
+func TestGit_CommitRequiresMessage(t *testing.T) {
+	dir := t.TempDir()
+	if err := exec.CommandContext(context.Background(), "git", "init", dir).Run(); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	_ = exec.CommandContext(context.Background(), "git", "-C", dir, "config", "user.email", "t@t").Run()
+	_ = exec.CommandContext(context.Background(), "git", "-C", dir, "config", "user.name", "t").Run()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := GitTool(dir, 0)
+	if res := git.Call(context.Background(), `{"subcommand":"add","args":"f.txt"}`); res.IsError {
+		t.Fatalf("git add failed: %s", res.Output)
+	}
+	for _, args := range []string{"", "--allow-empty"} {
+		res := git.Call(context.Background(), `{"subcommand":"commit","args":"`+args+`"}`)
+		if !res.IsError || !strings.Contains(res.Output, "requires -m") {
+			t.Errorf("commit args %q should demand -m, got: %s", args, res.Output)
+		}
+	}
+	// 带引号的多词 -m 经 quote-aware split 后保持完整（args 契约）。
+	// rtk 部署时输出紧凑（"ok <hash>"），按 log 断言消息内容；原生输出按 commit 行断言。
+	res := git.Call(context.Background(), `{"subcommand":"commit","args":"-m \"feat: a thing\""}`)
+	if res.IsError {
+		t.Fatalf("quoted -m commit failed: %s", res.Output)
+	}
+	if log := git.Call(context.Background(), `{"subcommand":"log"}`); !log.IsError &&
+		!strings.Contains(log.Output, "feat: a thing") {
+		t.Errorf("quoted -m should survive into the commit, log: %s", log.Output)
+	}
+}
+
+// SplitTruncate：git 结果超限时保 head+tail（错误结论在尾部），纯 head 截断会丢失。
+func TestGit_SplitTruncateSet(t *testing.T) {
+	if !GitTool(t.TempDir(), 0).SplitTruncate {
+		t.Fatal("git tool must set SplitTruncate (tail carries conflict/error conclusions)")
+	}
+}
