@@ -41,10 +41,10 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		grep = confineWrap(grep, workdir, true, evalSymlinks)
 		glob = confineWrap(glob, workdir, true, evalSymlinks)
 	}
-	git := tools.GitTool(workdir, shellTimeout)
-	goT := tools.GoTool(workdir, shellTimeout)
-	npm := tools.NpmTool(workdir, shellTimeout)
-	lint := tools.LintTool(workdir, shellTimeout)
+	git := tools.GitTool(workdir, shellTimeout, limits.MaxShellOutputChars)
+	goT := tools.GoTool(workdir, shellTimeout, limits.MaxShellOutputChars)
+	npm := tools.NpmTool(workdir, shellTimeout, limits.MaxShellOutputChars)
+	lint := tools.LintTool(workdir, shellTimeout, limits.MaxShellOutputChars)
 	rename := tools.RenameTool(workdir, writeTimeout)
 	deleteT := tools.DeleteTool(workdir, writeTimeout)
 	if confine && workdir != "" {

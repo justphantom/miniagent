@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
@@ -23,13 +22,16 @@ var allowedNpmSubcommands = map[string]bool{
 	"ls": true, "outdated": true, "audit": true, "version": true,
 }
 
-func NpmTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
+func NpmTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) miniagent.Tool {
 	if timeout <= 0 {
 		timeout = shellTimeout
 	}
+	if maxOutputChars <= 0 {
+		maxOutputChars = maxShellOutputChars
+	}
 	return miniagent.Tool{
 		Name:        "npm",
-		Description: "Constrained npm for JS dev: install/ci/test/run/ls/outdated/audit. install/ci allow dependency sync (network write accepted). run executes package.json scripts (arbitrary commands by design). When the rtk proxy is deployed, output is compact and NOT native npm format.",
+		Description: "Constrained npm for JS dev: " + sortedNames(allowedNpmSubcommands) + ". install/ci allow dependency sync (network write accepted). run executes package.json scripts (arbitrary commands by design). When the rtk proxy is deployed, output is compact and NOT native npm format. Timeout " + timeout.String() + "; non-zero exit (e.g. failing tests) is a normal result, not a tool failure.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "npm subcommand"},
 			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact. --prefix/-C/--registry are rejected`},
@@ -39,24 +41,28 @@ func NpmTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 		SplitTruncate: true,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "npm", func(rctx context.Context) miniagent.ToolResult {
-				return runNpm(rctx, workspaceRoot, args)
+				return runNpm(rctx, workspaceRoot, args, maxOutputChars)
 			})
 		},
 	}
 }
 
-func runNpm(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
+func runNpm(ctx context.Context, workspaceRoot, args string, maxOutputChars int) miniagent.ToolResult {
 	var a npmArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields, e.g. {\"subcommand\":\"test\"}): %v", err)}
+	if err := decodeStrict(args, &a); err != nil {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields subcommand/args, e.g. {\"subcommand\":\"test\"}): %v", err)}
 	}
-	if strings.TrimSpace(a.Subcommand) == "" {
+	sub := strings.TrimSpace(a.Subcommand)
+	if sub == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}
 	}
-	if !allowedNpmSubcommands[a.Subcommand] {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %q is not allowed in default mode; use one of: install, ci, test, run, ls, outdated, audit, version", a.Subcommand)}
+	if !allowedNpmSubcommands[sub] {
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %q is not allowed in default mode; use one of: %s", sub, sortedNames(allowedNpmSubcommands))}
 	}
-	fields := splitArgs(a.Args)
+	fields, qerr := splitArgsStrict(a.Args)
+	if qerr != "" {
+		return miniagent.ToolResult{IsError: true, Output: "args " + qerr}
+	}
 	// --prefix/-C redirects npm's working root outside the module tree (out-of-subtree writes);
 	// --registry overrides the registry endpoint (exfiltration of the dependency stream to an
 	// attacker-controlled server that can serve malicious tarballs). .npmrc in workdir achieves the
@@ -66,15 +72,15 @@ func runNpm(ctx context.Context, workspaceRoot, args string) miniagent.ToolResul
 			return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %s option %q redirects npm outside the module or to another registry; blocked (default mode)", a.Subcommand, f)}
 		}
 	}
-	cmdArgs := append([]string{a.Subcommand}, fields...)
+	cmdArgs := append([]string{sub}, fields...)
 	bin, argv := rtkWrap("npm", []string{"npm"}, cmdArgs)
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = resolveModuleRoot(workspaceRoot)
 	cmd.Env = scrubEnv(os.Environ())
 	setPGID(cmd)
-	body, err := runLimitedOutput(ctx, cmd)
+	body, err := runLimitedOutput(ctx, cmd, maxOutputChars)
 	if err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("npm %s failed: %v\n%s", a.Subcommand, err, body)}
+		return exitAwareResult("npm", sub, body, err)
 	}
 	if body == "" {
 		body = "(no output)\n"
