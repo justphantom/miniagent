@@ -46,7 +46,7 @@ func httpTimeoutFromConfig(cfg *config.Config) (time.Duration, error) {
 
 // listAllModels resolves the key per provider (provider.Key > $MINIAGENT_API_KEY) and reuses a unified
 // transport/timeout to aggregate the model list.
-func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]config.ModelRef, error) {
+func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]openai.ProviderModel, error) {
 	keyFor := func(p config.ProviderConfig) string {
 		if p.Key != "" {
 			return p.Key
@@ -58,6 +58,34 @@ func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpT
 	}
 	httpClient := newHTTPClient(httpTimeout, newHTTPTransport())
 	return openai.ListAllModels(ctx, providers, keyFor, httpClient, logger)
+}
+
+// FetchModelLimits GETs the provider's models endpoint once and returns the limits reported for
+// modelID (non-standard context_window/max_output_tokens extensions; nil fields when the endpoint
+// omits them or the model is absent from the list). Only kind=openai providers are supported —
+// anthropic forbids models_url at config validation. Best-effort: errors are the caller's to warn
+// and continue on (a down models endpoint must not block the run; the fallback is config-only limits).
+func FetchModelLimits(ctx context.Context, p config.ProviderConfig, modelID, apiKey string, httpTimeout time.Duration, logger *slog.Logger) (config.ModelLimits, error) {
+	if p.ModelsURL == "" || providerKind(p.Kind) != "openai" {
+		return config.ModelLimits{}, nil
+	}
+	if httpTimeout <= 0 {
+		httpTimeout = 120 * time.Second
+	}
+	llm, err := openai.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers)
+	if err != nil {
+		return config.ModelLimits{}, err
+	}
+	models, err := llm.ListModels(ctx)
+	if err != nil {
+		return config.ModelLimits{}, err
+	}
+	for _, m := range models {
+		if m.ID == modelID {
+			return config.ModelLimits{ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens}, nil
+		}
+	}
+	return config.ModelLimits{}, nil
 }
 
 // runListModels implements the -list-models early-exit path: outputs NDJSON model events line by line (provider/model

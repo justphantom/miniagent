@@ -47,7 +47,7 @@ func TestListAllModels_StaticNoGET(t *testing.T) {
 	if err != nil {
 		t.Fatalf("static list: %v", err)
 	}
-	if len(ids) != 2 || ids[0] != (config.ModelRef{Provider: "p", Model: "a"}) {
+	if len(ids) != 2 || ids[0] != (ProviderModel{Provider: "p", Model: "a"}) {
 		t.Errorf("ids = %v", ids)
 	}
 }
@@ -77,7 +77,7 @@ func TestListAllModels_MultiProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := map[config.ModelRef]bool{
+	want := map[ProviderModel]bool{
 		{Provider: "openai", Model: "gpt-4o"}:           true,
 		{Provider: "openai", Model: "gpt-3.5"}:          true,
 		{Provider: "deepseek", Model: "deepseek-chat"}:  true,
@@ -107,7 +107,7 @@ func TestListAllModels_MixedStaticAndDynamic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := map[config.ModelRef]bool{
+	want := map[ProviderModel]bool{
 		{Provider: "static", Model: "static-1"}:       true,
 		{Provider: "static", Model: "static-2"}:       true,
 		{Provider: "dynamic", Model: "dynamic-model"}: true,
@@ -140,7 +140,7 @@ func TestListAllModels_PartialFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from failed provider")
 	}
-	if len(ids) != 1 || ids[0] != (config.ModelRef{Provider: "ok", Model: "model-a"}) {
+	if len(ids) != 1 || ids[0] != (ProviderModel{Provider: "ok", Model: "model-a"}) {
 		t.Errorf("want [{ok model-a}], got %v", ids)
 	}
 	if !strings.Contains(err.Error(), "fail") {
@@ -199,7 +199,7 @@ func TestListAllModels_DeterministicOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []config.ModelRef{{Provider: "p1", Model: "m"}, {Provider: "p2", Model: "m"}, {Provider: "p3", Model: "m"}}
+	want := []ProviderModel{{Provider: "p1", Model: "m"}, {Provider: "p2", Model: "m"}, {Provider: "p3", Model: "m"}}
 	if len(ids) != len(want) {
 		t.Fatalf("want %v, got %v", want, ids)
 	}
@@ -229,7 +229,35 @@ func TestChatClient_ListModels_CustomHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
 	}
-	if len(ids) != 1 || ids[0] != "gpt-4o" {
+	if len(ids) != 1 || ids[0].ID != "gpt-4o" {
 		t.Errorf("ids = %v", ids)
+	}
+}
+
+// ListModels parses the non-standard context_window/max_output_tokens extensions when present.
+func TestListModels_ParsesLimits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"DeepSeek-V4-Flash-amd-openai","object":"model","created":1786887755,"owned_by":"local","upstream":"amd","protocol":"openai","context_window":204800,"max_output_tokens":65536},{"id":"agnes-2.5-flash-openai","context_window":524288,"max_output_tokens":65536},{"id":"plain"}]}`)
+	}))
+	defer srv.Close()
+	c := &ChatClient{APIKey: "sk", ModelsURL: srv.URL + "/v1/models"}
+	ids, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("want 3 models, got %d", len(ids))
+	}
+	if ids[0].ContextWindow == nil || *ids[0].ContextWindow != 204800 {
+		t.Errorf("context_window = %v, want 204800", ids[0].ContextWindow)
+	}
+	if ids[0].MaxOutputTokens == nil || *ids[0].MaxOutputTokens != 65536 {
+		t.Errorf("max_output_tokens = %v, want 65536", ids[0].MaxOutputTokens)
+	}
+	if ids[1].ContextWindow == nil || *ids[1].ContextWindow != 524288 {
+		t.Errorf("model[1] context_window = %v, want 524288", ids[1].ContextWindow)
+	}
+	if ids[2].ContextWindow != nil || ids[2].MaxOutputTokens != nil {
+		t.Errorf("model without limit fields should parse nil limits, got %+v", ids[2])
 	}
 }

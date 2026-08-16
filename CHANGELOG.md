@@ -4,6 +4,8 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+### Added
+- **auto-fill model limits from models_url**：启动时若 config 三层（model>provider>global）均未设 `context_window`/`max_tokens`，GET provider 的 `models_url` 一次，解析非标准 `context_window`/`max_output_tokens` 扩展字段并填充。从不覆盖显式配置；fetch 失败 warn 后继续（不阻塞运行）。`ListModels`/`ListAllModels` 返回类型从 `[]string`/`[]ModelRef` 升级为 `[]ModelInfo`/`[]ProviderModel`（含 `Limits`）；`-list-models` 路径行为不变。
 ### Fixed
 - **shell 挂起**（setsid 孤儿持有管道）：`sleep 30 &` 类后台任务逃逸进程组后持有 stdout fd，`cmd.Wait` 等待 exec copier 的 EOF 直到孤儿退出（实测 500ms 超时 6s+ 才返回）。`waitOutputTimeout` 按 ctx 剩余期限+2s 有界等待，孤儿场景按时放弃（泄漏进程为已知残留，见 platform.go）。
 - **非 UTF-8 输出击穿滑动窗口**：无首字节的字节流（二进制/GBK）使 `utf8FullRune` 恒 false，pending 无界增长 + 每次 Read 全量重拷（4MB 输入实测 552MB 分配）+ 全部输出变 U+FFFD。pending 封顶 4 字节，超限残片按十六进制转义呈现。另修复 cut 循环误用 `chunk[cut-1:]`（该切片恒以 chunk 末尾结束，与 cut 无关）导致的有效 UTF-8 尾部错位。

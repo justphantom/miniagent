@@ -64,6 +64,15 @@ type ModelRef struct {
 	Provider, Model string
 }
 
+// ModelLimits carries the capability limits a models endpoint reports for one model:
+// ContextWindow/MaxOutputTokens are non-standard extensions to the OpenAI /v1/models schema
+// (fields like context_window/max_output_tokens offered by some gateways), absent on official
+// endpoints — hence pointers: nil = endpoint did not report it.
+type ModelLimits struct {
+	ContextWindow   *int
+	MaxOutputTokens *int
+}
+
 // DefaultsConfig's Provider/Model are both required (after provider/model split, the "provider/id" string is no longer parsed).
 type DefaultsConfig struct {
 	Provider     string `json:"provider"`

@@ -18,9 +18,19 @@ import (
 
 const maxModelsBodyBytes = 1 << 20 // 1 MiB; the models list is far smaller than the chat body, cap prevents OOM
 
-// ListModels issues GET ModelsURL and returns the id list. Reuses ChatClient.modelsEndpoint/auth.
-// Retries 429/5xx and network errors automatically up to maxRetries times with the same backoff policy as Do.
-func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
+// ModelInfo is one model entry returned by ListModels: the id plus optional capability limits
+// (context_window/max_output_tokens) reported by the endpoint. The limit fields are non-standard
+// extensions absent on official OpenAI /v1/models; pointers stay nil when the endpoint omits them.
+type ModelInfo struct {
+	ID              string
+	ContextWindow   *int
+	MaxOutputTokens *int
+}
+
+// ListModels issues GET ModelsURL and returns the model list with optional capability limits.
+// Reuses ChatClient.modelsEndpoint/auth. Retries 429/5xx and network errors automatically up to
+// maxRetries times with the same backoff policy as Do.
+func (c *ChatClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	client, u, err := c.modelsEndpoint(30 * time.Second)
 	if err != nil {
 		return nil, err
@@ -30,9 +40,9 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		ids, retryable, retryAfter, err := c.listModelsOnce(ctx, client, u)
+		models, retryable, retryAfter, err := c.listModelsOnce(ctx, client, u)
 		if err == nil {
-			return ids, nil
+			return models, nil
 		}
 		if !retryable || attempt == httpretry.MaxRetries {
 			if attempt > 0 {
@@ -52,10 +62,10 @@ func (c *ChatClient) ListModels(ctx context.Context) ([]string, error) {
 	return nil, errors.New("list models retry loop exited unexpectedly")
 }
 
-// listModelsOnce performs a single GET /models and returns (ids, retryable, retryAfter, error).
+// listModelsOnce performs a single GET /models and returns (models, retryable, retryAfter, error).
 // retryAfter is parsed from the Retry-After header (-1 = absent) so ListModels retry backoff aligns
 // with ChatClient.Do (previously it was always -1, ignoring upstream backpressure).
-func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u *url.URL) ([]string, bool, time.Duration, error) {
+func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u *url.URL) ([]ModelInfo, bool, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, false, 0, fmt.Errorf("build request: %w", err)
@@ -97,34 +107,43 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 	}
 	var v struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID              string `json:"id"`
+			ContextWindow   *int   `json:"context_window,omitempty"`
+			MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return nil, false, 0, fmt.Errorf("parse response: %w", err)
 	}
-	ids := make([]string, 0, len(v.Data))
+	models := make([]ModelInfo, 0, len(v.Data))
 	for _, m := range v.Data {
-		ids = append(ids, m.ID)
+		models = append(models, ModelInfo{ID: m.ID, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens})
 	}
-	return ids, false, 0, nil
+	return models, false, 0, nil
+}
+
+// ProviderModel pairs a provider name with one model entry from that provider's listing.
+type ProviderModel struct {
+	Provider string
+	Model    string
+	Limits   config.ModelLimits
 }
 
 // ListAllModels aggregates the available models across multiple providers and returns them as a
-// slice of config.ModelRef (provider/model kept separate). It requests each provider's ModelsURL
-// concurrently (at most 8 in flight); static models (no ModelsURL) return the config directly
-// without a GET. A single provider failure is logged as a warning but the rest continue; the first
-// error (if any) is returned at the end. keyFor returns the final API key per provider; when
-// httpClient is non-nil its transport/timeout is reused. The caller must ensure providers are
-// already validated (unique names, valid URLs).
-func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFor func(config.ProviderConfig) string, httpClient *http.Client, logger *slog.Logger) ([]config.ModelRef, error) {
+// slice of ProviderModel (provider/model kept separate, plus optional capability limits reported
+// by the endpoint). It requests each provider's ModelsURL concurrently (at most 8 in flight);
+// static models (no ModelsURL) return the config directly without a GET. A single provider failure
+// is logged as a warning but the rest continue; the first error (if any) is returned at the end.
+// keyFor returns the final API key per provider; when httpClient is non-nil its transport/timeout
+// is reused. The caller must ensure providers are already validated (unique names, valid URLs).
+func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFor func(config.ProviderConfig) string, httpClient *http.Client, logger *slog.Logger) ([]ProviderModel, error) {
 	var (
 		firstErr error
 		mu       sync.Mutex
 		wg       sync.WaitGroup
 	)
 	// Collect results keyed by provider name, then concatenate in input order for stable output.
-	results := make(map[string][]config.ModelRef, len(providers))
+	results := make(map[string][]ProviderModel, len(providers))
 
 	const maxConcurrent = 8
 	sem := make(chan struct{}, maxConcurrent)
@@ -135,15 +154,15 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 		go func(p config.ProviderConfig) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			var ids []string
+			var models []ModelInfo
 			var err error
 			if p.ModelsURL == "" {
 				if len(p.Models) == 0 {
 					err = fmt.Errorf("provider %q has no models_url and its static models list is empty", p.Name)
 				} else {
-					ids = make([]string, 0, len(p.Models))
+					models = make([]ModelInfo, 0, len(p.Models))
 					for _, mm := range p.Models {
-						ids = append(ids, mm.Name)
+						models = append(models, ModelInfo{ID: mm.Name})
 					}
 				}
 			} else {
@@ -151,7 +170,7 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 				if e != nil {
 					err = e
 				} else {
-					ids, err = llm.ListModels(ctx)
+					models, err = llm.ListModels(ctx)
 				}
 			}
 			if err != nil {
@@ -165,9 +184,9 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 				mu.Unlock()
 				return
 			}
-			paired := make([]config.ModelRef, 0, len(ids))
-			for _, id := range ids {
-				paired = append(paired, config.ModelRef{Provider: p.Name, Model: id})
+			paired := make([]ProviderModel, 0, len(models))
+			for _, m := range models {
+				paired = append(paired, ProviderModel{Provider: p.Name, Model: m.ID, Limits: config.ModelLimits{ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens}})
 			}
 			mu.Lock()
 			results[p.Name] = paired
@@ -176,7 +195,7 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 	}
 	wg.Wait()
 
-	all := make([]config.ModelRef, 0)
+	all := make([]ProviderModel, 0)
 	for _, p := range providers {
 		all = append(all, results[p.Name]...)
 	}

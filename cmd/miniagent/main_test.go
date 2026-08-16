@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -184,6 +185,39 @@ func TestCLI_InvalidLogLevelExits1(t *testing.T) {
 	}
 }
 
+// e2e: config 未设 context_window/max_tokens 且配了 models_url → 启动时 GET /v1/models 自动填充
+// （模型 ID 命中 limits）；config 已显式设 context_window → 不发 models GET（显式配置优先，绝不覆盖）。
+func TestCLI_AutoFillModelLimits(t *testing.T) {
+	var modelsCalls int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			mu.Lock()
+			modelsCalls++
+			mu.Unlock()
+			fmt.Fprint(w, `{"data":[{"id":"m","context_window":524288,"max_output_tokens":65536}]}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	// auto-fill path: no context_window/max_tokens in config → GET models, run succeeds.
+	code, out := runMainBin(t, "hi", configArgs(t, srv.URL, "-workdir", t.TempDir()), "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("auto-fill code = %d, out = %s", code, out)
+	}
+	mu.Lock()
+	got := modelsCalls
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("models GET = %d, want 1 (auto-fill should fetch once when limits unset)", got)
+	}
+	if !strings.Contains(out, `"type":"result"`) {
+		t.Errorf("missing result event: %s", out)
+	}
+}
+
 // e2e: -save-session creates a new session, persisting the conversation to a jsonl under session.dir with an internally generated id.
 func TestCLI_SingleTurnSessionAppend(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +264,11 @@ func TestCLI_MultiLineStdinSingleTurn(t *testing.T) {
 	var calls int
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			// auto-fill models GET (writeConfigFixture sets models_url): report no limits, run proceeds unset.
+			fmt.Fprint(w, `{"data":[{"id":"m"}]}`)
+			return
+		}
 		calls++
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
@@ -255,6 +294,10 @@ func TestCLI_MultiLineStdinSingleTurn(t *testing.T) {
 // e2e: when run.max_duration expires the non-interactive path returns 1.
 func TestCLI_MaxDurationExits1(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			fmt.Fprint(w, `{"data":[{"id":"m"}]}`)
+			return
+		}
 		time.Sleep(50 * time.Millisecond)
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"late"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))

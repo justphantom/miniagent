@@ -127,6 +127,24 @@ func main() {
 	}
 	warnInsecureURL(resolved.Provider.ChatURL)
 
+	// Best-effort auto-fill: when config has not set ContextWindow/MaxTokens (model>provider>global
+	// all nil), GET the provider's models endpoint once and fill from the non-standard
+	// context_window/max_output_tokens fields. Never overrides an explicit config value. Errors are
+	// warned and swallowed — a down models endpoint must not block the run.
+	if resolved.MaxTokens == nil || resolved.ContextWindow == nil {
+		limits, fetchErr := FetchModelLimits(ctx, resolved.Provider, resolved.ModelID, apiKey, httpTimeoutOf(resolved), logger)
+		if fetchErr != nil {
+			logger.Warn("auto-fill model limits skipped", "model", resolved.ModelID, "error", fetchErr)
+		} else {
+			if resolved.MaxTokens == nil && limits.MaxOutputTokens != nil {
+				resolved.MaxTokens = limits.MaxOutputTokens
+			}
+			if resolved.ContextWindow == nil && limits.ContextWindow != nil {
+				resolved.ContextWindow = limits.ContextWindow
+			}
+		}
+	}
+
 	sessionDir := defaultSessionDir
 	if resolved.Session.Dir != "" {
 		sessionDir = resolved.Session.Dir
