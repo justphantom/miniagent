@@ -33,9 +33,11 @@ func LintTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 		Description: "Constrained golangci-lint for Go static analysis: run/version/linters. run executes enabled linters on the workspace (verify-gate last step). --fix/--write/--enable-all/--new* are blocked (auto-rewrites source or floods).",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "golangci-lint subcommand"},
-			"args":       map[string]any{"type": "string", "description": "Additional arguments (whitespace-split; --fix/--write/--enable-all/--new* rejected)"},
+			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact. --fix/--write/--enable-all/--new* are rejected`},
 		}, "subcommand"),
 		ResultLimit: miniagent.MaxToolResultInHistory,
+		// lint 结果按文件逐条输出，截断时保 head+tail 才能同时看到首个与末个问题文件。
+		SplitTruncate: true,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "golangci-lint", func(rctx context.Context) miniagent.ToolResult {
 				return runLint(rctx, workspaceRoot, args)
@@ -47,7 +49,7 @@ func LintTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 func runLint(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
 	var a lintArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed: %v", err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields, e.g. {\"subcommand\":\"run\",\"args\":\"./...\"}): %v", err)}
 	}
 	if strings.TrimSpace(a.Subcommand) == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}

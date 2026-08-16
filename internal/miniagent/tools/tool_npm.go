@@ -29,12 +29,14 @@ func NpmTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	}
 	return miniagent.Tool{
 		Name:        "npm",
-		Description: "Constrained npm for JS dev: install/ci/test/run/ls/outdated/audit. install/ci allow dependency sync (network write accepted). run executes package.json scripts (arbitrary commands by design).",
+		Description: "Constrained npm for JS dev: install/ci/test/run/ls/outdated/audit. install/ci allow dependency sync (network write accepted). run executes package.json scripts (arbitrary commands by design). When the rtk proxy is deployed, output is compact and NOT native npm format.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "npm subcommand"},
-			"args":       map[string]any{"type": "string", "description": "Additional arguments (whitespace-split)"},
+			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact. --prefix/-C/--registry are rejected`},
 		}, "subcommand"),
 		ResultLimit: miniagent.MaxToolResultInHistory,
+		// install/test 的错误摘要（ELIFECYCLE/exit 1）在输出尾部；与 shell/grep 同取 head+tail。
+		SplitTruncate: true,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "npm", func(rctx context.Context) miniagent.ToolResult {
 				return runNpm(rctx, workspaceRoot, args)
@@ -46,7 +48,7 @@ func NpmTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 func runNpm(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
 	var a npmArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed: %v", err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields, e.g. {\"subcommand\":\"test\"}): %v", err)}
 	}
 	if strings.TrimSpace(a.Subcommand) == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}

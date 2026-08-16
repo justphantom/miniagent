@@ -46,3 +46,10 @@ func TestNpm_AllowedSubcommandRuns(t *testing.T) {
 		t.Fatalf("npm version should succeed, got: %s", res.Output)
 	}
 }
+
+// SplitTruncate：install/test 的错误摘要（ELIFECYCLE/exit 1）在尾部。
+func TestNpm_SplitTruncateSet(t *testing.T) {
+	if !NpmTool(t.TempDir(), 0).SplitTruncate {
+		t.Fatal("npm tool must set SplitTruncate (error summaries live in the tail)")
+	}
+}

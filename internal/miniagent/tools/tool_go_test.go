@@ -32,11 +32,19 @@ func TestGo_MissingSubcommand(t *testing.T) {
 func TestGo_DeniesFileWritingOptions(t *testing.T) {
 	got := GoTool(t.TempDir(), 0)
 	// -o writes the binary outside the module tree; -toolexec runs an external build tool.
-	for _, opt := range []string{"-w", "-write", "-fix", "-modfile=x", "-o=/tmp/evil", "-toolexec=/tmp/tool"} {
+	// -cache/-modcache/-testcache (go clean) wipe global caches outside the workdir.
+	for _, opt := range []string{"-w", "-write", "-fix", "-modfile=x", "-o=/tmp/evil", "-toolexec=/tmp/tool", "-cache", "-modcache", "-testcache"} {
 		res := got.Call(context.Background(), `{"subcommand":"build","args":"`+opt+`"}`)
 		if !res.IsError || !strings.Contains(res.Output, "blocked") {
 			t.Errorf("build %q should be blocked, got: %s", opt, res.Output)
 		}
+	}
+}
+
+// SplitTruncate：go test/build 的 FAIL 明细在输出尾部，head 截断只剩包列表。
+func TestGo_SplitTruncateSet(t *testing.T) {
+	if !GoTool(t.TempDir(), 0).SplitTruncate {
+		t.Fatal("go tool must set SplitTruncate (FAIL details live in the tail)")
 	}
 }
 

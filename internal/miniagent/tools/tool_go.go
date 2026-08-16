@@ -31,12 +31,14 @@ func GoTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 	}
 	return miniagent.Tool{
 		Name:        "go",
-		Description: "Constrained go operations for building and testing (build/test/vet/doc/list/version/clean). run/get/install/mod/env-w are blocked.",
+		Description: "Constrained go operations for building and testing (build/test/vet/doc/list/version/clean; clean may NOT touch -cache/-modcache/-testcache). run/get/install/mod/env-w are blocked. When the rtk proxy is deployed, build/test/vet output is compact and NOT native go format.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "Go subcommand"},
-			"args":       map[string]any{"type": "string", "description": "Additional arguments (whitespace-split)"},
+			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact. Output-writing options are rejected`},
 		}, "subcommand"),
 		ResultLimit: miniagent.MaxToolResultInHistory,
+		// test/build 的 FAIL 明细在输出尾部，head 截断只剩包列表；与 shell/grep 同取 head+tail。
+		SplitTruncate: true,
 		Call: func(ctx context.Context, args string) miniagent.ToolResult {
 			return runWithTimeout(ctx, timeout, "go", func(rctx context.Context) miniagent.ToolResult {
 				return runGo(rctx, workspaceRoot, args)
@@ -48,7 +50,7 @@ func GoTool(workspaceRoot string, timeout time.Duration) miniagent.Tool {
 func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult {
 	var a goArgs
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed: %v", err)}
+		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("argument parsing failed (args must be a JSON object with string fields, e.g. {\"subcommand\":\"test\",\"args\":\"./...\"}): %v", err)}
 	}
 	if strings.TrimSpace(a.Subcommand) == "" {
 		return miniagent.ToolResult{IsError: true, Output: "missing argument: subcommand"}
@@ -88,8 +90,10 @@ func runGo(ctx context.Context, workspaceRoot, args string) miniagent.ToolResult
 
 // 拒绝写文件/写模块树之外/改源码的 go build/test 选项前缀。
 // -o writes the build/test binary to an arbitrary path (outside the workdir subtree);
-// -toolexec runs an arbitrary build-tool program during build/test — same class as -w/-modfile.
-var deniedGoArgPrefixes = []string{"-w", "-write", "-fix", "-modfile", "-o", "-toolexec"}
+// -toolexec runs an arbitrary build-tool program during build/test — same class as -w/-modfile;
+// -cache/-modcache/-testcache (go clean) wipe GLOBAL caches outside the workdir — a misfired
+// clean must not punish the host's build state; -n (print but don't execute) is harmless and kept.
+var deniedGoArgPrefixes = []string{"-w", "-write", "-fix", "-modfile", "-o", "-toolexec", "-cache", "-modcache", "-testcache"}
 
 // rtkGoSubcommands lists the subcommands that rtk go supports (compact output).
 var rtkGoSubcommands = map[string]bool{"build": true, "test": true, "vet": true}

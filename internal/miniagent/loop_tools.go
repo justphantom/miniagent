@@ -72,6 +72,9 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 	// Multiple tool_calls from the same LLM turn are mutually independent; serial execution makes total time = Σ individual
 	// tool durations (shell can take tens of seconds). Execute in parallel, results backfilled by original index, ensuring
 	// history messages correspond one-to-one with assistant.tool_calls (OpenAI requires ordered matching).
+	// maxParallelTools==1 degenerates runToolsParallel into serial execution (semaphore capacity 1):
+	// ordered sequential calls within one turn. Configured for stateful command tools (git add→commit→push
+	// in one turn): parallel execution hits index.lock / commits before adds.
 	parallel := cfg.MaxParallelTools
 	if parallel <= 0 {
 		parallel = maxParallelTools

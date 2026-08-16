@@ -58,3 +58,10 @@ func TestLint_BinaryMissingReturnsError(t *testing.T) {
 		t.Errorf("expected not-found message, got: %s", res.Output)
 	}
 }
+
+// SplitTruncate：lint 结果按文件逐条输出，截断时保 head+tail。
+func TestLint_SplitTruncateSet(t *testing.T) {
+	if !LintTool(t.TempDir(), 0).SplitTruncate {
+		t.Fatal("golangci-lint tool must set SplitTruncate (per-file findings span head to tail)")
+	}
+}

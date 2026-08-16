@@ -207,6 +207,12 @@ func runWithTimeout(ctx context.Context, timeout time.Duration, label string, fn
 	case r := <-done:
 		return r
 	case <-runCtx.Done():
-		return miniagent.ToolResult{IsError: true, Output: label + " timed out or cancelled: " + runCtx.Err().Error()}
+		// Timeout message carries the duration (the LLM cannot infer it from ctx error strings), and distinguishes
+		// the two causes: a parent cancellation surfaces ctx.Err(), a tool's own timeout names the duration — the LLM
+		// can then decide "split the command / narrow the test set" instead of mistaking it for a command failure.
+		if ctx.Err() != nil {
+			return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: label + " cancelled: " + ctx.Err().Error()}
+		}
+		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: fmt.Sprintf("%s timed out after %s — narrow the scope (fewer packages / smaller command) and retry", label, timeout)}
 	}
 }
