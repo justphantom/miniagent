@@ -56,6 +56,36 @@ func TestClient_ListModels_ParsesIDs(t *testing.T) {
 	}
 }
 
+// Non-standard context_window/max_output_tokens extensions (reported by proxy/gateway upstreams) flow
+// through; display_name is dropped; absent fields stay nil (official endpoint shape).
+func TestClient_ListModels_ParsesLimits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"m1","display_name":"One","context_window":200000,"max_output_tokens":64000},
+			{"id":"m2"}
+		]}`))
+	}))
+	defer srv.Close()
+	c, err := NewClient("k", srv.URL, srv.URL+"/v1/models", srv.Client(), nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids[0].ContextWindow == nil || *ids[0].ContextWindow != 200000 {
+		t.Fatalf("m1 ContextWindow = %v, want 200000", ids[0].ContextWindow)
+	}
+	if ids[0].MaxOutputTokens == nil || *ids[0].MaxOutputTokens != 64000 {
+		t.Fatalf("m1 MaxOutputTokens = %v, want 64000", ids[0].MaxOutputTokens)
+	}
+	if ids[1].ContextWindow != nil || ids[1].MaxOutputTokens != nil {
+		t.Fatalf("m2 limits should stay nil, got %+v", ids[1])
+	}
+}
+
 func TestClient_ListModels_RetryOn429(t *testing.T) {
 	var attempts int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -15,11 +15,14 @@ import (
 
 const maxModelsBodyBytes = 1 << 20 // 1 MiB; mirrors openai — the models list is far smaller than the chat body
 
-// ModelInfo is one model entry returned by ListModels. The Anthropic /v1/models endpoint reports only
-// id/display_name/created_at/type — no context_window/max_output_tokens — so unlike openai.ModelInfo
-// this carries no capability limits (display_name is intentionally not projected: the CLI outputs id only).
+// ModelInfo is one model entry returned by ListModels. The official Anthropic /v1/models reports only
+// id/display_name/created_at/type, but proxy/gateway upstreams may add context_window/max_output_tokens
+// (non-standard extensions, same field names as the openai provider); pointers stay nil when absent.
+// display_name is intentionally not projected: the CLI outputs id only.
 type ModelInfo struct {
-	ID string
+	ID              string
+	ContextWindow   *int
+	MaxOutputTokens *int
 }
 
 // ListModels issues GET ModelsURL?limit=1000 and returns the first page of models. Mirrors
@@ -92,7 +95,9 @@ func (c *Client) listModelsOnce(ctx context.Context, client *http.Client, u *url
 	}
 	var v struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID              string `json:"id"`
+			ContextWindow   *int   `json:"context_window,omitempty"`
+			MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -100,7 +105,7 @@ func (c *Client) listModelsOnce(ctx context.Context, client *http.Client, u *url
 	}
 	models := make([]ModelInfo, 0, len(v.Data))
 	for _, m := range v.Data {
-		models = append(models, ModelInfo{ID: m.ID})
+		models = append(models, ModelInfo{ID: m.ID, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens})
 	}
 	if len(models) == 0 {
 		return nil, false, 0, errors.New("model list is empty")

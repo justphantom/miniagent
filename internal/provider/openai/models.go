@@ -169,7 +169,8 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 					}
 				}
 			} else if p.Kind == "anthropic" {
-				// Anthropic /v1/models reports ids only — no context_window/max_output_tokens — so Limits stay nil.
+				// Anthropic official /v1/models reports ids only; proxy upstreams may add the same
+				// context_window/max_output_tokens extensions as openai, so limits flow through when present.
 				llm, e := anthropic.NewClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger, p.Headers, false)
 				if e != nil {
 					err = e
@@ -178,7 +179,7 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 					anthModels, err = llm.ListModels(ctx)
 					models = make([]ModelInfo, 0, len(anthModels))
 					for _, m := range anthModels {
-						models = append(models, ModelInfo{ID: m.ID})
+						models = append(models, ModelInfo{ID: m.ID, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens})
 					}
 				}
 			} else {
