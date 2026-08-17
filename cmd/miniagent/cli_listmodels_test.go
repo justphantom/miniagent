@@ -132,6 +132,42 @@ func TestCLI_ListModels_MultiProvider_ProviderFilter(t *testing.T) {
 	}
 }
 
+// -list-models for kind=anthropic with models_url: the anthropic provider path dispatches to its own
+// ListModels (x-api-key + anthropic-version auth), not the openai one.
+func TestCLI_ListModels_Anthropic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("X-Api-Key") != "sk-test" || r.Header.Get("Anthropic-Version") == "" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"claude-opus-4-8"},{"id":"claude-sonnet-4-5"}]}`)
+	}))
+	defer srv.Close()
+	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
+	body := fmt.Sprintf(`{"providers":[{"name":"a","kind":"anthropic","chat_url":"%s/v1/messages","models_url":"%s/v1/models","max_tokens":64000,"models":[{"name":"m"}]}],"defaults":{"provider":"a","model":"m"}}`, srv.URL, srv.URL)
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runMainBin(t, "", []string{"-list-models", "-config", cfgPath}, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("code = %d, out = %s", code, out)
+	}
+	evs := parseModelLines(t, out)
+	if len(evs) != 2 {
+		t.Fatalf("want 2 model events, got %d: %s", len(evs), out)
+	}
+	got := map[string]bool{}
+	for _, ev := range evs {
+		if ev.Provider != "a" {
+			t.Errorf("provider = %q, want a", ev.Provider)
+		}
+		got[ev.Model] = true
+	}
+	if !got["claude-opus-4-8"] || !got["claude-sonnet-4-5"] {
+		t.Errorf("missing models: %+v", evs)
+	}
+}
+
 // -list-models multi-provider partial failure: the successful provider's id is still printed to stdout, final exit code 1.
 func TestCLI_ListModels_MultiProvider_PartialFailure(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

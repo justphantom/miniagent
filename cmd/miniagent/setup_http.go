@@ -63,7 +63,7 @@ func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpT
 // FetchModelLimits GETs the provider's models endpoint once and returns the limits reported for
 // modelID (non-standard context_window/max_output_tokens extensions; nil fields when the endpoint
 // omits them or the model is absent from the list). Only kind=openai providers are supported —
-// anthropic forbids models_url at config validation. Best-effort: errors are the caller's to warn
+// the Anthropic /v1/models endpoint reports ids only. Best-effort: errors are the caller's to warn
 // and continue on (a down models endpoint must not block the run; the fallback is config-only limits).
 func FetchModelLimits(ctx context.Context, p config.ProviderConfig, modelID, apiKey string, httpTimeout time.Duration, logger *slog.Logger) (config.ModelLimits, error) {
 	if p.ModelsURL == "" || providerKind(p.Kind) != "openai" {
@@ -195,7 +195,7 @@ func buildAnthropicLLM(apiKey string, p config.ProviderConfig, logger *slog.Logg
 	chatClient := newHTTPClient(httpTimeout, transport)
 	streamClient := &http.Client{Transport: transport}
 	cache := p.Cache == nil || *p.Cache
-	chat, err := anthropic.NewClient(apiKey, p.ChatURL, chatClient, logger, p.Headers, cache)
+	chat, err := anthropic.NewClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger, p.Headers, cache)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 		os.Exit(1)
@@ -218,7 +218,7 @@ func buildDoer(apiKey string, p config.ProviderConfig, logger *slog.Logger, http
 	switch providerKind(p.Kind) {
 	case "anthropic":
 		cache := p.Cache == nil || *p.Cache
-		chat, err := anthropic.NewClient(apiKey, p.ChatURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers, cache)
+		chat, err := anthropic.NewClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers, cache)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
 			os.Exit(1)

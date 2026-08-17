@@ -19,7 +19,7 @@ func TestClient_AuthHeadersAndResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`))
 	}))
 	defer srv.Close()
-	c, err := NewClient("k-1", srv.URL, srv.Client(), nil, map[string]string{"X-Tenant-Id": "tn"}, false)
+	c, err := NewClient("k-1", srv.URL, "", srv.Client(), nil, map[string]string{"X-Tenant-Id": "tn"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestClient_RetryOn429(t *testing.T) {
 		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
 	}))
 	defer srv.Close()
-	c, _ := NewClient("k", srv.URL, srv.Client(), nil, nil, false)
+	c, _ := NewClient("k", srv.URL, "", srv.Client(), nil, nil, false)
 	res, err := c.Do(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}})
 	if err != nil {
 		t.Fatalf("after retry: %v", err)
@@ -76,7 +76,7 @@ func TestClient_ThinkingErrorMaps(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"\"thinking.type.enabled\" is not supported"}}`))
 	}))
 	defer srv.Close()
-	c, _ := NewClient("k", srv.URL, srv.Client(), nil, nil, false)
+	c, _ := NewClient("k", srv.URL, "", srv.Client(), nil, nil, false)
 	_, err := c.Do(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}})
 	if !errors.Is(err, miniagent.ErrThinkingUnsupported) {
 		t.Errorf("err = %v, want ErrThinkingUnsupported", err)
@@ -89,7 +89,7 @@ func TestClient_ContextLengthMaps(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"This model's maximum context length is 200000 tokens. However, your messages resulted in 1000000 tokens."}}`))
 	}))
 	defer srv.Close()
-	c, _ := NewClient("k", srv.URL, srv.Client(), nil, nil, false)
+	c, _ := NewClient("k", srv.URL, "", srv.Client(), nil, nil, false)
 	_, err := c.Do(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}})
 	if !errors.Is(err, miniagent.ErrContextLength) {
 		t.Errorf("err = %v, want ErrContextLength", err)
@@ -97,7 +97,7 @@ func TestClient_ContextLengthMaps(t *testing.T) {
 }
 
 func TestNewClient_URLReject(t *testing.T) {
-	if _, err := NewClient("k", "://bad", nil, nil, nil, false); err == nil {
+	if _, err := NewClient("k", "://bad", "", nil, nil, nil, false); err == nil {
 		t.Fatal("want error for invalid URL")
 	}
 }
@@ -112,7 +112,7 @@ func TestClient_CacheTokensFoldedIntoInput(t *testing.T) {
 		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":1,"cache_creation_input_tokens":30,"cache_read_input_tokens":70}}`))
 	}))
 	defer srv.Close()
-	c, _ := NewClient("k", srv.URL, srv.Client(), nil, nil, false)
+	c, _ := NewClient("k", srv.URL, "", srv.Client(), nil, nil, false)
 	res, err := c.Do(context.Background(), miniagent.Request{Model: "m", MaxTokens: 1, Messages: []miniagent.Message{{Role: miniagent.RoleUser, Content: "q"}}})
 	if err != nil {
 		t.Fatal(err)

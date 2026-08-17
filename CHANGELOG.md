@@ -4,6 +4,8 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+### Added
+- **anthropic 协议支持 `models_url` 动态获取模型列表**：`kind=anthropic` 的 provider 现可配 `models_url`（指向 Anthropic `GET /v1/models`），`-list-models` 与 `FetchModelLimits` 动态拉取；不配置时回退静态 `models` 列表。认证沿用 `x-api-key` + `anthropic-version`；响应只解析 `data[].id`，忽略 `display_name`（openai 侧无对应字段）；端点不报 `context_window`/`max_output_tokens`，故 limits 恒为 nil。`anthropic.NewClient` 签名加 `modelsURL` 参数。
 ### Fixed
 - **git 工具进程内串行化**：核心默认并行执行同一步的多个 tool_calls（maxParallelTools=8），同轮 `add`+`commit` 撞 `.git/index.lock`（会话 20260817-082103 实测 `Unable to create .git/index.lock: File exists`，模型随后徒劳尝试经 git rm / delete 工具删锁）。包级 `gitMu` 覆盖 exec 全程，同轮 git 调用按到达顺序串行；拒绝路径不排队、跨进程竞争不涉。
 - **args 未引号壳元字符前置拒绝**（git/go/npm/lint）：模型把 shell 管道/重定向写进 args（`test ./... 2>&1 | head -100` → go 收到 flag `-100`；`run ./... | grep -E …` → `-E` 报错），argv 直传 exec 无 shell，元字符成为字面参数报出无从诊断的 flag 错误。现检原始 args 引号外的 `| & ; > < \`` 并拒绝，文案指明「一次一条命令 / 引号包裹特殊字符 / auto 模式用 shell 工具」；引号内与转义形不受影响（`log --grep 'a|b'` 合法）。

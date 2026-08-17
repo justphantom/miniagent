@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent/config"
+	"github.com/justphantom/miniagent/internal/provider/anthropic"
 	"github.com/justphantom/miniagent/internal/provider/httpretry"
 )
 
@@ -132,7 +133,9 @@ type ProviderModel struct {
 // ListAllModels aggregates the available models across multiple providers and returns them as a
 // slice of ProviderModel (provider/model kept separate, plus optional capability limits reported
 // by the endpoint). It requests each provider's ModelsURL concurrently (at most 8 in flight);
-// static models (no ModelsURL) return the config directly without a GET. A single provider failure
+// static models (no ModelsURL) return the config directly without a GET. kind=anthropic providers
+// dispatch to the Anthropic /v1/models endpoint (same auth headers as chat); that endpoint reports
+// ids only, so Limits stay nil for those entries. A single provider failure
 // is logged as a warning but the rest continue; the first error (if any) is returned at the end.
 // keyFor returns the final API key per provider; when httpClient is non-nil its transport/timeout
 // is reused. The caller must ensure providers are already validated (unique names, valid URLs).
@@ -163,6 +166,19 @@ func ListAllModels(ctx context.Context, providers []config.ProviderConfig, keyFo
 					models = make([]ModelInfo, 0, len(p.Models))
 					for _, mm := range p.Models {
 						models = append(models, ModelInfo{ID: mm.Name})
+					}
+				}
+			} else if p.Kind == "anthropic" {
+				// Anthropic /v1/models reports ids only — no context_window/max_output_tokens — so Limits stay nil.
+				llm, e := anthropic.NewClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger, p.Headers, false)
+				if e != nil {
+					err = e
+				} else {
+					var anthModels []anthropic.ModelInfo
+					anthModels, err = llm.ListModels(ctx)
+					models = make([]ModelInfo, 0, len(anthModels))
+					for _, m := range anthModels {
+						models = append(models, ModelInfo{ID: m.ID})
 					}
 				}
 			} else {

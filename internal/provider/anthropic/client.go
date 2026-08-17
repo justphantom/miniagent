@@ -24,25 +24,38 @@ const maxChatBodyBytes = 4 << 20 // 4 MiB; mirrors openai — exactly at the lim
 // response parsing (parseResponse). The *http.Client carries an overall Timeout as a fallback against a
 // single call hanging; streaming goes through StreamClient.
 type Client struct {
-	APIKey   string
-	ChatURL  string
-	Headers  map[string]string
-	Cache    bool
-	chatURL  *url.URL
-	chatOnce sync.Once
-	chatErr  error
-	HTTP     *http.Client
-	Logger   *slog.Logger
+	APIKey     string
+	ChatURL    string
+	ModelsURL  string
+	Headers    map[string]string
+	Cache      bool
+	chatURL    *url.URL
+	chatOnce   sync.Once
+	chatErr    error
+	modelsURL  *url.URL
+	modelsOnce sync.Once
+	modelsErr  error
+	HTTP       *http.Client
+	Logger     *slog.Logger
 }
 
-// NewClient parses and caches chatURL at construction time. headers is the provider's custom request header
-// map (may be nil); cache toggles prompt-caching breakpoints.
-func NewClient(apiKey, chatURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string, cache bool) (*Client, error) {
+// NewClient parses and caches chatURL/modelsURL at construction time (empty modelsURL = static models
+// list, no endpoint). headers is the provider's custom request header map (may be nil); cache toggles
+// prompt-caching breakpoints.
+func NewClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string, cache bool) (*Client, error) {
 	u, err := config.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{APIKey: apiKey, ChatURL: chatURL, chatURL: u, HTTP: httpClient, Logger: logger, Headers: headers, Cache: cache}, nil
+	c := &Client{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: u, HTTP: httpClient, Logger: logger, Headers: headers, Cache: cache}
+	if modelsURL != "" {
+		mu, err := config.ValidateURL(modelsURL)
+		if err != nil {
+			return nil, err
+		}
+		c.modelsURL = mu
+	}
+	return c, nil
 }
 
 // chatEndpoint returns the cached chatURL (lazy-parse fallback for direct construction; sync.Once for safety).
@@ -61,6 +74,32 @@ func (c *Client) chatEndpoint(defaultTimeout time.Duration) (*http.Client, *url.
 		return nil, nil, c.chatErr
 	}
 	return c.client(defaultTimeout), c.chatURL, nil
+}
+
+// modelsEndpoint mirrors chatEndpoint for ModelsURL. Empty ModelsURL = static models list only (config
+// guarantees the empty case never reaches ListModels via ListAllModels).
+func (c *Client) modelsEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
+	if c.ModelsURL == "" {
+		return nil, nil, errors.New("models url is empty (static models list only)")
+	}
+	c.modelsOnce.Do(func() {
+		if c.modelsURL == nil {
+			u, err := config.ValidateURL(c.ModelsURL)
+			if err != nil {
+				c.modelsErr = err
+				return
+			}
+			c.modelsURL = u
+		}
+	})
+	if c.modelsErr != nil {
+		return nil, nil, c.modelsErr
+	}
+	u := *c.modelsURL
+	q := u.Query()
+	q.Set("limit", "1000")
+	u.RawQuery = q.Encode()
+	return c.client(defaultTimeout), &u, nil
 }
 
 // client returns the non-streaming http.Client (injected one reused; otherwise built per call with timeout).

@@ -168,6 +168,22 @@ func TestLoadConfig_AnthropicModelMaxTokensMustBePositive(t *testing.T) {
 	}
 }
 
+// kind=anthropic: models_url is now supported (upstream /v1/models uses the same x-api-key auth), so a config
+// pairing kind=anthropic with models_url must pass validation and surface ModelsURL.
+func TestLoadConfig_AnthropicModelsURLAllowed(t *testing.T) {
+	body := `{
+  "providers":[{"name":"a","kind":"anthropic","chat_url":"https://a/v1/messages","models_url":"https://a/v1/models","max_tokens":64000,"models":[{"name":"m"}]}],
+  "defaults":{"provider":"a","model":"m"}
+}`
+	cfg, err := LoadConfig(writeTmpConfig(t, body))
+	if err != nil {
+		t.Fatalf("kind=anthropic + models_url should pass validation: %v", err)
+	}
+	if cfg.Providers[0].ModelsURL != "https://a/v1/models" {
+		t.Errorf("ModelsURL = %q, want https://a/v1/models", cfg.Providers[0].ModelsURL)
+	}
+}
+
 // kind=anthropic: thinking.map values are JSON-object STRINGS (resolveThinking unmarshals each). A value whose content
 // is not a JSON object, or is one missing "type", must fail loud at startup rather than silently disable thinking.
 func TestLoadConfig_AnthropicThinkingMapValuesValidated(t *testing.T) {

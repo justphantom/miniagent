@@ -98,8 +98,8 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("provider name %q is duplicated", p.Name)
 		}
 		seen[p.Name] = true
-		// Kind enum + anthropic-specific constraints: the Messages API mandates max_tokens and has no
-		// OpenAI-style /v1/models listing (a static models list is used instead).
+		// Kind enum + anthropic-specific constraint: the Messages API mandates max_tokens. (models_url is
+		// allowed for kind=anthropic: the upstream /v1/models endpoint works with the same auth headers.)
 		kind := p.Kind
 		if kind == "" {
 			kind = "openai"
@@ -107,13 +107,8 @@ func validateConfig(cfg *Config) error {
 		if kind != "openai" && kind != "anthropic" {
 			return fmt.Errorf("provider %q kind %q is invalid (openai|anthropic)", p.Name, kind)
 		}
-		if kind == "anthropic" {
-			if p.MaxTokens == nil || *p.MaxTokens <= 0 {
-				return fmt.Errorf("provider %q kind=anthropic requires max_tokens > 0 (Anthropic Messages API mandates it)", p.Name)
-			}
-			if p.ModelsURL != "" {
-				return fmt.Errorf("provider %q kind=anthropic does not support models_url (leave empty; use a static models list)", p.Name)
-			}
+		if kind == "anthropic" && (p.MaxTokens == nil || *p.MaxTokens <= 0) {
+			return fmt.Errorf("provider %q kind=anthropic requires max_tokens > 0 (Anthropic Messages API mandates it)", p.Name)
 		}
 		if _, err := ValidateURL(p.ChatURL); err != nil {
 			return fmt.Errorf("provider %q chat_url: %w", p.Name, err)
