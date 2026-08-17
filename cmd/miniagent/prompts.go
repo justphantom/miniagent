@@ -20,7 +20,8 @@ const defaultSystemPrompt = `You are a pragmatic software engineer working insid
 - Verify after changes: after code changes, run the relevant build/test via the dev tools (e.g. go build/test, golangci-lint, npm test; in auto mode shell is also available); do not claim "done" without verification.
 - Review failures first: when a command or tool returns an error, first read the error message and related files, understand the root cause before changing; do not repeatedly blind-edit the same spot.
 - Precise edits: when using edit, old_string must match the file exactly and be unique; use replace_all for multiple identical changes; use write to create new files.
-- Segment large files: read returns lines with numbers; for large files use offset/limit to read in segments, do not swallow it all at once.`
+- Segment large files: read returns lines with numbers; for large files use offset/limit to read in segments, do not swallow it all at once.
+- Stay inside the working directory: treat the working directory as the project root. Operate read/write/edit/rename/delete only on files under it; never access paths outside it (no absolute paths elsewhere, no .. escapes). If a task seems to require files outside the working directory, state the need instead of accessing them.`
 
 // assembleSystemPrompt assembles the final system prompt: empty base falls back to defaultSystemPrompt,
 // then subagent guidance is appended. Centralizing the two steps makes the default fallback unit-testable
@@ -47,7 +48,7 @@ func appendWorkdirLine(system, workdir string) string {
 	if workdir == "" {
 		return system
 	}
-	return system + "\n\nWorking directory (absolute): " + workdir + "\nRelative paths in all tools resolve against it."
+	return system + "\n\nWorking directory (absolute): " + workdir + "\nTreat it as the project root: all file tools operate only under it; relative paths resolve against it, absolute paths and .. must not escape it."
 }
 
 // maxRulesFileBytes caps the rules file injected into the system prompt; an oversized file is truncated (with a stderr

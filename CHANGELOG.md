@@ -7,6 +7,9 @@
 ### Added
 - **`web` 工具（网页抓取，opt-in）**：GET URL → 文本入上下文（查文档/API/issue）。config `run.web_fetch: true` 注册（default+auto 均可，默认关）+ `run.web_timeout`（默认 30s）。SSRF 防护：拒私网/环回/链路本地（含云 metadata）/组播/受限广播及 v4-mapped v6 地址，DNS 全 IP 校验，重定向每跳重查；HTML 剥 `<script>/<style>`+标签+实体解码+空行折叠（极简正则级，非浏览器）；拒非 text/* 与 application/json；body 1MiB 封顶（对齐 read），输出 `max_shell_output_chars` 同源限幅+截断标记；仅 GET/HTTP(S)；User-Agent 标识。**非安全边界**：GET 查询参数可携带数据外传、响应内容直入上下文（prompt injection 面），guardrail 定位（攻击面记账已更新）。测试 httptest 全覆盖（12 用例）+ config round-trip。
 
+### Changed
+- **default system prompt 加 workdir 约束**：工作流清单新增 "Stay inside the working directory" 条目（点名 read/write/edit/rename/delete 工具 + 绝对路径/`..` 逃逸形态 + "state the need instead of accessing" 出口）；`appendWorkdirLine` 注入行从 "Relative paths resolve against it" 增强为 "all file tools operate only under it; relative paths resolve against it, absolute paths and .. must not escape it"。CLI `-workdir` 已注入 system prompt（运行时信息，非 config 来源，沿用 `appendWorkdirLine` 既有定位）。软约束，减少模型越界尝试的无效往返；硬边界仍靠 default 模式 `confineWrap`/`resolveConfinedPath` 代码层拒（auto 模式无硬边界，prompt 是唯一软引导）。
+
 ## [4.7.0] - 2026-08-17
 
 > minor：工具面大版本——新增 `ast`/`golangci-lint` 内置工具（default 12 / auto 13）、`git tag` 放行；**breaking**：`shell` 工具收为 auto-only 注册（`GuardShell` 两 config 键随之删除）；default 模式封锁 `.git` 目录并参数级收紧（git/go/npm/lint deny 重构为 `optSpec` 归一化匹配器）；anthropic `models_url` 动态模型列表 + limits auto-fill；数十项工具行为修复（子命令重复剥离、壳元字符拒绝、UTF-8 流处理、glob `**` 等）。既有 openai 主链路行为不变。

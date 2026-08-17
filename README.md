@@ -362,7 +362,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 ## 项目专属配置
 
-system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `defaultSystemPrompt`）加上可选的 workdir 规则文件（`defaults.rules_file`，见下）；不再从 `.miniagent/persona.md`/`rules.md` 无条件自动加载。`.miniagent/` 目录现仅用于 session 存储（见「会话」节）。
+system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `defaultSystemPrompt`，含工作流约束 + 「停留在工作目录内」的越界禁令）加上可选的 workdir 规则文件（`defaults.rules_file`，见下）；不再从 `.miniagent/persona.md`/`rules.md` 无条件自动加载。`.miniagent/` 目录现仅用于 session 存储（见「会话」节）。末尾无条件注入 CLI `-workdir` 的绝对路径行 + stay-inside 约束（软引导，非边界；default 模式真边界在 confineWrap 代码层）。
 
 > **破坏性变更**：项目级 `workdir/.miniagent/persona.md`/`rules.md` 自动加载已移除（继全局 `~/.miniagent/` 层之后的第二次收口，system prompt 来源统一为 config-only）。迁移：原 persona 内容直进 `defaults.system_prompt`（「取代默认」语义与 system_prompt 等价）；原 rules 为「追加」语义，物进 `system_prompt` 文本时需自行保留内置默认的工作流约束（或接受其丢失）。
 

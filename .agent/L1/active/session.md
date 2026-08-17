@@ -7,7 +7,7 @@ updated: 2026-08-18T00:25:00+08:00
 # 当前会话
 
 ## 状态
-`web` 工具已提交推送（`913a6b5`，含审查后 3 项修复：CheckRedirect 端到端 SSRF 测试/O(n) 剥离/注释清理）。.agent 沉淀完成（opt-in-tool-gating pattern + 计数修正 + index 登记）。无进行中任务。
+system prompt workdir 约束已实现待提交：`defaultSystemPrompt` 加 "Stay inside the working directory" 条目（正向指令+点名工具/逃逸形态+给出口），`appendWorkdirLine` 扩展为 stay-inside 约束句（CLI `-workdir` 绝对路径行增强）。测试 +2 断言。verify-gate 全绿（707 passed）。无进行中任务。
 
 ## 备注
 - 下一版本注意：`make build` 的 version 注入须在有 shell/make 的环境执行。

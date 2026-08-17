@@ -26,7 +26,7 @@ func TestShellSingleQuote(t *testing.T) {
 	}
 }
 func TestDefaultSystemPrompt_CoversWorkflow(t *testing.T) {
-	for _, want := range []string{"read", "grep", "go build", "golangci-lint", "edit", "replace_all", "Verify", "test"} {
+	for _, want := range []string{"read", "grep", "go build", "golangci-lint", "edit", "replace_all", "Verify", "test", "Stay inside the working directory", ".. escapes"} {
 		if !strings.Contains(defaultSystemPrompt, want) {
 			t.Errorf("default prompt missing %q", want)
 		}
@@ -132,11 +132,18 @@ func TestAppendProjectRules_RejectsNonBasename(t *testing.T) {
 	}
 }
 
-// appendWorkdirLine: a non-empty workdir is injected as an absolute-path line; empty workdir is a no-op.
+// appendWorkdirLine: a non-empty workdir is injected as an absolute-path line + stay-inside constraint;
+// empty workdir is a no-op.
 func TestAppendWorkdirLine_InjectsAndSkipsEmpty(t *testing.T) {
 	got := appendWorkdirLine("BASE", "/abs/work")
 	if !strings.HasPrefix(got, "BASE") || !strings.Contains(got, "/abs/work") {
 		t.Errorf("workdir should be injected: %q", got)
+	}
+	// The constraint line names the concrete escape forms so the model can self-check.
+	for _, want := range []string{"project root", "relative paths resolve against it", ".. must not escape"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("workdir line missing constraint %q: %q", want, got)
+		}
 	}
 	if got := appendWorkdirLine("BASE", ""); got != "BASE" {
 		t.Errorf("empty workdir should be a no-op, got: %q", got)
