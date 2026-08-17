@@ -20,7 +20,7 @@ import (
 // path argument, so confineWrap does not apply; its SSRF guard lives inside WebTool.
 func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout, webTimeout time.Duration,
 	mode string, fileResultLimit int, limits miniagent.Limits,
-	confineAuto, evalSymlinks, webFetch bool) []miniagent.Tool {
+	confineAuto, evalSymlinks bool) []miniagent.Tool {
 	// confine wraps the file tools when in ModeDefault, OR in ModeAuto when confineAuto is opted in
 	// (auto keeps shell free; this is deterministic-file-primitive defense-in-depth for long sessions).
 	confine := mode == miniagent.ModeDefault || (mode == miniagent.ModeAuto && confineAuto)
@@ -51,21 +51,17 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout, webTi
 	lint := tools.LintTool(workdir, shellTimeout, limits.MaxShellOutputChars)
 	rename := tools.RenameTool(workdir, writeTimeout)
 	deleteT := tools.DeleteTool(workdir, writeTimeout)
+	web := tools.WebTool(webTimeout, 0, limits.MaxShellOutputChars, false)
 	if confine && workdir != "" {
 		rename = confineWrap(rename, workdir, false, evalSymlinks)
 		deleteT = confineWrap(deleteT, workdir, false, evalSymlinks)
 	}
 	builtins := []miniagent.Tool{
-		read, write, edit, grep, glob, astT, git, goT, npm, lint, rename, deleteT,
+		read, write, edit, grep, glob, astT, git, goT, npm, lint, rename, deleteT, web,
 	}
-	// shell is auto-only: default mode does not register it (12 tools); a misfired call fails
-	// dispatch with "unknown tool". mode=="" resolves to default at the config layer, so only
-	// an explicit auto registers shell — mirrors the shellMode resolution that used to live here.
+	// shell is auto-only: default mode does not register it (13 tools incl. web); a misfired call fails
 	if mode == miniagent.ModeAuto {
 		builtins = append(builtins, tools.ShellTool(workdir, shellTimeout, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes))
-	}
-	if webFetch {
-		builtins = append(builtins, tools.WebTool(webTimeout, 0, limits.MaxShellOutputChars, false))
 	}
 	return builtins
 }

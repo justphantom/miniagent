@@ -197,9 +197,9 @@ return finishMaxIterations
 | `shell` | 命令执行 | 默认超时 **120s**，进程组隔离、按 shell_timeout |
 | `git`/`go`/`npm`/`golangci-lint` | 语言生态 | 子命令 allow-list + 参数级 deny（见 §10） |
 | `rename`/`delete` | 文件管理 | 限 workdir 子树 |
-| `web` | 网页抓取 | opt-in（`run.web_fetch`）；SSRF 防护（拒私网/环回/链路本地）、重定向每跳重查、HTML 标签剥离、body/输出双截断 |
+| `web` | 网页抓取 | 默认注册；SSRF 防护（拒私网/环回/链路本地）、重定向每跳重查、HTML 标签剥离、body/输出双截断 |
 
-**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 12 工具（+opt-in `web`）无 shell，误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
+**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 13 工具（含 `web`，无 shell），误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
 
 工具执行经 `handleToolCalls` + `runToolsParallel`（并行度受 `MaxParallelTools` 约束，默认 5）+ `safeCall`（panic 兜底）。
 
