@@ -14,7 +14,7 @@ default 模式（2026-08-16 起 shell 不注册，此前为词法 guardrail 禁�
 
 ## 决策
 
-### 工具集（12 个，禁 shell 后）
+### 工具集（12 个默认 + opt-in web，禁 shell 后）
 | 工具 | 作用 | allow-list 粒度 |
 |---|---|---|
 | read/write/edit | 文件读写改 | — |
@@ -26,6 +26,7 @@ default 模式（2026-08-16 起 shell 不注册，此前为词法 guardrail 禁�
 | ast | Go 符号声明搜索 | — |
 | rename | 移动/改名 | 子树校验 |
 | delete | 删除文件 | 子树校验 + 精确路径 |
+| web | URL 抓取（**opt-in** `run.web_fetch`，SSRF 防护内置） | 目标主机校验 |
 
 ### allow-list 收紧原则
 1. **只放开发必需子命令**，拒绝可写/可执行/可改历史的命令：
