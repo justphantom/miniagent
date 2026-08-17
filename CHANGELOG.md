@@ -4,20 +4,46 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+
+## [4.7.0] - 2026-08-17
+
+> minor：工具面大版本——新增 `ast`/`golangci-lint` 内置工具（default 12 / auto 13）、`git tag` 放行；**breaking**：`shell` 工具收为 auto-only 注册（`GuardShell` 两 config 键随之删除）；default 模式封锁 `.git` 目录并参数级收紧（git/go/npm/lint deny 重构为 `optSpec` 归一化匹配器）；anthropic `models_url` 动态模型列表 + limits auto-fill；数十项工具行为修复（子命令重复剥离、壳元字符拒绝、UTF-8 流处理、glob `**` 等）。既有 openai 主链路行为不变。
+
+### Added
+- **`ast` 工具（Go 符号声明搜索）**：经 go/parser 递归搜索 Go 源文件的符号声明——函数/方法/类型/接口/结构体/常量/变量，输出 `path:lineno:kind Name`（方法作 `method (R) Name`），parser 级免疫注释/字符串误报；找定义不找引用（引用搜索归 grep）。参数 `pattern`（Go 正则，匹配符号名）+ `kind` 过滤 + `path` 搜索根 + `glob` 文件名过滤；命中 500 封顶，跳过 `.git`/vendor/testdata/非 `.go`；default 模式经 confineWrap 只读限 workdir 子树。README/ARCHITECTURE 工具清单同步（计数 default 12 / auto 13）。
+- **golangci-lint 工具**（subcommand allowlist: run/version/linters; --fix/--write/--enable-all/--new* 被拒），default 模式禁 shell 下可闭环 verify-gate 末步。
+- **git tag 子命令放行（创建/列举）**：`git tag` 入 allow-list，默认模式可打 annotated tag（发版流程 `git tag -a vX.Y.Z -m` 此前需用户在 default 外手动执行）。参数级拒绝：`tag -d/-f/--delete/--force`（删/移本地 tag ref）与 `tag -F/--file`（任意文件读入 message，经 show/cat-file 回显外泄）。exec 族（`-s/-u/-v/-e/--trailer`，gpg/编辑器调用）维持不拒——与 `commit -S/--gpg-sign` 同类先例，非新攻击面。远端 tag 面不变（`push --tags`/refspec push 此前已可用，强推/删除仍被 `+`/`:` refspec 规则拦）。已知保守过拒：`-m<msg>` 粘合形含 d/f/F 字母被簇分支拒（引号形 `-m "msg"` 不受影响）。
+- **anthropic `models_url` 动态拉取模型列表 + limits 字段生效**：`kind=anthropic` 的 provider 现可配 `models_url`（指向 Anthropic `GET /v1/models`），`-list-models` 与 `FetchModelLimits` 动态拉取；不配置时回退静态 `models` 列表。认证沿用 `x-api-key` + `anthropic-version`；响应解析 `data[].id` 及非标准扩展字段 `context_window`/`max_output_tokens`（代理/网关上游可返回，与 openai 同名）；`display_name` 不透传（CLI 输出只用 id）。limits 参与主运行 auto-fill：填充 `MaxTokens`（传参）与 `ContextWindow`（压缩时机）；官方端点不报这两个字段时保持 nil。`anthropic.NewClient` 签名加 `modelsURL` 参数。
+- **auto-fill model limits from models_url**：启动时若 config 三层（model>provider>global）均未设 `context_window`/`max_tokens`，GET provider 的 `models_url` 一次，解析非标准 `context_window`/`max_output_tokens` 扩展字段并填充。从不覆盖显式配置；fetch 失败 warn 后继续（不阻塞运行）。`ListModels`/`ListAllModels` 返回类型从 `[]string`/`[]ModelRef` 升级为 `[]ModelInfo`/`[]ProviderModel`（含 `Limits`）；`-list-models` 路径行为不变。
+
 ### Changed
 - **provider 包与 CLI 配置层解耦（库化前置 P1/P2，详见 L2 library-defer-provider-config-decouple）**：`ValidateURL` 从 `config` 挪至 `internal/text`（纯 URL 校验，语义不属于 config）；`openai.ListAllModels` 签名改吃新中间结构 `ModelSource`（`config.ProviderConfig` 在 cmd 层映射），`openai`/`anthropic` 包现在零 `config` import。`FetchModelLimits`/`-list-models` 行为不变。
-### Added
-- **anthropic `models_url` 动态拉取模型列表 + limits 字段生效**：`kind=anthropic` 的 provider 现可配 `models_url`（指向 Anthropic `GET /v1/models`），`-list-models` 与 `FetchModelLimits` 动态拉取；不配置时回退静态 `models` 列表。认证沿用 `x-api-key` + `anthropic-version`；响应解析 `data[].id` 及非标准扩展字段 `context_window`/`max_output_tokens`（代理/网关上游可返回，与 openai 同名）；`display_name` 不透传（CLI 输出只用 id）。limits 参与主运行 auto-fill：填充 `MaxTokens`（传参）与 `ContextWindow`（压缩时机）；官方端点不报这两个字段时保持 nil。`anthropic.NewClient` 签名加 `modelsURL` 参数。
+- `go` 工具白名单加入 `fmt`：default 模式禁 shell 下可执行 gofmt 等价格式化，补齐 verify-gate 首步。
+- **default 模式封锁 `.git` 目录**：read/write/edit/grep/glob（`checkConfine`）与 rename/delete（`resolveConfinedPath`）拒绝指向 `.git` 及其子树的路径（含嵌套 submodule 布局；读也拒，防 config 凭证泄漏）。堵 git hooks 执行链（写 `.git/hooks/*` 后 `git commit`/`git pull` 触发）与 remote 改写外传（改 `.git/config` 后 `git push`）两条绕过 git 工具 allow-list 的通道；`.git` 内操作经 `git` 工具子命令白名单进行。auto 模式不套 confine，不受影响。
+- **default 模式参数级收紧**（.git 封锁后残余通道）：
+  - git deny 前缀加 `--no-index`/`-F`（仓库外任意文件读：diff 比较 / commit message 注入回读）；`git push/pull <url>` 位置参数拒绝（首个非选项位置参数含 `://` 或绝对路径即拒，堵不改 config 的外传路径）。
+  - `.gitattributes` 外部驱动拒绝：每次 git 工具调用前扫 repo 根 `.gitattributes`，`filter=`/`diff=`/`textconv=` 属性即拒（workdir 可写文件声明 clean/smudge/diff 驱动 → `git add/diff` 执行外部命令，绕过 .git 封锁）。
+  - go deny 前缀加 `-o`/`-toolexec`（编译产物写子树外 / 构建期执行外部程序）。
+  - npm 拒 `--prefix`/`-C`/`--registry`（cwd 移出模块树 / 依赖流指向他方 registry）。残余：workdir 内 `.npmrc` 可覆写 registry，接受（guardrail 定位）。
+  - `resolveModuleRoot` 上溯不得越出 workdir：父目录有 go.mod 时不再把 go/npm/lint 的 cwd 定到 workdir 外（模块级写越出子树）。已知保守代价：workdir 为模块子目录（repo/cmd/x）时 npm 报找不到 package.json。
+- **git/go/npm/lint 工具签名加 `maxOutputChars int`**（`GitTool`/`GoTool`/`NpmTool`/`LintTool`）：输出上限从硬编码常量改为调用方注入（cmd 层接 `Limits.MaxShellOutputChars`）；库直接调用方传 `0` 走默认。
+- **`decodeStrict` 拒未知字段 + `splitArgsStrict` 拒未闭合引号**：git/go/npm/lint 四工具的 args 解析收紧，字段 typo 与引号笔误从静默错行为改为带指引的显式报错。
+- lint deny `-w` 前缀删除（无对应改写语义，纯误杀）；git 全局 `-O`/`-F` 收敛为 commit 专属 `-F`（diff 的 `-O<orderfile>` 只读）。
+- **lint 不再经 rtk 代理**：rtk wrapper 吞退出码（见 Fixed），exit_code 契约优先于输出紧凑；git/go/npm 的 rtk 路由不变。
+- **共享 exec 基建抽文件（300 行预算）**：`drainPipe`/`waitOutputTimeout` 抽入 `run_limited.go`（shell 与 git/go/npm/lint 共享同一跨块 UTF-8 缓冲与有界等待，`runLimitedOutput`/`utf8FullRune` 同文件）；`.gitattributes` 防线拆 `tool_gitattr.go`、`runWithTimeout` 拆 `tool_timeout.go`。
+
+### Removed
+- **breaking：shell 工具仅 `-mode auto` 注册**。default 模式不再注册 `shell`（12 工具，误调返回 `unknown tool`），auto 模式不变（13 工具）。注册门替代两级词法过滤，同批删除：
+  - `ShellTool` 的 mode 形参与 sudo/su 等 11 提权器拒绝名单（`sudoSuRe`）——经 cmd 装配后不可达（auto 不触发该检查）。
+  - `GuardShell` 及 opt-in config 键 `run.shell_allowlist` / `run.shell_confine_cd`（v4.5.0 引入）——仅 default shell 生效，shell 不注册后成死代码；已配该键的 config 加载不再生效（字段已删，JSON 中残留键被忽略）。
+  - subagent fork 引导（经 shell fork）改 **auto-only 注入**；default 模式 system prompt 不再含 fork 指引。验证句措辞改工具中立（dev tools，auto 下另有 shell）。
+
 ### Fixed
 - **git 工具进程内串行化**：核心默认并行执行同一步的多个 tool_calls（maxParallelTools=8），同轮 `add`+`commit` 撞 `.git/index.lock`（会话 20260817-082103 实测 `Unable to create .git/index.lock: File exists`，模型随后徒劳尝试经 git rm / delete 工具删锁）。包级 `gitMu` 覆盖 exec 全程，同轮 git 调用按到达顺序串行；拒绝路径不排队、跨进程竞争不涉。
 - **args 未引号壳元字符前置拒绝**（git/go/npm/lint）：模型把 shell 管道/重定向写进 args（`test ./... 2>&1 | head -100` → go 收到 flag `-100`；`run ./... | grep -E …` → `-E` 报错），argv 直传 exec 无 shell，元字符成为字面参数报出无从诊断的 flag 错误。现检原始 args 引号外的 `| & ; > < \`` 并拒绝，文案指明「一次一条命令 / 引号包裹特殊字符 / auto 模式用 shell 工具」；引号内与转义形不受影响（`log --grep 'a|b'` 合法）。
 - **go/npm/lint 子命令重复剥离**：同 git 修法铺到三工具——会话 20260817-082103 中 34 次 go 调用 29 次带 `{"subcommand":"test","args":"test ./..."}` 形制，拼成 `go test test` 报 `package test is not in std` 假失败，模型误诊为 rtk proxy artifact 烧约 25 次调用后带着未跑通的全量验证提交。公共 `stripDupSubcommand`（4 处重复抽 helper）。
 - **git 子命令重复剥离**：模型高频把 subcommand 重复写进 args（`{"subcommand":"add","args":"add f.txt"}`），拼成 `git add add f.txt` 后报 `pathspec 'add' did not match` / `ambiguous argument 'log'`——实测会话连续十余次重试该形制全部失败且无法自愈。现在 args 首个 token 与 subcommand 相同时静默剥离（文件名恰等于子命令名时不误伤）。
 - **glob `**` 与含 `/` 模式**：原实现只按 basename 匹配（`filepath.Match(pattern, d.Name())`），含 `/` 的 pattern 永不命中、`**` 不支持——实测会话连试 6 种 pattern 全 `no matches` 后模型放弃。现在：不含 `/` 的模式保持 basename 语义（历史行为）；含 `/` 的模式按相对路径逐段匹配，`**` 段匹配任意层目录（`**/app.css`、`internal/**`）。README 同步。
-### Added
-- **git tag 子命令放行（创建/列举）**：`git tag` 入 allow-list，默认模式可打 annotated tag（发版流程 `git tag -a vX.Y.Z -m` 此前需用户在 default 外手动执行）。参数级拒绝：`tag -d/-f/--delete/--force`（删/移本地 tag ref）与 `tag -F/--file`（任意文件读入 message，经 show/cat-file 回显外泄）。exec 族（`-s/-u/-v/-e/--trailer`，gpg/编辑器调用）维持不拒——与 `commit -S/--gpg-sign` 同类先例，非新攻击面。远端 tag 面不变（`push --tags`/refspec push 此前已可用，强推/删除仍被 `+`/`:` refspec 规则拦）。已知保守过拒：`-m<msg>` 粘合形含 d/f/F 字母被簇分支拒（引号形 `-m "msg"` 不受影响）。
-- **auto-fill model limits from models_url**：启动时若 config 三层（model>provider>global）均未设 `context_window`/`max_tokens`，GET provider 的 `models_url` 一次，解析非标准 `context_window`/`max_output_tokens` 扩展字段并填充。从不覆盖显式配置；fetch 失败 warn 后继续（不阻塞运行）。`ListModels`/`ListAllModels` 返回类型从 `[]string`/`[]ModelRef` 升级为 `[]ModelInfo`/`[]ProviderModel`（含 `Limits`）；`-list-models` 路径行为不变。
-### Fixed
 - **shell 挂起**（setsid 孤儿持有管道）：`sleep 30 &` 类后台任务逃逸进程组后持有 stdout fd，`cmd.Wait` 等待 exec copier 的 EOF 直到孤儿退出（实测 500ms 超时 6s+ 才返回）。`waitOutputTimeout` 按 ctx 剩余期限+2s 有界等待，孤儿场景按时放弃（泄漏进程为已知残留，见 platform.go）。
 - **非 UTF-8 输出击穿滑动窗口**：无首字节的字节流（二进制/GBK）使 `utf8FullRune` 恒 false，pending 无界增长 + 每次 Read 全量重拷（4MB 输入实测 552MB 分配）+ 全部输出变 U+FFFD。pending 封顶 4 字节，超限残片按十六进制转义呈现。另修复 cut 循环误用 `chunk[cut-1:]`（该切片恒以 chunk 末尾结束，与 cut 无关）导致的有效 UTF-8 尾部错位。
 - **孤立首字节误判完整 rune**：`utf8FullRune` 对尾字节为首字节（0x80+ 且非续字节）返回 false，跨 Read 边界的 rune 不再被拆写。
@@ -47,22 +73,12 @@
 - **`.git` 守卫大小写敏感**：Windows/macOS 文件系统 `.GIT` 即 gitdir，精确比较可绕过。两处 `dotGitWithinRoot` 改 EqualFold（8.3 短名为已知残留）。
 - **edit 锁键未归一化**：`/w/./f` 与 `f` 两拼写各持一把锁，并行编辑丢失更新。锁键经 Clean。
 - **writeFileAtomic 无 fsync**：崩溃窗口内 rename 先于数据块落盘会导致目标空/半文件（与 session_rewrite 同源的崩溃持久性问题）。补 tmp.Sync + 父目录 best-effort Sync。
-- **glob 畸形括号漏检**：`q*a[` 类通配符后缀经单字符探针不报错（Match 惰性解析）。双探针验证。
 - **grep 二进制嗅探窗口实际 4096**：默认 bufio 缓冲限制 Peek(8192)，4096-8191 区间的 NUL 漏检。`NewReaderSize(f, 8192)`。
 - **schema 测试只覆盖 4/11 工具**、**git pathspec 测试死断言**（t.Logf 不失败）：补齐/改 t.Errorf。
-
-### Fixed
 - **glob 畸形括号漏检（复验补充）**：双探针法对任意长度探针都被字面量前缀短路（实测 `q*a[` 对 1..255 长度 x 探针全 nil）。补结构扫描器 `globPatternMalformed`（未闭合 `[`/尾部孤立反斜杠）。
 - **npm `--C` 双横线绕过（复验新发现）**：`-C` 原列 shorts 分支不认双横线形，实测 `--C /tmp` 重定向前缀成功。改列 longs。
 - **shell 纯二进制输出 U+FFFD 墙（复验补充）**：无效字节逐个变 3 字节替换符，字符上限被放大 3 倍且不可读。`escapeNonUTF8` 按十六进制转义无效序列，有效文本原样保留。
 - **read 截断标记分页语义**：offset/limit 已收窄视图时标记改为 "this page shows only part of..."（原 "showing the first N bytes" 对分页读不准确）。
-
-### Changed
-- **lint 不再经 rtk 代理**：rtk wrapper 吞退出码（见上），exit_code 契约优先于输出紧凑；git/go/npm 的 rtk 路由不变。
-- **`drainPipe`/`waitOutputTimeout` 抽入 `run_limited.go`**：shell 与 git/go/npm/lint 共享同一跨块 UTF-8 缓冲与有界等待。
-- **`.gitattributes` 防线拆 `tool_gitattr.go`**、**`runWithTimeout` 拆 `tool_timeout.go`**（300 行预算）。
-
-### Fixed
 - **`rtkWrap` 无 rtk 主机上丢 prefix**：fallback 返回 `(bin, args)` 丢弃 prefix，`git status` 实际 exec 裸 `git`（usage dump + exit 1）、`go build ./...` → `go ./...` unknown command——rtk 覆盖的 8 git 子命令与 build/test/vet 在无 rtk 环境全坏。fallback 改拼 `prefix[1:]+args` 保住完整 argv。
 - **git 短旗标/长选项缩写绕过 deny 前缀**（HasPrefix 精确匹配的系统性缺口，实测复现）：`push -f`/`-d`（--force/--delete 最高频短形）、`commit --am`（≡`--amend`，实测改写 HEAD）、`push --dele` 全部放行。重构为 `optSpec` 匹配器（flagmatch.go）：短旗标全等+等号粘合、go 单破折长名全等、git 双破折唯一前缀缩写识别；新增 `--mirror`/`--receive-pack`/`--exec`/`--repo`/`--pathspec-from-file` 入禁（push --receive-pack 实测 RCE 通道）。
 - **push/pull 位置参数守卫漏相对路径与 scp 风格**：`../evil.git`（无 `://` 非绝对）实测整库推出、`--mirror` 强同步全部 ref；守卫改拒含 `:`/`/`/`\`/`..` 的首位置参数。
@@ -80,33 +96,6 @@
 - **`resolveModuleRoot` 死代码**：上溯循环第二轮必 break（dir 已越 startDir 前缀），等价只查 startDir 的 go.mod；删循环留单查。
 - **subcommand 前后空白**：判空用 TrimSpace 但查表用原值，`" status"` 被拒且错误列表看似一致不可自诊；统一 trim 后查表。
 - **描述漂移**：go 描述漏 `fmt`、npm 漏 `version`、git 只点名 18 子命令中 9 个；allow-list 列表改 `sortedNames(map)` 同源生成，描述/错误共用，并补超时时长与非零退出语义说明。
-
-### Changed
-- **git/go/npm/lint 工具签名加 `maxOutputChars int`**（`GitTool`/`GoTool`/`NpmTool`/`LintTool`）：输出上限从硬编码常量改为调用方注入（cmd 层接 `Limits.MaxShellOutputChars`）；库直接调用方传 `0` 走默认。
-- **`decodeStrict` 拒未知字段 + `splitArgsStrict` 拒未闭合引号**：git/go/npm/lint 四工具的 args 解析收紧，字段 typo 与引号笔误从静默错行为改为带指引的显式报错。
-- lint deny `-w` 前缀删除（无对应改写语义，纯误杀）；git 全局 `-O`/`-F` 收敛为 commit 专属 `-F`（diff 的 `-O<orderfile>` 只读）。
-- `runLimitedOutput`/`utf8FullRune` 抽出 `run_limited.go`（共享 exec 基建独立成文件，tool_git.go 回到 300 行内）。
-
-### Added
-- golangci-lint 工具（subcommand allowlist: run/version/linters; --fix/--write/--enable-all/--new* 被拒），default 模式禁 shell 下可闭环 verify-gate 末步。
-
-### Removed
-- **breaking：shell 工具仅 `-mode auto` 注册**。default 模式不再注册 `shell`（11 工具，误调返回 `unknown tool`），auto 模式不变（12 工具）。注册门替代两级词法过滤，同批删除：
-  - `ShellTool` 的 mode 形参与 sudo/su 等 11 提权器拒绝名单（`sudoSuRe`）——经 cmd 装配后不可达（auto 不触发该检查）。
-  - `GuardShell` 及 opt-in config 键 `run.shell_allowlist` / `run.shell_confine_cd`（v4.5.0 引入）——仅 default shell 生效，shell 不注册后成死代码；已配该键的 config 加载不再生效（字段已删，JSON 中残留键被忽略）。
-  - subagent fork 引导（经 shell fork）改 **auto-only 注入**；default 模式 system prompt 不再含 fork 指引。验证句措辞改工具中立（dev tools，auto 下另有 shell）。
-
-### Changed
-- `go` 工具白名单加入 `fmt`：default 模式禁 shell 下可执行 gofmt 等价格式化，补齐 verify-gate 首步。
-- **default 模式封锁 `.git` 目录**：read/write/edit/grep/glob（`checkConfine`）与 rename/delete（`resolveConfinedPath`）拒绝指向 `.git` 及其子树的路径（含嵌套 submodule 布局；读也拒，防 config 凭证泄漏）。堵 git hooks 执行链（写 `.git/hooks/*` 后 `git commit`/`git pull` 触发）与 remote 改写外传（改 `.git/config` 后 `git push`）两条绕过 git 工具 allow-list 的通道；`.git` 内操作经 `git` 工具子命令白名单进行。auto 模式不套 confine，不受影响。
-- **default 模式参数级收紧**（.git 封锁后残余通道）：
-  - git deny 前缀加 `--no-index`/`-F`（仓库外任意文件读：diff 比较 / commit message 注入回读）；`git push/pull <url>` 位置参数拒绝（首个非选项位置参数含 `://` 或绝对路径即拒，堵不改 config 的外传路径）。
-  - `.gitattributes` 外部驱动拒绝：每次 git 工具调用前扫 repo 根 `.gitattributes`，`filter=`/`diff=`/`textconv=` 属性即拒（workdir 可写文件声明 clean/smudge/diff 驱动 → `git add/diff` 执行外部命令，绕过 .git 封锁）。
-  - go deny 前缀加 `-o`/`-toolexec`（编译产物写子树外 / 构建期执行外部程序）。
-  - npm 拒 `--prefix`/`-C`/`--registry`（cwd 移出模块树 / 依赖流指向他方 registry）。残余：workdir 内 `.npmrc` 可覆写 registry，接受（guardrail 定位）。
-  - `resolveModuleRoot` 上溯不得越出 workdir：父目录有 go.mod 时不再把 go/npm/lint 的 cwd 定到 workdir 外（模块级写越出子树）。已知保守代价：workdir 为模块子目录（repo/cmd/x）时 npm 报找不到 package.json。
-
-### Fixed
 - `go` 工具经 rtk 代理时子命令重复（`rtk go build build ./...` → `package build is not in std`）：`rtkWrap` 的 prefix 含 subcommand 而 `cmdArgs` 也以 subcommand 开头，rtk 路径改传 `fields`（不含 subcommand），与 git 一致。
 - `runLimitedOutput` 移除恒为 `maxShellOutputChars` 的冗余参数（unparam）；`git_splitargs_test.go` 的 `exec.Command` 改 `exec.CommandContext`（noctx）。
 

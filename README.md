@@ -9,7 +9,7 @@
 - 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、**不注册 shell 工具**——误调返回 `unknown tool`）；auto = 无限制（注册全部 12 工具含 shell）。default 不构成安全边界——写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`internal/miniagent/platform_windows.go`）
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：auto 模式 12 个：`read` / `write` / `edit` / `grep` / `glob` / `shell` / `git` / `go` / `npm` / `golangci-lint` / `rename` / `delete`；default 模式 11 个（无 `shell`，外部命令经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令）
+- 工具：auto 模式 13 个：`read` / `write` / `edit` / `grep` / `glob` / `ast` / `shell` / `git` / `go` / `npm` / `golangci-lint` / `rename` / `delete`；default 模式 12 个（无 `shell`，外部命令经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令）
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行；**session 保存期间临时忽略信号**，避免截断 session 文件
 
 ## 架构：极简核心 + 开放钩子
@@ -199,7 +199,7 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 ## 工具清单
 
-工具集与约束取决于 `-mode`：default 模式注册 11 个工具（无 `shell`），写工具（write/edit）限定在 workdir 子树，文件工具（read/write/edit/grep/glob/rename/delete）拒绝 `.git` 目录及内容（防绕过 git 工具白名单：hooks 执行链 / remote 改写），git/go/npm 工具另拒参数级通道（`--no-index`/`-F`/push-pull URL 位置参数/`.gitattributes` 驱动/`-o`/`-toolexec`/`--prefix`/`--registry`，模块根上溯不越 workdir）；auto 模式注册全部 12 个工具（含 `shell`），无任何约束。工具参数为 JSON 对象。
+工具集与约束取决于 `-mode`：default 模式注册 12 个工具（无 `shell`），文件工具（read/write/edit/grep/glob/ast/rename/delete）限定在 workdir 子树、拒绝 `.git` 目录及内容（防绕过 git 工具白名单：hooks 执行链 / remote 改写），git/go/npm 工具另拒参数级通道（`--no-index`/`-F`/push-pull URL 位置参数/`.gitattributes` 驱动/`-o`/`-toolexec`/`--prefix`/`--registry`，模块根上溯不越 workdir）；auto 模式注册全部 13 个工具（含 `shell`），无任何约束。工具参数为 JSON 对象。
 
 > **v4.4.0 破坏性变更**：移除内置工具 `codemap`（目录树概览，与 glob+read 功能重叠）与 `todo`（`todo_create`/`todo_update`/`todo_list`，进程内任务清单，与核心零策略冲突），内置工具 10→6。迁移：`codemap` 改用 `glob`（结构）+ `read`（内容）组合；`todo` 改由模型在正文跟踪任务。详见 [CHANGELOG](./CHANGELOG.md)。
 
@@ -262,6 +262,19 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 | `path` | string | 否 | 根目录，默认 `-workdir` |
 
 约束：命中上限 500 条；操作超时 30s。
+
+### `ast`
+
+递归搜索 Go 源文件的**符号声明**（parser 解析 AST，不受注释/字符串干扰），输出 `path:lineno:kind Name`（方法为 `method (R) Name`）。查定义用此工具，查引用用 `grep`。
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | 匹配符号名的正则（Go regexp 语法，如 `Tool`、`^Run`、`(?i)client`） |
+| `kind` | string | 否 | 声明种类过滤：`func` / `method` / `type` / `interface` / `struct` / `const` / `var`（interface/struct 是 type 的细分） |
+| `path` | string | 否 | 搜索根目录，默认 `-workdir` |
+| `glob` | string | 否 | 文件名 include 过滤（filepath.Match，如 `*_test.go`） |
+
+约束：命中上限 500 条；跳过 `.git`、`vendor`、`testdata`、非 `.go` 文件；操作超时同 `file_op_timeout`（默认 30s）；正则同 `grep` 的复杂度限制（防 ReDoS）。
 
 ### `shell`
 
@@ -422,7 +435,7 @@ system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `de
 ```
 
 **关键字段说明**：
-- `provider.chat_url` / `provider.models_url`：完整 OpenAI 兼容端点
+- `provider.chat_url` / `provider.models_url`：完整端点 URL（OpenAI 兼容或 Anthropic Messages API，按 `kind`）。`kind=anthropic` 的 `models_url` 指向 Anthropic `GET /v1/models`，支持动态拉取模型列表与 `context_window`/`max_output_tokens` 扩展字段
 - `provider.key`：按字面量读取；明文入 config，注意文件权限（建议 `0600`），或改用 `$MINIAGENT_API_KEY`
 - `defaults.provider` / `defaults.model`：主会话 provider 名与 model id，**成对必填**（拆分后不再使用 `provider/id` 拼接串）
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式

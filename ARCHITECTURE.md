@@ -69,7 +69,8 @@ internal/miniagent/session/     会话持久化子包
   lock_*.go           平台锁原语
 
 internal/miniagent/tools/       内置工具实现
-  tool_read/write/edit/grep/glob/shell.go  六个文件与 shell 工具（shell 仅 auto 注册）
+  tool_read/write/edit/grep/glob/ast.go  文件与符号搜索六工具（ast 为 Go 符号声明搜索）
+  tool_shell.go         命令执行（shell 仅 auto 注册）
   tool_git/go/npm/lint.go    语言生态工具（git 版本控制 / go 编译测试 / npm JS 生态 / golangci-lint 静态检查）
   tool_rename/delete.go      文件重命名与删除
   tool_helpers.go     路径解析、schema 构造
@@ -182,7 +183,7 @@ return finishMaxIterations
 
 ## 6. 工具系统
 
-`loop_api.go:Tool` 定义工具契约（name/description/parameters schema + `Call func` 执行函数）；`loop_api.go:ToolResult` 为执行结果（Content/ExitCode/IsError）。六个内置工具实现均在 `internal/miniagent/tools/`：
+`loop_api.go:Tool` 定义工具契约（name/description/parameters schema + `Call func` 执行函数）；`loop_api.go:ToolResult` 为执行结果（Content/ExitCode/IsError）。内置工具实现均在 `internal/miniagent/tools/`：
 
 | 工具 | 行为 | 关键机制 |
 |---|---|---|
@@ -190,10 +191,13 @@ return finishMaxIterations
 | `write` | 写文件 | 覆盖写、按 write_timeout |
 | `edit` | 精确替换 | old→new 唯一匹配、多段事务 |
 | `grep` | 递归正则搜索 | 输出 path:lineno:line，可 glob 过滤 |
-| `glob` | 路径匹配 | filepath.Match 模式 |
+| `glob` | 路径匹配 | filepath.Match 模式；含 `/` 按相对路径逐段匹配，支持 `**` |
+| `ast` | Go 符号声明搜索 | go/parser 解析，输出 path:lineno:kind Name，kind 过滤 |
 | `shell` | 命令执行 | 默认超时 **120s**，进程组隔离、按 shell_timeout |
+| `git`/`go`/`npm`/`golangci-lint` | 语言生态 | 子命令 allow-list + 参数级 deny（见 §10） |
+| `rename`/`delete` | 文件管理 | 限 workdir 子树 |
 
-**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 11 工具无 shell，误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
+**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 12 工具无 shell，误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
 
 工具执行经 `handleToolCalls` + `runToolsParallel`（并行度受 `MaxParallelTools` 约束，默认 5）+ `safeCall`（panic 兜底）。
 

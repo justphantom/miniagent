@@ -28,6 +28,7 @@
       "name": "anthropic",
       "kind": "anthropic",
       "chat_url": "https://api.anthropic.com/v1/messages",
+      "models_url": "https://api.anthropic.com/v1/models",
       "key": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
       "max_tokens": 64000,
       "models": [
