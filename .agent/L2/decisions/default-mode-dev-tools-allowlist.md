@@ -14,7 +14,7 @@ default 模式（2026-08-16 起 shell 不注册，此前为词法 guardrail 禁�
 
 ## 决策
 
-### 工具集（10 个，禁 shell 后）
+### 工具集（12 个，禁 shell 后）
 | 工具 | 作用 | allow-list 粒度 |
 |---|---|---|
 | read/write/edit | 文件读写改 | — |
@@ -22,15 +22,17 @@ default 模式（2026-08-16 起 shell 不注册，此前为词法 guardrail 禁�
 | git | 版本控制 | 子命令白名单 |
 | go | 编译/测试/文档 | 子命令白名单 |
 | npm | JS 生态构建/测试/依赖 | 子命令白名单 |
+| golangci-lint | 静态检查 | 子命令白名单 |
+| ast | Go 符号声明搜索 | — |
 | rename | 移动/改名 | 子树校验 |
 | delete | 删除文件 | 子树校验 + 精确路径 |
 
 ### allow-list 收紧原则
 1. **只放开发必需子命令**，拒绝可写/可执行/可改历史的命令：
-   - git：只读 14 + `add/commit/pull/push/tag`；tag 仅创建/列举（拒 `-d/-f` 删改、`-F` 任意文件读）；拒 `reset/rebase/merge/checkout/switch/restore/stash/config/branch/remote/worktree/clean`
-   - go：`build/test/vet/doc/list/version/clean`；拒 `run`（等同 shell 执行任意代码）、`get/install/mod tidy/download/init/generate/fmt/env -w/bug`
+   - git：只读 15（含 `tag` 列举）+ `add/commit/pull/push/tag`（tag 仅创建/列举：拒 `-d/-f` 删改、`-F` 任意文件读）；拒 `reset/rebase/merge/checkout/switch/restore/stash/config/branch/remote/worktree/clean`
+   - go：`build/test/vet/fmt/doc/list/version/clean`（`fmt` v4.7.0 入列，补 verify-gate 首步）；拒 `run`（等同 shell 执行任意代码）、`get/install/mod tidy/download/init/generate/env -w/bug`
    - npm：`install/ci/test/run/ls/outdated/audit/version`；拒 `publish/adduser/logout/create/init`
-2. **参数级拒绝**：即使 allow-list 内的子命令也拒危险参数前缀——git 拒 `--output`/`-O`/`--ext-diff`，go 拒 `-w`/`-write`/`-fix`/`-modfile`
+2. **参数级拒绝**：即使 allow-list 内的子命令也拒危险参数——v4.7.0 起用 `optSpec` 归一化匹配器（短旗标全等+等号粘合、go 单破折长名全等、git 双破折唯一前缀缩写识别，`flagmatch.go`），取代原 `strings.Fields`+`HasPrefix`。具体拒拦项见 `default-mode-not-security-boundary.md`「参数级收紧」段。
 3. **delete 最严**：仅精确路径，拒非空目录/glob/通配符/workdir 根/symlink（空目录 `os.Remove` 非 `RemoveAll`）
 4. **rename 拒 symlink 源**：防符号链接跟随逃逸
 5. **npm install 前置校验 workdir 内有 package.json**：防在错误目录全局装包
@@ -59,6 +61,7 @@ git/go/npm 工具优先经 rtk（输出紧凑代理），rtk 未部署时回退�
 - `internal/miniagent/tools/tool_git.go`（allow-list + rtk 代理）
 - `internal/miniagent/tools/tool_go.go`（allow-list + rtk 代理）
 - `internal/miniagent/tools/tool_npm.go`（allow-list + rtk 代理）
+- `internal/miniagent/tools/tool_golint.go`（allow-list）
 - `internal/miniagent/tools/tool_rename.go`、`tool_delete.go`（子树校验）
 - `internal/miniagent/tools/tool_helpers.go`（`rtkBin`/`rtkWrap`/`resolveConfinedPath`）
 - commits `dd47d3c`→`30ff117`（逐步演进）

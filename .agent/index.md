@@ -1,34 +1,38 @@
 ---
-updated: 2026-08-15T23:59:00+08:00
+layer: meta
+updated: 2026-08-17
 ---
 
 # .agent 记忆索引
 
-## L0 永久约束
-- [persona.md](L0/persona.md) — 定位与沟通风格
-- [constraints.md](L0/constraints.md) — 架构不变量 + 记忆元规则
-- [policies.md](L0/policies.md) — 流程策略
+L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/session.md`；L2（经验教训）按需查 `L2/README.md`。检索优先精确关键词。
 
-## L1 活跃过程
-- [active/session.md](L1/active/session.md) — 当前会话
+## L2/decisions（架构决策 ADR）
 
-## L2 经验教训
-- [decisions/multi-provider-kind-dispatch.md](L2/decisions/multi-provider-kind-dispatch.md) — 多 provider Kind 分派 + wire 边界有损投影 + anthropic 协议易错点
-- [decisions/core-zero-policy-loophooks-decoupling.md](L2/decisions/core-zero-policy-loophooks-decoupling.md) — 核心零策略 + LoopHooks 外挂 + 子包化解耦
-- [decisions/default-mode-not-security-boundary.md](L2/decisions/default-mode-not-security-boundary.md) — default 模式非安全边界 + 凭证剥离局限 + confirm/sandbox 配置化 + shell allowlist/cd-confine guardrail
-- [decisions/system-prompt-config-only.md](L2/decisions/system-prompt-config-only.md) — system prompt 来源统一 config-only（.miniagent/ 层收口 + NEW-1 回归 + 迁移规则）
-- [patterns/compaction-system.md](L2/patterns/compaction-system.md) — 压缩体系：预算自适应 CW + 7 阶裁剪 + reasoning 头尾截断
-- [patterns/config-tri-state-resolve.md](L2/patterns/config-tri-state-resolve.md) — config 三态裁决 + 隐性 footgun
-- [patterns/memory-freshness-pointer-over-count.md](L2/patterns/memory-freshness-pointer-over-count.md) — 记忆反过期元规则：结构数量引用用指针不硬编码
-- [patterns/producer-contract-change-ripple.md](L2/patterns/producer-contract-change-ripple.md) — 改动涟漪：改/删 X 必 grep 代码+注释+测试+文档四类
-- [patterns/adversarial-workflow-review.md](L2/patterns/adversarial-workflow-review.md) — 对抗式 workflow 评审（finder × verify 两阶段）+ 盲区维度收益
-- [incidents/session-jsonl-persistence.md](L2/incidents/session-jsonl-persistence.md) — session jsonl 持久化可靠性组
-- [incidents/streaming-sse-robustness.md](L2/incidents/streaming-sse-robustness.md) — 流式 SSE 健壮性（中断/index 碰撞/幂等重试）
-- [incidents/thinking-pindown-downgrade-length.md](L2/incidents/thinking-pindown-downgrade-length.md) — thinking 钉死 + 降级链 + length 空回复
-- [incidents/hooks-no-recover-shape-result-contract.md](L2/incidents/hooks-no-recover-shape-result-contract.md) — 钩子无 recover + Run 顶层兜底 + ShapeToolResult 契约
-- [incidents/corrupted-summary-prompt-injection.md](L2/incidents/corrupted-summary-prompt-injection.md) — 损坏摘要注入（P0，v4.3.0 已修：isSummaryGarbage 校验 + prose-only 重试 + lossy 回落）
-- [incidents/compaction-headadj-override-stale-clause.md](L2/incidents/compaction-headadj-override-stale-clause.md) — jointTailBudget override 路径误扣 headAdj（SummarizerPrompt 过时子句，生产者契约改消费者未同步）
-- [incidents/anthropic-provider-copy-asymmetry.md](L2/incidents/anthropic-provider-copy-asymmetry.md) — anthropic 复制 openai 漏的 5 对称项（role=system/max_tokens/529/StreamAllowUnterminated/thinking.map）+ 跨 provider 复制清单
-- [incidents/tools-rewrite-lost-logic.md](L2/incidents/tools-rewrite-lost-logic.md) — tools.go 重写丢三段逻辑（confine/result-limit/runLimitedOutput 吞错）+ 测试文件截断 + 语义重写不该碰的文件碰了
-- [decisions/default-mode-dev-tools-allowlist.md](L2/decisions/default-mode-dev-tools-allowlist.md) — default 模式外部命令工具集（git/go/npm/rename/delete）allow-list + rtk 代理 + 各工具决策依据
-- [patterns/allowlist-deny-arg-prefix.md](L2/patterns/allowlist-deny-arg-prefix.md) — 子命令白名单 + 参数前缀拒绝（default 收紧双…[args omitted]
+- `core-zero-policy-loophooks-decoupling` — 核心零策略 + LoopHooks 外挂 + 子包化；库化缓至 5.0.0
+- `multi-provider-kind-dispatch` — 多 provider Kind 字符串分派 + wire 边界有损投影（anthropic 接入）
+- `system-prompt-config-only` — system prompt 收口 config-only；opt-in `rules_file`
+- `default-mode-not-security-boundary` — default 模式具体防线总账（.git 封锁/参数级收紧/攻击面记账；L0 #13 指向此）
+- `default-mode-dev-tools-allowlist` — git/go/npm/lint 白名单子命令决策 + rtk 代理
+- `library-defer-provider-config-decouple` — 库化暂缓；provider 包与 config 解耦（P1/P2 已做）
+
+## L2/patterns（可复用模式）
+
+- `compaction-system` — 压缩体系：预算自适应 CW + 7 阶裁剪 + reasoning 截断
+- `config-tri-state-resolve` — config 三态裁决 + 隐性 footgun（tool_output_dir/session.dir/pickMPG）
+- `memory-freshness-pointer-over-count` — 记忆反过期规则：数量引用用指针不硬编码
+- `producer-contract-change-ripple` — 改动涟漪：改/删 X 必 grep 代码+注释+测试+文档
+- `adversarial-workflow-review` — 对抗式 workflow 评审（finder × verify）
+- `allowlist-deny-arg-prefix` — 子命令白名单 + 参数拒绝的抽象模式（optSpec 归一匹配）
+- `optional-proxy-rtk-integration` — 可选外部代理（rtk）探测+回退模式
+
+## L2/incidents（事故复盘）
+
+- `session-jsonl-persistence` — jsonl 持久化可靠性（flock/原子写/尾行容忍）
+- `streaming-sse-robustness` — SSE 中断检测/幂等重试/封顶
+- `thinking-pindown-downgrade-length` — thinking 钉死+降级链+length 空回复
+- `hooks-no-recover-shape-result-contract` — 钩子红线与 ShapeToolResult 契约
+- `corrupted-summary-prompt-injection` — 损坏摘要注入（v4.3.0 已修，留设计依据）
+- `compaction-headadj-override-stale-clause` — jointTailBudget override 误扣（消费者未同步）
+- `anthropic-provider-copy-asymmetry` — 跨 provider 复制对称清单（5 bug 复盘）
+- `tools-rewrite-lost-logic` — 文件重写丢逻辑 + 测试截断教训
