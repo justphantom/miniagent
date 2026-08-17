@@ -25,6 +25,7 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `adversarial-workflow-review` — 对抗式 workflow 评审（finder × verify）
 - `allowlist-deny-arg-prefix` — 子命令白名单 + 参数拒绝的抽象模式（optSpec 归一匹配）
 - `optional-proxy-rtk-integration` — 可选外部代理（rtk）探测+回退模式
+- `release-checklist` — 发版检查单：版本定级先例/新工具五处文档同步/动作序列
 
 ## L2/incidents（事故复盘）
 
