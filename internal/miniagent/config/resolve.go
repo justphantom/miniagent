@@ -26,6 +26,7 @@ type ResolvedRun struct {
 	ConfirmDestructive                                     *bool
 	MaxDuration, ShellTimeout, FileOpTimeout, WriteTimeout *time.Duration
 	ToolOutputRetention                                    *time.Duration
+	WebTimeout                                             *time.Duration
 }
 
 type Resolved struct {
@@ -247,6 +248,10 @@ func resolveRun(cfg *Config, o CLIOverrides) (ResolvedRun, error) {
 		return r, err
 	}
 	r.ToolOutputRetention, err = ParseDuration(cfg.Run.ToolOutputRetention, "run.tool_output_retention")
+	if err != nil {
+		return r, err
+	}
+	r.WebTimeout, err = ParseDuration(cfg.Run.WebTimeout, "run.web_timeout")
 	if err != nil {
 		return r, err
 	}

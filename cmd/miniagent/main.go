@@ -177,7 +177,7 @@ func main() {
 	// Main provider chat/stream + summary compChat (when crossing providers); os.Exit on missing key or invalid endpoint.
 	llm, compChat := buildRuntimeClients(resolved, apiKey, logger)
 
-	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits, intoBool(resolved.RunConfig.ConfineAuto, false), intoBool(resolved.RunConfig.ConfineEvalSymlinks, false))
+	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), webTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits, intoBool(resolved.RunConfig.ConfineAuto, false), intoBool(resolved.RunConfig.ConfineEvalSymlinks, false), intoBool(resolved.RunConfig.WebFetch, false))
 	baseCfg := loopCfg(resolved, f, history, tools)
 	warnNoBudgetFuse(resolved, f, logger)
 	// §P1-A: tool output persist directory — explicit config wins; otherwise, when -save-session/-session is active, derive from the session directory

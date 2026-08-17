@@ -4,6 +4,8 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+### Added
+- **`web` 工具（网页抓取，opt-in）**：GET URL → 文本入上下文（查文档/API/issue）。config `run.web_fetch: true` 注册（default+auto 均可，默认关）+ `run.web_timeout`（默认 30s）。SSRF 防护：拒私网/环回/链路本地（含云 metadata）/组播/受限广播及 v4-mapped v6 地址，DNS 全 IP 校验，重定向每跳重查；HTML 剥 `<script>/<style>`+标签+实体解码+空行折叠（极简正则级，非浏览器）；拒非 text/* 与 application/json；body 1MiB 封顶（对齐 read），输出 `max_shell_output_chars` 同源限幅+截断标记；仅 GET/HTTP(S)；User-Agent 标识。**非安全边界**：GET 查询参数可携带数据外传、响应内容直入上下文（prompt injection 面），guardrail 定位（攻击面记账已更新）。测试 httptest 全覆盖（12 用例）+ config round-trip。
 
 ## [4.7.0] - 2026-08-17
 

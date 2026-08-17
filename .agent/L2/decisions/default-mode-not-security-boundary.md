@@ -36,6 +36,7 @@ default 拦「一步直呼危险命令」+「直接文件路径绕过」（.git 
 6. ~~**golangci-lint custom linter**~~ 已堵：`.golangci.yml` 属 workdir 可写文件但经 lint 工具执行的 custom linter 路径——**注：本轮未实现 config 拦截**，custom linter 声明仍可达（lint run 执行 `.golangci.yml` 声明的外部程序）。残余，接受（与 npm run 同类：执行开发工具链声明的程序）。
 7. ~~**resolveModuleRoot 向上逃逸**~~ 已堵：上溯不得越出 workdir（见「参数级收紧」6）。
 8. **无网络出口控制**（部分收窄）：npm install/audit、git pull/push 仍可出网到**配置的** registry/remote；`--registry` 重定向已拒，`.npmrc` 覆写残余。真出口控制靠调用方网络层。
+9. **`web` 工具出网**（2026-08-17 opt-in，`run.web_fetch`）：GET 任意 HTTP(S) URL。SSRF 防护拦私网/环回/链路本地（含云 metadata 169.254.169.254）/组播/受限广播/v4-mapped v6，DNS 全 IP 校验，重定向每跳重查。残余：(a) GET 查询参数可携带数据外传（`?secret=...`）；(b) 响应内容直入上下文（prompt injection 面，同 `corrupted-summary` 族，但 web 无摘要守卫，靠模型自身）；(c) DNS rebind（解析后到连接前 IP 切换）绕单次校验。均 guardrail 定位，真防护靠调用方网络层。
 
 **三档：残余词法窗口**
 9. 写工具 confine 纯词法不追 symlink（`confine_eval_symlinks` 仅 opt-in 收窄 TOCTOU）；rename/delete 拒 symlink 源。

@@ -161,6 +161,14 @@ func writeTimeoutOf(resolved *config.Resolved) time.Duration {
 	return 0
 }
 
+// webTimeoutOf returns run.web_timeout (0 = WebTool's built-in 30s default).
+func webTimeoutOf(resolved *config.Resolved) time.Duration {
+	if resolved.Run.WebTimeout != nil {
+		return *resolved.Run.WebTimeout
+	}
+	return 0
+}
+
 func httpTimeoutOf(resolved *config.Resolved) time.Duration {
 	if resolved.HTTPTimeout != nil {
 		return *resolved.HTTPTimeout

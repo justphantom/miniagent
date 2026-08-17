@@ -8,17 +8,19 @@ import (
 )
 
 // buildTools registers builtin tools and adjusts constraints by mode:
-//   - default (12 tools, NO shell): file tools (read/write/edit/grep/glob/ast) are confined to the workdir
+//   - default (12 tools + opt-in web, NO shell): file tools (read/write/edit/grep/glob/ast) are confined to the workdir
 //     subtree via confineWrap; a misfired shell call returns "unknown tool" since it is not registered.
 //     workdir is required (validated at the main entry).
-//   - auto (13 tools): no constraints (file tools are not wrapped) unless confineAuto is opted in.
+//   - auto (13 tools + opt-in web): no constraints (file tools are not wrapped) unless confineAuto is opted in.
 //
 // git and go tools are inherently read-only/constrained by their own allow-list, so they are NOT wrapped
 // in confineWrap (which only understands a "path" JSON field, not "subcommand"). Their timeout aligns
 // with shellTimeout (120s) rather than fileOpTimeout (30s), since go test/build can exceed 30s.
-func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.Duration,
+// web is opt-in via run.web_fetch (registered in both modes when enabled) — it has no workdir-bound
+// path argument, so confineWrap does not apply; its SSRF guard lives inside WebTool.
+func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout, webTimeout time.Duration,
 	mode string, fileResultLimit int, limits miniagent.Limits,
-	confineAuto, evalSymlinks bool) []miniagent.Tool {
+	confineAuto, evalSymlinks, webFetch bool) []miniagent.Tool {
 	// confine wraps the file tools when in ModeDefault, OR in ModeAuto when confineAuto is opted in
 	// (auto keeps shell free; this is deterministic-file-primitive defense-in-depth for long sessions).
 	confine := mode == miniagent.ModeDefault || (mode == miniagent.ModeAuto && confineAuto)
@@ -61,6 +63,9 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	// an explicit auto registers shell — mirrors the shellMode resolution that used to live here.
 	if mode == miniagent.ModeAuto {
 		builtins = append(builtins, tools.ShellTool(workdir, shellTimeout, limits.MaxShellOutputChars, limits.ShellStreamWindowBytes))
+	}
+	if webFetch {
+		builtins = append(builtins, tools.WebTool(webTimeout, 0, limits.MaxShellOutputChars, false))
 	}
 	return builtins
 }

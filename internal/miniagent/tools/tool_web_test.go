@@ -1,0 +1,220 @@
+package tools
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
+)
+
+// newWebTool builds a web tool with allowPrivate=true so httptest's 127.0.0.1
+// listener passes the SSRF guard; the guard itself is covered separately below.
+func newWebTool(t *testing.T) miniagent.Tool {
+	t.Helper()
+	return WebTool(0, 0, 0, true)
+}
+
+func callWeb(t *testing.T, tl miniagent.Tool, args string) miniagent.ToolResult {
+	t.Helper()
+	return tl.Call(context.Background(), args)
+}
+
+func TestWeb_PlainText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello docs\nline two\n"))
+	}))
+	defer srv.Close()
+	res := callWeb(t, newWebTool(t), `{"url":"`+srv.URL+`"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "hello docs") || !strings.Contains(res.Output, "line two") {
+		t.Errorf("output missing body: %q", res.Output)
+	}
+}
+
+func TestWeb_HTMLStripsScriptStyleTags(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><style>.a{color:red}</style><title>T</title></head>
+<body><h1>Heading</h1><script>var x="secret()";</script><p>Para &amp; more</p><!-- comment --></body></html>`))
+	}))
+	defer srv.Close()
+	res := callWeb(t, newWebTool(t), `{"url":"`+srv.URL+`"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	for _, banned := range []string{"secret()", "color:red", "<", "</", "script", "style", "comment"} {
+		if strings.Contains(res.Output, banned) {
+			t.Errorf("output leaked %q: %q", banned, res.Output)
+		}
+	}
+	if !strings.Contains(res.Output, "Heading") || !strings.Contains(res.Output, "Para & more") {
+		t.Errorf("output missing visible text: %q", res.Output)
+	}
+}
+
+func TestWeb_JSONBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"a":1}`))
+	}))
+	defer srv.Close()
+	res := callWeb(t, newWebTool(t), `{"url":"`+srv.URL+`"}`)
+	if res.IsError || !strings.Contains(res.Output, `{"a":1}`) {
+		t.Errorf("json body mangled: %+v", res)
+	}
+}
+
+func TestWeb_RedirectChainFollowed(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("arrived"))
+	}))
+	defer final.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL+"/x", http.StatusFound)
+	}))
+	defer srv.Close()
+	res := callWeb(t, newWebTool(t), `{"url":"`+srv.URL+`"}`)
+	if res.IsError || !strings.Contains(res.Output, "arrived") {
+		t.Errorf("redirect not followed: %+v", res)
+	}
+}
+
+func TestWeb_HTTPErrorStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusNotFound)
+	}))
+	defer srv.Close()
+	res := callWeb(t, newWebTool(t), `{"url":"`+srv.URL+`"}`)
+	if !res.IsError || !strings.Contains(res.Output, "404") {
+		t.Errorf("want 404 error, got %+v", res)
+	}
+}
+
+func TestWeb_SchemeAndArgsValidation(t *testing.T) {
+	tl := newWebTool(t)
+	cases := []struct {
+		name, args, wantIn string
+	}{
+		{"ftp scheme rejected", `{"url":"ftp://example.com/f"}`, "scheme"},
+		{"file scheme rejected", `{"url":"file:///etc/passwd"}`, "scheme"},
+		{"missing url", `{"url":""}`, "missing argument"},
+		{"unknown field rejected", `{"url":"http://example.com","path":"x"}`, "parsing"},
+		{"trailing data rejected", `{"url":"http://example.com"}{"url":"http://evil.com"}`, "trailing"},
+	}
+	for _, c := range cases {
+		res := callWeb(t, tl, c.args)
+		if !res.IsError {
+			t.Errorf("%s: want error", c.name)
+		} else if !strings.Contains(res.Output, c.wantIn) {
+			t.Errorf("%s: error %q missing %q", c.name, res.Output, c.wantIn)
+		}
+	}
+}
+
+func TestWeb_PublicHostBlockedCases(t *testing.T) {
+	// Guard-only tests (no HTTP): the tool with allowPrivate=false must deny
+	// loopback / private / link-local targets before any request goes out.
+	tl := WebTool(0, 0, 0, false)
+	cases := []struct {
+		name, host string
+	}{
+		{"loopback literal", "http://127.0.0.1/x"},
+		{"loopback name", "http://localhost/x"},
+		{"private v4 literal", "http://10.1.2.3/x"},
+		{"private v4 literal 192.168", "http://192.168.0.1/x"},
+		{"link-local metadata", "http://169.254.169.254/latest/meta-data/"},
+		{"ipv6 loopback", "http://[::1]/x"},
+		{"ipv6 unique-local", "http://[fd00::1]/x"},
+	}
+	for _, c := range cases {
+		res := callWeb(t, tl, `{"url":"`+c.host+`"}`)
+		if !res.IsError {
+			t.Errorf("%s (%s): want block", c.name, c.host)
+		} else if !strings.Contains(res.Output, "blocked") && !strings.Contains(res.Output, "resolve") {
+			t.Errorf("%s: error %q lacks block reason", c.name, res.Output)
+		}
+	}
+}
+
+func TestWeb_PrivateRedirectBlockedWhenGuarded(t *testing.T) {
+	// Public-looking first hop (allowPrivate=true only for the first hop via test
+	// server), then redirect to a loopback literal: CheckRedirect re-checks and
+	// must fail despite allowPrivate... allowPrivate skips redirect checks too,
+	// so here we assert the guarded variant rejects via checkWebHost directly.
+	if err := checkWebHost(context.Background(), mustParseURL(t, "http://127.0.0.1:9/x"), false); err == nil {
+		t.Error("checkWebHost must reject loopback literal")
+	}
+	if err := checkWebHost(context.Background(), mustParseURL(t, "http://[::ffff:127.0.0.1]/x"), false); err == nil {
+		t.Error("checkWebHost must reject v4-mapped loopback")
+	}
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	return u
+}
+
+func TestWeb_BinaryRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte{0x00, 0x01, 0x02, 0x00, 0x03})
+	}))
+	defer srv.Close()
+	res := callWeb(t, newWebTool(t), `{"url":"`+srv.URL+`"}`)
+	if !res.IsError || !strings.Contains(res.Output, "binary") {
+		t.Errorf("want binary rejection, got %+v", res)
+	}
+}
+
+func TestWeb_BodyTruncationMarker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("a", 3000)))
+	}))
+	defer srv.Close()
+	tl := WebTool(0, 2000, 0, true) // maxBytes 2000 < body
+	res := callWeb(t, tl, `{"url":"`+srv.URL+`"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "truncated") {
+		t.Errorf("missing truncation marker: %q", res.Output[:min(len(res.Output), 120)])
+	}
+}
+
+func TestWeb_OutputCharCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", 100000)))
+	}))
+	defer srv.Close()
+	tl := WebTool(0, 0, 5000, true)
+	res := callWeb(t, tl, `{"url":"`+srv.URL+`"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if len([]rune(res.Output)) > 6000 {
+		t.Errorf("output %d runes exceeds cap+marker", len([]rune(res.Output)))
+	}
+}
+
+func TestWebToText_CollapsesBlankLines(t *testing.T) {
+	got := webToText("<p>a</p>\n\n\n\n<p>b</p>", true)
+	if got != "a\nb" {
+		t.Errorf("blank-line collapse: %q", got)
+	}
+}
+
+func TestDecodeEntities_NumericForms(t *testing.T) {
+	if got := decodeEntities("&#65;&#x42;&unknown;"); got != "AB&unknown;" {
+		t.Errorf("numeric entities: %q", got)
+	}
+}

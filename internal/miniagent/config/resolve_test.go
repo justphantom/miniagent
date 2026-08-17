@@ -124,6 +124,28 @@ func TestResolve_StrategyConstants(t *testing.T) {
 }
 
 // New fields: summary_request and summarizer_prompt are correctly parsed from config.
+// web_timeout (config-only duration key, same ParseDuration family as shell_timeout):
+// valid string resolves to duration; unset stays nil (WebTool's built-in default applies).
+func TestResolve_WebTimeout(t *testing.T) {
+	cfg := mkFullConfig("p", "m")
+	r, err := Resolve(cfg, CLIOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Run.WebTimeout != nil {
+		t.Errorf("WebTimeout = %v, want nil when unset", r.Run.WebTimeout)
+	}
+	d := "45s"
+	cfg = mkFullConfig("p", "m")
+	cfg.Run = RunConfig{WebTimeout: &d}
+	r, err = Resolve(cfg, CLIOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Run.WebTimeout == nil || *r.Run.WebTimeout != 45*time.Second {
+		t.Errorf("WebTimeout = %v, want 45s", r.Run.WebTimeout)
+	}
+}
 func TestResolve_PromptFields(t *testing.T) {
 	cfg := mkFullConfig("p", "m")
 	cfg.Defaults.SummaryRequest = "custom summary guidance"

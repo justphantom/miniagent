@@ -152,6 +152,13 @@ type RunConfig struct {
 	// ConfineAuto (opt-in) wraps the file tools (read/write/edit/grep/glob) with confineWrap in ModeAuto too (shell stays
 	// free). Defense-in-depth for long sessions where the deterministic file primitives are worth constraining even when shell is free.
 	ConfineAuto *bool `json:"confine_auto,omitempty"`
+	// WebFetch (opt-in) registers the `web` GET-fetch tool in both default and auto modes; nil/unset=false
+	// (tool absent, a misfired call returns unknown tool). The tool is network-egress: SSRF-guarded
+	// (public IPs only, redirect re-checked) but content enters context unfiltered (prompt-injection
+	// surface); enabling it is an explicit trust decision by the operator.
+	WebFetch *bool `json:"web_fetch,omitempty"`
+	// WebTimeout is the per-fetch overall timeout ("30s"); unset uses the built-in default (30s).
+	WebTimeout *string `json:"web_timeout,omitempty"`
 }
 
 // CompactionConfig configures the summary compaction model for long sessions.

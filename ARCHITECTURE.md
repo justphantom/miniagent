@@ -73,6 +73,7 @@ internal/miniagent/tools/       内置工具实现
   tool_shell.go         命令执行（shell 仅 auto 注册）
   tool_git/go/npm/lint.go    语言生态工具（git 版本控制 / go 编译测试 / npm JS 生态 / golangci-lint 静态检查）
   tool_rename/delete.go      文件重命名与删除
+  tool_web.go         网页抓取（opt-in，SSRF 防护 + HTML 标签剥离）
   tool_helpers.go     路径解析、schema 构造
   output_accum.go     shell 输出字节滑窗累积器（保尾部）
 
@@ -196,8 +197,9 @@ return finishMaxIterations
 | `shell` | 命令执行 | 默认超时 **120s**，进程组隔离、按 shell_timeout |
 | `git`/`go`/`npm`/`golangci-lint` | 语言生态 | 子命令 allow-list + 参数级 deny（见 §10） |
 | `rename`/`delete` | 文件管理 | 限 workdir 子树 |
+| `web` | 网页抓取 | opt-in（`run.web_fetch`）；SSRF 防护（拒私网/环回/链路本地）、重定向每跳重查、HTML 标签剥离、body/输出双截断 |
 
-**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 12 工具无 shell，误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
+**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 12 工具（+opt-in `web`）无 shell，误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
 
 工具执行经 `handleToolCalls` + `runToolsParallel`（并行度受 `MaxParallelTools` 约束，默认 5）+ `safeCall`（panic 兜底）。
 
