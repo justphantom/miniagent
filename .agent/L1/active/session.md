@@ -7,7 +7,7 @@ updated: 2026-08-16T00:00:00+08:00
 # 当前会话
 
 ## 当前任务
-anthropic `models_url` 的 `context_window`/`max_output_tokens` 扩展字段已生效（流入 ModelInfo.Limits + FetchModelLimits auto-fill，压缩时机判断可用）。改动完成 verify-gate 全绿，待审/提交。
+anthropic `models_url` 的 `context_window`/`max_output_tokens` 扩展字段已生效（流入 ModelInfo.Limits + FetchModelLimits auto-fill，压缩时机判断可用）。库化暂缓已记 L2（library-defer-provider-config-decouple）。P1（ValidateURL → internal/text）+ P2（ListAllModels 去 config 化，新 ModelSource 中间结构，cmd 层映射）已完成，verify-gate 全绿，provider 包零 config import，待提交。
 
 ## 已完成
 - 二轮会话实证评估（`20260817-082103`）P0+P2+P3 全修（verify-gate 全绿）：**P0** go/npm/lint 子命令重复剥离——该会话 34 次 go 调用 29 次带 `{"subcommand":"test","args":"test ./..."}` 形制，拼成 `go test test` 报 `package test is not in std` 假失败，模型误诊 rtk artifact 烧约 25 次调用后带未跑通的验证提交；公共 `stripDupSubcommand`（tool_helpers.go，4 处重复抽 helper）铺 git/go/npm/lint，各工具加 SubcommandRepeatedInArgsStripped 测试。**P2** git 工具进程内串行化——`gitMu`（tool_git.go）包级 mutex 锁 exec 全程，同轮并行 add+commit 不再撞 index.lock（会话实锤 + 核心注释自认该风险）；合成测试 500 次未能复现（rtk 进程启动延迟才拉开竞争窗口），机制确定，回归测试锁后置不变量（TestGit_ParallelAddCommitNoIndexLock，-race×3 过）。**P3** args 壳元字符前置拒绝——`checkShellMetachars`（tool_helpers.go）检原始 args 引号外 `| & ; > < \``，四工具铺；引号内/转义形不误杀（`log --grep 'a|b'` 合法，23 用例表测 + 四工具集成测）；文案指明 NO shell + 一次一条/auto 用 shell。lint 修 2（intrange + staticcheck tagged switch）。CHANGELOG Fixed×3。待用户审 diff/决定提交。

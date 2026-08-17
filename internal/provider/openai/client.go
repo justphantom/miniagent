@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/provider/httpretry"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 const maxChatBodyBytes = 4 << 20 // 4 MiB; exactly at the limit so it does not truncate, 1 byte over errors
@@ -42,13 +42,13 @@ type ChatClient struct {
 // may be empty (ListAllModels does not GET when falling back to the static list). headers is the
 // provider's custom request header map and may be nil.
 func NewChatClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*ChatClient, error) {
-	chat, err := config.ValidateURL(chatURL)
+	chat, err := text.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
 	c := &ChatClient{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: chat, HTTP: httpClient, Logger: logger, Headers: headers}
 	if modelsURL != "" {
-		m, err := config.ValidateURL(modelsURL)
+		m, err := text.ValidateURL(modelsURL)
 		if err != nil {
 			return nil, err
 		}
@@ -64,7 +64,7 @@ func cacheEndpoint(dst **url.URL, errp *error, raw string) {
 	if *dst != nil {
 		return
 	}
-	u, err := config.ValidateURL(raw)
+	u, err := text.ValidateURL(raw)
 	if err != nil {
 		*errp = err
 		return

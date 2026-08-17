@@ -1,11 +1,15 @@
 // Package text provides plain-text helpers shared by the core and addon subpackages
 // (compaction/event/builtin/provider/openai): rune truncation (head / tail / head+tail split),
-// CJK/non-CJK rune counting, and Unix millisecond timestamps.
+// CJK/non-CJK rune counting, Unix millisecond timestamps, and HTTP URL validation.
 // All are pure functions independent of agent domain types, so they form a repo-level shared layer
 // (internal/text), eliminating divergent truncation/counting implementations across packages.
+// ValidateURL lives here (not in the config package) so provider implementations can share the exact
+// same URL rules without importing the CLI config layer.
 package text
 
 import (
+	"fmt"
+	"net/url"
 	"time"
 	"unicode"
 )
@@ -72,4 +76,25 @@ func TruncateHeadTail(s string, n int, marker string) string {
 		return s // head+tail window already covers everything, no truncation needed (a marker would only add noise)
 	}
 	return string(r[:headN]) + marker + string(r[len(r)-tailN:])
+}
+
+// ValidateURL parses and validates raw as a legal http(s) URL (with scheme+host).
+// Shared by the core config validation and the provider implementations, to avoid divergence.
+func ValidateURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("url %q failed to parse: %w (expected http(s)://host[:port][/path])", raw, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("url %q is missing scheme or host (expected http(s)://host[:port])", raw)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("url %q scheme %q is not supported (http/https only)", raw, u.Scheme)
+	}
+	// Reject embedded userinfo (https://key@host): credentials embedded in the URL get logged in error bodies, and the Go transport may also
+	// send them as Basic Auth. The API key must be injected via provider.key / $MINIAGENT_API_KEY, never in the URL.
+	if u.User != nil {
+		return nil, fmt.Errorf("url %q contains userinfo (user:pass@host) — forbidden, to prevent credentials embedded in the URL from being logged or leaked", raw)
+	}
+	return u, nil
 }

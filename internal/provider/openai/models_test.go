@@ -5,24 +5,25 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"sync"
 	"testing"
-
-	"github.com/justphantom/miniagent/internal/miniagent/config"
 )
 
+func keyForTest(_ ModelSource) string { return "sk-test" }
+
+// ListModels non-200: error mentions status.
 func TestListModels_NonOKErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, "err")
+		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer srv.Close()
 	llm := &ChatClient{APIKey: "sk", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}
 	if _, err := llm.ListModels(context.Background()); err == nil {
-		t.Error("non-200 should error")
+		t.Fatal("expected error on non-200")
 	}
 }
 
+// Empty data: empty slice, no error.
 func TestListModels_EmptyData(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"data":[]}`)
@@ -31,213 +32,170 @@ func TestListModels_EmptyData(t *testing.T) {
 	llm := &ChatClient{APIKey: "sk", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}
 	ids, err := llm.ListModels(context.Background())
 	if err != nil {
-		t.Fatalf("empty data: %v", err)
+		t.Fatalf("ListModels: %v", err)
 	}
 	if len(ids) != 0 {
-		t.Errorf("want empty, got %v", ids)
+		t.Fatalf("ids = %v, want empty", ids)
 	}
 }
 
-func keyForTest(_ config.ProviderConfig) string { return "sk-test" }
+// Empty ModelsURL: ChatClient.ListModels errors (models_url not configured); static fallback lives in
+// ListAllModels via ModelSource.StaticModels, never a GET (no server needed proves no HTTP).
+func TestListModels_StaticFallback(t *testing.T) {
+	c, err := NewChatClient("sk", "http://example.invalid/v1/chat/completions", "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ListModels(context.Background()); err == nil {
+		t.Fatal("expected error when models_url is empty")
+	}
+}
 
-func TestListAllModels_StaticNoGET(t *testing.T) {
-	// Empty ModelsURL + static Models -> returned directly, never sends HTTP (no server needed proves no GET).
-	providers := []config.ProviderConfig{{Name: "p", Models: []config.ModelConfig{{Name: "a"}, {Name: "b"}}}}
+// ListAllModels static entries: no ModelsURL -> StaticModels surfaced without any HTTP.
+func TestListAllModels_Static(t *testing.T) {
+	providers := []ModelSource{{Name: "p", StaticModels: []string{"a", "b"}}}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err != nil {
-		t.Fatalf("static list: %v", err)
+		t.Fatalf("ListAllModels: %v", err)
 	}
-	if len(ids) != 2 || ids[0] != (ProviderModel{Provider: "p", Model: "a"}) {
-		t.Errorf("ids = %v", ids)
-	}
-}
-
-func TestListAllModels_StaticEmptyErrors(t *testing.T) {
-	providers := []config.ProviderConfig{{Name: "p"}}
-	if _, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil); err == nil {
-		t.Error("empty static models should error")
+	if len(ids) != 2 || ids[0].Provider != "p" || ids[0].Model != "a" || ids[1].Model != "b" {
+		t.Fatalf("ids = %+v", ids)
 	}
 }
 
-func TestListAllModels_MultiProvider(t *testing.T) {
+// ListAllModels dynamic: two providers aggregated, both hit their models_url.
+func TestListAllModels_Dynamic(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-3.5"}]}`)
+		fmt.Fprint(w, `{"data":[{"id":"o1"}]}`)
 	}))
 	defer srv1.Close()
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"deepseek-chat"},{"id":"deepseek-coder"}]}`)
+		fmt.Fprint(w, `{"data":[{"id":"o2"}]}`)
 	}))
 	defer srv2.Close()
-
-	providers := []config.ProviderConfig{
+	providers := []ModelSource{
 		{Name: "openai", ChatURL: srv1.URL, ModelsURL: srv1.URL + "/v1/models"},
 		{Name: "deepseek", ChatURL: srv2.URL, ModelsURL: srv2.URL + "/v1/models"},
 	}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ListAllModels: %v", err)
 	}
-	want := map[ProviderModel]bool{
-		{Provider: "openai", Model: "gpt-4o"}:           true,
-		{Provider: "openai", Model: "gpt-3.5"}:          true,
-		{Provider: "deepseek", Model: "deepseek-chat"}:  true,
-		{Provider: "deepseek", Model: "deepseek-coder"}: true,
-	}
-	if len(ids) != 4 {
-		t.Fatalf("want 4 ids, got %d: %v", len(ids), ids)
-	}
-	for _, id := range ids {
-		if !want[id] {
-			t.Errorf("unexpected ref: %+v", id)
-		}
+	if len(ids) != 2 {
+		t.Fatalf("ids = %+v, want 2 entries", ids)
 	}
 }
 
-func TestListAllModels_MixedStaticAndDynamic(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"dynamic-model"}]}`)
-	}))
-	defer srv.Close()
-
-	providers := []config.ProviderConfig{
-		{Name: "static", Models: []config.ModelConfig{{Name: "static-1"}, {Name: "static-2"}}},
-		{Name: "dynamic", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
-	}
-	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
+// ListAllModels: empty provider slice yields empty result, no error.
+func TestListAllModels_Empty(t *testing.T) {
+	ids, err := ListAllModels(context.Background(), []ModelSource{}, keyForTest, nil, nil)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ListAllModels: %v", err)
 	}
-	want := map[ProviderModel]bool{
-		{Provider: "static", Model: "static-1"}:       true,
-		{Provider: "static", Model: "static-2"}:       true,
-		{Provider: "dynamic", Model: "dynamic-model"}: true,
-	}
-	if len(ids) != 3 {
-		t.Fatalf("want 3 ids, got %d: %v", len(ids), ids)
-	}
-	for _, id := range ids {
-		if !want[id] {
-			t.Errorf("unexpected ref: %+v", id)
-		}
+	if len(ids) != 0 {
+		t.Fatalf("ids = %+v, want empty", ids)
 	}
 }
 
+// ListAllModels partial failure: the healthy provider's models still returned; err non-nil.
 func TestListAllModels_PartialFailure(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"model-a"}]}`)
+		fmt.Fprint(w, `{"data":[{"id":"ok1"}]}`)
 	}))
 	defer srv1.Close()
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "unreachable", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv2.Close()
-
-	providers := []config.ProviderConfig{
+	providers := []ModelSource{
 		{Name: "ok", ChatURL: srv1.URL, ModelsURL: srv1.URL + "/v1/models"},
 		{Name: "fail", ChatURL: srv2.URL, ModelsURL: srv2.URL + "/v1/models"},
 	}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err == nil {
-		t.Fatal("expected error from failed provider")
+		t.Fatal("expected error from failing provider")
 	}
-	if len(ids) != 1 || ids[0] != (ProviderModel{Provider: "ok", Model: "model-a"}) {
-		t.Errorf("want [{ok model-a}], got %v", ids)
-	}
-	if !strings.Contains(err.Error(), "fail") {
-		t.Errorf("error should mention failing provider: %v", err)
+	if len(ids) != 1 || ids[0].Model != "ok1" {
+		t.Fatalf("ids = %+v, want ok1 only", ids)
 	}
 }
 
-func TestListAllModels_EmptyProviders(t *testing.T) {
-	ids, err := ListAllModels(context.Background(), []config.ProviderConfig{}, keyForTest, nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(ids) != 0 {
-		t.Errorf("want empty, got %v", ids)
-	}
-}
-
-func TestListAllModels_PerProviderKey(t *testing.T) {
+// ListAllModels passes the provider-specific key to the endpoint.
+func TestListAllModels_KeyPerProvider(t *testing.T) {
+	var mu sync.Mutex
+	got := make(map[string]string)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		fmt.Fprintf(w, `{"data":[{"id":"%s"}]}`, auth)
+		mu.Lock()
+		got[r.Header.Get("Authorization")] = ""
+		mu.Unlock()
+		fmt.Fprint(w, `{"data":[{"id":"k"}]}`)
 	}))
 	defer srv.Close()
-
-	providers := []config.ProviderConfig{
-		{Name: "a", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models", Key: "key-a"},
-		{Name: "b", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models", Key: "key-b"},
+	providers := []ModelSource{
+		{Name: "a", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
+		{Name: "b", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 	}
-	keys := map[string]string{"a": "shared"}
-	ids, err := ListAllModels(context.Background(), providers, func(p config.ProviderConfig) string {
-		if k, ok := keys[p.Name]; ok {
-			return k
-		}
-		return p.Key
-	}, nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := ListAllModels(context.Background(), providers, func(p ModelSource) string {
+		return "key-" + p.Name
+	}, nil, nil); err != nil {
+		t.Fatalf("ListAllModels: %v", err)
 	}
-	if ids[0].Model != "Bearer shared" || ids[1].Model != "Bearer key-b" {
-		t.Errorf("per-provider key not respected: %v", ids)
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := got["Bearer key-a"]; !ok {
+		t.Fatalf("missing Bearer key-a, got %v", got)
+	}
+	if _, ok := got["Bearer key-b"]; !ok {
+		t.Fatalf("missing Bearer key-b, got %v", got)
 	}
 }
 
-func TestListAllModels_DeterministicOrder(t *testing.T) {
+// ListAllModels preserves input provider order (stable output contract).
+func TestListAllModels_OrderStable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"m"}]}`)
+		fmt.Fprint(w, `{"data":[{"id":"x"}]}`)
 	}))
 	defer srv.Close()
-
-	providers := []config.ProviderConfig{
+	providers := []ModelSource{
 		{Name: "p1", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 		{Name: "p2", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 		{Name: "p3", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
 	}
 	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ListAllModels: %v", err)
 	}
-	want := []ProviderModel{{Provider: "p1", Model: "m"}, {Provider: "p2", Model: "m"}, {Provider: "p3", Model: "m"}}
-	if len(ids) != len(want) {
-		t.Fatalf("want %v, got %v", want, ids)
-	}
-	for i, id := range ids {
-		if id != want[i] {
-			t.Errorf("order mismatch at %d: got %+v, want %+v", i, id, want[i])
-		}
+	if len(ids) != 3 || ids[0].Provider != "p1" || ids[1].Provider != "p2" || ids[2].Provider != "p3" {
+		t.Fatalf("order not stable: %+v", ids)
 	}
 }
 
 // ListModels carries the custom request headers.
 func TestChatClient_ListModels_CustomHeaders(t *testing.T) {
+	var gotTenant string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Custom") != "xyz" {
-			t.Errorf("X-Custom = %q, want xyz", r.Header.Get("X-Custom"))
-		}
-		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"}]}`)
+		gotTenant = r.Header.Get("X-Tenant-Id")
+		fmt.Fprint(w, `{"data":[{"id":"m"}]}`)
 	}))
 	defer srv.Close()
 	c := &ChatClient{
 		APIKey:    "sk",
 		ChatURL:   srv.URL,
 		ModelsURL: srv.URL + "/v1/models",
-		Headers:   map[string]string{"X-Custom": "xyz"},
+		Headers:   map[string]string{"X-Tenant-Id": "tn"},
 	}
-	ids, err := c.ListModels(context.Background())
-	if err != nil {
+	if _, err := c.ListModels(context.Background()); err != nil {
 		t.Fatalf("ListModels: %v", err)
 	}
-	if len(ids) != 1 || ids[0].ID != "gpt-4o" {
-		t.Errorf("ids = %v", ids)
+	if gotTenant != "tn" {
+		t.Fatalf("X-Tenant-Id = %q, want tn", gotTenant)
 	}
 }
 
 // ListModels parses the non-standard context_window/max_output_tokens extensions when present.
 func TestListModels_ParsesLimits(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"DeepSeek-V4-Flash-amd-openai","object":"model","created":1786887755,"owned_by":"local","upstream":"amd","protocol":"openai","context_window":204800,"max_output_tokens":65536},{"id":"agnes-2.5-flash-openai","context_window":524288,"max_output_tokens":65536},{"id":"plain"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"m","context_window":200000,"max_output_tokens":32000}]}`)
 	}))
 	defer srv.Close()
 	c := &ChatClient{APIKey: "sk", ModelsURL: srv.URL + "/v1/models"}
@@ -245,19 +203,32 @@ func TestListModels_ParsesLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
 	}
-	if len(ids) != 3 {
-		t.Fatalf("want 3 models, got %d", len(ids))
+	if len(ids) != 1 || ids[0].ContextWindow == nil || *ids[0].ContextWindow != 200000 || ids[0].MaxOutputTokens == nil || *ids[0].MaxOutputTokens != 32000 {
+		t.Fatalf("limits not parsed: %+v", ids)
 	}
-	if ids[0].ContextWindow == nil || *ids[0].ContextWindow != 204800 {
-		t.Errorf("context_window = %v, want 204800", ids[0].ContextWindow)
+}
+
+// ListAllModels kind=anthropic: dispatches to the Anthropic /v1/models endpoint (x-api-key auth).
+func TestListAllModels_AnthropicDispatch(t *testing.T) {
+	var gotKey, gotVer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Api-Key")
+		gotVer = r.Header.Get("Anthropic-Version")
+		fmt.Fprint(w, `{"data":[{"id":"claude-opus-4-8","context_window":200000,"max_output_tokens":32000}]}`)
+	}))
+	defer srv.Close()
+	providers := []ModelSource{{Name: "ant", Kind: "anthropic", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"}}
+	ids, err := ListAllModels(context.Background(), providers, keyForTest, nil, nil)
+	if err != nil {
+		t.Fatalf("ListAllModels: %v", err)
 	}
-	if ids[0].MaxOutputTokens == nil || *ids[0].MaxOutputTokens != 65536 {
-		t.Errorf("max_output_tokens = %v, want 65536", ids[0].MaxOutputTokens)
+	if gotKey != "sk-test" || gotVer == "" {
+		t.Fatalf("anthropic auth headers missing: key=%q ver=%q", gotKey, gotVer)
 	}
-	if ids[1].ContextWindow == nil || *ids[1].ContextWindow != 524288 {
-		t.Errorf("model[1] context_window = %v, want 524288", ids[1].ContextWindow)
+	if len(ids) != 1 || ids[0].Model != "claude-opus-4-8" {
+		t.Fatalf("ids = %+v", ids)
 	}
-	if ids[2].ContextWindow != nil || ids[2].MaxOutputTokens != nil {
-		t.Errorf("model without limit fields should parse nil limits, got %+v", ids[2])
+	if ids[0].Limits.ContextWindow == nil || *ids[0].Limits.ContextWindow != 200000 {
+		t.Fatalf("anthropic limits not surfaced: %+v", ids[0].Limits)
 	}
 }

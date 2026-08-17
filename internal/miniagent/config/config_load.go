@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // maxConfigFileBytes is the byte cap for the config file, preventing OOM from multi-GB files.
@@ -110,11 +111,11 @@ func validateConfig(cfg *Config) error {
 		if kind == "anthropic" && (p.MaxTokens == nil || *p.MaxTokens <= 0) {
 			return fmt.Errorf("provider %q kind=anthropic requires max_tokens > 0 (Anthropic Messages API mandates it)", p.Name)
 		}
-		if _, err := ValidateURL(p.ChatURL); err != nil {
+		if _, err := text.ValidateURL(p.ChatURL); err != nil {
 			return fmt.Errorf("provider %q chat_url: %w", p.Name, err)
 		}
 		if p.ModelsURL != "" {
-			if _, err := ValidateURL(p.ModelsURL); err != nil {
+			if _, err := text.ValidateURL(p.ModelsURL); err != nil {
 				return fmt.Errorf("provider %q models_url: %w", p.Name, err)
 			}
 		}

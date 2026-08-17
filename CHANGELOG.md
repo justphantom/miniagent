@@ -4,6 +4,8 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+### Changed
+- **provider 包与 CLI 配置层解耦（库化前置 P1/P2，详见 L2 library-defer-provider-config-decouple）**：`ValidateURL` 从 `config` 挪至 `internal/text`（纯 URL 校验，语义不属于 config）；`openai.ListAllModels` 签名改吃新中间结构 `ModelSource`（`config.ProviderConfig` 在 cmd 层映射），`openai`/`anthropic` 包现在零 `config` import。`FetchModelLimits`/`-list-models` 行为不变。
 ### Added
 - **anthropic `models_url` 动态拉取模型列表 + limits 字段生效**：`kind=anthropic` 的 provider 现可配 `models_url`（指向 Anthropic `GET /v1/models`），`-list-models` 与 `FetchModelLimits` 动态拉取；不配置时回退静态 `models` 列表。认证沿用 `x-api-key` + `anthropic-version`；响应解析 `data[].id` 及非标准扩展字段 `context_window`/`max_output_tokens`（代理/网关上游可返回，与 openai 同名）；`display_name` 不透传（CLI 输出只用 id）。limits 参与主运行 auto-fill：填充 `MaxTokens`（传参）与 `ContextWindow`（压缩时机）；官方端点不报这两个字段时保持 nil。`anthropic.NewClient` 签名加 `modelsURL` 参数。
 ### Fixed

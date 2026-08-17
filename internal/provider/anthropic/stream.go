@@ -13,8 +13,8 @@ import (
 	"sync"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/provider/httpretry"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // StreamClient calls the Anthropic Messages API (streaming SSE). Mirrors openai.StreamClient; differs in
@@ -40,7 +40,7 @@ type StreamClient struct {
 
 // NewStreamClient parses and caches chatURL at construction time. headers may be nil; cache toggles caching.
 func NewStreamClient(apiKey, chatURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string, cache bool) (*StreamClient, error) {
-	u, err := config.ValidateURL(chatURL)
+	u, err := text.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func NewStreamClient(apiKey, chatURL string, httpClient *http.Client, logger *sl
 func (c *StreamClient) chatEndpoint() (*url.URL, error) {
 	c.chatOnce.Do(func() {
 		if c.chatURL == nil {
-			u, err := config.ValidateURL(c.ChatURL)
+			u, err := text.ValidateURL(c.ChatURL)
 			if err != nil {
 				c.chatErr = err
 				return

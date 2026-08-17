@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/provider/httpretry"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 const maxChatBodyBytes = 4 << 20 // 4 MiB; mirrors openai — exactly at the limit so it does not truncate
@@ -43,13 +43,13 @@ type Client struct {
 // list, no endpoint). headers is the provider's custom request header map (may be nil); cache toggles
 // prompt-caching breakpoints.
 func NewClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string, cache bool) (*Client, error) {
-	u, err := config.ValidateURL(chatURL)
+	u, err := text.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
 	c := &Client{APIKey: apiKey, ChatURL: chatURL, ModelsURL: modelsURL, chatURL: u, HTTP: httpClient, Logger: logger, Headers: headers, Cache: cache}
 	if modelsURL != "" {
-		mu, err := config.ValidateURL(modelsURL)
+		mu, err := text.ValidateURL(modelsURL)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +62,7 @@ func NewClient(apiKey, chatURL, modelsURL string, httpClient *http.Client, logge
 func (c *Client) chatEndpoint(defaultTimeout time.Duration) (*http.Client, *url.URL, error) {
 	c.chatOnce.Do(func() {
 		if c.chatURL == nil {
-			u, err := config.ValidateURL(c.ChatURL)
+			u, err := text.ValidateURL(c.ChatURL)
 			if err != nil {
 				c.chatErr = err
 				return
@@ -84,7 +84,7 @@ func (c *Client) modelsEndpoint(defaultTimeout time.Duration) (*http.Client, *ur
 	}
 	c.modelsOnce.Do(func() {
 		if c.modelsURL == nil {
-			u, err := config.ValidateURL(c.ModelsURL)
+			u, err := text.ValidateURL(c.ModelsURL)
 			if err != nil {
 				c.modelsErr = err
 				return

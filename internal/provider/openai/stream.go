@@ -13,8 +13,8 @@ import (
 	"sync"
 
 	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/provider/httpretry"
+	"github.com/justphantom/miniagent/internal/text"
 )
 
 // StreamClient calls the OpenAI-compatible chat completions endpoint (streaming SSE).
@@ -39,7 +39,7 @@ type StreamClient struct {
 
 // NewStreamClient parses and caches chatURL at construction time. headers are provider custom request headers, may be nil.
 func NewStreamClient(apiKey, chatURL string, httpClient *http.Client, logger *slog.Logger, headers map[string]string) (*StreamClient, error) {
-	chat, err := config.ValidateURL(chatURL)
+	chat, err := text.ValidateURL(chatURL)
 	if err != nil {
 		return nil, err
 	}
