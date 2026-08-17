@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -158,5 +159,79 @@ func TestDenyResult_ExitCodeNotSet(t *testing.T) {
 	}
 	if r.Output == "" {
 		t.Error("denyResult must format the output message")
+	}
+}
+
+// checkShellMetachars 只检引号外：模型把 shell 管道/重定向写进 args（`test ./... 2>&1 | head -100`
+// → go 收到 flag "-100"），前置拒绝并指明出路；引号内的 | 与转义形是合法参数值，不得误杀。
+func TestCheckShellMetachars(t *testing.T) {
+	for _, tc := range []struct {
+		args string
+		want string // "" = pass
+	}{
+		{"./... 2>&1 | head -100", ">"}, // 首个命中是 2>&1 的 >（> 在 | 前）
+		{"rm -f .git/index.lock && add f.txt", "&&"},
+		{"add a; commit -m x", ";"},
+		{"log --grep 'a|b' --oneline", ""}, // 引号内 | 合法
+		{`log --grep "foo>bar"`, ""},       // 双引号内 > 合法
+		{`commit -m "a && b"`, ""},         // 引号内 && 合法
+		{`test ./... > out.txt`, ">"},      // 未引号重定向
+		{"-run 'TestA|x' ./...", ""},       // 单引号包裹的 |
+		{`test -run "x\|y" ./...`, ""},     // 转义 | 合法
+		{"./...", ""},                      // 无元字符
+		{"", ""},                           // 空 args
+		{"status", ""},                     // 单 token
+		{"--grep=\"won't\"", ""},           // 撇号在双引号内
+		{"add 'a' 'b'", ""},                // 多个完整引号对
+		{"log --format='%h %s'", ""},       // 引号内空格+百分号
+		{"diff HEAD~1..HEAD -- x.go", ""},  // .. 非元字符
+		{"commit -m \"feat: x\" -a", ""},   // 常规形
+		{"test -run x ./... 2>&1", ">"},    // 2>&1 的 > 拦
+		{"log -10 --oneline", ""},          // 负数字不是 >
+		{"add -A && commit", "&&"},         // 未引号 &&
+		{"`id`", "`"},                      // 反引号
+		{"test ./...; gofmt -l .", ";"},    // 分号
+		{"push origin main", ""},           // 纯 pathspec
+	} {
+		if got := checkShellMetachars(tc.args); got != tc.want {
+			t.Errorf("checkShellMetachars(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+// 四工具集成：含未引号元字符的 args 必须前置拒绝（IsError 且文案指向 NO shell 事实），
+// 引号包裹的合法调用不受影响。
+func TestShellMetachars_RejectedAcrossTools(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		tool string
+		args string
+	}{
+		{"git", `{"subcommand":"log","args":"log --oneline | head -5"}`},
+		{"go", `{"subcommand":"test","args":"test ./... 2>&1"}`},
+		{"npm", `{"subcommand":"test","args":"test --silent > /dev/null"}`},
+		{"lint", `{"subcommand":"run","args":"run ./... | grep foo"}`},
+	}
+	for _, c := range cases {
+		var res miniagent.ToolResult
+		switch c.tool {
+		case "git":
+			res = GitTool(dir, 0, 0).Call(context.Background(), c.args)
+		case "go":
+			res = GoTool(dir, 0, 0).Call(context.Background(), c.args)
+		case "npm":
+			res = NpmTool(dir, 0, 0).Call(context.Background(), c.args)
+		case "lint":
+			res = LintTool(dir, 0, 0).Call(context.Background(), c.args)
+		}
+		if !res.IsError || !strings.Contains(res.Output, "NO shell") {
+			t.Errorf("%s with metachar args should be rejected pre-exec with NO-shell message, got IsError=%v: %s", c.tool, res.IsError, res.Output)
+		}
+	}
+	// 引号内的 | 合法：git log --grep 'a|b' 不得被拒（需真 repo，失败仅当含拦截文案）。
+	initGitRepo(t, dir)
+	res := GitTool(dir, 0, 0).Call(context.Background(), `{"subcommand":"log","args":"log --grep 'a|b' --oneline"}`)
+	if res.IsError && strings.Contains(res.Output, "NO shell") {
+		t.Errorf("quoted pipe must not be rejected: %s", res.Output)
 	}
 }

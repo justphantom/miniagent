@@ -93,6 +93,13 @@ func runGo(ctx context.Context, workspaceRoot, args string, maxOutputChars int) 
 	if qerr != "" {
 		return denyResult("args %s", qerr)
 	}
+	if op := checkShellMetachars(a.Args); op != "" {
+		return denyResult("%s", denyShellMetachars(a.Args))
+	}
+	// 同 git：模型高频把 subcommand 重复写进 args（{"subcommand":"test","args":"test ./..."}），
+	// 拼成 `go test test` 报 "package test is not in std"——实测会话 34 次 go 调用 29 次带该形制，
+	// 模型误诊为 rtk proxy artifact 烧掉约 25 次调用。剥离后 `go test ./...` 语义不变。
+	fields = stripDupSubcommand(sub, fields)
 	specs := append(append([]optSpec{}, goGlobalDeniedOptions...), goExecDeniedOptions...)
 	if sub == "clean" {
 		specs = append(specs, goCleanDeniedOptions...)

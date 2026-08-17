@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -42,6 +43,14 @@ func sortedNames(m map[string]bool) string {
 	sort.Strings(names)
 	return strings.Join(names, ", ")
 }
+
+// gitMu serializes git invocations inside this process. The core runs one step's tool calls in
+// parallel (maxParallelTools=8): a same-turn add+commit pair races on .git/index.lock — observed
+// in session 20260817-082103 ("Unable to create .git/index.lock: File exists"), after which the
+// model fruitlessly tried to rm the lock through every blocked channel. Git is stateful at the
+// index level, so ordering within a process is the correct granularity; cross-process races
+// remain the user's own concurrency.
+var gitMu sync.Mutex
 
 func GitTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) miniagent.Tool {
 	if timeout <= 0 {
@@ -84,12 +93,13 @@ func runGit(ctx context.Context, workspaceRoot, args string, maxOutputChars int)
 	if qerr != "" {
 		return denyResult("args %s", qerr)
 	}
+	if op := checkShellMetachars(a.Args); op != "" {
+		return denyResult("%s", denyShellMetachars(a.Args))
+	}
 	// 模型高频把 subcommand 重复写进 args（{"subcommand":"add","args":"add f.txt"}），拼成
 	// `git add` + 重复的 "add" 后报 pathspec 'add' 不存在 / 'log' 成 ambiguous argument——
 	// 实测会话里连续十余次重试同一形制全部失败。剥掉首个重复 token 而非报错：后续 token 语义不变。
-	if len(fields) > 0 && fields[0] == sub {
-		fields = fields[1:]
-	}
+	fields = stripDupSubcommand(sub, fields)
 	if tok, spec, hit := checkDeniedOptions(fields, gitDeniedFor(sub)); hit {
 		return denyResult("git %s option %q (%s) %s; blocked", sub, tok, spec.joinNames(), spec.reason)
 	}
@@ -108,6 +118,10 @@ func runGit(ctx context.Context, workspaceRoot, args string, maxOutputChars int)
 	if err := checkGitAttributes(ctx, dir); err != nil {
 		return denyResult("%s", err.Error())
 	}
+	// 串行化放在全部前置检查之后、exec 之前：拒绝路径无须排队；锁覆盖 exec 全程，
+	// 同轮并行的 add+commit 按到达顺序先后执行，不再撞 index.lock。
+	gitMu.Lock()
+	defer gitMu.Unlock()
 	// cwd 定 workdir（pathspec 与系统提示"相对路径基于 workdir"一致），不再 -C 仓库根——
 	// 曾按 repo 根解析，子目录 workdir 下 add/diff 静默命中根下同名文件或假空 diff。
 	cmdArgs := []string{"--no-pager", sub}

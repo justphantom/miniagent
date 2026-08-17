@@ -61,6 +61,18 @@ func TestLint_AllowedSubcommandRuns(t *testing.T) {
 	}
 }
 
+// 子命令重复形剥离（同 git/go/npm）：{"subcommand":"version","args":"version"} 曾拼成
+// `golangci-lint version version`（run 形更糟：`run run ./...` 报 stat ./run 目录不存在）。
+func TestLint_SubcommandRepeatedInArgsStripped(t *testing.T) {
+	if _, err := exec.LookPath("golangci-lint"); err != nil {
+		t.Skip("golangci-lint not available")
+	}
+	res := LintTool(t.TempDir(), 0, 0).Call(context.Background(), `{"subcommand":"version","args":"version"}`)
+	if res.IsError {
+		t.Errorf("repeated 'version' should be stripped and succeed, got: %s", res.Output)
+	}
+}
+
 // 二进制不存在时必须返回 IsError + no such file 消息（不 panic、不崩溃），
 // 与 git/go/npm 经 runLimitedOutput 的既有行为对齐。用空 PATH 子目录强制 LookPath 失败，
 // 不依赖运行环境是否安装了 golangci-lint。

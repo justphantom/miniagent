@@ -73,6 +73,10 @@ func runLint(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 	if qerr != "" {
 		return denyResult("args %s", qerr)
 	}
+	if op := checkShellMetachars(a.Args); op != "" {
+		return denyResult("%s", denyShellMetachars(a.Args))
+	}
+	fields = stripDupSubcommand(sub, fields)
 	if tok, spec, hit := checkDeniedOptions(fields, lintDeniedOptions); hit {
 		return denyResult("golangci-lint %s option %q (%s) %s; blocked", sub, tok, spec.joinNames(), spec.reason)
 	}

@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -110,6 +112,47 @@ func TestGit_SubcommandRepeatedInArgsStripped(t *testing.T) {
 	ls := git.Call(context.Background(), `{"subcommand":"ls-files","args":"--cached"}`)
 	if !strings.Contains(ls.Output, "add") {
 		t.Errorf("file named 'add' should be staged, got: %s", ls.Output)
+	}
+}
+
+// 同轮并行 add+commit 曾撞 .git/index.lock（核心 maxParallelTools=8 并行执行同一步的
+// 多个 tool_calls，会话 20260817-082103 实测 "Unable to create .git/index.lock: File exists"，
+// 模型随后徒劳尝试经 git rm / delete 工具删锁）。gitMu 串行化后必须全部成功。
+func TestGit_ParallelAddCommitNoIndexLock(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := GitTool(dir, 0, 0)
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make([]string, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			var res miniagent.ToolResult
+			if i%2 == 0 {
+				res = git.Call(context.Background(), `{"subcommand":"add","args":"f.txt"}`)
+			} else {
+				res = git.Call(context.Background(), `{"subcommand":"commit","args":"-m \"msg\""}`)
+			}
+			if res.IsError {
+				errs[i] = res.Output
+			}
+		}(i)
+	}
+	wg.Wait()
+	for i, e := range errs {
+		if e != "" {
+			t.Errorf("parallel call %d failed: %s", i, e)
+		}
+	}
+	// commit 三次中至多一次真正提交（其余 nothing to commit，正常退出码结果非 IsError）。
+	ls := git.Call(context.Background(), `{"subcommand":"log","args":"--oneline"}`)
+	if ls.IsError {
+		t.Fatalf("log failed: %s", ls.Output)
 	}
 }
 

@@ -53,6 +53,18 @@ func TestNpm_AllowedSubcommandRuns(t *testing.T) {
 	}
 }
 
+// 子命令重复形剥离（同 git/go）：{"subcommand":"version","args":"version"} 拼成
+// `npm version version` 会把第二个 version 当版本号参数打印，非报错但语义已错。
+func TestNpm_SubcommandRepeatedInArgsStripped(t *testing.T) {
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available")
+	}
+	res := NpmTool(t.TempDir(), 0, 0).Call(context.Background(), `{"subcommand":"version","args":"version"}`)
+	if res.IsError {
+		t.Errorf("repeated 'version' should be stripped and succeed, got: %s", res.Output)
+	}
+}
+
 // SplitTruncate：install/test 的错误摘要（ELIFECYCLE/exit 1）在尾部。
 func TestNpm_SplitTruncateSet(t *testing.T) {
 	if !NpmTool(t.TempDir(), 0, 0).SplitTruncate {

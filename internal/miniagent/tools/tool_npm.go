@@ -69,6 +69,10 @@ func runNpm(ctx context.Context, workspaceRoot, args string, maxOutputChars int)
 	if qerr != "" {
 		return denyResult("args %s", qerr)
 	}
+	if op := checkShellMetachars(a.Args); op != "" {
+		return denyResult("%s", denyShellMetachars(a.Args))
+	}
+	fields = stripDupSubcommand(sub, fields)
 	// --prefix/-C redirects npm's working root outside the module tree (out-of-subtree writes);
 	// --registry overrides the registry endpoint (exfiltration of the dependency stream to an
 	// attacker-controlled server that can serve malicious tarballs). npm 接受单破折号长名

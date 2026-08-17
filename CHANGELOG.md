@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 ### Fixed
+- **git 工具进程内串行化**：核心默认并行执行同一步的多个 tool_calls（maxParallelTools=8），同轮 `add`+`commit` 撞 `.git/index.lock`（会话 20260817-082103 实测 `Unable to create .git/index.lock: File exists`，模型随后徒劳尝试经 git rm / delete 工具删锁）。包级 `gitMu` 覆盖 exec 全程，同轮 git 调用按到达顺序串行；拒绝路径不排队、跨进程竞争不涉。
+- **args 未引号壳元字符前置拒绝**（git/go/npm/lint）：模型把 shell 管道/重定向写进 args（`test ./... 2>&1 | head -100` → go 收到 flag `-100`；`run ./... | grep -E …` → `-E` 报错），argv 直传 exec 无 shell，元字符成为字面参数报出无从诊断的 flag 错误。现检原始 args 引号外的 `| & ; > < \`` 并拒绝，文案指明「一次一条命令 / 引号包裹特殊字符 / auto 模式用 shell 工具」；引号内与转义形不受影响（`log --grep 'a|b'` 合法）。
+- **go/npm/lint 子命令重复剥离**：同 git 修法铺到三工具——会话 20260817-082103 中 34 次 go 调用 29 次带 `{"subcommand":"test","args":"test ./..."}` 形制，拼成 `go test test` 报 `package test is not in std` 假失败，模型误诊为 rtk proxy artifact 烧约 25 次调用后带着未跑通的全量验证提交。公共 `stripDupSubcommand`（4 处重复抽 helper）。
 - **git 子命令重复剥离**：模型高频把 subcommand 重复写进 args（`{"subcommand":"add","args":"add f.txt"}`），拼成 `git add add f.txt` 后报 `pathspec 'add' did not match` / `ambiguous argument 'log'`——实测会话连续十余次重试该形制全部失败且无法自愈。现在 args 首个 token 与 subcommand 相同时静默剥离（文件名恰等于子命令名时不误伤）。
 - **glob `**` 与含 `/` 模式**：原实现只按 basename 匹配（`filepath.Match(pattern, d.Name())`），含 `/` 的 pattern 永不命中、`**` 不支持——实测会话连试 6 种 pattern 全 `no matches` 后模型放弃。现在：不含 `/` 的模式保持 basename 语义（历史行为）；含 `/` 的模式按相对路径逐段匹配，`**` 段匹配任意层目录（`**/app.css`、`internal/**`）。README 同步。
 ### Added

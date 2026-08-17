@@ -216,6 +216,23 @@ func TestGo_DoesNotOverblockLegitFlags(t *testing.T) {
 	}
 }
 
+// 子命令重复形剥离：{"subcommand":"test","args":"test ./..."} 曾拼成 `go test test` 报
+// "package test is not in std" 假失败（实测会话 34 次 go 调用 29 次带该形制，模型误诊为
+// rtk artifact 烧约 25 次调用）。剥离后须等价正常调用。
+func TestGo_SubcommandRepeatedInArgsStripped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/dup\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a_test.go"), []byte("package dup\nimport \"testing\"\nfunc TestA(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := GoTool(dir, 0, 0).Call(context.Background(), `{"subcommand":"test","args":"test ./..."}`)
+	if res.IsError {
+		t.Errorf("repeated 'test' should be stripped and succeed, got: %s", res.Output)
+	}
+}
+
 // SplitTruncate：go test/build 的 FAIL 明细在输出尾部，head 截断只剩包列表。
 func TestGo_SplitTruncateSet(t *testing.T) {
 	if !GoTool(t.TempDir(), 0, 0).SplitTruncate {
