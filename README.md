@@ -258,7 +258,7 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
-| `pattern` | string | 是 | filepath.Match 通配（`*` `?` `[...]`，不跨 `/`、无 `**`） |
+| `pattern` | string | 是 | 通配模式：不含 `/` 时按文件名匹配（任意深度，如 `*.go`）；含 `/` 时按相对路径逐段匹配，`**` 段匹配任意层目录（如 `**/app.css`、`internal/**`） |
 | `path` | string | 否 | 根目录，默认 `-workdir` |
 
 约束：命中上限 500 条；操作超时 30s。

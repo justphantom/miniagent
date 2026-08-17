@@ -8,10 +8,10 @@ import (
 )
 
 // buildTools registers builtin tools and adjusts constraints by mode:
-//   - default (11 tools, NO shell): file tools (read/write/edit/grep/glob) are confined to the workdir
+//   - default (12 tools, NO shell): file tools (read/write/edit/grep/glob/ast) are confined to the workdir
 //     subtree via confineWrap; a misfired shell call returns "unknown tool" since it is not registered.
 //     workdir is required (validated at the main entry).
-//   - auto (12 tools): no constraints (file tools are not wrapped) unless confineAuto is opted in.
+//   - auto (13 tools): no constraints (file tools are not wrapped) unless confineAuto is opted in.
 //
 // git and go tools are inherently read-only/constrained by their own allow-list, so they are NOT wrapped
 // in confineWrap (which only understands a "path" JSON field, not "subcommand"). Their timeout aligns
@@ -37,9 +37,11 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 	}
 	grep := tools.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
 	glob := tools.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
+	astT := tools.AstTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
 	if confine && workdir != "" {
 		grep = confineWrap(grep, workdir, true, evalSymlinks)
 		glob = confineWrap(glob, workdir, true, evalSymlinks)
+		astT = confineWrap(astT, workdir, true, evalSymlinks)
 	}
 	git := tools.GitTool(workdir, shellTimeout, limits.MaxShellOutputChars)
 	goT := tools.GoTool(workdir, shellTimeout, limits.MaxShellOutputChars)
@@ -52,9 +54,9 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout time.D
 		deleteT = confineWrap(deleteT, workdir, false, evalSymlinks)
 	}
 	builtins := []miniagent.Tool{
-		read, write, edit, grep, glob, git, goT, npm, lint, rename, deleteT,
+		read, write, edit, grep, glob, astT, git, goT, npm, lint, rename, deleteT,
 	}
-	// shell is auto-only: default mode does not register it (11 tools); a misfired call fails
+	// shell is auto-only: default mode does not register it (12 tools); a misfired call fails
 	// dispatch with "unknown tool". mode=="" resolves to default at the config layer, so only
 	// an explicit auto registers shell — mirrors the shellMode resolution that used to live here.
 	if mode == miniagent.ModeAuto {

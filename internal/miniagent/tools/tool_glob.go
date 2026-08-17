@@ -6,6 +6,7 @@ import (
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,7 +23,11 @@ type globArgs struct {
 }
 
 // GlobTool recursively lists file paths matching a glob, one path per line relative to workdir.
-// Uses filepath.Match globs (*, ?, [...]); they do not cross / and do not support ** — for recursion use grep or shell.
+// Pattern semantics: a pattern without / matches the file NAME anywhere in the tree (historical
+// basename behavior — `*.go` keeps listing nested files); a pattern containing / is matched
+// segment-wise against the path relative to root, with `**` as a segment matching zero or more
+// directories (`**/app.css` matches at any depth). Single-segment wildcards (* ? [...]) do not
+// cross /, same as filepath.Match.
 // timeout<=0 uses the default fileOpTimeout.
 func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) miniagent.Tool {
 	if timeout <= 0 {
@@ -33,9 +38,9 @@ func GlobTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) m
 	}
 	return miniagent.Tool{
 		Name:        "glob",
-		Description: "Recursively lists file paths matching a glob pattern, one per line (relative to workdir). Uses filepath.Match globs (* ? [...]; does not cross /, no **). Excludes .git. Match limit " + strconv.Itoa(maxGlobEntries) + ".",
+		Description: "Recursively lists file paths matching a glob pattern, one per line (relative to workdir). A pattern without / matches the file name anywhere in the tree (e.g. *.go); a pattern with / matches the relative path segment-wise, and ** matches any number of directories (e.g. **/app.css, internal/**/*_test.go). Excludes .git. Match limit " + strconv.Itoa(maxGlobEntries) + ".",
 		Parameters: object(map[string]any{
-			"pattern": map[string]any{"type": "string", "description": "A filepath.Match glob pattern, e.g. *.go or *_test.go"},
+			"pattern": map[string]any{"type": "string", "description": "Glob pattern: no / matches the file name at any depth (*.go); with / matches the relative path, ** spans directories (**/app.css, internal/**)"},
 			"path":    map[string]any{"type": "string", "description": "Root directory, relative to workdir or absolute, defaults to workdir"},
 		}, "pattern"),
 		ResultLimit: miniagent.MaxToolResultInHistory,
@@ -92,17 +97,16 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
-		ok, _ := filepath.Match(a.Pattern, d.Name())
-		if !ok {
+		rel := path
+		if r, err := filepath.Rel(root, path); err == nil {
+			rel = r
+		}
+		if !globMatchPath(a.Pattern, rel) {
 			return nil
 		}
 		if len(paths) >= maxGlobEntries {
 			truncated = true
 			return filepath.SkipAll
-		}
-		rel := path
-		if r, err := filepath.Rel(root, path); err == nil {
-			rel = r
 		}
 		paths = append(paths, rel)
 		return nil
@@ -118,6 +122,57 @@ func runGlob(ctx context.Context, workspaceRoot, args string, maxOutputChars int
 		out += fmt.Sprintf("\n…(over %d entries, collection stopped)", maxGlobEntries)
 	}
 	return miniagent.ToolResult{Output: out}
+}
+
+// globMatchPath matches rel (path relative to root, slash-separated) against pattern.
+// Pattern without '/': basename semantics — matched against the file NAME only, at any depth
+// (historical behavior; `*.go` must keep listing nested files). Pattern with '/': segment-wise,
+// where a `**` segment matches zero or more directories. Single-segment wildcards stay
+// non-crossing (filepath.Match), so `*` never spans '/'.
+func globMatchPath(pattern, rel string) bool {
+	if !strings.Contains(pattern, "/") {
+		ok, _ := filepath.Match(pattern, path.Base(rel))
+		return ok
+	}
+	return matchSegs(strings.Split(pattern, "/"), rel)
+}
+
+// matchSegs matches a '/'-split pattern segment list against a slash-separated relative path.
+// `**` consumes zero or more leading path segments (backtracking); every other segment is a
+// filepath.Match wildcard that must equal exactly one path component.
+func matchSegs(segs []string, path string) bool {
+	for len(segs) > 0 {
+		if segs[0] == "**" {
+			// Collapse consecutive ** (a/**/**/b ≡ a/**/b) to bound the backtracking fan-out.
+			for len(segs) > 1 && segs[1] == "**" {
+				segs = segs[1:]
+			}
+			rest := strings.Split(path, "/")
+			for drop := 0; drop <= len(rest); drop++ {
+				if matchSegs(segs[1:], strings.Join(rest[drop:], "/")) {
+					return true
+				}
+			}
+			return false
+		}
+		if path == "" {
+			return false
+		}
+		head := path
+		if i := strings.IndexByte(path, '/'); i >= 0 {
+			head = path[:i]
+			path = path[i+1:]
+		} else {
+			path = ""
+		}
+		if ok, _ := filepath.Match(segs[0], head); !ok {
+			return false
+		}
+		segs = segs[1:]
+	}
+	// Pattern exhausted: match only when the path is exhausted too (** at the tail already
+	// consumed everything via the loop above, so here path must be empty).
+	return path == ""
 }
 
 // globPatternMalformed reports the bracket/backslash structural errors that fabricated-name probes

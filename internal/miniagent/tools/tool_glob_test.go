@@ -26,6 +26,49 @@ func TestGlobTool_Basic(t *testing.T) {
 	}
 }
 
+// ** 与含 / 模式按相对路径段匹配（实测会话：**/app.css 连试 6 种 pattern 全 no matches 后
+// 模型放弃）。无 / 模式保持 basename 语义（*.go 仍列深层文件，历史行为）。
+func TestGlobTool_DoubleStarAndSlashPatterns(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"app.css":                       "",
+		"internal/admin/assets.go":      "",
+		"internal/admin/assets/app.css": "",
+		"internal/x_test.go":            "",
+		"other/app.css":                 "",
+	})
+	for _, tc := range []struct{ pattern, want string }{
+		{"**/app.css", "internal/admin/assets/app.css"}, // 深层命中 + 根层命中
+		{"internal/**", "internal/admin/assets.go"},     // 目录前缀 + ** 收尾
+		{"internal/**/*_test.go", "internal/x_test.go"}, // ** 后跟段
+		{"other/app.css", "other/app.css"},              // 字面相对路径
+	} {
+		res := GlobTool(dir, 0, 0).Call(context.Background(), fmt.Sprintf(`{"pattern":%q}`, tc.pattern))
+		if res.IsError {
+			t.Errorf("pattern %q: unexpected error: %s", tc.pattern, res.Output)
+			continue
+		}
+		if !strings.Contains(res.Output, tc.want) {
+			t.Errorf("pattern %q: want %q in output, got: %q", tc.pattern, tc.want, res.Output)
+		}
+	}
+	// **/app.css 命中根层与所有深层 app.css（共 3 处）。
+	res := GlobTool(dir, 0, 0).Call(context.Background(), `{"pattern":"**/app.css"}`)
+	if n := strings.Count(res.Output, "app.css"); n != 3 {
+		t.Errorf("**/app.css should match 3 files (root + 2 nested), got %d: %q", n, res.Output)
+	}
+	// 含 / 模式不再匹配纯文件名错位的路径。
+	res = GlobTool(dir, 0, 0).Call(context.Background(), `{"pattern":"internal/*.css"}`)
+	if strings.Contains(res.Output, "assets/app.css") {
+		t.Errorf("internal/*.css must not cross / into assets/: %q", res.Output)
+	}
+	// 无 / 模式保持 basename 语义。
+	res = GlobTool(dir, 0, 0).Call(context.Background(), `{"pattern":"app.css"}`)
+	if !strings.Contains(res.Output, "other/app.css") {
+		t.Errorf("slash-less pattern keeps basename semantics: %q", res.Output)
+	}
+}
+
 func TestGlobTool_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"a.go": ""})

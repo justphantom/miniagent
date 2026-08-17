@@ -4,7 +4,11 @@
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
+### Fixed
+- **git 子命令重复剥离**：模型高频把 subcommand 重复写进 args（`{"subcommand":"add","args":"add f.txt"}`），拼成 `git add add f.txt` 后报 `pathspec 'add' did not match` / `ambiguous argument 'log'`——实测会话连续十余次重试该形制全部失败且无法自愈。现在 args 首个 token 与 subcommand 相同时静默剥离（文件名恰等于子命令名时不误伤）。
+- **glob `**` 与含 `/` 模式**：原实现只按 basename 匹配（`filepath.Match(pattern, d.Name())`），含 `/` 的 pattern 永不命中、`**` 不支持——实测会话连试 6 种 pattern 全 `no matches` 后模型放弃。现在：不含 `/` 的模式保持 basename 语义（历史行为）；含 `/` 的模式按相对路径逐段匹配，`**` 段匹配任意层目录（`**/app.css`、`internal/**`）。README 同步。
 ### Added
+- **git tag 子命令放行（创建/列举）**：`git tag` 入 allow-list，默认模式可打 annotated tag（发版流程 `git tag -a vX.Y.Z -m` 此前需用户在 default 外手动执行）。参数级拒绝：`tag -d/-f/--delete/--force`（删/移本地 tag ref）与 `tag -F/--file`（任意文件读入 message，经 show/cat-file 回显外泄）。exec 族（`-s/-u/-v/-e/--trailer`，gpg/编辑器调用）维持不拒——与 `commit -S/--gpg-sign` 同类先例，非新攻击面。远端 tag 面不变（`push --tags`/refspec push 此前已可用，强推/删除仍被 `+`/`:` refspec 规则拦）。已知保守过拒：`-m<msg>` 粘合形含 d/f/F 字母被簇分支拒（引号形 `-m "msg"` 不受影响）。
 - **auto-fill model limits from models_url**：启动时若 config 三层（model>provider>global）均未设 `context_window`/`max_tokens`，GET provider 的 `models_url` 一次，解析非标准 `context_window`/`max_output_tokens` 扩展字段并填充。从不覆盖显式配置；fetch 失败 warn 后继续（不阻塞运行）。`ListModels`/`ListAllModels` 返回类型从 `[]string`/`[]ModelRef` 升级为 `[]ModelInfo`/`[]ProviderModel`（含 `Limits`）；`-list-models` 路径行为不变。
 ### Fixed
 - **shell 挂起**（setsid 孤儿持有管道）：`sleep 30 &` 类后台任务逃逸进程组后持有 stdout fd，`cmd.Wait` 等待 exec copier 的 EOF 直到孤儿退出（实测 500ms 超时 6s+ 才返回）。`waitOutputTimeout` 按 ctx 剩余期限+2s 有界等待，孤儿场景按时放弃（泄漏进程为已知残留，见 platform.go）。

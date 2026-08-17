@@ -18,14 +18,15 @@ type gitArgs struct {
 	Args       string `json:"args,omitempty"`
 }
 
-// 只读子命令 + 基本版本写操作（add/commit/pull/push）。
+// 只读子命令 + 基本版本写操作（add/commit/pull/push/tag）。tag 仅允许创建/列举
+// （-d/-f 删改本地 tag ref、-F 任意文件读经 show/cat-file 回显外泄，均在 flagmatch.go 拒）；
 // 写操作经 rtk 代理时输出紧凑（"ok <hash>"/"ok <branch>"）；reset/merge/rebase/checkout 等改变历史的命令仍被拒。
 var allowedGitSubcommands = map[string]bool{
 	"status": true, "diff": true, "log": true, "show": true,
 	"ls-files": true, "blame": true, "reflog": true,
 	"whatchanged": true, "describe": true, "check-attr": true,
 	"ls-tree": true, "rev-parse": true, "shortlog": true, "cat-file": true,
-	"add": true, "commit": true, "pull": true, "push": true,
+	"add": true, "commit": true, "pull": true, "push": true, "tag": true,
 }
 
 // rtkGitSubcommands lists the subcommands that rtk git supports (compact output).
@@ -51,7 +52,7 @@ func GitTool(workspaceRoot string, timeout time.Duration, maxOutputChars int) mi
 	}
 	return miniagent.Tool{
 		Name:        "git",
-		Description: "Git operations: read-only (status/diff/log/show/ls-tree etc) plus basic versioning (add/commit/pull/push). History-rewriting commands (reset/rebase/merge/checkout, commit --amend, push --force/--delete) and config/branch/tag management are blocked. push/pull operate on the configured remote only. Relative pathspecs resolve against the workdir, NOT the repo root. Commit requires -m (also accepts -am). When the rtk proxy is deployed, output is compact and NOT native git format. Timeout " + timeout.String() + "; non-zero exit is a normal result (see exit code), not a tool failure.",
+		Description: "Git operations: read-only (status/diff/log/show/ls-tree etc) plus basic versioning (add/commit/pull/push/tag). History-rewriting commands (reset/rebase/merge/checkout, commit --amend, push --force/--delete) and config/branch management are blocked. tag create/list only: tag -d/-f (delete/move) and tag -F (read message from any file) are blocked. push/pull operate on the configured remote only. Relative pathspecs resolve against the workdir, NOT the repo root. Commit requires -m (also accepts -am). When the rtk proxy is deployed, output is compact and NOT native git format. Timeout " + timeout.String() + "; non-zero exit is a normal result (see exit code), not a tool failure.",
 		Parameters: object(map[string]any{
 			"subcommand": map[string]any{"type": "string", "description": "Git subcommand"},
 			"args":       map[string]any{"type": "string", "description": `Additional arguments as ONE string; shell-style quoting keeps spaces intact (e.g. args: "-m \"feat: add thing\""). Options that write files or rewrite history are rejected`},
@@ -82,6 +83,12 @@ func runGit(ctx context.Context, workspaceRoot, args string, maxOutputChars int)
 	fields, qerr := splitArgsStrict(a.Args)
 	if qerr != "" {
 		return denyResult("args %s", qerr)
+	}
+	// 模型高频把 subcommand 重复写进 args（{"subcommand":"add","args":"add f.txt"}），拼成
+	// `git add` + 重复的 "add" 后报 pathspec 'add' 不存在 / 'log' 成 ambiguous argument——
+	// 实测会话里连续十余次重试同一形制全部失败。剥掉首个重复 token 而非报错：后续 token 语义不变。
+	if len(fields) > 0 && fields[0] == sub {
+		fields = fields[1:]
 	}
 	if tok, spec, hit := checkDeniedOptions(fields, gitDeniedFor(sub)); hit {
 		return denyResult("git %s option %q (%s) %s; blocked", sub, tok, spec.joinNames(), spec.reason)

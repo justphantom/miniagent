@@ -27,7 +27,7 @@ default 模式下调用外部二进制（git/go/npm），不能用 deny-list（�
 5. **confineWrap 不适用于命令工具**：confineWrap 只解析 `{"path":...}`，而 git/go/npm 的 args 无 path 字段，包装是 no-op。只对文件工具（read/write/edit/grep/glob/rename/delete）做 confineWrap
 
 ## 为何不用 deny-list
-deny-list 只拦已知危险命令，新命令默认放行——git/go/npm 的可写子命令数量大（stash/config/branch/tag/remote/worktree/clean/grep…），deny-list 维护成本高且易漏。allow-list 默认拒绝未知，新增命令安全（自动被拒）。
+deny-list 只拦已知危险命令，新命令默认放行——git/go/npm 的可写子命令数量大（stash/config/branch/replace/notes/remote/worktree/clean…），deny-list 维护成本高且易漏。allow-list 默认拒绝未知，新增命令安全（自动被拒）。新放行的子命令须按 `git tag` 先例（2026-08-16）做全 flag 面审计：破坏/文件/exec 三类逐 flag 定拒或显式接受先例（tag 的 `-d/-f` 删改、`-F` 文件读拒；`-s/-v` gpg exec 按 `commit -S` 先例接受）。
 
 ## 何时用
 - default 模式下调外部二进制且需收紧

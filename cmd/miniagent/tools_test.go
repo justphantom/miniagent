@@ -16,13 +16,13 @@ func toolNames(tools []miniagent.Tool) map[string]bool {
 	return names
 }
 
-// auto mode registers all 12 builtin tools including shell.
-func TestBuildTools_AutoRegisters12(t *testing.T) {
+// auto mode registers all 13 builtin tools including shell.
+func TestBuildTools_AutoRegisters13(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)
-	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "shell": true, "git": true, "go": true, "npm": true, "golangci-lint": true, "rename": true, "delete": true}
+	want := map[string]bool{"read": true, "write": true, "edit": true, "grep": true, "glob": true, "ast": true, "shell": true, "git": true, "go": true, "npm": true, "golangci-lint": true, "rename": true, "delete": true}
 	got := toolNames(tools)
 	if len(tools) != len(want) {
-		t.Fatalf("got %d tools %v, want %d (auto: read/write/edit/grep/glob/shell/git/go/npm/lint/rename/delete)", len(tools), got, len(want))
+		t.Fatalf("got %d tools %v, want %d (auto: read/write/edit/grep/glob/ast/shell/git/go/npm/lint/rename/delete)", len(tools), got, len(want))
 	}
 	for name := range want {
 		if !got[name] {
@@ -36,12 +36,12 @@ func TestBuildTools_AutoRegisters12(t *testing.T) {
 	}
 }
 
-// default mode registers 11 tools WITHOUT shell: a misfired shell call fails dispatch with "unknown tool"
+// default mode registers 12 tools WITHOUT shell: a misfired shell call fails dispatch with "unknown tool"
 // (loop_tools), not an executed command — the registration gate replaces the old sudo/su denylist.
-func TestBuildTools_DefaultRegisters11NoShell(t *testing.T) {
+func TestBuildTools_DefaultRegisters12NoShell(t *testing.T) {
 	tools := buildTools(t.TempDir(), 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)
-	if len(tools) != 11 {
-		t.Fatalf("got %d tools %v, want 11 (default: read/write/edit/grep/glob/git/go/npm/lint/rename/delete)", len(tools), toolNames(tools))
+	if len(tools) != 12 {
+		t.Fatalf("got %d tools %v, want 12 (default: read/write/edit/grep/glob/ast/git/go/npm/lint/rename/delete)", len(tools), toolNames(tools))
 	}
 	if got := toolNames(tools); got["shell"] {
 		t.Fatal("default mode must not register shell")
@@ -50,11 +50,11 @@ func TestBuildTools_DefaultRegisters11NoShell(t *testing.T) {
 
 // Empty workdir keeps the same mode-dependent counts (workdir is required at the main entry; this is the degenerate unit case).
 func TestBuildTools_EmptyWorkdirModeCounts(t *testing.T) {
-	if n := len(buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)); n != 12 {
-		t.Errorf("auto empty workdir: got %d tools, want 12", n)
+	if n := len(buildTools("", 0, 0, 0, miniagent.ModeAuto, 0, miniagent.Limits{}, false, false)); n != 13 {
+		t.Errorf("auto empty workdir: got %d tools, want 13", n)
 	}
-	if n := len(buildTools("", 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)); n != 11 {
-		t.Errorf("default empty workdir: got %d tools, want 11", n)
+	if n := len(buildTools("", 0, 0, 0, miniagent.ModeDefault, 0, miniagent.Limits{}, false, false)); n != 12 {
+		t.Errorf("default empty workdir: got %d tools, want 12", n)
 	}
 }
 

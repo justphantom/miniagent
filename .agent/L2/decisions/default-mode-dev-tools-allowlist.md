@@ -27,7 +27,7 @@ default 模式（2026-08-16 起 shell 不注册，此前为词法 guardrail 禁�
 
 ### allow-list 收紧原则
 1. **只放开发必需子命令**，拒绝可写/可执行/可改历史的命令：
-   - git：只读 14 + `add/commit/pull/push`；拒 `reset/rebase/merge/checkout/switch/restore/stash/config/branch/tag/remote/worktree/clean`
+   - git：只读 14 + `add/commit/pull/push/tag`；tag 仅创建/列举（拒 `-d/-f` 删改、`-F` 任意文件读）；拒 `reset/rebase/merge/checkout/switch/restore/stash/config/branch/remote/worktree/clean`
    - go：`build/test/vet/doc/list/version/clean`；拒 `run`（等同 shell 执行任意代码）、`get/install/mod tidy/download/init/generate/fmt/env -w/bug`
    - npm：`install/ci/test/run/ls/outdated/audit/version`；拒 `publish/adduser/logout/create/init`
 2. **参数级拒绝**：即使 allow-list 内的子命令也拒危险参数前缀——git 拒 `--output`/`-O`/`--ext-diff`，go 拒 `-w`/`-write`/`-fix`/`-modfile`

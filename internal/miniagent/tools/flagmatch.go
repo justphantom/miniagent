@@ -122,6 +122,11 @@ var gitDeniedOptions = map[string][]optSpec{
 	"push": {
 		{shorts: []string{"-f", "-d"}, longs: []string{"force", "force-with-lease", "delete", "mirror"}, reason: reasonHistory},
 	},
+	"tag": {
+		// -d/-f 删除/移动本地 tag ref；-F 从任意文件读 message（内容入 tag 对象，经 show/cat-file 回显可外泄）。
+		{shorts: []string{"-d", "-f"}, longs: []string{"delete", "force"}, reason: reasonHistory},
+		{shorts: []string{"-F"}, longs: []string{"file"}, reason: reasonWrite},
+	},
 	"*": {
 		{longs: []string{"output", "ext-diff", "no-index"}, reason: reasonWrite},
 		// 本工具把 args 一律拼在子命令之后（git --no-pager <sub> <args...>），git 会把
