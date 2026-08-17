@@ -16,18 +16,23 @@ func webToText(body string, isHTML bool) string {
 	}
 	s := body
 	// Drop script/style contents entirely (case-insensitive, tolerating attributes).
+	// Case-fold once (O(n)) instead of per-iteration findTag (O(n²) worst case: each
+	// iteration re-folded the remaining string via strings.ToLower for matching).
+	folded := strings.ToLower(s)
 	for _, tag := range []string{"script", "style"} {
 		for {
-			start := findTag(s, "<"+tag)
+			start := strings.Index(folded, "<"+tag)
 			if start < 0 {
 				break
 			}
-			end := findTag(s[start:], "</"+tag+">")
+			end := strings.Index(folded[start:], "</"+tag+">")
 			if end < 0 {
-				s = s[:start]
+				s, folded = s[:start], folded[:start]
 				break
 			}
-			s = s[:start] + s[start+end+len(tag)+3:]
+			drop := end + len(tag) + 3
+			s = s[:start] + s[start+drop:]
+			folded = folded[:start] + folded[start+drop:]
 		}
 	}
 	// Strip tags; preserve block boundaries as newlines so words don't glue across elements.
@@ -57,11 +62,6 @@ func webToText(body string, isHTML bool) string {
 		}
 	}
 	return strings.Join(kept, "\n")
-}
-
-// findTag finds a case-insensitive tag open/close marker in s, returning the index of '<'.
-func findTag(s, tag string) int {
-	return strings.Index(strings.ToLower(s), strings.ToLower(tag))
 }
 
 // decodeEntities decodes the common named entities + numeric forms. Not exhaustive by design.

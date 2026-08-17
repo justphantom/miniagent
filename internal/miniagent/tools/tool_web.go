@@ -168,7 +168,7 @@ func isPublicIP(ip net.IP) bool {
 	return !blocked
 }
 
-// readWebBody reads up to maxBytes+1 (the +1 detects truncation), translating to text upfront.
+// readWebBody reads up to maxBytes+1 (the +1 detects truncation).
 func readWebBody(r io.Reader, maxBytes int) (string, bool, error) {
 	raw, err := io.ReadAll(io.LimitReader(r, int64(maxBytes)+1))
 	if err != nil {

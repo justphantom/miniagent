@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -142,7 +143,7 @@ func TestWeb_PublicHostBlockedCases(t *testing.T) {
 	}
 }
 
-func TestWeb_PrivateRedirectBlockedWhenGuarded(t *testing.T) {
+func TestCheckWebHost_RejectsLoopbackAndV4Mapped(t *testing.T) {
 	// Public-looking first hop (allowPrivate=true only for the first hop via test
 	// server), then redirect to a loopback literal: CheckRedirect re-checks and
 	// must fail despite allowPrivate... allowPrivate skips redirect checks too,
@@ -216,5 +217,82 @@ func TestWebToText_CollapsesBlankLines(t *testing.T) {
 func TestDecodeEntities_NumericForms(t *testing.T) {
 	if got := decodeEntities("&#65;&#x42;&unknown;"); got != "AB&unknown;" {
 		t.Errorf("numeric entities: %q", got)
+	}
+}
+
+// remapPublicDial replaces http.DefaultTransport with one that dials the public literal
+// 8.8.8.8 as 127.0.0.1, so httptest servers (bound to 127.0.0.1) can be reached via a
+// public-looking first-hop URL — letting checkWebHost pass the first hop while
+// CheckRedirect re-validates redirect targets end-to-end. Restored on cleanup.
+// Not safe under t.Parallel (mutates a global); these tests do not parallelize.
+func remapPublicDial(t *testing.T) {
+	t.Helper()
+	orig := http.DefaultTransport
+	http.DefaultTransport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, _ := net.SplitHostPort(addr)
+			if host == "8.8.8.8" {
+				addr = net.JoinHostPort("127.0.0.1", port)
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+	t.Cleanup(func() { http.DefaultTransport = orig })
+}
+
+// TestWeb_RedirectToPrivateLiteralBlocked exercises the CheckRedirect SSRF branch end-to-end:
+// first hop is a public IP literal (passes checkWebHost), the server 302s to a loopback
+// literal — CheckRedirect must re-validate and reject. Previously only checkWebHost itself
+// was unit-tested, leaving the redirect callback's guard unverified.
+func TestWeb_RedirectToPrivateLiteralBlocked(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("should not reach"))
+	}))
+	defer final.Close()
+	finalURL, _ := url.Parse(final.URL)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1:"+finalURL.Port()+"/secret", http.StatusFound)
+	}))
+	defer srv.Close()
+	srvURL, _ := url.Parse(srv.URL)
+
+	remapPublicDial(t)
+	tl := WebTool(0, 0, 0, false) // allowPrivate=false: CheckRedirect re-checks each hop
+	res := callWeb(t, tl, `{"url":"http://8.8.8.8:`+srvURL.Port()+`/redirect"}`)
+	if !res.IsError {
+		t.Fatalf("want redirect-to-private blocked, got: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "blocked") {
+		t.Errorf("error %q lacks redirect-block reason", res.Output)
+	}
+	if strings.Contains(res.Output, "should not reach") {
+		t.Error("redirect to private target was followed")
+	}
+}
+
+// TestWeb_RedirectToPublicLiteralFollowed is the positive counterpart: a redirect to a
+// public IP literal must be followed (CheckRedirect returns nil), proving the guard does
+// not over-block legitimate public hops.
+func TestWeb_RedirectToPublicLiteralFollowed(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("arrived"))
+	}))
+	defer final.Close()
+	finalURL, _ := url.Parse(final.URL)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://8.8.8.8:"+finalURL.Port()+"/x", http.StatusFound)
+	}))
+	defer srv.Close()
+	srvURL, _ := url.Parse(srv.URL)
+
+	remapPublicDial(t)
+	tl := WebTool(0, 0, 0, false)
+	res := callWeb(t, tl, `{"url":"http://8.8.8.8:`+srvURL.Port()+`/redirect"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "arrived") {
+		t.Errorf("redirect to public literal not followed: %q", res.Output)
 	}
 }
