@@ -6,10 +6,9 @@
 - 默认非流式：每次 LLM 调用是普通 POST，等完整响应返回；传 `-stream` 改走 SSE，增量发 `text_delta`/`reasoning_delta` 事件
 - 会话：默认无状态；`-save-session` 新建并落盘（id 内部生成），`-session <id>` 接续已存在会话；均以 jsonl append-only 落盘（首行 metadata + 每条 message），跨进程接续对话。二者互斥
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
-- 权限模式（`-mode`）：default（默认）= 薄软约束（写工具限 workdir 子树、**不注册 shell 工具**——误调返回 `unknown tool`）；auto = 无限制（注册全部 12 工具含 shell）。default 不构成安全边界——写工具可符号链接逃逸，真隔离仍靠调用方（容器/低权限用户）
 - 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`internal/miniagent/platform_windows.go`）
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
-- 工具：auto 模式 14 个：`read` / `write` / `edit` / `grep` / `glob` / `ast` / `web` / `shell` / `git` / `go` / `npm` / `golangci-lint` / `rename` / `delete`；default 模式 13 个（无 `shell`，外部命令经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令；`web` 网页抓取默认注册，SSRF 防护内置）
+- 工具：单模式 8 个：`read` / `write` / `edit` / `grep` / `glob` / `ast` / `web` / `shell`。隔离全交运行用户的 OS 权限（容器/低权 UID/文件权限），agent 层不做安全保障
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行；**session 保存期间临时忽略信号**，避免截断 session 文件
 
 ## 架构：极简核心 + 开放钩子
@@ -90,7 +89,6 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 -log-level string        日志级别：debug|info|warn|error（默认 info）
 -max-iterations int      单轮 LLM 调用上限（0=默认 20）
 -metrics-step            每步输出 metrics NDJSON 到 stderr（step/transcript 长度/token 花费/压缩/LLM 请求数）
--mode string             权限模式 default|auto（默认 default）：workdir 恒必填；default 限写工具于 workdir 且不注册 shell 工具；auto 注册全部 12 工具无限制
 -model string            LLM model id（须与 -provider 成对传入，同传覆盖 defaults 对；只传其一报错）
 -provider string         LLM provider 名（须与 -model 成对传入；-list-models 时单独用于筛选单个 provider）
 -replay string           回放指定会话（读 session 文件重显过程，不调 LLM；与 -save-session/-session/-result-only 互斥）
@@ -199,7 +197,7 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 ## 工具清单
 
-工具集与约束取决于 `-mode`：default 模式注册 13 个工具（无 `shell`，含 `web`），文件工具（read/write/edit/grep/glob/ast/rename/delete）限定在 workdir 子树、拒绝 `.git` 目录及内容（防绕过 git 工具白名单：hooks 执行链 / remote 改写），git/go/npm 工具另拒参数级通道（`--no-index`/`-F`/push-pull URL 位置参数/`.gitattributes` 驱动/`-o`/`-toolexec`/`--prefix`/`--registry`，模块根上溯不越 workdir）；auto 模式注册全部 14 个工具（含 `shell`），无任何约束；`web` 工具两模式默认注册（SSRF 防护内置，超时 `run.web_timeout`）。工具参数为 JSON 对象。
+单模式 8 个工具：`read` / `write` / `edit` / `grep` / `glob` / `ast` / `shell` / `web`。隔离全交运行用户的 OS 权限（容器/低权 UID/文件权限），agent 层不做 confine/白名单/`.git` 封锁等安全保障。工具参数为 JSON 对象。
 
 > **v4.4.0 破坏性变更**：移除内置工具 `codemap`（目录树概览，与 glob+read 功能重叠）与 `todo`（`todo_create`/`todo_update`/`todo_list`，进程内任务清单，与核心零策略冲突），内置工具 10→6。迁移：`codemap` 改用 `glob`（结构）+ `read`（内容）组合；`todo` 改由模型在正文跟踪任务。详见 [CHANGELOG](./CHANGELOG.md)。
 
@@ -278,11 +276,11 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 ### `shell`
 
-通过 `sh -c` 执行命令，stdout+stderr 合并输出。**仅 `-mode auto` 注册**；default 模式不注册该工具（误调返回 `unknown tool`，外部命令经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具）。
+通过 `sh -c` 执行命令，stdout+stderr 合并输出。
 
 ### `web`
 
-GET 抓取 URL 并转为文本入上下文（查文档 / API 参考 / issue）。两模式默认注册。SSRF 防护内置（拒私网/环回/链路本地含云 metadata/组播/受限广播及 v4-mapped v6，DNS 全 IP 校验，重定向每跳重查）；超时 `run.web_timeout`（默认 30s）；仅 GET/HTTP(S)；拒非 text/* 与 application/json；body 1MiB 封顶，输出限幅+截断标记。非安全边界：GET 查询参数可携数据外传、响应内容直入上下文（prompt injection 面）。
+GET 抓取 URL 并转为文本入上下文（查文档 / API 参考 / issue）。SSRF 防护内置（拒私网/环回/链路本地含云 metadata/组播/受限广播及 v4-mapped v6，DNS 全 IP 校验，重定向每跳重查）；超时 `run.web_timeout`（默认 30s）；仅 GET/HTTP(S)；拒非 text/* 与 application/json；body 1MiB 封顶，输出限幅+截断标记。非安全边界：GET 查询参数可携数据外传、响应内容直入上下文（prompt injection 面）。
 
 - **SSRF 防护**（默认开）：拒绝私网（10/8、172.16/12、192.168/16）、环回、链路本地（含云 metadata 169.254.169.254）、组播/受限广播及映射 IPv4 的 IPv6 地址；DNS 解析出的每个 IP 都校验；重定向每跳重查目标主机。**非安全边界**——绕过 DNS rebind…[args omitted]
 
@@ -327,14 +325,14 @@ GET 抓取 URL 并转为文本入上下文（查文档 / API 参考 / issue）�
 
 ## 运行隔离（工程实践）
 
-miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写工具限定 workdir 子树（`path.Clean`+前缀，**不追符号链接**）、`read`/`grep`/`glob` 在 default 模式下被限制在 workdir 内、**`shell` 工具不注册**（误调返回 `unknown tool`；外部命令仅经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具，防 misfired 调用，非沙箱）、**`.git` 目录被封锁**（文件工具读写均拒，`.git` 内操作仅经 `git` 工具白名单，防 hooks 执行/remote 改写绕过；但 `npm run`/`go test` 本身即任意代码执行，属开发闭环定义内行为）。`-mode auto` 注册 `shell` 且无任何限制（shell 可经 `cd`/绝对路径访问 workdir 外）。隔离**主要由运行用户的 OS 权限决定**，调用方负责：
+miniagent **不做任何 agent 层安全保障**（v5.0.0 删 `-mode`/confineWrap/白名单子命令工具/`.git` 封锁）：`shell` 恒注册、无路径限制，隔离**完全由运行用户的 OS 权限决定**，调用方负责：
 
 - 用**专用低权限用户**运行；workdir 属该用户（或只读挂载），无关路径靠文件系统权限隔离。
 - 密钥经 `$MINIAGENT_API_KEY` 环境变量或 config `provider.key` 注入。**注意：无论哪种方式，shell 子进程都可经 `/proc/$PPID/environ` 或读 config 文件拿到 key**（环境变量剥离只挡 `echo $VAR` 这类直读，挡不住 procfs）。因此密钥隔离**依赖运行用户的 OS 权限**：专用低权限用户、config 文件 `0600`、必要时容器/独立 UID。不要再依赖已移除的 `-key-file`。
 - **session 保存受信号保护**：收到 `SIGINT`/`SIGTERM` 后，正在进行的 LLM/工具调用会被取消，但 `AppendMessages`/`RewriteMessages` 期间会临时忽略信号，保证 session 文件原子落盘，避免半写截断。
 - 需要更强隔离时自行叠加容器 / 独立 UID / `hidepid` / 网络出口白名单等——这些**不在 miniagent 职责内**，由运行环境提供。
 
-> 一句话：miniagent 信任其运行用户的权限边界；default 模式仅拦误操作，越权访问的闸门是 OS 用户与文件权限。此外，工具/输入/输出/请求体均有大小上限（见「内部约束」），`grep` 拒绝复杂正则，以降低误用与注入风险。
+> 一句话：miniagent 信任其运行用户的权限边界；越权访问的闸门是 OS 用户与文件权限。此外，工具/输入/输出/请求体均有大小上限（见「内部约束」），`grep` 拒绝复杂正则，以降低误用与注入风险。
 
 ## 内部约束（常量）
 
@@ -362,7 +360,7 @@ miniagent 的 `-mode default` 是**薄软约束，不构成安全边界**：写�
 
 ## 项目专属配置
 
-system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `defaultSystemPrompt`，含工作流约束 + 「停留在工作目录内」的越界禁令）加上可选的 workdir 规则文件（`defaults.rules_file`，见下）；不再从 `.miniagent/persona.md`/`rules.md` 无条件自动加载。`.miniagent/` 目录现仅用于 session 存储（见「会话」节）。末尾无条件注入 CLI `-workdir` 的绝对路径行 + stay-inside 约束（软引导，非边界；default 模式真边界在 confineWrap 代码层）。
+system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `defaultSystemPrompt`，含工作流约束 + 「停留在工作目录内」的越界禁令）加上可选的 workdir 规则文件（`defaults.rules_file`，见下）；不再从 `.miniagent/persona.md`/`rules.md` 无条件自动加载。`.miniagent/` 目录现仅用于 session 存储（见「会话」节）。末尾无条件注入 CLI `-workdir` 的绝对路径行 + stay-inside 约束（软引导，非边界；真边界靠 OS 权限）。
 
 > **破坏性变更**：项目级 `workdir/.miniagent/persona.md`/`rules.md` 自动加载已移除（继全局 `~/.miniagent/` 层之后的第二次收口，system prompt 来源统一为 config-only）。迁移：原 persona 内容直进 `defaults.system_prompt`（「取代默认」语义与 system_prompt 等价）；原 rules 为「追加」语义，物进 `system_prompt` 文本时需自行保留内置默认的工作流约束（或接受其丢失）。
 
@@ -452,12 +450,12 @@ system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `de
 ```bash
 # 单次问答（默认读取 ~/.miniagent/miniagent.json；key 经 $MINIAGENT_API_KEY 或 config provider.key 注入）
 echo "用一句话解释 goroutine" | \
-  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -mode auto
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir "$PWD"
 
 # 显式指定配置文件
 MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -config /path/to/miniagent.json ...
 
-# 带工具 + 指定工作目录（default 模式：写工具限该目录，shell cwd 为该目录；-workdir 须绝对路径）
+# 带工具 + 指定工作目录（shell cwd 为该目录；-workdir 须绝对路径）
 echo "在当前目录跑测试并总结失败原因" | \
   MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir "$PWD/repo"
 
@@ -467,10 +465,10 @@ echo "重构这段代码" | \
 
 # 限制整体墙钟 5 分钟（防 ReAct 循环失控烧 token；config run.max_duration）
 echo "跑全量测试并总结" | \
-  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -mode auto -workdir "$PWD"
+  MINIAGENT_API_KEY=sk-xxx ./bin/miniagent -workdir "$PWD"
 
 # subagent fork：把可并行子任务再调一次 miniagent（仅输出结果文本）
-echo "<子任务>" | ./bin/miniagent -config <path> -workdir "$PWD" -mode default -result-only  # subagent 无状态，不落盘会话
+echo "<子任务>" | ./bin/miniagent -config <path> -workdir "$PWD" -result-only  # subagent 无状态，不落盘会话
 
 # 查看版本
 ./bin/miniagent -version

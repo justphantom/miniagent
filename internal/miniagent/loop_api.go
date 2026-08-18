@@ -247,10 +247,3 @@ type LoopConfig struct {
 	// files during construction. <=0 uses 7d. Strategy config carrier — not read by the core Run.
 	ToolOutputRetention time.Duration
 }
-
-// Permission modes (review v3 requirement §4): default=thin soft constraint (write tools limited to workdir, shell rejects sudo/su),
-// auto=unrestricted. default does not constitute a security boundary (shell can cd/absolute-path escape, write tools can escape via symlinks).
-const (
-	ModeDefault = "default"
-	ModeAuto    = "auto"
-)

@@ -7,8 +7,8 @@ updated: 2026-08-18
 # 当前会话
 
 ## 状态
-Responses 支持已实现：新增 `kind=responses` 与 `internal/provider/responses`；无状态全量 `input` + `store:false` + encrypted reasoning 本地回放；core/session 增 `ReasoningState`；配置路由/文档/测试同步；3 个超 300 行文件已机械拆分。verify-gate 全绿。
+v5.0.0 工具精简已实施：删 `-mode`/confineWrap/白名单工具（git/go/npm/lint/rename/delete）/.git 封锁/rtk/`ModeDefault`/`ModeAuto` 常量/`confine_eval_symlinks`/`confine_auto`。保留 8 工具：read/write/edit/grep/glob/ast/shell/web（单模式，shell 恒注册）。buildTools 签名瘦身为 `(workdir, 4 timeouts, fileResultLimit, limits)`。subagent guidance 去 `{mode}` 占位符。system prompt Verify 条目改引 shell、Stay inside 去 rename/delete。verify-gate 全绿（gofmt/build/vet/test -race/lint/行数）。
 
 ## 备注
-- 2026-08-18：§P1-A 修复(e244cdd)已提交但 bin 未重编致旧二进制仍拦截 tool-output 读回。根因：bin vcs.revision=ab44adf(<e244cdd)。已 `make build` 重编，新 bin=e244cdd。排查：jsonl session[10] 拦截→`go version -m bin/miniagent` 比对 vcs.revision→源码链路自洽（main.go:188→191+194→286，readAllow 目录=store 写入目录=同一 toolOutputDir）。
-- 下一版本注意：`make build` 的 version 注入须在有 shell/make 的环境执行。
+- 待提交：diff 摘要已给用户，待审阅后 commit。
+- L0 第13条已重写为「agent 层零安全保障」；两 L2 决策文件标 superseded。

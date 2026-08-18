@@ -3,9 +3,12 @@ layer: L2
 type: decision
 tags: [tools, default-mode, git, go, npm, rename, delete, rtk, allow-list, dev-tasks]
 created: 2026-08-15
-updated: 2026-08-15
+updated: 2026-08-18
 confidence: high
+status: superseded
 ---
+
+> **v5.0.0 已废弃**：`-mode`/confineWrap/白名单工具/git/go/npm/lint/rename/delete/rtk 集成全删。见 `default-mode-not-security-boundary.md` 的 v5.0.0 段与 CHANGELOG v5.0.0。
 
 # default 模式外部命令工具集：allow-list 收紧策略 + rtk 代理
 

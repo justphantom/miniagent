@@ -78,7 +78,6 @@
     "provider": "openai",
     "model": "gpt-4o",
     "thinking": "off",
-    "mode": "default",
     "system_prompt": "",
     "rules_file": "",
     "summary_request": "Summarize the completed tools and key results; do not continue calling tools.",
@@ -115,8 +114,6 @@
     "preserve_recent_tokens": 0,
     "tool_output_dir": "",
     "tool_output_retention": "168h",
-    "confine_eval_symlinks": false,
-    "confine_auto": false,
     "web_timeout": "30s"
   },
   "compaction": {

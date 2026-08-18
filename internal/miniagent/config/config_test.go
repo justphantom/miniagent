@@ -24,7 +24,7 @@ func writeTmpConfig(t *testing.T, body string) string {
 func validConfigBody() string {
 	return `{
   "providers":[{"name":"main","chat_url":"https://api/v1/chat/completions","models":[{"name":"glm"}]}],
-  "defaults":{"provider":"main","model":"glm","mode":"default"}
+  "defaults":{"provider":"main","model":"glm"}
 }`
 }
 

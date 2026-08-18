@@ -1,11 +1,9 @@
 package tools
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,41 +11,6 @@ import (
 
 // utf8MaxSeq 是最长 UTF-8 序列（4 字节）：drainPipe 的 pending 缓冲上限与 utf8FullRune 的回扫上界。
 const utf8MaxSeq = 4
-
-// runLimitedOutput 是 git/go/npm/lint 共享的 exec 基建：合并 stdout/stderr 进滑动窗口累加器，
-// ctx 结束杀进程组并关闭管道解阻塞读循环。跨块 UTF-8 边界由 drainPipe 的 pending 缓冲处理。
-func runLimitedOutput(ctx context.Context, cmd *exec.Cmd, maxOutputChars int) (string, error) {
-	pr, pw := io.Pipe()
-	cmd.Stdout = pw
-	cmd.Stderr = pw
-	if err := cmd.Start(); err != nil {
-		_ = pw.Close()
-		return "", err
-	}
-	waitErr := make(chan error, 1)
-	go func() {
-		waitErr <- cmd.Wait()
-		_ = pw.Close()
-	}()
-	go func() {
-		<-ctx.Done()
-		killProcessGroup(cmd)
-		_ = pw.Close()
-	}()
-	// 滑动窗口按字节计量、maxOutputChars 按字符（runes）计量：8 倍余量防止多字节输出被过度
-	// 逐出（与 ShellTool 的 streamWindow=maxOutputChars*8 对齐），finalize 再按字符截尾。
-	accum := newOutputAccum(8*maxOutputChars, 0, "", "miniagent_exec_")
-	drainPipe(pr, accum)
-	_ = accum.closeSink()
-	// 有界等待的基线取 ctx 剩余期限（调用方均为 runWithTimeout 派生的带期限 ctx）。
-	budget := time.Duration(0)
-	if dl, ok := ctx.Deadline(); ok {
-		budget = max(time.Until(dl), 0)
-	}
-	werr := waitOutputTimeout(waitErr, budget)
-	killProcessGroup(cmd)
-	return accum.finalize(maxOutputChars), werr
-}
 
 // waitOutputTimeout 有界地等待 cmd.Wait：进程组被杀后，setsid 逃逸出组的孤孙子进程（守护
 // 进程双 fork 的典型形态）仍持有管道 fd，exec 的 copier 不结束、cmd.Wait 会远超期限地阻塞。

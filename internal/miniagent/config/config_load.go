@@ -193,9 +193,6 @@ func validateConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Defaults.Mode != "" && cfg.Defaults.Mode != miniagent.ModeDefault && cfg.Defaults.Mode != miniagent.ModeAuto {
-		return fmt.Errorf("defaults.mode %q is invalid (%s|%s)", cfg.Defaults.Mode, miniagent.ModeDefault, miniagent.ModeAuto)
-	}
 	// Pinned: defaults.thinking≠off → the main provider must declare thinking{field≠"", map non-empty}; the wire must go through the provider mapping.
 	if cfg.Defaults.Thinking != "" && cfg.Defaults.Thinking != miniagent.ThinkingOff {
 		if defProv.Thinking == nil {

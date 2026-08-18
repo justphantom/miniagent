@@ -21,7 +21,7 @@ func TestShellSingleQuote(t *testing.T) {
 		}
 	}
 	// A path containing spaces must be wrapped in quotes after subagentGuidance (L3-3).
-	if got := renderSubagentGuidance("", "/Users/First Last/x.json", "default"); !strings.Contains(got, "-config '/Users/First Last/x.json'") {
+	if got := renderSubagentGuidance("", "/Users/First Last/x.json"); !strings.Contains(got, "-config '/Users/First Last/x.json'") {
 		t.Errorf("config path with spaces not quoted: %s", got)
 	}
 }
@@ -33,13 +33,9 @@ func TestDefaultSystemPrompt_CoversWorkflow(t *testing.T) {
 	}
 }
 
-// subagentGuidance default mode=default: the fork command contains -mode default and the config path,
-// and is marked stateless (session is not persisted).
-func TestSubagentGuidance_DefaultMode(t *testing.T) {
-	got := renderSubagentGuidance("", "/abs/miniagent.json", "default")
-	if !strings.Contains(got, "-mode default") {
-		t.Errorf("default mode: expected -mode default in:\n%s", got)
-	}
+// subagentGuidance: the fork command contains the config path and is marked stateless (session is not persisted).
+func TestSubagentGuidance_DefaultTemplate(t *testing.T) {
+	got := renderSubagentGuidance("", "/abs/miniagent.json")
 	if !strings.Contains(got, "/abs/miniagent.json") {
 		t.Errorf("missing config path:\n%s", got)
 	}
@@ -48,36 +44,18 @@ func TestSubagentGuidance_DefaultMode(t *testing.T) {
 	}
 }
 
-// When the parent session mode=auto it is passed through: the fork command should contain -mode auto,
-// not the hardcoded default (review v3 P3).
-func TestSubagentGuidance_AutoMode(t *testing.T) {
-	got := renderSubagentGuidance("", "/abs/miniagent.json", "auto")
-	if !strings.Contains(got, "-mode auto") {
-		t.Errorf("auto mode: expected -mode auto in:\n%s", got)
-	}
-	if strings.Contains(got, "-mode default") {
-		t.Errorf("auto mode leaked hardcoded default:\n%s", got)
-	}
-}
-
-// injectSubagentGuidance is auto-only (the fork channel is shell, registered in auto mode only);
-// default and empty mode do not inject — the guidance would point at a tool that fails dispatch.
-func TestInjectSubagentGuidance_AutoOnly(t *testing.T) {
+// injectSubagentGuidance injects whenever the config path is known; empty configAbsPath does not inject.
+func TestInjectSubagentGuidance_ConfigGate(t *testing.T) {
 	const base = "SYS"
-	out := injectSubagentGuidance(base, "", "/abs/miniagent.json", "auto")
-	if !strings.Contains(out, "-mode auto") {
-		t.Errorf("auto not propagated:\n%s", out)
+	out := injectSubagentGuidance(base, "", "/abs/miniagent.json")
+	if !strings.Contains(out, "-config ") {
+		t.Errorf("guidance missing:\n%s", out)
 	}
 	if !strings.HasPrefix(out, base) {
 		t.Errorf("system prompt should be prefix, got: %s", out)
 	}
-	for _, mode := range []string{"default", ""} {
-		if got := injectSubagentGuidance(base, "", "/abs/miniagent.json", mode); got != base {
-			t.Errorf("mode %q should not inject (no shell to fork with), got: %s", mode, got)
-		}
-	}
 	// Empty configAbsPath is not injected.
-	if got := injectSubagentGuidance(base, "", "", "auto"); got != base {
+	if got := injectSubagentGuidance(base, "", ""); got != base {
 		t.Errorf("empty config path should not inject, got: %s", got)
 	}
 }
@@ -87,16 +65,16 @@ func TestInjectSubagentGuidance_AutoOnly(t *testing.T) {
 // appends to the empty string, leaving the system guidance-only — loopCfg uses resolved.System verbatim (no
 // re-default), so the agent would silently lose all workflow constraints.
 func TestAssembleSystemPrompt_DefaultApplied(t *testing.T) {
-	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "default", "", "")
+	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "", "")
 	if !strings.Contains(got, "Observe before acting") {
 		t.Errorf("under default config system prompt should contain the ReAct constraints from defaultSystemPrompt: %q", got)
 	}
 }
 
-// renderSubagentGuidance: custom template + placeholder replacement ({config_path} wrapped via shellSingleQuote, {mode} filled directly).
+// renderSubagentGuidance: custom template + placeholder replacement ({config_path} wrapped via shellSingleQuote).
 func TestRenderSubagentGuidance_CustomTemplate(t *testing.T) {
-	got := renderSubagentGuidance("fork={config_path}|mode={mode}", "/x y/z.json", "auto")
-	if want := "fork='/x y/z.json'|mode=auto"; got != want {
+	got := renderSubagentGuidance("fork={config_path}", "/x y/z.json")
+	if want := "fork='/x y/z.json'"; got != want {
 		t.Errorf("custom template placeholder replacement = %q, want %q", got, want)
 	}
 }
@@ -151,13 +129,13 @@ func TestAppendWorkdirLine_InjectsAndSkipsEmpty(t *testing.T) {
 }
 
 // assembleSystemPrompt layers base (default fallback or config) + rules file + subagent guidance in that order.
-// Uses mode=auto because guidance injection is auto-only (shell fork channel).
+// Guidance injection is unconditional (single mode, shell always registered).
 func TestAssembleSystemPrompt_LayersRulesThenGuidance(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("RULE-TEXT"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := assembleSystemPrompt("", "", "/abs/miniagent.json", "auto", dir, "AGENTS.md")
+	got := assembleSystemPrompt("", "", "/abs/miniagent.json", dir, "AGENTS.md")
 	if !strings.Contains(got, "Observe before acting") {
 		t.Errorf("default base lost: %q", got)
 	}
@@ -176,7 +154,7 @@ func TestAssembleSystemPrompt_LayersRulesThenGuidance(t *testing.T) {
 	if idxRule >= idxWd || idxWd >= idxGuidance {
 		t.Errorf("order must be rules < workdir < guidance: rule@%d workdir@%d guidance@%d", idxRule, idxWd, idxGuidance)
 	}
-	got2 := assembleSystemPrompt("MYBASE", "", "/abs/miniagent.json", "auto", dir, "AGENTS.md")
+	got2 := assembleSystemPrompt("MYBASE", "", "/abs/miniagent.json", dir, "AGENTS.md")
 	if !strings.HasPrefix(got2, "MYBASE") || !strings.Contains(got2, "RULE-TEXT") {
 		t.Errorf("custom base should also get rules appended: %q", got2)
 	}

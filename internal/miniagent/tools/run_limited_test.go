@@ -81,77 +81,6 @@ func TestDrainPipe_ChunkBoundaryRuneAlignment(t *testing.T) {
 
 // 非 UTF-8 流（连续 0x80 字节、无首字节）：pending 被 cap 在 4 字节，滑动窗口照常逐出
 // （banner 出现）、调用及时返回，而不是整段滞留 pending（#2 回归，旧代码窗口永不逐出）。
-func TestRunLimitedOutput_NonUTF8WindowStillEvicts(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("sh not available")
-	}
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "sh", "-c", `head -c 2000000 /dev/zero | tr '\000' '\200'`)
-	done := make(chan struct{})
-	var body string
-	var err error
-	go func() {
-		body, err = runLimitedOutput(ctx, cmd, 100000)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("runLimitedOutput did not return for a non-UTF-8 stream (pending grew unbounded)")
-	}
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(body, "only tail kept") {
-		t.Errorf("sliding window never evicted for non-UTF-8 output: len=%d", len(body))
-	}
-	if len(body) > 400000 { // banner + tail + TruncateTail(100000 runes) 的余量
-		t.Errorf("output far exceeds the window/cap: len=%d", len(body))
-	}
-}
-
-// 合法 UTF-8 输出与旧行为按字节等价：内容原样保留、无 banner（#2 的“valid-UTF-8 行为不变”约束）。
-func TestRunLimitedOutput_ValidUTF8Unchanged(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("sh not available")
-	}
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "sh", "-c", `awk 'BEGIN{for(i=0;i<50;i++)printf "你ok\n"}'`)
-	body, err := runLimitedOutput(ctx, cmd, 100000)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.Contains(body, "only tail kept") {
-		t.Errorf("under-limit output should carry no banner: %q", firstN(body, 40))
-	}
-	if !utf8.ValidString(body) {
-		t.Errorf("valid UTF-8 input must round-trip byte-identically: % x", body[:6])
-	}
-	if !strings.Contains(body, "你ok") || !strings.HasSuffix(body, "你ok\n") {
-		t.Errorf("content altered: head=%q tail=%q", firstN(body, 10), body[len(body)-8:])
-	}
-}
-
-// 窗口按字节、cap 按字符（#29）：200000 字节 / 66666 个 CJK 字符在 100000 字符 cap 之内，
-// 不得再被 maxOutputChars 原值（字节窗口）过度逐出——旧实现只剩 ~12000 字符 + banner。
-func TestRunLimitedOutput_MultibyteNotOverEvicted(t *testing.T) {
-	if _, err := exec.LookPath("awk"); err != nil {
-		t.Skip("awk not available")
-	}
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "sh", "-c", `awk 'BEGIN{for(i=0;i<66666;i++)printf "你"}'`)
-	body, err := runLimitedOutput(ctx, cmd, 100000)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.Contains(body, "only tail kept") {
-		t.Errorf("under-char-cap CJK output should not be evicted: %q runes=%d", firstN(body, 30), len([]rune(body)))
-	}
-	if got := len([]rune(body)); got != 66666 {
-		t.Errorf("runes = %d, want 66666 (8x byte window must keep the in-cap content)", got)
-	}
-}
-
 // setsid 孤孙子进程持管道时 cmd.Wait 挂死：waitOutputTimeout 在基线 +2s 后放弃等待，
 // 调用方有界返回并报告超时（#1 回归；泄漏的孤儿子进程是已知残留，见 platform.go P3-6）。
 func TestShell_SetsidOrphanBoundedWait(t *testing.T) {
@@ -234,24 +163,3 @@ func TestShell_EvictedTailKeepsRuneBoundary(t *testing.T) {
 }
 
 // 纯二进制流不再输出成片 U+FFFD：无效字节按十六进制转义，输出可读且不超过字符上限的量级。
-func TestRunLimitedOutput_NonUTF8HexEscaped(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("sh not available")
-	}
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "sh", "-c", `head -c 400000 /dev/zero | tr '\000' '\201\202'`)
-	body, err := runLimitedOutput(ctx, cmd, 100000)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	invalid := strings.Count(body, "�")
-	if invalid > 0 {
-		t.Errorf("non-UTF-8 output should be hex-escaped, found %d U+FFFD in %d chars", invalid, len([]rune(body)))
-	}
-	if !strings.Contains(body, "80 ") && !strings.Contains(body, "81 ") && !strings.Contains(body, "82 ") {
-		t.Errorf("expected hex escapes in output, head: %q", firstN(body, 60))
-	}
-	if r := len([]rune(body)); r > 350000 { // 十六进制 3 字符/字节 + banner + TruncateTail 余量
-		t.Errorf("escaped output exceeds expected bound: %d runes", r)
-	}
-}

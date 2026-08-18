@@ -12,10 +12,9 @@ import (
 	"fmt"
 	miniagent "github.com/justphantom/miniagent/internal/miniagent"
 	"io"
-	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
-	"sync"
 )
 
 // denyResult builds a pre-execution rejection: no command ran, so ExitCode must be ExitCodeNotSet —
@@ -36,76 +35,6 @@ func resolveToolPath(workspaceRoot, p string) string {
 	return filepath.Join(workspaceRoot, p)
 }
 
-// resolveConfinedPath checks that p (relative to root or absolute) stays within root's subtree.
-// Returns the absolute resolved path and nil on success, or "" and an error if it escapes.
-// When readOnly is false (write tools), targeting the workdir root itself is rejected
-// (would destroy the entire workdir); read-only tools may target the root (e.g. listing it).
-// All paths reject <root>/.git/** (default mode): direct file access to .git bypasses the git tool's
-// allow-list (write .git/hooks/* → hook execution via git commit/pull; edit .git/config remote →
-// push exfiltration). Not a security boundary — npm run et al. remain equivalent-shell channels.
-func resolveConfinedPath(root, p string, readOnly bool) (string, error) {
-	full := p
-	if !filepath.IsAbs(p) {
-		full = filepath.Join(root, p)
-	}
-	absTarget, err := filepath.Abs(filepath.Clean(full))
-	if err != nil {
-		return "", fmt.Errorf("resolve path %q failed: %w", p, err)
-	}
-	rootAbs, err := filepath.Abs(filepath.Clean(root))
-	if err != nil {
-		return "", fmt.Errorf("resolve workdir %q failed: %w", root, err)
-	}
-	sep := string(filepath.Separator)
-	if !readOnly && absTarget == rootAbs {
-		return "", fmt.Errorf("path %q points to the workdir root itself, cannot overwrite", p)
-	}
-	if !strings.HasPrefix(absTarget+sep, rootAbs+sep) {
-		return "", fmt.Errorf("path %q escapes workdir (default mode)", p)
-	}
-	if rel, err := filepath.Rel(rootAbs, absTarget); err == nil && dotGitWithinRoot(rel) {
-		return "", fmt.Errorf("path %q targets the .git directory (default mode); use the git tool instead", p)
-	}
-	return absTarget, nil
-}
-
-// dotGitWithinRoot reports whether rel (relative to workdir root) is or is under a ".git" directory
-// at any depth — covers ".git", ".git/config", and nested "sub/.git/HEAD" (submodule/worktree layouts).
-// Compared case-insensitively: on Windows/macOS filesystems .GIT IS the gitdir (git opens .git
-// case-insensitively there), so an exact compare would let .GIT/hooks bypass the guard. Windows 8.3
-// short names (GIT~1) remain a known accepted gap.
-func dotGitWithinRoot(rel string) bool {
-	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
-		if strings.EqualFold(part, ".git") {
-			return true
-		}
-	}
-	return false
-}
-
-// rtkBin caches the lookup of the rtk output-compacting proxy ("" = not deployed). rtk is optional:
-// when present, git/go/npm commands route through it for token-compact output; otherwise they exec natively.
-// withRtkBin (rtk_wrap_test.go) swaps the cached lookup in tests.
-var rtkBin = sync.OnceValue(func() string {
-	if p, err := exec.LookPath("rtk"); err == nil {
-		return p
-	}
-	return ""
-})
-
-// rtkWrap returns ("rtk", prefix+args) when rtk is deployed, else (bin, prefix[1:]+args).
-// prefix is the full native argv head — prefix[0] is bin itself, so the no-rtk fallback keeps
-// every argument (dropping prefix, as an earlier version did, turned `git status` into a bare
-// `git` usage dump on rtk-less hosts). The caller decides which subcommands are worth proxying
-// (rtk covers only a subset per tool).
-func rtkWrap(bin string, prefix, args []string) (string, []string) {
-	if rtkBin() == "" {
-		out := append([]string{}, prefix[1:]...)
-		return bin, append(out, args...)
-	}
-	return "rtk", append(append([]string{}, prefix...), args...)
-}
-
 // decodeStrict unmarshals a tool-args JSON object rejecting unknown fields: a field-name typo
 // (`{"subcommand":"add","command":"x"}`) used to fall through to EMPTY args, silently turning
 // `git add` into a whole-repo stage. The error names the offending key so the LLM self-corrects.
@@ -122,4 +51,34 @@ func decodeStrict(args string, dst any) error {
 		return errors.New("unexpected trailing data after JSON object")
 	}
 	return nil
+}
+
+// sortedNames 与 map 同源生成逗号列表，避免手写串与 map 漂移（描述/错误共用的单一事实源）。
+func sortedNames(m map[string]bool) string {
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// maxFileResultInHistory is the character cap for results of code-content tools like read/edit entering history:
+// code truncation means losing accuracy, so a higher quota than the default policy.MaxToolResultInHistory is given
+// (still constrained by read's own maxReadFileChars output cap). miniagent.Tool.ResultLimit takes this value.
+const maxFileResultInHistory = 8000
+
+// object builds a JSON Schema object description. When required is empty the key is omitted: the JSON Schema
+// spec states that omitting required is equivalent to an empty array, which all compliant backends accept;
+// writing a nil slice into the map would serialize as "required":null, triggering a 400 from strict backends
+// (e.g. OpenAI).
+func object(props map[string]any, required ...string) map[string]any {
+	out := map[string]any{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		out["required"] = required
+	}
+	return out
 }

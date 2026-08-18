@@ -19,9 +19,6 @@ func TestResolve_CLIOverridesConfig(t *testing.T) {
 	if r.ModelID != "glm-5.2" {
 		t.Errorf("ModelID = %q", r.ModelID)
 	}
-	if r.Mode != "default" {
-		t.Errorf("Mode = %q want default", r.Mode)
-	}
 }
 
 func TestResolve_DefaultsModel(t *testing.T) {
@@ -32,28 +29,6 @@ func TestResolve_DefaultsModel(t *testing.T) {
 	}
 	if r.ModelID != "glm" {
 		t.Errorf("ModelID = %q want glm (from defaults)", r.ModelID)
-	}
-}
-
-// An invalid CLI mode must error, not be silently treated as auto.
-func TestResolve_InvalidCliModeErrors(t *testing.T) {
-	cfg, _ := LoadConfig(writeTmpConfig(t, validConfigBody()))
-	badMode := "invalid_mode"
-	if _, err := Resolve(cfg, CLIOverrides{Mode: &badMode}); err == nil {
-		t.Error("invalid CLI mode should error, not silently become auto")
-	}
-}
-
-// config defaults.mode has already been validated by validateConfig; Resolve re-validates the CLI override against the enum.
-func TestResolve_AutoModeAllowed(t *testing.T) {
-	cfg, _ := LoadConfig(writeTmpConfig(t, validConfigBody()))
-	autoMode := "auto"
-	r, err := Resolve(cfg, CLIOverrides{Mode: &autoMode})
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if r.Mode != "auto" {
-		t.Errorf("Mode = %q want auto", r.Mode)
 	}
 }
 

@@ -71,9 +71,6 @@ func collectOverrides(f *cliFlags) config.CLIOverrides {
 	if set["thinking"] {
 		o.Thinking = f.thinking
 	}
-	if set["mode"] {
-		o.Mode = f.mode
-	}
 	if set["max-iterations"] {
 		o.MaxIterations = f.maxIterations
 	}

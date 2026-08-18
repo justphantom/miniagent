@@ -3,9 +3,12 @@ layer: L2
 type: decision
 tags: [security, sandbox, shell, credentials, config-driven, default-mode]
 created: 2026-08-09
-updated: 2026-08-16
+updated: 2026-08-18
 confidence: high
+status: superseded
 ---
+
+> **v5.0.0 已废弃**：`-mode`/confineWrap/白名单工具/.git 封锁全删，agent 层零安全保障（shell 恒注册无约束、文件工具无路径限制）。安全完全靠运行用户的 OS 权限。历史防线记录保留供溯源。
 
 # default 模式非安全边界 + shell 仅 auto 注册 + 凭证剥离局限 + confirm/sandbox 配置化
 

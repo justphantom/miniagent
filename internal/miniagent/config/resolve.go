@@ -4,15 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
 // CLIOverrides collects the "explicitly passed" CLI parameters (main uses flag.Visit to distinguish unset),
 // for Resolve to arbitrate by cli>config>builtin precedence. A nil pointer means not passed. After P2 only
 // core CLI parameters remain; strategy parameters (summary/duration/window etc.) live only in config, so they are absent here.
 type CLIOverrides struct {
-	Provider, Model, Thinking, Mode        *string
+	Provider, Model, Thinking              *string
 	MaxIterations                          *int
 	Stream, ResultOnly, ConfirmDestructive *bool
 }
@@ -37,7 +35,6 @@ type Resolved struct {
 	CompactionAuto           bool
 	CompactionReserved       int
 	Thinking                 string
-	Mode                     string
 	System                   string
 	RulesFile                string
 	SummaryRequest           string
@@ -131,17 +128,6 @@ func Resolve(cfg *Config, o CLIOverrides) (*Resolved, error) {
 	}
 	if err := validateThinking(r.Thinking, customKeys); err != nil {
 		return nil, fmt.Errorf("thinking: %w", err)
-	}
-	switch {
-	case o.Mode != nil && *o.Mode != "":
-		r.Mode = *o.Mode
-	case cfg.Defaults.Mode != "":
-		r.Mode = cfg.Defaults.Mode
-	default:
-		r.Mode = "default"
-	}
-	if r.Mode != miniagent.ModeDefault && r.Mode != miniagent.ModeAuto {
-		return nil, fmt.Errorf("mode %q is invalid (%s|%s)", r.Mode, miniagent.ModeDefault, miniagent.ModeAuto)
 	}
 	r.System = cfg.Defaults.SystemPrompt
 	r.RulesFile = cfg.Defaults.RulesFile

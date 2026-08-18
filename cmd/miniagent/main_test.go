@@ -131,9 +131,9 @@ func TestCLI_MissingAPIKeyExits1(t *testing.T) {
 	}
 }
 
-// missing -workdir → error in ANY mode (workdir is unconditionally required and must be absolute).
-func TestCLI_DefaultModeRequiresWorkdir(t *testing.T) {
-	args := configArgs(t, "http://127.0.0.1:1", "-mode", "default")
+// missing -workdir → error (workdir is unconditionally required and must be absolute).
+func TestCLI_RequiresWorkdir(t *testing.T) {
+	args := configArgs(t, "http://127.0.0.1:1")
 	code, out := runMainBin(t, "prompt", args, "MINIAGENT_API_KEY=sk-test")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)

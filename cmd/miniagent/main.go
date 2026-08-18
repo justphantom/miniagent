@@ -39,7 +39,6 @@ type cliFlags struct {
 	stream             *bool
 	listModels         *bool
 	configPath         *string
-	mode               *string
 	thinking           *string
 	resultOnly         *bool
 	confirmDestructive *bool
@@ -50,7 +49,6 @@ type cliFlags struct {
 func parseFlags() *cliFlags {
 	f := &cliFlags{}
 	f.configPath = flag.String("config", "", "path to config file (default looks up ~/.miniagent/miniagent.json; errors if not found)")
-	f.mode = flag.String("mode", "", "permission mode default|auto (workdir required when default); defaults to default")
 	f.thinking = flag.String("thinking", "", "thinking level off|minimal|low|medium|high|xhigh|max (default off)")
 	f.resultOnly = flag.Bool("result-only", false, "output only result.text (for subagent fork); mutually exclusive with -stream")
 	f.confirmDestructive = flag.Bool("confirm-destructive", false, "opt-in: prompt before write/edit and dangerous shell; in non-interactive/subagent mode destructive tools are denied unless MINIAGENT_AUTO_APPROVE=1")
@@ -162,7 +160,7 @@ func main() {
 		}
 	}
 	// System prompt: config defaults.system_prompt with the built-in defaultSystemPrompt fallback, then subagent guidance (see assembleSystemPrompt).
-	resolved.System = assembleSystemPrompt(resolved.System, resolved.SubagentGuidance, absConfigPath(*f.configPath), resolved.Mode, workdir, resolved.RulesFile)
+	resolved.System = assembleSystemPrompt(resolved.System, resolved.SubagentGuidance, absConfigPath(*f.configPath), workdir, resolved.RulesFile)
 
 	// Apply runtime config overrides (precedence: config>builtin).
 	limits := miniagent.Limits{
@@ -178,9 +176,7 @@ func main() {
 	llm, compChat := buildRuntimeClients(resolved, apiKey, logger)
 
 	// §P1-A: tool output persist directory — explicit config wins; otherwise, when -save-session/-session is active, derive from the session directory
-	// as <sessionDir>/<id>.tool-output/ (disabled when there is no session and no config set). Computed before buildTools so read-only file tools
-	// can be given this directory as a read exception (the marker's absolute path lives outside workdir; without the exception the §P1-A read-back
-	// hint is unreachable, contradicting the "stay inside workdir" system prompt).
+	// as <sessionDir>/<id>.tool-output/ (disabled when there is no session and no config set).
 	toolOutputDir := ""
 	if resolved.RunConfig.ToolOutputDir != nil && *resolved.RunConfig.ToolOutputDir != "" {
 		toolOutputDir = *resolved.RunConfig.ToolOutputDir
@@ -188,7 +184,7 @@ func main() {
 		toolOutputDir = filepath.Join(filepath.Dir(sessPath), strings.TrimSuffix(filepath.Base(sessPath), ".jsonl")+".tool-output")
 	}
 
-	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), webTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits, intoBool(resolved.RunConfig.ConfineAuto, false), intoBool(resolved.RunConfig.ConfineEvalSymlinks, false), toolOutputDir)
+	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), webTimeoutOf(resolved), into(resolved.RunConfig.MaxFileResultChars, 0), limits)
 	baseCfg := loopCfg(resolved, f, history, tools)
 	warnNoBudgetFuse(resolved, f, logger)
 	baseCfg.ToolOutputDir = toolOutputDir

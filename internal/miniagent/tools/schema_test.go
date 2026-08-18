@@ -56,7 +56,7 @@ func TestObject_EmitsRequiredWhenGiven(t *testing.T) {
 }
 
 // After serializing the Parameters of all built-in tools, the required field must never be null.
-// Covers every constructor registered by cmd/miniagent buildTools (11 default-mode tools + shell),
+// Covers every constructor registered by cmd/miniagent buildTools,
 // so a regression in any object(...) call (e.g. a nil required) fails here.
 func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 	workdir := t.TempDir()
@@ -66,12 +66,8 @@ func TestAllToolSchemas_RequiredNeverNull(t *testing.T) {
 		EditFileTool(workdir, 0),
 		GrepTool(workdir, 0, 0, 0),
 		GlobTool(workdir, 0, 0),
-		GitTool(workdir, 0, 0),
-		GoTool(workdir, 0, 0),
-		NpmTool(workdir, 0, 0),
-		LintTool(workdir, 0, 0),
-		RenameTool(workdir, 0),
-		DeleteTool(workdir, 0),
+		AstTool(workdir, 0, 0),
+		WebTool(0, 0, 0, false),
 		ShellTool(workdir, 0, 0, 0),
 	}
 

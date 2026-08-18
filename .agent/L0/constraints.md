@@ -1,7 +1,7 @@
 ---
 layer: L0
 version: 1
-updated: 2026-08-13
+updated: 2026-08-18
 ---
 
 # 约束
@@ -21,7 +21,7 @@ updated: 2026-08-13
 10. **thinking 钉死**：启用必经 `provider.ThinkingMapping`（`{field, map[level]}`），`req.Thinking==nil` 不发该字段；启动期 `validateThinking` 枚举前置校验，`level∉map` 启动报错而非端点 400。
 11. **session jsonl 持久化契约**：append-only + flock 跨进程锁 + 临时文件 `os.Rename` 原子 rewrite + 写前 `ensureTrailingNewline` 截崩溃半行 + 写盘期忽略 SIGINT/SIGTERM；新文件 0600、目录 0700。
 12. **stdout 是 NDJSON 机器契约**：`result` 事件 `text/model/input_tokens/output_tokens/steps` 不带 `omitempty`（为 0 也出键）；人类 prompt / 确认走 stderr。流式有 content 无 `[DONE]` 无 `finish_reason` 视为连接中断硬错（`errStreamUnterminated`）。
-13. **default 模式非安全边界**：shell 仅 auto 注册（default 误调 `unknown tool`）、写工具可符号链接逃逸、auto 模式无约束；真隔离靠调用方（沙箱 / 容器 / 低权用户）。越界 / 逃逸不视为漏洞。具体防线（.git 封锁、参数级收紧、攻击面记账）见 L2 `default-mode-not-security-boundary.md`。
+13. **agent 层零安全保障**：v5.0.0 删 `-mode`/confineWrap/白名单工具/.git 封锁；`shell` 恒注册无约束、文件工具无路径限制。隔离完全靠运行用户的 OS 权限（容器/低权 UID/文件权限）。
 14. **依赖单向无环**：`cmd → core`、所有 `internal/*` 子包（compaction/event/provider/tools/policy/config/session/metrics/looptest）`→ core`，反向禁止；领域类型 `Message/Response/Usage/Request/Delta` 必须留核心包。
 
 ## 记忆系统元规则
