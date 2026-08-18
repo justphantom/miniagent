@@ -118,12 +118,16 @@ func runWeb(ctx context.Context, client *http.Client, args string, maxBytes, max
 		return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("web read %q failed: %v", raw, err)}
 	}
 	ctype := resp.Header.Get("Content-Type")
+	body, charsetWarn := decodeWebBody(ctype, body)
+	if charsetWarn != "" {
+		charsetWarn = "[warning: " + charsetWarn + "]\n"
+	}
 	kind := webContentKind(ctype, body)
 	if kind == webBinary {
 		return denyResult("content is binary (content-type %q); web only supports text", ctype)
 	}
 	out := webToText(body, kind == webHTML)
-	out = text.Truncate(out, maxOutputChars, "…[web output truncated]")
+	out = charsetWarn + text.Truncate(out, maxOutputChars, "…[web output truncated]")
 	if truncated {
 		out += fmt.Sprintf("\n…[body over %d bytes, truncated]", maxBytes)
 	}
