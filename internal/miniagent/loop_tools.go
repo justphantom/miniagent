@@ -46,7 +46,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 	// Chain-of-thought enters history with the assistant message (needed to feed back reasoning models). §P0-B: attach real usage for subsequent stale-estimate prevention.
 	// Content: resp.Text — models often prepend explanatory text before tool_calls (Claude via OpenAI proxy, some open-source models);
 	// including it in history preserves multi-turn coherence; the final text (loop.go:166)/summary (:102) paths both set Content, this aligns (R4-2, was previously discarded).
-	appendMsg(&msgs, newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, ToolCalls: calls, Usage: &resp.Usage})
+	appendMsg(&msgs, newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, ReasoningState: resp.ReasoningState, ToolCalls: calls, Usage: &resp.Usage})
 
 	// First notify all tool_use calls in this turn in order: consumers see the complete tool plan as early as possible, with deterministic ordering.
 	// OnToolUse returning ErrToolDenied rejects that tool (e.g. dangerous command not confirmed): record then continue

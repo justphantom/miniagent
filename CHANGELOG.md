@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 ### Added
+- **OpenAI Responses API provider（`kind=responses`）**：新增 `internal/provider/responses`，支持文本/function tools/reasoning、非流式与语义事件流式、usage/finish 映射、重试与 thinking 降级。采用全量本地 `input` 投影，不用 `previous_response_id`；固定 `store:false` + `include:reasoning.encrypted_content`，新增 `Message/Response.ReasoningState` 持久化并回放 encrypted reasoning item（旧 session 缺该字段兼容）。`chat_url` 指 `/v1/responses`，`models_url` 复用 OpenAI models 端点；未配置 Responses 内置托管工具。
 - **`web` 工具（网页抓取，默认注册）**：GET URL → 文本入上下文（查文档/API/issue）。两模式默认注册 + `run.web_timeout`（默认 30s）。SSRF 防护：拒私网/环回/链路本地（含云 metadata）/组播/受限广播及 v4-mapped v6 地址，DNS 全 IP 校验，重定向每跳重查；HTML 剥 `<script>/<style>`+标签+实体解码+空行折叠（极简正则级，非浏览器）；拒非 text/* 与 application/json；body 1MiB 封顶（对齐 read），输出 `max_shell_output_chars` 同源限幅+截断标记；仅 GET/HTTP(S)；User-Agent 标识。**非安全边界**：GET 查询参数可携带数据外传、响应内容直入上下文（prompt injection 面），guardrail 定位（攻击面记账已更新）。测试 httptest 全覆盖（12 用例）。
 
 ### Changed

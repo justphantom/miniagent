@@ -46,6 +46,7 @@ func EstimateTokens(msgs []miniagent.Message, system string, tools []miniagent.T
 	for _, m := range msgs {
 		add(m.Content)
 		add(m.Reasoning)
+		add(m.ReasoningState)
 		toolCalls += len(m.ToolCalls)
 		for _, tc := range m.ToolCalls {
 			add(tc.Args)
@@ -112,6 +113,7 @@ func estimateResponseTokens(resp miniagent.Response) int {
 	}
 	add(resp.Text)
 	add(resp.Reasoning)
+	add(resp.ReasoningState)
 	for _, tc := range resp.ToolCalls {
 		add(tc.Args)
 	}
@@ -134,6 +136,7 @@ func trimHistoryForContext(msgs []miniagent.Message, contextTrim int) []miniagen
 	copy(out, msgs)
 	for i := range out {
 		out[i].Reasoning = ""
+		out[i].ReasoningState = ""
 		if out[i].Role == miniagent.RoleTool {
 			out[i].Content = text.Truncate(strings.TrimSpace(out[i].Content), contextTrim, "…[context_trim]")
 		}

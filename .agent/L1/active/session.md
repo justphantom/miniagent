@@ -1,13 +1,13 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-18T00:25:00+08:00
+updated: 2026-08-18
 ---
 
 # 当前会话
 
 ## 状态
-`web` 工具改为默认注册（撤 opt-in 门）：删 config `WebFetch` 键 + `buildTools` 无条件 append；文档/记忆五+三处同步（默认 13/14 工具、guardrail 定位不变）。verify-gate 全绿（707 passed）。无进行中任务。
+Responses 支持已实现：新增 `kind=responses` 与 `internal/provider/responses`；无状态全量 `input` + `store:false` + encrypted reasoning 本地回放；core/session 增 `ReasoningState`；配置路由/文档/测试同步；3 个超 300 行文件已机械拆分。verify-gate 全绿。
 
 ## 备注
 - 下一版本注意：`make build` 的 version 注入须在有 shell/make 的环境执行。

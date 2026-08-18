@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	"log/slog"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
 	"github.com/justphantom/miniagent/internal/provider/anthropic"
@@ -184,119 +182,4 @@ func warnInsecureURL(rawURL string) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "miniagent: warning: endpoint %s uses plain http, API key sent unencrypted\n", u.Redacted())
-}
-
-// providerKind normalizes the Kind field: empty defaults to "openai" (backward-compatible with configs
-// written before the Kind field existed).
-func providerKind(kind string) string {
-	if kind == "" {
-		return "openai"
-	}
-	return kind
-}
-
-// buildLLM constructs the main provider's LLM by ProviderConfig.Kind: "anthropic" routes to the Anthropic
-// Messages API provider, anything else ("" / "openai") to the OpenAI Chat Completions provider. The returned
-// LLM also satisfies miniagent.Doer (the compaction fallback uses it directly). httpTimeout<=0 = default 120s.
-func buildLLM(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) miniagent.LLM {
-	switch providerKind(p.Kind) {
-	case "anthropic":
-		return buildAnthropicLLM(apiKey, p, logger, httpTimeout)
-	default:
-		return buildOpenAILLM(apiKey, p, logger, httpTimeout)
-	}
-}
-
-// buildOpenAILLM constructs the OpenAI Chat Completions provider: a ChatClient (overall Timeout, non-streaming
-// + models) and a StreamClient (no Timeout, streaming), both sharing one *http.Transport. Chat's httpTimeout
-// is a fallback against a single call hanging; stream has no Timeout so the body read is not cut.
-func buildOpenAILLM(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) miniagent.LLM {
-	if httpTimeout <= 0 {
-		httpTimeout = 120 * time.Second
-	}
-	transport := newHTTPTransport()
-	chatClient := newHTTPClient(httpTimeout, transport)
-	streamClient := &http.Client{Transport: transport}
-	chat, err := openai.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger, p.Headers)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-		os.Exit(1)
-	}
-	stream, err := openai.NewStreamClient(apiKey, p.ChatURL, streamClient, logger, p.Headers)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-		os.Exit(1)
-	}
-	stream.StreamAllowUnterminated = p.StreamAllowUnterminated != nil && *p.StreamAllowUnterminated
-	return &openai.Provider{Chat: chat, Stream: stream}
-}
-
-// buildAnthropicLLM constructs the Anthropic Messages API provider. cache toggles prompt-caching breakpoints
-// (nil/auto or true → enabled; false → kill-switch). Client (non-streaming) and StreamClient (streaming) share
-// one *http.Transport with the same timeout split as the openai path.
-func buildAnthropicLLM(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) miniagent.LLM {
-	if httpTimeout <= 0 {
-		httpTimeout = 120 * time.Second
-	}
-	transport := newHTTPTransport()
-	chatClient := newHTTPClient(httpTimeout, transport)
-	streamClient := &http.Client{Transport: transport}
-	cache := p.Cache == nil || *p.Cache
-	chat, err := anthropic.NewClient(apiKey, p.ChatURL, p.ModelsURL, chatClient, logger, p.Headers, cache)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-		os.Exit(1)
-	}
-	stream, err := anthropic.NewStreamClient(apiKey, p.ChatURL, streamClient, logger, p.Headers, cache)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-		os.Exit(1)
-	}
-	stream.StreamAllowUnterminated = p.StreamAllowUnterminated != nil && *p.StreamAllowUnterminated
-	return &anthropic.Provider{Chat: chat, Stream: stream}
-}
-
-// buildDoer constructs a non-streaming Doer for the specified provider (used by scenarios that only need Do,
-// such as cross-provider compaction summarization). Routes by Kind the same way as buildLLM.
-func buildDoer(apiKey string, p config.ProviderConfig, logger *slog.Logger, httpTimeout time.Duration) miniagent.Doer {
-	if httpTimeout <= 0 {
-		httpTimeout = 120 * time.Second
-	}
-	switch providerKind(p.Kind) {
-	case "anthropic":
-		cache := p.Cache == nil || *p.Cache
-		chat, err := anthropic.NewClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers, cache)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-			os.Exit(1)
-		}
-		return chat
-	default:
-		chat, err := openai.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: invalid endpoint url: %v\n", err)
-			os.Exit(1)
-		}
-		return chat
-	}
-}
-
-// newHTTPTransport returns the reused *http.Transport, configuring proxy, dial, TLS, and response-header timeouts.
-func newHTTPTransport() *http.Transport {
-	return &http.Transport{
-		Proxy:       http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		// Was 30s: slow endpoints (e.g. agnes) often got requests cut here, causing long-input scenarios like compaction summarization to fail.
-		// Relaxed to 300s; the side effect is that any provider's slow request hangs longer (takes effect together with http.Client.Timeout).
-		// Note: 300s actually only takes effect on the stream path (stream has no Client.Timeout); chat/compaction response-header
-		// waiting is capped by each Client.Timeout(120s), so 300s is a redundant upper bound for them (only relaxes the old 30s cutoff).
-		ResponseHeaderTimeout: 300 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-}
-
-// newHTTPClient returns a *http.Client with the specified overall timeout and transport.
-func newHTTPClient(timeout time.Duration, transport *http.Transport) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: transport}
 }

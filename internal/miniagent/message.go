@@ -16,11 +16,15 @@ const (
 const KindSummary = "summary"
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Reasoning  string     `json:"reasoning,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Reasoning string `json:"reasoning,omitempty"`
+	// ReasoningState carries a provider-opaque JSON array of reasoning output items. Responses uses it to
+	// replay encrypted reasoning across function-call rounds; other providers ignore it. Compaction may clear
+	// it only as a unit because encrypted state cannot be truncated safely.
+	ReasoningState string     `json:"reasoning_state,omitempty"`
+	ToolCalls      []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID     string     `json:"tool_call_id,omitempty"`
 	// IsError marks whether the tool execution corresponding to a tool message failed (ToolResult.IsError).
 	// Only meaningful for the tool role; the wire chatMessage does not carry this field (buildChatBody does
 	// not emit it, so it never leaks to the LLM) — it is used only for session persistence and history

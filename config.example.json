@@ -25,6 +25,28 @@
       "stream_allow_unterminated": false
     },
     {
+      "name": "openai-responses",
+      "kind": "responses",
+      "chat_url": "https://api.openai.com/v1/responses",
+      "models_url": "https://api.openai.com/v1/models",
+      "key": "sk-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+      "models": [
+        {"name": "gpt-5.5", "max_tokens": 8192, "context_window": 200000}
+      ],
+      "thinking": {
+        "field": "reasoning",
+        "map": {
+          "off": "off",
+          "minimal": "minimal",
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": "xhigh",
+          "max": "max"
+        }
+      }
+    },
+    {
       "name": "anthropic",
       "kind": "anthropic",
       "chat_url": "https://api.anthropic.com/v1/messages",

@@ -76,6 +76,8 @@ func estimateMessageTokensLocal(m miniagent.Message) int {
 	nonCJK, cjk = nonCJK+n, cjk+c
 	n, c = text.CountCharsLocal(m.Reasoning)
 	nonCJK, cjk = nonCJK+n, cjk+c
+	n, c = text.CountCharsLocal(m.ReasoningState)
+	nonCJK, cjk = nonCJK+n, cjk+c
 	for _, tc := range m.ToolCalls {
 		n, c = text.CountCharsLocal(tc.Args)
 		nonCJK, cjk = nonCJK+n, cjk+c

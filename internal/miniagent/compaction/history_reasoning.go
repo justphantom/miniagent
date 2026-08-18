@@ -9,7 +9,7 @@ import (
 	"slices"
 )
 
-// stripStaleReasoning proactively clears the Reasoning of assistant messages older than the most recent keepN (P1).
+// stripStaleReasoning proactively clears the Reasoning/ReasoningState of assistant messages older than keepN (P1).
 // A single reasoning trace from a thinking model is often several times the body text, and replaying it verbatim
 // every turn is a hidden token sink; meanwhile the model's next-step decision rarely needs to look back at earlier
 // reasoning — the conclusion is already condensed into that turn's assistant body / tool_calls. Reasoning is
@@ -30,7 +30,7 @@ func stripStaleReasoning(msgs []miniagent.Message, keepN int) []miniagent.Messag
 	for _, m := range msgs {
 		if m.Role == miniagent.RoleAssistant {
 			nAssistant++
-			if m.Reasoning != "" {
+			if m.Reasoning != "" || m.ReasoningState != "" {
 				hasReasoning = true
 			}
 		}
@@ -51,6 +51,7 @@ func stripStaleReasoning(msgs []miniagent.Message, keepN int) []miniagent.Messag
 			continue
 		}
 		out[i].Reasoning = ""
+		out[i].ReasoningState = ""
 	}
 	return out
 }

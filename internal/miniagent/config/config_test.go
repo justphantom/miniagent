@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/justphantom/miniagent/internal/miniagent"
 	"os"
 	"strings"
 	"testing"
@@ -47,6 +48,12 @@ func TestLoadConfig_OK(t *testing.T) {
 	}
 	if len(cfg.Providers) != 1 || cfg.Providers[0].Name != "main" {
 		t.Errorf("providers = %+v", cfg.Providers)
+	}
+}
+
+func TestLoadConfig_Example(t *testing.T) {
+	if _, err := LoadConfig("../../../config.example.json"); err != nil {
+		t.Fatalf("load example: %v", err)
 	}
 }
 
@@ -108,6 +115,27 @@ func TestLoadConfig_BadChatURL(t *testing.T) {
 	body := `{"providers":[{"name":"p","chat_url":"ftp://x"}]}`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
 		t.Error("non-http chat_url should error")
+	}
+}
+
+func TestValidateConfig_ResponsesKind(t *testing.T) {
+	cfg := mkFullConfig("main", "m", ProviderConfig{
+		Name:     "main",
+		Kind:     "responses",
+		ChatURL:  "https://api/v1/responses",
+		Thinking: &miniagent.ThinkingMapping{Field: "reasoning", Map: map[string]string{"high": "high"}},
+	})
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("valid responses config: %v", err)
+	}
+	cfg.Providers[0].Thinking.Field = "reasoning_effort"
+	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), `thinking.field "reasoning"`) {
+		t.Fatalf("err = %v, want responses thinking.field error", err)
+	}
+	cfg.Providers[0].Thinking.Field = "reasoning"
+	cfg.Providers[0].Thinking.Map["high"] = " "
+	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "effort is empty") {
+		t.Fatalf("err = %v, want empty effort error", err)
 	}
 }
 

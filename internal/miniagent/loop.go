@@ -108,7 +108,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 			// Steps denote "active ReAct steps"; the summary bootstrap is not an active step, so usage and Steps are intentionally out of sync on this path.
 			return Result{}, false, nil
 		}
-		appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, Usage: &resp2.Usage})
+		appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp2.Text, Reasoning: resp2.Reasoning, ReasoningState: resp2.ReasoningState, Usage: &resp2.Usage})
 		if hooks.AfterLLM != nil {
 			if aerr := hooks.AfterLLM(ctx, s+1, resp2); aerr != nil {
 				// recordStepUsage has not run yet (it is after this); compute s per the Steps=recorded usage calls semantics (=(s+1)-1),
@@ -192,7 +192,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 
 		if len(resp.ToolCalls) == 0 {
 			// Final text enters history: subsequent turns need to see the previous answer. Attach real usage for external strategies to prevent stale estimation.
-			appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, Usage: &resp.Usage})
+			appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, ReasoningState: resp.ReasoningState, Usage: &resp.Usage})
 			return Result{Text: resp.Text, Steps: step, Finish: FinishStop}, nil
 		}
 

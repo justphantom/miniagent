@@ -18,6 +18,9 @@ func TestTrimHistoryForContext(t *testing.T) {
 	if out[1].Reasoning != "" {
 		t.Errorf("reasoning not cleared: %q", out[1].Reasoning)
 	}
+	if out[1].ReasoningState != "" {
+		t.Errorf("reasoning state not cleared: %q", out[1].ReasoningState)
+	}
 	if len(out[2].Content) > contextTrimToolChars+50 {
 		t.Errorf("tool content not compressed: len=%d (want <= %d+marker)", len(out[2].Content), contextTrimToolChars)
 	}

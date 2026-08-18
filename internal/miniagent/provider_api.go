@@ -21,11 +21,14 @@ type Request struct {
 }
 
 type Response struct {
-	Text         string
-	Reasoning    string // reasoning chain (reasoning_content / reasoning), fed back into history as needed
-	ToolCalls    []ToolCall
-	Usage        Usage
-	FinishReason string // stop|length|tool_calls|content_filter|null; non-stop means the answer was truncated/filtered
+	Text      string
+	Reasoning string // reasoning chain (reasoning_content / reasoning), fed back into history as needed
+	// ReasoningState is provider-opaque reasoning wire state. Run persists it on the assistant message so the
+	// next request can replay it without keeping provider-side conversation state.
+	ReasoningState string
+	ToolCalls      []ToolCall
+	Usage          Usage
+	FinishReason   string // stop|length|tool_calls|content_filter|null; non-stop means the answer was truncated/filtered
 }
 
 type Usage struct {

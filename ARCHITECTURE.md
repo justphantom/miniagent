@@ -88,6 +88,11 @@ internal/provider/openai/       OpenAI 兼容 provider（Chat Completions）
   models.go           ListAllModels
   retry.go            重试退避
 
+internal/provider/responses/    OpenAI Responses API provider
+  wire.go / response.go        input/output item 投影与解析
+  client.go / stream.go / events.go 非流式 + 语义事件流式
+  retry.go            thinking 400 分类
+
 internal/provider/anthropic/    Anthropic Messages API provider
   wire.go / wire_blocks.go      序列化层（role=system 折叠、interleaved-thinking）
   client.go / stream.go / sse.go 非流式 + 流式 SSE
@@ -208,10 +213,11 @@ return finishMaxIterations
 通过 `Provider` 配置分派到 `internal/provider/` 下对应实现，核心经 `LLM` / `Doer` 接口调用，不感知底层协议：
 
 - **OpenAI 兼容**（`openai/`）：Chat Completions，`wire.go` 序列化层（含 thinking / tools），`client.go`（非流式+重试/降级）+ `stream.go`/`stream_parse.go`（SSE）+ `models.go`（动态 GET + 静态回落）。
+- **OpenAI Responses API**（`responses/`）：全量本地 transcript 投影为 `input`，不用 `previous_response_id`；固定 `store:false` + `include:reasoning.encrypted_content`，reasoning output item 以 `Message.ReasoningState` 本地持久化并在 function-call 后续请求原样回放；支持 Responses 语义 SSE，`response.completed/incomplete/failed` 为终态。
 - **Anthropic Messages API**（`anthropic/`）：wire 边界有损投影（role=system 折叠、interleaved-thinking beta、prompt caching），含 `max_tokens>0` 强制校验（Messages API 强制）、`thinking.map` 值为 JSON 对象串、`stop_reason` 映射、529 状态码重试、`StreamAllowUnterminated`。
-- **共享重试**（`httpretry/`）：厂商无关的 429/5xx 指数退避 + `retry_after` 解析，openai/anthropic 共用，消除跨 provider 复制不对称。
+- **共享重试**（`httpretry/`）：厂商无关的 429/5xx 指数退避 + `retry_after` 解析，openai/responses/anthropic 共用，消除跨 provider 复制不对称。
 
-配置侧 `Provider.Kind`（`"openai"` 默认 / `"anthropic"`）决定 setup_http.go 的分派路径；kind=anthropic 有专属校验（`max_tokens>0` 强制、禁用 `models_url`、thinking.map 值为 JSON 对象串且须含 `type`）。
+配置侧 `Provider.Kind`（`"openai"` 默认 / `"responses"` / `"anthropic"`）决定 setup 层分派路径；kind=responses 强制 `thinking.field:"reasoning"`，kind=anthropic 有专属校验（`max_tokens>0` 强制、thinking.map 值为 JSON 对象串且须含 `type`）。
 
 ## 8. 会话持久化
 
@@ -227,7 +233,7 @@ return finishMaxIterations
 
 - **config 文件查找**：`-config` 显式路径，否则 `$MINIAGENT_CONFIG`，否则 `~/.miniagent/miniagent.json`（找不到即报错，无静默回落）。
 - **Defaults 叠加**：`defaults.system_prompt`（未配则内置 defaultSystemPrompt）+ opt-in `defaults.rules_file`（工作目录内 basename 规则文件，追加到 system prompt 中段；防越界/注入）。
-- **Provider**：`kind` 枚举（openai|anthropic）、`name`/`chat_url`/`key`、`thinking`（level + provider 映射）、model 列表。
+- **Provider**：`kind` 枚举（openai|responses|anthropic）、`name`/`chat_url`/`key`、`thinking`（level + provider 映射）、model 列表。
 - **Run/Compaction**：`max_iterations`/`max_total_tokens`/`max_duration`/`stream`/`confirm_destructive`/`tool_output_dir`/`context_*`/`summary_*`/`preserve_recent_tokens` 等。
 
 ## 10. 安全模型

@@ -20,7 +20,7 @@ type SessionConfig struct {
 
 type ProviderConfig struct {
 	Name      string `json:"name"`
-	Kind      string `json:"kind,omitempty"` // wire format: "" / "openai" (default, Chat Completions) or "anthropic" (Messages API)
+	Kind      string `json:"kind,omitempty"` // wire format: "" / "openai" (Chat Completions, default), "responses", or "anthropic"
 	ChatURL   string `json:"chat_url"`
 	ModelsURL string `json:"models_url,omitempty"`
 	Key       string `json:"key,omitempty"`

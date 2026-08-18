@@ -105,11 +105,14 @@ func validateConfig(cfg *Config) error {
 		if kind == "" {
 			kind = "openai"
 		}
-		if kind != "openai" && kind != "anthropic" {
-			return fmt.Errorf("provider %q kind %q is invalid (openai|anthropic)", p.Name, kind)
+		if kind != "openai" && kind != "responses" && kind != "anthropic" {
+			return fmt.Errorf("provider %q kind %q is invalid (openai|responses|anthropic)", p.Name, kind)
 		}
 		if kind == "anthropic" && (p.MaxTokens == nil || *p.MaxTokens <= 0) {
 			return fmt.Errorf("provider %q kind=anthropic requires max_tokens > 0 (Anthropic Messages API mandates it)", p.Name)
+		}
+		if kind == "responses" && p.Thinking != nil && p.Thinking.Field != "reasoning" {
+			return fmt.Errorf("provider %q kind=responses requires thinking.field \"reasoning\"", p.Name)
 		}
 		if _, err := text.ValidateURL(p.ChatURL); err != nil {
 			return fmt.Errorf("provider %q chat_url: %w", p.Name, err)
@@ -148,6 +151,13 @@ func validateConfig(cfg *Config) error {
 				}
 				if _, ok := obj["type"]; !ok {
 					return fmt.Errorf("provider %q thinking.map[%q] object is missing the \"type\" key (kind=anthropic)", p.Name, level)
+				}
+			}
+		}
+		if kind == "responses" && p.Thinking != nil {
+			for level, effort := range p.Thinking.Map {
+				if level != miniagent.ThinkingOff && strings.TrimSpace(effort) == "" {
+					return fmt.Errorf("provider %q thinking.map[%q] effort is empty (kind=responses)", p.Name, level)
 				}
 			}
 		}
