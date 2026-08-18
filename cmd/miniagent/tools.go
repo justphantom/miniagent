@@ -20,10 +20,17 @@ import (
 // path argument, so confineWrap does not apply; its SSRF guard lives inside WebTool.
 func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout, webTimeout time.Duration,
 	mode string, fileResultLimit int, limits miniagent.Limits,
-	confineAuto, evalSymlinks bool) []miniagent.Tool {
+	confineAuto, evalSymlinks bool, toolOutputDir string) []miniagent.Tool {
 	// confine wraps the file tools when in ModeDefault, OR in ModeAuto when confineAuto is opted in
 	// (auto keeps shell free; this is deterministic-file-primitive defense-in-depth for long sessions).
 	confine := mode == miniagent.ModeDefault || (mode == miniagent.ModeAuto && confineAuto)
+	// readAllow is the read-only exception for the persisted tool-output directory (§P1-A read-back):
+	// toolOutputStore writes full output outside workdir and hands the model an absolute path hint;
+	// without this exception the hint is unreachable. Write tools never get the exception.
+	var readAllow []string
+	if confine && workdir != "" && toolOutputDir != "" {
+		readAllow = []string{toolOutputDir}
+	}
 	read := tools.ReadFileTool(workdir, fileOpTimeout, limits.MaxReadFileBytes)
 	write := tools.WriteFileTool(workdir, writeTimeout)
 	edit := tools.EditFileTool(workdir, writeTimeout)
@@ -33,17 +40,17 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout, webTi
 		edit.ResultLimit = fileResultLimit
 	}
 	if confine && workdir != "" {
-		read = confineWrap(read, workdir, true, evalSymlinks)
-		write = confineWrap(write, workdir, false, evalSymlinks)
-		edit = confineWrap(edit, workdir, false, evalSymlinks)
+		read = confineWrap(read, workdir, true, readAllow, evalSymlinks)
+		write = confineWrap(write, workdir, false, nil, evalSymlinks)
+		edit = confineWrap(edit, workdir, false, nil, evalSymlinks)
 	}
 	grep := tools.GrepTool(workdir, fileOpTimeout, limits.MaxGrepMatches, limits.MaxShellOutputChars)
 	glob := tools.GlobTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
 	astT := tools.AstTool(workdir, fileOpTimeout, limits.MaxShellOutputChars)
 	if confine && workdir != "" {
-		grep = confineWrap(grep, workdir, true, evalSymlinks)
-		glob = confineWrap(glob, workdir, true, evalSymlinks)
-		astT = confineWrap(astT, workdir, true, evalSymlinks)
+		grep = confineWrap(grep, workdir, true, readAllow, evalSymlinks)
+		glob = confineWrap(glob, workdir, true, readAllow, evalSymlinks)
+		astT = confineWrap(astT, workdir, true, readAllow, evalSymlinks)
 	}
 	git := tools.GitTool(workdir, shellTimeout, limits.MaxShellOutputChars)
 	goT := tools.GoTool(workdir, shellTimeout, limits.MaxShellOutputChars)
@@ -53,8 +60,8 @@ func buildTools(workdir string, shellTimeout, fileOpTimeout, writeTimeout, webTi
 	deleteT := tools.DeleteTool(workdir, writeTimeout)
 	web := tools.WebTool(webTimeout, 0, limits.MaxShellOutputChars, false)
 	if confine && workdir != "" {
-		rename = confineWrap(rename, workdir, false, evalSymlinks)
-		deleteT = confineWrap(deleteT, workdir, false, evalSymlinks)
+		rename = confineWrap(rename, workdir, false, nil, evalSymlinks)
+		deleteT = confineWrap(deleteT, workdir, false, nil, evalSymlinks)
 	}
 	builtins := []miniagent.Tool{
 		read, write, edit, grep, glob, astT, git, goT, npm, lint, rename, deleteT, web,

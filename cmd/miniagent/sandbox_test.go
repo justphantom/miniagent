@@ -35,6 +35,57 @@ func TestCheckConfine_OutsideRejected(t *testing.T) {
 	}
 }
 
+// §P1-A read-back exception: read-only tools may read the persisted tool-output dir (outside workdir).
+func TestConfineWrap_ToolOutputReadAllowlist(t *testing.T) {
+	root := t.TempDir()
+	out := t.TempDir()
+	name := filepath.Join(out, "tool_1_call_1.txt")
+	if err := os.WriteFile(name, []byte("full output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := confineWrap(tools.ReadFileTool(root, 0, 0), root, true, []string{out})
+	r := wrapped.Call(context.Background(), fmt.Sprintf(`{"path":%q}`, name))
+	if r.IsError {
+		t.Fatalf("read of allowlisted tool output failed: %+v", r)
+	}
+	if !strings.Contains(r.Output, "full output") {
+		t.Errorf("allowlisted read should return content: %+v", r)
+	}
+	// Sibling of the allow-root is NOT covered.
+	outside := filepath.Join(filepath.Dir(out), "sibling.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = wrapped.Call(context.Background(), fmt.Sprintf(`{"path":%q}`, outside))
+	if !r.IsError {
+		t.Error("read outside allow-root should be rejected")
+	}
+}
+
+func TestPathInRoots(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "a.txt")
+	cases := []struct {
+		p    string
+		want bool
+	}{
+		{file, true},
+		{root, true},
+		{root + "/../other", false},
+		{"/abs/other", false},
+		{"relative", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := pathInRoots(c.p, []string{root}); got != c.want {
+			t.Errorf("pathInRoots(%q)=%v, want %v", c.p, got, c.want)
+		}
+	}
+	if pathInRoots(file, nil) {
+		t.Error("nil roots should never match")
+	}
+}
+
 // path="." or workdir itself must be rejected, to prevent overwriting the entire workdir.
 func TestCheckConfine_RootItselfRejected(t *testing.T) {
 	root := t.TempDir()
@@ -101,7 +152,7 @@ func TestConfineWrap_RenameConfinesFromAndTo(t *testing.T) {
 	if err := os.Symlink(outside, linkdir); err != nil {
 		t.Skipf("cannot create symlink: %v", err)
 	}
-	wrapped := confineWrap(tools.RenameTool(root, 0), root, false)
+	wrapped := confineWrap(tools.RenameTool(root, 0), root, false, nil)
 	r := wrapped.Call(context.Background(), `{"from":"a.txt","to":"sub/b.txt"}`)
 	if !r.IsError || !strings.Contains(r.Output, "symlink") {
 		t.Errorf("rename into symlinked dir should be rejected by the wrap, got: %+v", r)
@@ -125,7 +176,7 @@ func TestConfineWrap_RenameInsideWorkdir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wrapped := confineWrap(tools.RenameTool(root, 0), root, false)
+	wrapped := confineWrap(tools.RenameTool(root, 0), root, false, nil)
 	r := wrapped.Call(context.Background(), `{"from":"a.txt","to":"sub/b.txt"}`)
 	if r.IsError {
 		t.Fatalf("in-workdir rename should pass, got: %s", r.Output)
@@ -170,7 +221,7 @@ func TestConfineWrap_BlocksSymlinkPath(t *testing.T) {
 	}
 
 	tool := tools.WriteFileTool(root, 0)
-	wrapped := confineWrap(tool, root, false)
+	wrapped := confineWrap(tool, root, false, nil)
 	r := wrapped.Call(context.Background(), `{"path":"linkdir/pwned.txt","content":"x"}`)
 	if !r.IsError || !strings.Contains(r.Output, "symlink") {
 		t.Errorf("expected confineWrap to reject symlink path, got: %+v", r)
@@ -185,7 +236,7 @@ func TestConfineWrap_BlocksSymlinkPath(t *testing.T) {
 func TestConfineWrap_AllowsRegularPath(t *testing.T) {
 	root := t.TempDir()
 	tool := tools.WriteFileTool(root, 0)
-	wrapped := confineWrap(tool, root, false)
+	wrapped := confineWrap(tool, root, false, nil)
 	r := wrapped.Call(context.Background(), `{"path":"sub/ok.txt","content":"hello"}`)
 	if r.IsError {
 		t.Fatalf("expected regular path to pass: %s", r.Output)
@@ -200,7 +251,7 @@ func TestConfineWrap_AllowsRegularPath(t *testing.T) {
 // no unconstrained successful write is produced. Regression guard: previously rejecting all empty paths once hurt grep/glob.
 func TestConfineWrap_EmptyPathFallsThroughToOrig(t *testing.T) {
 	root := t.TempDir()
-	wrapped := confineWrap(tools.WriteFileTool(root, 0), root, false)
+	wrapped := confineWrap(tools.WriteFileTool(root, 0), root, false, nil)
 	// Non-JSON / missing path / empty path: all should be rejected by orig(write), no successful write allowed.
 	for _, args := range []string{`not-json`, `{"content":"x"}`, `{"path":""}`} {
 		r := wrapped.Call(context.Background(), args)
@@ -220,7 +271,7 @@ func TestConfineWrap_GrepWithoutPathWorks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello foo bar"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root, true)
+	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root, true, nil)
 	r := grep.Call(context.Background(), `{"pattern":"foo"}`)
 	if r.IsError {
 		t.Fatalf("grep without path should work (default workdir), got error: %+v", r)
@@ -235,13 +286,13 @@ func TestConfineWrap_ConfinesEscapePath(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	// write with .. out of bounds
-	wrapped := confineWrap(tools.WriteFileTool(root, 0), root, false)
+	wrapped := confineWrap(tools.WriteFileTool(root, 0), root, false, nil)
 	r := wrapped.Call(context.Background(), `{"path":"../escape.txt","content":"x"}`)
 	if !r.IsError || !strings.Contains(r.Output, "escapes workdir") {
 		t.Errorf("write escaping workdir should be rejected: %+v", r)
 	}
 	// grep with an absolute path escaping bounds (grep uses workspaceRoot but still needs confine to prevent absolute path escape)
-	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root, true)
+	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root, true, nil)
 	r = grep.Call(context.Background(), fmt.Sprintf(`{"pattern":"x","path":%q}`, outside))
 	if !r.IsError || !strings.Contains(r.Output, "escapes workdir") {
 		t.Errorf("grep escaping workdir should be rejected: %+v", r)
@@ -311,7 +362,7 @@ func TestConfineWrap_ReadOnlyGrepAllowsRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello foo"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root, true)
+	grep := confineWrap(tools.GrepTool(root, 0, 0, 0), root, true, nil)
 	for _, p := range []string{root, "."} {
 		r := grep.Call(context.Background(), fmt.Sprintf(`{"pattern":"foo","path":%q}`, p))
 		if r.IsError {
@@ -321,7 +372,7 @@ func TestConfineWrap_ReadOnlyGrepAllowsRoot(t *testing.T) {
 		}
 	}
 	// Write tool (readOnly=false) still rejects the workdir root.
-	write := confineWrap(tools.WriteFileTool(root, 0), root, false)
+	write := confineWrap(tools.WriteFileTool(root, 0), root, false, nil)
 	r := write.Call(context.Background(), fmt.Sprintf(`{"path":%q,"content":"x"}`, root))
 	if !r.IsError || !strings.Contains(r.Output, "workdir root") {
 		t.Errorf("write targeting workdir root should be rejected: %+v", r)

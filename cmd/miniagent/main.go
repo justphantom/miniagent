@@ -177,16 +177,21 @@ func main() {
 	// Main provider chat/stream + summary compChat (when crossing providers); os.Exit on missing key or invalid endpoint.
 	llm, compChat := buildRuntimeClients(resolved, apiKey, logger)
 
-	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), webTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits, intoBool(resolved.RunConfig.ConfineAuto, false), intoBool(resolved.RunConfig.ConfineEvalSymlinks, false))
+	// §P1-A: tool output persist directory — explicit config wins; otherwise, when -save-session/-session is active, derive from the session directory
+	// as <sessionDir>/<id>.tool-output/ (disabled when there is no session and no config set). Computed before buildTools so read-only file tools
+	// can be given this directory as a read exception (the marker's absolute path lives outside workdir; without the exception the §P1-A read-back
+	// hint is unreachable, contradicting the "stay inside workdir" system prompt).
+	toolOutputDir := ""
+	if resolved.RunConfig.ToolOutputDir != nil && *resolved.RunConfig.ToolOutputDir != "" {
+		toolOutputDir = *resolved.RunConfig.ToolOutputDir
+	} else if sessPath != "" {
+		toolOutputDir = filepath.Join(filepath.Dir(sessPath), strings.TrimSuffix(filepath.Base(sessPath), ".jsonl")+".tool-output")
+	}
+
+	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), webTimeoutOf(resolved), resolved.Mode, into(resolved.RunConfig.MaxFileResultChars, 0), limits, intoBool(resolved.RunConfig.ConfineAuto, false), intoBool(resolved.RunConfig.ConfineEvalSymlinks, false), toolOutputDir)
 	baseCfg := loopCfg(resolved, f, history, tools)
 	warnNoBudgetFuse(resolved, f, logger)
-	// §P1-A: tool output persist directory — explicit config wins; otherwise, when -save-session/-session is active, derive from the session directory
-	// as <sessionDir>/<id>.tool-output/ (disabled when there is no session and no config set).
-	if resolved.RunConfig.ToolOutputDir != nil && *resolved.RunConfig.ToolOutputDir != "" {
-		baseCfg.ToolOutputDir = *resolved.RunConfig.ToolOutputDir
-	} else if sessPath != "" {
-		baseCfg.ToolOutputDir = filepath.Join(filepath.Dir(sessPath), strings.TrimSuffix(filepath.Base(sessPath), ".jsonl")+".tool-output")
-	}
+	baseCfg.ToolOutputDir = toolOutputDir
 	if resolved.Run.ToolOutputRetention != nil {
 		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
 	}

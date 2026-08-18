@@ -30,7 +30,7 @@ import (
 // as stated in the README), so capability is not increased — this is only a guardrail against misoperation,
 // without forcibly calling EvalSymlinks (which would change default semantics and introduce new failure modes).
 // True isolation relies on a low-privilege user + container + OS layer (see README "Runtime isolation").
-func confineWrap(tool miniagent.Tool, root string, readOnly bool, evalSymlinks ...bool) miniagent.Tool {
+func confineWrap(tool miniagent.Tool, root string, readOnly bool, allowDirs []string, evalSymlinks ...bool) miniagent.Tool {
 	orig := tool.Call
 	tool.Call = func(ctx context.Context, args string) miniagent.ToolResult {
 		var p struct {
@@ -50,8 +50,11 @@ func confineWrap(tool miniagent.Tool, root string, readOnly bool, evalSymlinks .
 				}
 			}
 			if p.Path != "" {
-				if err := checkConfine(root, p.Path, readOnly, evalSymlinks...); err != nil {
-					return miniagent.ToolResult{IsError: true, Output: err.Error()}
+				// Read-only tools get an allowDirs exception (§P1-A read-back); write tools pass nil.
+				if !readOnly || !pathInRoots(p.Path, allowDirs) {
+					if err := checkConfine(root, p.Path, readOnly, evalSymlinks...); err != nil {
+						return miniagent.ToolResult{IsError: true, Output: err.Error()}
+					}
 				}
 			}
 		}
@@ -144,6 +147,24 @@ func checkConfine(root, p string, readOnly bool, evalSymlinks ...bool) error {
 // short names (GIT~1) remain a known accepted gap. Duplicated from tools.resolveConfinedPath's helper
 // rather than exported: cmd → core must not add a reverse dependency for one predicate (invariant #14;
 // the two confine layers already mirror each other).
+// pathInRoots reports whether p (absolute, as the §P1-A marker always emits) falls inside any of roots.
+// Relative paths resolve against workdir and can never point into an external allow-root, so they return
+// false (they stay subject to checkConfine). Roots are cleaned; an empty list never matches. Read-only only.
+func pathInRoots(p string, roots []string) bool {
+	if len(roots) == 0 || !filepath.IsAbs(p) {
+		return false
+	}
+	abs := filepath.Clean(p)
+	sep := string(filepath.Separator)
+	for _, r := range roots {
+		root := filepath.Clean(r)
+		if abs == root || strings.HasPrefix(abs+sep, root+sep) {
+			return true
+		}
+	}
+	return false
+}
+
 func dotGitWithinRoot(rel string) bool {
 	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
 		if strings.EqualFold(part, ".git") {
