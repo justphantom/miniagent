@@ -3,16 +3,17 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
-### Changed
-- **v5.0.0 破坏性变更：删 agent 层安全保障，工具精简至 8 个**：移除 `-mode` 双模式（default/auto 合并为单模式，`shell` 恒注册）、`confineWrap`（workdir 子树路径限制）、`.git` 目录封锁、git/go/npm/golangci-lint/rename/delete 6 个白名单子命令工具及其 allow-list/deny-args/`.gitattributes` 防线/`resolveModuleRoot` 上溯约束、rtk proxy 集成（`rtkBin`/`rtkWrap`）、`confine_eval_symlinks`/`confine_auto` config 项、`ModeDefault`/`ModeAuto` 常量。保留工具：read/write/edit/grep/glob/ast/shell/web（8 个）。安全完全靠运行用户的 OS 权限（容器/低权 UID/文件权限），agent 层不再做任何保障。subagent guidance 模板去 `{mode}` 占位符（单模式无 mode 传递）。system prompt 「Verify」条目改引 shell（不再点名 go/golangci-lint/npm dev tools），「Stay inside」去 rename/delete 提及。迁移：外部命令改用 `shell` 工具（`git status`/`go test`/`npm install`/`golangci-lint run`/`mv`/`rm` 等），删除 config `defaults.mode`/`run.confine_eval_symlinks`/`run.confine_auto` 键（JSON 忽略未知键，旧 config 无需改即可加载）。
+## [5.0.0] - 2026-08-18
+
+> major：删 agent 层全部安全保障（`-mode`/confineWrap/白名单子命令工具/.git 封锁），工具精简至 8 个；新增 OpenAI Responses API provider + `web` 抓取工具。迁移见下。
 
 ### Added
 - **OpenAI Responses API provider（`kind=responses`）**：新增 `internal/provider/responses`，支持文本/function tools/reasoning、非流式与语义事件流式、usage/finish 映射、重试与 thinking 降级。采用全量本地 `input` 投影，不用 `previous_response_id`；固定 `store:false` + `include:reasoning.encrypted_content`，新增 `Message/Response.ReasoningState` 持久化并回放 encrypted reasoning item（旧 session 缺该字段兼容）。`chat_url` 指 `/v1/responses`，`models_url` 复用 OpenAI models 端点；未配置 Responses 内置托管工具。
-- **`web` 工具（网页抓取，默认注册）**：GET URL → 文本入上下文（查文档/API/issue）。两模式默认注册 + `run.web_timeout`（默认 30s）。SSRF 防护：拒私网/环回/链路本地（含云 metadata）/组播/受限广播及 v4-mapped v6 地址，DNS 全 IP 校验，重定向每跳重查；HTML 剥 `<script>/<style>`+标签+实体解码+空行折叠（极简正则级，非浏览器）；拒非 text/* 与 application/json；body 1MiB 封顶（对齐 read），输出 `max_shell_output_chars` 同源限幅+截断标记；仅 GET/HTTP(S)；User-Agent 标识。**非安全边界**：GET 查询参数可携带数据外传、响应内容直入上下文（prompt injection 面），guardrail 定位（攻击面记账已更新）。测试 httptest 全覆盖（12 用例）。
+- **`web` 工具（网页抓取）**：GET URL → 文本入上下文（查文档/API/issue）。默认注册 + `run.web_timeout`（默认 30s）。SSRF 防护：拒私网/环回/链路本地（含云 metadata）/组播/受限广播及 v4-mapped v6 地址，DNS 全 IP 校验，重定向每跳重查；HTML 剥 `<script>/<style>`+标签+实体解码+空行折叠（极简正则级，非浏览器）；拒非 text/* 与 application/json；body 1MiB 封顶（对齐 read），输出 `max_shell_output_chars` 同源限幅+截断标记；仅 GET/HTTP(S)；User-Agent 标识。**非安全边界**：GET 查询参数可携带数据外传、响应内容直入上下文（prompt injection 面），guardrail 定位（攻击面记账已更新）。测试 httptest 全覆盖（12 用例）。
 
 ### Changed
-- **default system prompt 加 workdir 约束**：工作流清单新增 "Stay inside the working directory" 条目（点名 read/write/edit/rename/delete 工具 + 绝对路径/`..` 逃逸形态 + "state the need instead of accessing" 出口）；`appendWorkdirLine` 注入行从 "Relative paths resolve against it" 增强为 "all file tools operate only under it; relative paths resolve against it, absolute paths and .. must not escape it"。CLI `-workdir` 已注入 system prompt（运行时信息，非 config 来源，沿用 `appendWorkdirLine` 既有定位）。软约束，减少模型越界尝试的无效往返；硬边界仍靠 default 模式 `confineWrap`/`resolveConfinedPath` 代码层拒（auto 模式无硬边界，prompt 是唯一软引导）。
+- **v5.0.0 破坏性变更：删 agent 层安全保障，工具精简至 8 个**：移除 `-mode` 双模式（default/auto 合并为单模式，`shell` 恒注册）、`confineWrap`（workdir 子树路径限制）、`.git` 目录封锁、git/go/npm/golangci-lint/rename/delete 6 个白名单子命令工具及其 allow-list/deny-args/`.gitattributes` 防线/`resolveModuleRoot` 上溯约束、rtk proxy 集成（`rtkBin`/`rtkWrap`）、`confine_eval_symlinks`/`confine_auto` config 项、`ModeDefault`/`ModeAuto` 常量。保留工具：read/write/edit/grep/glob/ast/shell/web（8 个）。安全完全靠运行用户的 OS 权限（容器/低权 UID/文件权限），agent 层不再做任何保障。subagent guidance 模板去 `{mode}` 占位符（单模式无 mode 传递）。system prompt 「Verify」条目改引 shell（不再点名 go/golangci-lint/npm dev tools），「Stay inside」去 rename/delete 提及。迁移：外部命令改用 `shell` 工具（`git status`/`go test`/`npm install`/`golangci-lint run`/`mv`/`rm` 等），删除 config `defaults.mode`/`run.confine_eval_symlinks`/`run.confine_auto` 键（JSON 忽略未知键，旧 config 无需改即可加载）。
+- **default system prompt 加 workdir 约束**：工作流清单新增 "Stay inside the working directory" 条目（点名 read/write/edit 工具 + 绝对路径/`..` 逃逸形态 + "state the need instead of accessing" 出口）；`appendWorkdirLine` 注入行从 "Relative paths resolve against it" 增强为 "all file tools operate only under it; relative paths resolve against it, absolute paths and .. must not escape it"。CLI `-workdir` 已注入 system prompt。软约束（v5.0.0 删 confineWrap 后为唯一引导），减少模型越界尝试的无效往返。
 
 ## [4.7.0] - 2026-08-17
 

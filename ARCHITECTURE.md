@@ -21,9 +21,8 @@ cmd/miniagent/        CLI 入口层
   setup_run.go        loopCfg / compactionOptions / warnNoBudgetFuse（Run 组装辅助）
   setup.go            config 查找、key 解析、hooks 构建、退出码
   setup_http.go       buildLLM / buildDoer（HTTP client 注入，provider Kind 分派）
-  tools.go            buildTools：注册内置工具并按 mode 调约束
+  tools.go            buildTools：注册内置工具（单模式，shell 恒注册）
   session.go          -save-session/-session 解析与互斥
-  sandbox.go          confineWrap：default 模式文件工具路径越界拒绝；只读工具放行 workdir 根
   prompts.go          默认 system prompt、subagent 引导、workdir 绝对路径注入
   replay.go           -replay：离线重放会话（不调 LLM、不用 key、不落盘）
   stdin.go            读 prompt（空 stdin 交互引导）
@@ -200,11 +199,9 @@ return finishMaxIterations
 | `glob` | 路径匹配 | filepath.Match 模式；含 `/` 按相对路径逐段匹配，支持 `**` |
 | `ast` | Go 符号声明搜索 | go/parser 解析，输出 path:lineno:kind Name，kind 过滤 |
 | `shell` | 命令执行 | 默认超时 **120s**，进程组隔离、按 shell_timeout |
-| `git`/`go`/`npm`/`golangci-lint` | 语言生态 | 子命令 allow-list + 参数级 deny（见 §10） |
-| `rename`/`delete` | 文件管理 | 限 workdir 子树 |
-| `web` | 网页抓取 | 默认注册；SSRF 防护（拒私网/环回/链路本地）、重定向每跳重查、HTML 标签剥离、body/输出双截断 |
+| `web` | 网页抓取 | SSRF 防护（拒私网/环回/链路本地）、重定向每跳重查、HTML 标签剥离、body/输出双截断 |
 
-**default 模式 shell 策略**：`shell` 工具**仅在 ModeAuto 注册**（`cmd/miniagent/tools.go buildTools`）；default 模式 13 工具（含 `web`，无 shell），误调经 dispatch 报 `unknown tool`。外部命令在 default 下经 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具（各自 allow-list 拒危险子命令/参数）。原 opt-in 词法护栏（`GuardShell`：`run.shell_allowlist`/`run.shell_confine_cd`）与 `ShellTool` 的 sudo/su 拒绝名单已随该决策删除——注册门替代词法过滤。
+v5.0.0 起单模式，8 工具（上表全部）恒注册；`shell` 无任何 agent 层约束。原 `git`/`go`/`npm`/`golangci-lint` 白名单子命令工具与 `rename`/`delete` 工具已删（外部命令一律走 `shell`）。安全模型见 §10。
 
 工具执行经 `handleToolCalls` + `runToolsParallel`（并行度受 `MaxParallelTools` 约束，默认 5）+ `safeCall`（panic 兜底）。
 
@@ -238,10 +235,9 @@ return finishMaxIterations
 
 ## 10. 安全模型
 
-- **workdir 约束**（必填、绝对路径）：写工具边界 + shell cwd 基准。
-- **default 模式**（非安全边界）：`confineWrap` 按读写分流——write/edit 拒绝指向 workdir 根（防 MkdirAll/Rename 覆盖整个 workdir），read/grep/glob 放行 workdir 根；`shell` 不注册（误调 `unknown tool`）；`.git/**` 全工具拒绝（`checkConfine`/`resolveConfinedPath` 的 `dotGitWithinRoot`，含嵌套 submodule 布局，读也拒——防 hooks 执行/remote 改写/config 泄漏绕过 git 工具白名单）（`dotGitWithinRoot` 大小写不敏感比较——Windows/macOS 文件系统下 `.GIT` 即 gitdir；8.3 短名为已知残留）；参数级：git 拒 `--no-index`/`-F`/push-pull URL 位置参数/`+refspec`（≡`--force`）与 `:refspec`（≡`--delete`）/短旗标簇（`-qf`）/`--upload-pack` 全局 RCE 族/`.gitattributes` 外部驱动（`checkGitPositionalArgs`/`checkGitAttributes`——属性源含祖先链、`<gitdir>/info/attributes` 与树内全部 `.gitattributes`），go 拒 `-o`/`--o` 双横线形/`-toolexec`/中间 `..` 写路径（`resolveWriteFlagValue` 按 `filepath.Rel` 判界，fmt 的 FILE 实参同规则），npm 拒 `--prefix`/`-C`/`--registry`（`optSpec` 归一化匹配，单横线长形同拒），golangci-lint 拒 `--fix`/`-n`/`--new*` 全族/`--output.json.path`，`resolveModuleRoot` 上溯不越 workdir。
-- **auto 模式**：`shell` 注册且无约束，用于可信子任务。
-- **路径越界**：`..`/绝对路径/子目录统一拒绝（basename-only 对 rules_file 同样适用，防越界读注入）。
+- **零安全保障**（v5.0.0）：`shell` 恒注册且无约束，文件工具无路径限制，`.git` 不封锁，白名单子命令工具全部删除。隔离**完全靠运行用户的 OS 权限**（容器/低权 UID/文件权限），调用方负责。
+- **workdir**（必填、绝对路径）：仅作为相对路径解析基准 + shell cwd，**不是安全边界**。
+- **rules_file 越界**：basename-only（仍在，防越界读注入）。
 - **凭证剥离**：shell 子进程剥离所有 `MINIAGENT_*` 前缀环境变量（含 key/URL），避免密钥泄漏给 LLM 派生命令；其他环境变量按原样继承。
 - **破坏性工具确认**（opt-in `confirm_destructive`）：write/edit + 危险 shell 前提示，非交互/子 agent 模式拒绝（可 `$MINIAGENT_AUTO_APPROVE=1` 放行）。
 
