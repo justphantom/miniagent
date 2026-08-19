@@ -147,7 +147,7 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 | `text_delta` / `reasoning_delta` | 流式模式（`-stream`）下 LLM 输出增量 | `step`, `text` |
 | `tool_use` | 每次 LLM 请求工具调用（工具执行前） | `name`, `input` |
 | `tool_result` | 每次工具执行后 | `name`, `call_id`, `output`(截断), `truncated`, `is_error`, `exit_code`(仅 shell) |
-| `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `finish` |
+| `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `llm_requests`, `finish`, `compacted`, `thinking_downgraded` |
 | `error` | 主流程失败，**终态** | `message` |
 
 工具完整结果经 `trimForHistory` 裁剪后写入历史回灌 LLM；概要（截断到 `maxToolResultEventChars`）经 `tool_result` 事件输出到 stdout 供消费方观察。
@@ -160,9 +160,12 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 - `model`：本次调用使用的模型 id
 - `input_tokens` / `output_tokens`：累计的 token 用量
 - `steps`：本轮 LLM 调用次数
+- `llm_requests`：本次实际发出的 LLM 请求数（含降级/重试/总结步）
+- `compacted`：本轮是否触发过摘要压缩（`true` 表示窗口溢出后执行了 `FitHistory` 摘要或 fallback 裁剪）
+- `thinking_downgraded`：本轮是否因端点不支持 thinking 而降级（`true` 表示 thinking 字段被丢弃后重试了一次）
 - `message`：错误描述
 
-> `result` 事件中 `text`/`model`/`input_tokens`/`output_tokens`/`steps` 均不带 `omitempty`，为 0 也会出现键名，方便消费方稳定 parse。
+> `result` 事件中 `text`/`model`/`input_tokens`/`output_tokens`/`steps`/`llm_requests`/`finish`/`compacted`/`thinking_downgraded` 均不带 `omitempty`，为 0 也会出现键名，方便消费方稳定 parse。
 
 ### 输出示例
 

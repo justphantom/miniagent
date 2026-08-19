@@ -244,7 +244,7 @@ v5.0.0 起单模式，8 工具（上表全部）恒注册；`shell` 无任何 ag
 
 ## 11. 事件协议（NDJSON，`internal/miniagent/event/`）
 
-stdout 一行一个 NDJSON 事件，类型：`session`（新建会话首条，含 id）/ `llm_request`（每次 LLM 调用）/ `tool_use` / `tool_result`（含 ExitCode/IsError；exit_code 仅在结果携带可信退出码时出现——命令语义性非零退出（IsError=false）或错误但 ExitCode>0，校验拒绝/超时等未真正执行命令的路径省略该字段，避免 is_error:true 与 exit_code:0 并存的矛盾）/ `delta`（流式增量，含 kind=text/reasoning）/ `result`（最终）/ `error`（含 code）。
+stdout 一行一个 NDJSON 事件，类型：`session`（新建会话首条，含 id）/ `llm_request`（每次 LLM 调用）/ `tool_use` / `tool_result`（含 ExitCode/IsError；exit_code 仅在结果携带可信退出码时出现——命令语义性非零退出（IsError=false）或错误但 ExitCode>0，校验拒绝/超时等未真正执行命令的路径省略该字段，避免 is_error:true 与 exit_code:0 并存的矛盾）/ `delta`（流式增量，含 kind=text/reasoning）/ `result`（最终，含 `compacted`/`thinking_downgraded` —— 消费方可感知本轮压缩/降级信号而无需解析 transcript）/ `error`（含 code）。
 
 辅助：`-replay` 离线重放会话（读 jsonl、不呼 LLM、不落盘、不读 stdin）；`-metrics-step` 通过 `OnStep` 把 per-step 观测写 stderr NDJSON（transcript 增长、token 斜率、压缩次数、LLM 请求数）。
 
