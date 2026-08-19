@@ -25,15 +25,18 @@ type toolUseEvent struct {
 
 // resultEvent is the terminal event. text/model/input_tokens/output_tokens/steps/finish
 // all omit omitempty, so even 0/empty-string values still produce keys, allowing consumers to parse stably.
+// compacted/thinking_downgraded are the same machine-contract booleans: always present, false default.
 type resultEvent struct {
-	Type         string `json:"type"`
-	Text         string `json:"text"`
-	Model        string `json:"model"`
-	InputTokens  int    `json:"input_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-	Steps        int    `json:"steps"`
-	LLMRequests  int    `json:"llm_requests"`
-	Finish       string `json:"finish"`
+	Type               string `json:"type"`
+	Text               string `json:"text"`
+	Model              string `json:"model"`
+	InputTokens        int    `json:"input_tokens"`
+	OutputTokens       int    `json:"output_tokens"`
+	Steps              int    `json:"steps"`
+	LLMRequests        int    `json:"llm_requests"`
+	Finish             string `json:"finish"`
+	Compacted          bool   `json:"compacted"`
+	ThinkingDowngraded bool   `json:"thinking_downgraded"`
 }
 
 type errorEvent struct {
@@ -55,17 +58,21 @@ func ToolUseWriter(w io.Writer) miniagent.OnToolUse {
 	}
 }
 
-// EmitResult writes the terminal result event.
+// EmitResult writes the terminal result event. compacted/thinking_downgraded mirror
+// Result.Compacted/ThinkingDowngraded: consumers can detect "this round summarized" /
+// "thinking was dropped to a downgrade" without parsing the transcript.
 func EmitResult(w io.Writer, result miniagent.Result, model string) error {
 	return json.NewEncoder(w).Encode(resultEvent{
-		Type:         "result",
-		Text:         result.Text,
-		Model:        model,
-		InputTokens:  result.Usage.InputTokens,
-		OutputTokens: result.Usage.OutputTokens,
-		Steps:        result.Steps,
-		LLMRequests:  result.LLMRequests,
-		Finish:       result.Finish,
+		Type:               "result",
+		Text:               result.Text,
+		Model:              model,
+		InputTokens:        result.Usage.InputTokens,
+		OutputTokens:       result.Usage.OutputTokens,
+		Steps:              result.Steps,
+		LLMRequests:        result.LLMRequests,
+		Finish:             result.Finish,
+		Compacted:          result.Compacted,
+		ThinkingDowngraded: result.ThinkingDowngraded,
 	})
 }
 

@@ -58,7 +58,9 @@ func modelSources(providers []config.ProviderConfig) []modelSource {
 // slice of providerModel (provider/model kept separate, plus optional capability limits reported
 // by the endpoint). It requests each provider's ModelsURL concurrently (at most 8 in flight);
 // static models (no ModelsURL) return the config directly without a GET. kind=anthropic providers
-// dispatch to the Anthropic /v1/models endpoint. A single provider failure is logged as a warning
+// dispatch to the Anthropic /v1/models client; kind="" / "openai" / "responses" all use the
+// OpenAI-compatible client (the Responses API reuses the OpenAI /v1/models endpoint, no dedicated
+// responses client exists). A single provider failure is logged as a warning
 // but the rest continue; the first error (if any) is returned at the end.
 // keyFor returns the final API key per provider; when httpClient is non-nil its transport/timeout is reused.
 func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]providerModel, error) {

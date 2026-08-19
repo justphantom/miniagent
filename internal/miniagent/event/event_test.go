@@ -35,7 +35,7 @@ func TestToolUseWriter(t *testing.T) {
 
 func TestEmitResult(t *testing.T) {
 	var buf bytes.Buffer
-	if err := EmitResult(&buf, miniagent.Result{Text: "hi", Usage: miniagent.Usage{InputTokens: 1, OutputTokens: 2}, Steps: 3, Finish: "stop"}, "m"); err != nil {
+	if err := EmitResult(&buf, miniagent.Result{Text: "hi", Usage: miniagent.Usage{InputTokens: 1, OutputTokens: 2}, Steps: 3, Finish: "stop", Compacted: true, ThinkingDowngraded: true}, "m"); err != nil {
 		t.Fatalf("EmitResult: %v", err)
 	}
 	var ev map[string]any
@@ -44,6 +44,9 @@ func TestEmitResult(t *testing.T) {
 	}
 	if ev["type"] != "result" || ev["text"] != "hi" || ev["model"] != "m" || ev["steps"] != float64(3) || ev["finish"] != "stop" {
 		t.Errorf("event = %+v", ev)
+	}
+	if ev["compacted"] != true || ev["thinking_downgraded"] != true {
+		t.Errorf("compaction/downgrade flags not surfaced: %+v", ev)
 	}
 }
 
@@ -57,7 +60,7 @@ func TestEmitResult_ZeroFieldsPresent(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, key := range []string{"type", "text", "model", "input_tokens", "output_tokens", "steps", "finish"} {
+	for _, key := range []string{"type", "text", "model", "input_tokens", "output_tokens", "steps", "finish", "compacted", "thinking_downgraded"} {
 		if _, ok := ev[key]; !ok {
 			t.Errorf("missing key %q in %s", key, buf.String())
 		}

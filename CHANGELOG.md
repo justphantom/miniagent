@@ -3,6 +3,11 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Added
+- **`result` NDJSON 事件新增 `compacted`/`thinking_downgraded` 布尔字段**：恒出键（false 默认），外部消费方可感知"本轮触发过摘要压缩"/"thinking 被降级丢弃"，无需解析 transcript。`EmitResult` 从 `Result.Compacted`/`ThinkingDowngraded` 回填。新增字段非破坏（既有消费方忽略未知键）；用严格 schema 校验的消费方需同步放宽。
+
 ## [5.0.0] - 2026-08-18
 
 > major：删 agent 层全部安全保障（`-mode`/confineWrap/白名单子命令工具/.git 封锁），工具精简至 8 个；新增 OpenAI Responses API provider + `web` 抓取工具。迁移见下。
