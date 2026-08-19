@@ -125,7 +125,7 @@ type toolResultEvent struct {
 
 // execBackedTools 报告哪些工具有真实退出码语义（非零退出 = 命令结论而非工具故障）。
 var execBackedTools = map[string]bool{
-	"shell": true, "git": true, "go": true, "npm": true, "golangci-lint": true,
+	"shell": true,
 }
 
 // EmitToolResult writes a tool_result event. output is truncated to maxToolResultEventChars;

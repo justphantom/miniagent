@@ -161,7 +161,7 @@ func TestEmitToolResult_ExecToolValidationErrorOmitsExitCode(t *testing.T) {
 // A non-zero exit of an exec-backed command stays a normal (is_error:false) result carrying its code.
 func TestEmitToolResult_ExecNonZeroExitKeepsCode(t *testing.T) {
 	var buf bytes.Buffer
-	if err := EmitToolResult(&buf, "go", "c5", miniagent.ToolResult{Output: "FAIL", ExitCode: 1}); err != nil {
+	if err := EmitToolResult(&buf, "shell", "c5", miniagent.ToolResult{Output: "FAIL", ExitCode: 1}); err != nil {
 		t.Fatalf("EmitToolResult: %v", err)
 	}
 	var ev map[string]any

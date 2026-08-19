@@ -180,6 +180,7 @@ func scrubEnv(env []string) []string {
 }
 
 // hasSecretKeyword reports whether the uppercased variable name contains a secret-related keyword. Serves scrubEnv only.
+// hasSecretKeyword reports whether the uppercased variable name contains a secret-related keyword.
 // PAT covers fine-grained tokens like GITHUB_PAT, but the PATH family of variables shares the P-A-T substring — PATH is the
 // required variable for shell executable-path resolution, and scrubbing it would break ls/grep/cat entirely. So PAT goes
 // through a separate "if it contains PATH it must be path-like, exempt" branch. Rare variables like COMPAT_*/PATCH_* are
@@ -191,33 +192,4 @@ func hasSecretKeyword(upperName string) bool {
 		}
 	}
 	return strings.Contains(upperName, "PAT") && !strings.Contains(upperName, "PATH")
-}
-
-// gitCredentialEnvVars are scrubbed vars that git push/pull legitimately need for remote auth
-// (GITHUB_TOKEN et al. for https, SSH_AUTH_SOCK for agent-forwarded ssh). They are re-added ONLY for
-// push/pull — those two never echo env back in their output, so the exfiltration channel scrubEnv targets
-// (repo code run via go test/npm run echoing env) does not apply; every other subcommand keeps the full
-// scrub (hooks run on commit/push would see whatever env commit gets, so commit stays fully scrubbed —
-// the credential vars above are no use to it anyway).
-var gitCredentialEnvVars = []string{
-	"GITHUB_TOKEN", "GITLAB_TOKEN", "GITEA_TOKEN", "GH_TOKEN",
-	"SSH_AUTH_SOCK", "SSH_AGENT_PID",
-}
-
-// restoreGitCredentials returns the scrubbed env plus git push/pull auth vars still present in raw.
-func restoreGitCredentials(scrubbed, raw []string) []string {
-	wanted := make(map[string]string, len(gitCredentialEnvVars))
-	for _, kv := range raw {
-		name, val, ok := strings.Cut(kv, "=")
-		if ok {
-			wanted[name] = val
-		}
-	}
-	out := scrubbed
-	for _, name := range gitCredentialEnvVars {
-		if v, ok := wanted[name]; ok {
-			out = append(out, name+"="+v)
-		}
-	}
-	return out
 }
