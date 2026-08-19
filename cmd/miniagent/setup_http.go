@@ -42,40 +42,7 @@ func httpTimeoutFromConfig(cfg *config.Config) (time.Duration, error) {
 	return *d, nil
 }
 
-// modelSources maps config providers onto the provider-package decoupled ModelSource view
-// (the openai package does not import config; the cmd layer owns the mapping).
-func modelSources(providers []config.ProviderConfig) []openai.ModelSource {
-	out := make([]openai.ModelSource, 0, len(providers))
-	for _, p := range providers {
-		ms := openai.ModelSource{Name: p.Name, Kind: p.Kind, ChatURL: p.ChatURL, ModelsURL: p.ModelsURL, Headers: p.Headers}
-		if p.ModelsURL == "" {
-			ms.StaticModels = make([]string, 0, len(p.Models))
-			for _, m := range p.Models {
-				ms.StaticModels = append(ms.StaticModels, m.Name)
-			}
-		}
-		out = append(out, ms)
-	}
-	return out
-}
-
-// listAllModels resolves the key per provider (provider.Key > $MINIAGENT_API_KEY) and reuses a unified
-// transport/timeout to aggregate the model list.
-func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]openai.ProviderModel, error) {
-	keyFor := func(p openai.ModelSource) string {
-		if pKey := providerKeyByName(providers, p.Name); pKey != "" {
-			return pKey
-		}
-		return os.Getenv("MINIAGENT_API_KEY")
-	}
-	if httpTimeout <= 0 {
-		httpTimeout = 120 * time.Second
-	}
-	httpClient := newHTTPClient(httpTimeout, newHTTPTransport())
-	return openai.ListAllModels(ctx, modelSources(providers), keyFor, httpClient, logger)
-}
-
-// providerKeyByName returns provider.Key by name from the config slice (ModelSource deliberately
+// providerKeyByName returns provider.Key by name from the config slice (modelSource deliberately
 // carries no key material; the key is resolved at the cmd layer per call).
 func providerKeyByName(providers []config.ProviderConfig, name string) string {
 	for _, p := range providers {

@@ -8,9 +8,9 @@
 
 **可正确集成的三个前提**（开发者必须先理解）：
 
-1. **钩子无 panic 兜底**：`recover()` 只覆盖 LLM 调用（`loop_extra.go callLLMOnce`）与工具调用（`loop_tools.go safeCall`）。9 个 `LoopHooks` 字段与 `CompactingHook` 的调用点（`loop.go`：OnStep / OnLLMError / AfterLLM / BeforeLLM、`loop_extra.go callLLMOnce 内 OnDelta`、`loop_tools.go`：OnToolUse / OnToolResult / ShapeToolResult、`compaction/compacting.go:NewCompaction` 内部 `applyCompactingHook`）全是裸 error 检查、无 defer recover。**钩子 panic 会崩进程**——这是与 tool/LLM 调用最显著的不对称。（取舍：核心自带的默认钩子 `NewCompaction`/`NewDefault*` 经审查 panic-free，故核心装配下无实际风险；第三方钩子的 recover 责任在实现者，见 §6.1 红线 1。核心若统一包 `safeInvoke` 兜底会静默吞掉钩子 bug，与「错误尽早暴露」相悖，故未加——这是刻意的对称性取舍，非遗漏。）
+1. **钩子 panic 有 Run 顶层兜底（不自崩）**：`loop.go:39-59` 的 defer `recover()` 会把 9 个 `LoopHooks` 字段与 `CompactingHook` 的调用点（`loop.go`：OnStep / OnLLMError / AfterLLM / BeforeLLM、`loop_extra.go callLLMOnce 内 OnDelta`、`loop_tools.go`：OnToolUse / OnToolResult / ShapeToolResult、`compaction/compacting.go:applyCompactingHook`）及核心辅助函数中任一 panic 转为 error 返回（`run panicked: ...`），transcript/newMsgs 经同一 defer 保活供 session 落盘——钩子 panic 不再崩进程、不丢本轮消息。注意：panic 仍终止整轮 `Run`，且错误信息只含 panic 值、丢失调用点现场；故复杂钩子仍建议自行 `defer recover()` 以输出可定位错误（见 §6.1 红线 1）。核心取「Run 顶层兜底」而非逐调用点 `safeInvoke`：逐点包装会掩埋钩子内部一半的状态，顶层兜底以最小侵入保住持久化契约（d37e2fc 引入，f25d9db 更新注释）。
 2. **钩子不直接改 transcript**：意图经返回值（`StepOutput`/content/`CompactingOutput`）表达，由核心折叠副作用。直接改入参 `msgs` 不会生效（核心用返回值）。
-3. **`NewCompaction` 无共享可变状态**：`before` 闭包捕获的 `budget`（`compaction/assemble.go`）初始化后只读；每步 `Force` 推断到局部变量、拷贝传入 `FitHistory`，闭包不写共享状态——多 `Run` 并发复用同一对钩子实例亦无 race。（旧版 `overflowPending` 跨步状态已在 4.2.0 移除：溢出判定改为 `before` 从 `in.Msgs` 的真实 usage 推断，`after=nil`。）
+3. **`NewCompaction` 无共享可变状态**：`before` 闭包捕获的 `budget`（`compaction/compacting.go`）初始化后只读；每步 `Force` 推断到局部变量、拷贝传入 `FitHistory`，闭包不写共享状态——多 `Run` 并发复用同一对钩子实例亦无 race。（旧版 `overflowPending` 跨步状态已在 4.2.0 移除：溢出判定改为 `before` 从 `in.Msgs` 的真实 usage 推断，`after=nil`。）
 
 **主要风险点**：钩子实现者若忽略上述 1、3，会在长会话/并发/畸形数据下崩进程或 `-race` 失败。
 
@@ -40,7 +40,7 @@ handleToolCalls ──                                                    [loop_
        appendMsg(tool)
 ```
 
-`CompactingHook` 在 `compactWithSummary` 内、调 `Summarize` 前触发（`compaction/assemble.go` 的 `applyCompactionHook`），独立于 `LoopHooks`，仅压缩路径生效。
+`CompactingHook` 在 `compactWithSummary` 内、调 `Summarize` 前触发（`compaction/compacting.go` 的 `applyCompactingHook`），独立于 `LoopHooks`，仅压缩路径生效。
 
 ## 2. 逐钩子契约
 
@@ -107,9 +107,9 @@ handleToolCalls ──                                                    [loop_
 ### 2.9 `OnStep(ctx, StepSnapshot) error`
 
 - **职责**：每步**观察**缝口——输出该步的 transcript 长度、输入/输出 token、是否压缩、累计 LLM 请求数、本步新增消息数。observe-only（无 error 返回），典型消费者是 `metrics.NewStepEmitter`（NDJSON 到 stderr）。
-- **触发时序**：每步顶部，`BeforeLLM` 之前（`loop.go:128`），step 编号从 0 起、随每一步推进。
+- **触发时序**：每步顶部，`BeforeLLM` 之前（`loop.go:128`），step 编号从 1 起、随每一步推进（与 `StepSnapshot.Step` 的 1-based 语义一致）。
 - **入参** `StepSnapshot`：只读快照，不含可写副作用。
-- **error 契约**：`OnStep` 无 error 返回（`func(ctx, snap)`），实现者不得抛出——异常靠 §6.1 的 panic 自保。
+- **error 契约**：`OnStep` 无 error 返回（`func(ctx, snap)`），实现者不得抛出——panic 会经 Run 顶层兜底终止整轮（见 §0 点 1），观察类逻辑请自行 recover 以免误杀整轮。
 - **nil**：不通知（核心零开销短路）。
 - **红线**：不得依赖快照字段顺序做精确匹配；`Compacted` 为**截至本步**是否压缩过（含历史步）。
 
@@ -118,7 +118,7 @@ handleToolCalls ──                                                    [loop_
 - **职责**：摘要前注入 context（领域知识 / 文件清单）或一次性替换 `summarizerPrompt`。
 - **入参** `CompactingInput`：`SessionID`、只读 `Middle`、`Model`。
 - **返回** `CompactingOutput`：`Context []string`（以一条 user 消息 append 到 middle 末尾进摘要输入）、`Prompt string`（替换本次 prompt）。
-- **error**：实现 A 契约——返回 error **中止本次压缩**（`compaction/assemble.go`），`FitHistory` 回落有损压缩。不可 cancel。
+- **error**：实现 A 契约——返回 error **中止本次压缩**（`compaction/compacting.go`），`FitHistory` 回落有损压缩。不可 cancel。
 - **nil**：零开销短路。
 - **配对安全**：仅追加无 tool_calls 的 user 消息，不破坏配对（触发前已过 `ValidateToolPairing`）。
 
@@ -159,13 +159,13 @@ handleToolCalls ──                                                    [loop_
 ## 5. 并发与生命周期
 
 - **单 Run 内顺序**：钩子按 §1 时序顺序调用，**非并发**。同一步内 `OnToolUse` 全部先通知、`runToolsParallel` 后执行；`OnToolResult`/`ShapeToolResult` 在结果回填循环内顺序处理。
-- **闭包状态**：`NewCompaction` 的 `before` 闭包捕获 `ContextBudget`（`compaction/assemble.go`），但初始化后只读——`Force` 每步推断到局部变量、拷贝传入 `FitHistory`，无共享可变状态，多 `Run` 并发复用安全。旧版 `overflowPending` 跨步状态已移除（4.2.0）。
+- **闭包状态**：`NewCompaction` 的 `before` 闭包捕获 `ContextBudget`（`compaction/compacting.go`），但初始化后只读——`Force` 每步推断到局部变量、拷贝传入 `FitHistory`，无共享可变状态，多 `Run` 并发复用安全。旧版 `overflowPending` 跨步状态已移除（4.2.0）。
 - **ctx 联动**：`OnDelta`/工具执行遵守 `ctx`（`runToolsParallel` 信号量获取联动 `ctx.Done`）；钩子内长操作应尊重传入 `ctx`。
 - **资源生命周期**：工具输出 store（`toolOutputStore`）由核心在 `Run` 内创建/清理（`loop_hooks_default.go`）；钩子不应持有需跨 `Run` 释放的资源，除非自管。
 
 ## 6. 不变量与红线（实现钩子必须遵守）
 
-1. **🔴 panic 自保**：钩子无核心 recover。复杂逻辑须自行 `defer recover()` 或保证输入无关的恒不 panic（参考 `safeCall`/`callLLMOnce` 的兜底范式）。
+1. **panic 自保（建议非强制）**：核心已有 Run 顶层兜底（`loop.go` defer recover，见 §0 点 1），钩子 panic 不再崩进程、transcript 保活；但 panic 仍终止整轮且丢失调用点现场，复杂钩子仍建议自行 `defer recover()` 或保证输入无关的恒不 panic（参考 `safeCall`/`callLLMOnce` 的兜底范式），以输出可定位的错误。
 2. **🔴 配对不可破坏**：`ShapeToolResult` 只改 content；任何钩子不得新增/删除 assistant.tool_calls 或改 tool 消息的 `tool_call_id`。
 3. **🔴 不直接改 transcript**：BeforeLLM 经 `StepOutput` 表达，核心按 `Commit` 决定是否替换。直接改入参 `msgs` 元素不生效。
 4. **Kind/Usage/IsError 不进 wire**：钩子构造的消息若带 `Kind`（如 `KindSummary`）仅持久化/屏障识别用，`buildChatBody` 独立构造绝不泄漏给 LLM。

@@ -6,13 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/provider/anthropic"
 	"github.com/justphantom/miniagent/internal/provider/httpretry"
 )
 
@@ -120,121 +117,4 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 		models = append(models, ModelInfo{ID: m.ID, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens})
 	}
 	return models, false, 0, nil
-}
-
-// ModelSource is one provider endpoint to list models from: the decoupled view of a provider
-// entry (config.ProviderConfig maps onto this at the cmd layer) so the provider package does not
-// depend on the CLI config layer. Kind ""/"openai" is the OpenAI-compatible protocol; "anthropic"
-// dispatches to the Anthropic /v1/models client.
-type ModelSource struct {
-	Name      string
-	Kind      string
-	ChatURL   string
-	ModelsURL string
-	Headers   map[string]string
-	// StaticModels lists model ids without a ModelsURL (returned without a GET).
-	StaticModels []string
-}
-
-// ProviderModel pairs a provider name with one model entry from that provider's listing.
-type ProviderModel struct {
-	Provider string
-	Model    string
-	Limits   ModelLimits
-}
-
-// ModelLimits mirrors the capability limit fields reported by models endpoints
-// (non-standard context_window/max_output_tokens extensions); nil when absent.
-type ModelLimits struct {
-	ContextWindow   *int
-	MaxOutputTokens *int
-}
-
-// ListAllModels aggregates the available models across multiple providers and returns them as a
-// slice of ProviderModel (provider/model kept separate, plus optional capability limits reported
-// by the endpoint). It requests each provider's ModelsURL concurrently (at most 8 in flight);
-// static models (no ModelsURL) return the config directly without a GET. kind=anthropic providers
-// dispatch to the Anthropic /v1/models endpoint (same auth headers as chat); that endpoint reports
-// ids only, so Limits stay nil for those entries. A single provider failure
-// is logged as a warning but the rest continue; the first error (if any) is returned at the end.
-// keyFor returns the final API key per provider; when httpClient is non-nil its transport/timeout
-// is reused. The caller must ensure providers are already validated (unique names, valid URLs).
-func ListAllModels(ctx context.Context, providers []ModelSource, keyFor func(ModelSource) string, httpClient *http.Client, logger *slog.Logger) ([]ProviderModel, error) {
-	var (
-		firstErr error
-		mu       sync.Mutex
-		wg       sync.WaitGroup
-	)
-	// Collect results keyed by provider name, then concatenate in input order for stable output.
-	results := make(map[string][]ProviderModel, len(providers))
-
-	const maxConcurrent = 8
-	sem := make(chan struct{}, maxConcurrent)
-
-	for _, p := range providers {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(p ModelSource) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			var models []ModelInfo
-			var err error
-			if p.ModelsURL == "" {
-				if len(p.StaticModels) == 0 {
-					err = fmt.Errorf("provider %q has no models_url and its static models list is empty", p.Name)
-				} else {
-					models = make([]ModelInfo, 0, len(p.StaticModels))
-					for _, id := range p.StaticModels {
-						models = append(models, ModelInfo{ID: id})
-					}
-				}
-			} else if p.Kind == "anthropic" {
-				// Anthropic official /v1/models reports ids only; proxy upstreams may add the same
-				// context_window/max_output_tokens extensions as openai, so limits flow through when present.
-				llm, e := anthropic.NewClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger, p.Headers, false)
-				if e != nil {
-					err = e
-				} else {
-					var anthModels []anthropic.ModelInfo
-					anthModels, err = llm.ListModels(ctx)
-					models = make([]ModelInfo, 0, len(anthModels))
-					for _, m := range anthModels {
-						models = append(models, ModelInfo{ID: m.ID, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens})
-					}
-				}
-			} else {
-				llm, e := NewChatClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger, p.Headers)
-				if e != nil {
-					err = e
-				} else {
-					models, err = llm.ListModels(ctx)
-				}
-			}
-			if err != nil {
-				if logger != nil {
-					logger.Warn("list models failed", "provider", p.Name, "error", err)
-				}
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = fmt.Errorf("provider %q: %w", p.Name, err)
-				}
-				mu.Unlock()
-				return
-			}
-			paired := make([]ProviderModel, 0, len(models))
-			for _, m := range models {
-				paired = append(paired, ProviderModel{Provider: p.Name, Model: m.ID, Limits: ModelLimits{ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens}})
-			}
-			mu.Lock()
-			results[p.Name] = paired
-			mu.Unlock()
-		}(p)
-	}
-	wg.Wait()
-
-	all := make([]ProviderModel, 0)
-	for _, p := range providers {
-		all = append(all, results[p.Name]...)
-	}
-	return all, firstErr
 }

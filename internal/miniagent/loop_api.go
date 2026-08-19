@@ -137,7 +137,9 @@ type StepOutput struct {
 	Persist []Message
 	// ExtraUsage is accumulated into this round's Result.Usage (e.g. the tokens of the summary LLM call); takes effect when non-nil.
 	ExtraUsage *Usage
-	// Compacted=true flags that compaction occurred this round; the core sets Result.Compacted accordingly (the interaction layer rewrites the session based on this).
+	// Compacted=true flags that compaction occurred this round (the BeforeLLM hook sets StepOutput.Compacted, and the core
+	// back-fills from it). Observation-only: exposed on Result for consumers like OnStep/metrics — the cmd save path rewrites
+	// the session on every turn regardless (first-line meta.LLMRequests), so it no longer gates persistence.
 	Compacted bool
 	// ViewEstimate is the request-side token estimate of View computed by the compaction pass (policy.EstimateTokens(View)),
 	// threaded to OnBudget so it can reuse it on the zero-usage (streaming) path instead of re-scanning ToSend. 0 = not computed
@@ -195,9 +197,9 @@ type Result struct {
 	// naturally excluded).
 	NewMessages []Message
 	// Compacted flags whether summary compaction was triggered this round (the BeforeLLM hook sets StepOutput.Compacted, and the core
-	// back-fills from it). The interaction/entry layer decides whether to rewrite the session file based on this — the append-only persisted
-	// newMsgs contains the barriered old summary and the compacted middle, and long sessions need opportunistic rewrite to truly discard
-	// them (review P2 session files are never compacted).
+	// back-fills from it). Observation-only for consumers: the cmd save path rewrites the session file on every turn (first-line
+	// meta.LLMRequests accumulates across turns), which is what truly discards the barriered old summary and compacted middle
+	// (review P2 session files are never compacted).
 	Compacted bool
 	// ThinkingDowngraded flags whether callLLMWithDowngrade experienced a thinking downgrade this round. The interaction layer clears
 	// baseCfg.ThinkingLevel based on this, avoiding re-sending the original value next round and hitting 400 again (review P2 thinking

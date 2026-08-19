@@ -10,9 +10,9 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 )
 
-// RewriteMessages performs a full rewrite of the session file (write temp file -> os.Rename atomic swap). Only invoked when Run succeeds and
-// result.Compacted is true: the newMsgs persisted by append-only include the blocked old summary and the compacted middle, which long sessions
-// need a rewrite to truly discard (review P2 session file never compacts). msgs is the full transcript; lock and temp-file strategy
+// RewriteMessages performs a full rewrite of the session file (write temp file -> os.Rename atomic swap). Invoked by the cmd save path on every
+// turn — the first meta line (LLMRequests) accumulates across turns and append-only cannot rewrite it; compaction additionally relies on the same
+// rewrite to truly discard the barriered middle (review P2 session file never compacts). msgs is the full transcript; lock and temp-file strategy
 // see withSessionLock; write/rename failures clean up temp files. After rename the next LoadSession reads the slimmed file.
 // opts: opts[0] overrides the maxSessionBytes limit (<=0 or omitted falls back to the maxSessionBytes constant).
 func RewriteMessages(path string, meta SessionMeta, msgs []miniagent.Message, opts ...int64) error {

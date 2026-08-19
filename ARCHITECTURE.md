@@ -40,8 +40,8 @@ internal/miniagent/   核心库（零外部依赖，纯标准库）
   platform*.go        平台原语：flock / O_NOFOLLOW / 进程组 kill（windows 分文件）
 
 internal/miniagent/compaction/  压缩引擎子包（「压缩作为外挂」的默认实现）
-  assemble.go         NewCompaction（封装为 before/after 钩子，after 自 4.2.0 起=nil）
-  compacting.go       CompactingHook / CompactingInput / CompactingOutput / applyCompactingHook
+  compacting.go       NewCompaction（封装为 before/after 钩子，after 自 4.2.0 起=nil）+ CompactingHook/CompactingInput/CompactingOutput/applyCompactingHook
+  assemble.go         摘要 prompt/模板：buildSummarizerSystem / summarizeMiddle / deriveSummaryMaxChars/MaxTokens
   budget.go           FitHistory 流水线、ContextBudget、applyContextStrips（P1/P4/P6/P7/P8'/P9b/P11）、tail 预算
   budget_const.go     压缩常量（summary/tail/reasoning/args 阈值）
   split.go            applyCompactionBarrier、compactWithSummary、selectTailByTokens
@@ -63,7 +63,7 @@ internal/miniagent/policy/      默认策略工厂
 
 internal/miniagent/session/     会话持久化子包
   session.go          LoadSession / AppendMessages（flock 跨进程锁 + append-only + 预序列化拒绝超限）
-  session_rewrite.go  RewriteMessages（临时文件 + os.Rename 原子改写，用于 compaction 真正丢弃历史）
+  session_rewrite.go  RewriteMessages（全量原子改写：CLI 主路径每轮落盘 + compaction 后真正丢弃旧历史）
   validate.go         ValidateSessionID / ValidateToolPairing / validateSessionMessage
   lock_*.go           平台锁原语
 
@@ -129,7 +129,7 @@ return finishMaxIterations
 
 关键设计：
 
-- **`msgs` vs `newMsgs` 分离**：`msgs` 是 LLM 上下文（裁剪只动它），`newMsgs` 只记本轮新增（main 据此 append-only 落盘）。两者经 `appendMsg` 同步追加，保证上下文与持久化一致。
+- **`msgs` vs `newMsgs` 分离**：`msgs` 是 LLM 上下文（裁剪只动它），`newMsgs` 只记本轮新增（main 在 Run 末尾经 `RewriteMessages` 将 `result.Messages` 全量落盘——首行 `meta.LLMRequests` 跨轮累积需更新，append-only 无法改首行）。两者经 `appendMsg` 同步追加，保证上下文与持久化一致。
 - **`Result` 命名返回 + defer 统一写**：Usage/Messages/NewMessages/thinkingDowngraded/compacted 全部由 defer 写入，各 return 只设差异字段（Steps/Text/Finish），杜绝遗漏字段致会话持久化丢消息。
 - **thinking 降级固化**：`captureDowngrade` 在降级后清空 `cfg` 的 thinking 字段 + 置 `thinkingDowngraded=true`，跨步保持（主路径/OnLLMError 重试/总结闭包共用同一处理点）。
 - **ErrContextLength 失败恢复（外挂）**：经 `OnLLMError` 钩子承载，核心自身不做错误恢复。默认 `NewDefaultOnLLMError` 对 `ErrContextLength` 调 `trimHistoryForContext`（清 reasoning + 压 tool content）收紧后 `retry=true`，核心重试一次本次调用（不递归）。
@@ -156,11 +156,11 @@ return finishMaxIterations
 - `View`：本轮实际发给 LLM 的消息（必填）。
 - `Commit=true`：核心把运行 transcript 替换为 View（压缩场景）。
 - `Persist`：额外持久化增量（如 summary），带 `Kind` 的条目替换 newMsgs 中同 Kind 旧条目（多次压缩只留最新 summary）。
-- `ExtraUsage`/`Compacted`：累加用量、标记压缩（交互层据此 rewrite session）。
+- `ExtraUsage`/`Compacted`：累加用量、标记压缩（观测用；cmd 落盘每轮恒 rewrite，不据此决定）。
 
 ## 5. 上下文管理（压缩引擎）
 
-`compaction/assemble.go:NewCompaction` 把整套压缩封装为 `(before, after)` 钩子对（`after` 自 4.2.0 起=nil）。`before` 每步从历史最新真实 usage 推断 `Force`（静默溢出判定），再做 `applyCompactionBarrier` + `FitHistory`。溢出判定不依赖跨步闭包状态——before/after 无共享可变状态，单 Run 内串行调用，可被多 Run 安全复用。
+`compaction/compacting.go:NewCompaction` 把整套压缩封装为 `(before, after)` 钩子对（`after` 自 4.2.0 起=nil）。`before` 每步从历史最新真实 usage 推断 `Force`（静默溢出判定），再做 `applyCompactionBarrier` + `FitHistory`。溢出判定不依赖跨步闭包状态——before/after 无共享可变状态，单 Run 内串行调用，可被多 Run 安全复用。
 
 **压缩屏障**：`applyCompactionBarrier` 定位最新一条 `Kind=="summary"` 消息，只把它及之后的消息进 context，之前的旧历史仍留 session 文件（机会性 rewrite 才真正丢弃）。
 
@@ -220,9 +220,10 @@ v5.0.0 起单模式，8 工具（上表全部）恒注册；`shell` 无任何 ag
 
 `internal/miniagent/session/` 以 jsonl 持久化：首行 `SessionMeta`（含 provider/model/workdir/created/LLMRequests），后续每行一条 message。
 
-- **写（AppendMessages）**：flock 跨进程锁防行交错非法 JSON；预序列化拒绝超限（size+pending > limit 即拒，避免成功写入后被 LoadSession 拒）；`ensureTrailingNewline` 写前截断崩溃半行残留；原子性靠 `f.Sync()`。
+- **写（主路径恒 RewriteMessages）**：CLI 每轮 `saveSession` 全量重写——首行 `meta.LLMRequests` 跨轮累积，append-only 无法改首行；compaction 亦借此真正丢弃旧历史。临时文件同目录 + `os.Rename` 原子交换 + 父目录 fsync，写入/rename 失败均清理临时文件；写盘期忽略 SIGINT/SIGTERM。
+- **写（AppendMessages，库 API）**：append-only 追加保留给库化调用方——flock 跨进程锁防行交错非法 JSON；预序列化拒绝超限（size+pending > limit 即拒，避免成功写入后被 LoadSession 拒）；`ensureTrailingNewline` 写前截断崩溃半行残留；原子性靠 `f.Sync()`。CLI 主路径不再调用。
 - **读（LoadSession）**：`OpenNoFollow` + `LimitReader` 单次读取 + 单行 64KB 扫描缓冲；容忍末尾半行（崩溃残留），非末尾则报"mid-file corruption"。`ValidateToolPairing` 强制配对。
-- **改写（RewriteMessages）**：仅在 `Run` 成功且 `Compacted=true` 时触发——append-only 无法真正丢弃已被摘要折叠的旧历史。临时文件同目录 + `os.Rename` 原子交换 + 父目录 fsync，写入/rename 失败均清理临时文件。
+- **改写（RewriteMessages）**：CLI 主路径每轮全量落盘（非仅 compaction 触发）。临时文件同目录 + `os.Rename` 原子交换 + 父目录 fsync，写入/rename 失败均清理临时文件。
 
 ## 9. 配置与解析
 
@@ -258,4 +259,4 @@ stdout 一行一个 NDJSON 事件，类型：`session`（新建会话首条，�
 7. 压缩只改 context-side copy，不动 newMsgs/持久化；真正丢弃旧历史靠 `RewriteMessages` 原子改写。
 8. think 降级经 `captureDowngrade` 跨步固化，主路径/重试/总结闭包共用同一处理点。
 9. provider 可替换；`Provider.Kind` 决定分派路径，anthropic 有专属校验。
-10. 会话文件 append-only + flock + 预序列化拒绝超限 + 末尾半行容忍；改写仅 compaction 触发。
+10. 会话文件 jsonl：主路径恒全量 rewrite（同目录临时文件 + os.Rename 原子交换 + 父目录 fsync），flock + 预序列化拒绝超限 + 末尾半行容忍仍完整；AppendMessages 为库 API，CLI 主路径不调用。
