@@ -101,6 +101,21 @@ func TestLoadConfig_NoProviders(t *testing.T) {
 	}
 }
 
+// A config typo (e.g. chat_url → chaturl, or a stale key from a removed version) must fail loudly, not be
+// silently dropped into a zero-value field — otherwise the run proceeds with unintended config. Regression for
+// decodeConfigStrict's DisallowUnknownFields.
+func TestLoadConfig_UnknownFieldRejected(t *testing.T) {
+	for _, body := range []string{
+		`{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","chaturl":"https://x"}]}`,
+		`{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions","tokens":100}]}`, // stale key
+		`{"providers":[{"name":"p","chat_url":"https://a/v1/chat/completions"}],"unknown_top":1}`,
+	} {
+		if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
+			t.Errorf("config with unknown field should error: %s", body)
+		}
+	}
+}
+
 func TestLoadConfig_DupProviderName(t *testing.T) {
 	body := `{"providers":[
 		{"name":"p","chat_url":"https://a/v1/chat/completions"},

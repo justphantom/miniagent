@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,11 +40,27 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config %q: %w", path, err)
 	}
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := decodeConfigStrict(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config %q is not valid JSON: %w", path, err)
 	}
 	if err := validateConfig(&cfg); err != nil {
 		return nil, fmt.Errorf("config %q: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// decodeConfigStrict deserializes config rejecting unknown fields: json.Unmarshal silently ignores unknown keys,
+// so a config typo (e.g. `chat_url` → `chaturl`, or a stale key from a removed version) would be silently dropped
+// and the run proceeds with the field's zero value — the most insidious config failure. DisallowUnknownFields makes
+// it fail loudly with the offending key, and the second Decode rejects trailing data after the JSON object.
+func decodeConfigStrict(data []byte, dst *Config) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected trailing data after JSON object")
+	}
+	return nil
 }
