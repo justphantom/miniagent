@@ -10,10 +10,10 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 ## L2/decisions（架构决策 ADR）
 
 - `core-zero-policy-loophooks-decoupling` — 核心零策略 + LoopHooks 外挂 + 子包化；库化缓至 5.0.0
-- `multi-provider-kind-dispatch` — 多 provider Kind 字符串分派 + wire 边界有损投影（anthropic 接入）
+- `multi-provider-kind-dispatch` — 多 provider Kind 字符串分派 + wire 边界有损投影（**superseded**，anthropic 已删）
 - `system-prompt-config-only` — system prompt 收口 config-only；opt-in `rules_file`
 - `default-mode-not-security-boundary` — default 模式具体防线总账（.git 封锁/参数级收紧/攻击面记账；L0 #13 指向此）
-- `default-mode-dev-tools-allowlist` — git/go/npm/lint 白名单子命令决策 + rtk 代理
+- `default-mode-dev-tools-allowlist` — git/go/npm/lint 白名单子命令决策 + rtk 代理（**superseded**，v5.0.0 已删）
 - `library-defer-provider-config-decouple` — 库化暂缓；provider 包与 config 解耦（P1/P2 已做）
 
 ## L2/patterns（可复用模式）
@@ -23,8 +23,8 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `memory-freshness-pointer-over-count` — 记忆反过期规则：数量引用用指针不硬编码
 - `producer-contract-change-ripple` — 改动涟漪：改/删 X 必 grep 代码+注释+测试+文档
 - `adversarial-workflow-review` — 对抗式 workflow 评审（finder × verify）
-- `allowlist-deny-arg-prefix` — 子命令白名单 + 参数拒绝的抽象模式（optSpec 归一匹配）
-- `optional-proxy-rtk-integration` — 可选外部代理（rtk）探测+回退模式
+- `allowlist-deny-arg-prefix` — 子命令白名单 + 参数拒绝的抽象模式（**superseded**，v5.0.0 已删工具）
+- `optional-proxy-rtk-integration` — 可选外部代理（rtk）探测+回退模式（**superseded**，v5.0.0 已删）
 - `release-checklist` — 发版检查单：版本定级先例/新工具五处文档同步/动作序列
 - `opt-in-tool-gating` — 工具注册门选型（mode/config/无门；web 撤门教训：防护内置则门控多余）
 
@@ -36,5 +36,5 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `hooks-no-recover-shape-result-contract` — 钩子红线与 ShapeToolResult 契约
 - `corrupted-summary-prompt-injection` — 损坏摘要注入（v4.3.0 已修，留设计依据）
 - `compaction-headadj-override-stale-clause` — jointTailBudget override 误扣（消费者未同步）
-- `anthropic-provider-copy-asymmetry` — 跨 provider 复制对称清单（5 bug 复盘）
+- `anthropic-provider-copy-asymmetry` — 跨 provider 复制对称清单（5 bug 复盘）（**superseded**，anthropic 已删）
 - `tools-rewrite-lost-logic` — 文件重写丢逻辑 + 测试截断教训

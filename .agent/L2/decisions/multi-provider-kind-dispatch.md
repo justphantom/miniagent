@@ -3,9 +3,12 @@ layer: L2
 type: decision
 tags: [architecture, provider, anthropic, wire, thinking, dispatch]
 created: 2026-08-11
-updated: 2026-08-11
+updated: 2026-08-20
 confidence: high
+status: superseded
 ---
+
+> **v5.0.0 已废弃**：anthropic provider 已移除（`9bdb60a`），当前仅 openai 单一 provider。Kind 分派架构保留（`cmd/miniagent/setup_providers.go`），但 `"anthropic"` 分支不复存在。此决策保留供参考。
 
 # 多 provider Kind 分派 + wire 边界有损投影
 
@@ -37,6 +40,5 @@ confidence: high
 - `streaming-sse-robustness`（L2/incidents）—— SSE 健壮性组，anthropic parseSSE 复用同款中断检测/幂等重试。
 
 ## 参考
-- `internal/provider/anthropic/`（wire.go/wire_blocks.go 投影、sse.go 状态机、client.go/stream.go、retry.go、provider.go）
-- `cmd/miniagent/setup_http.go`（Kind 分派）、`main.go`（接口签名）、`internal/miniagent/config/config.go`（Kind/Cache 字段）
-- 评估 workflow `wf_f68db080-714`（三方案 A/B/C 对照，差异矩阵）
+- `cmd/miniagent/setup_http.go`（Kind 分派）、`main.go`（接口签名）、`internal/miniagent/config/config.go`（Kind 字段）
+- 评估 workflow（finder × verify 两轮，三方案 A/B/C 对照，差异矩阵）

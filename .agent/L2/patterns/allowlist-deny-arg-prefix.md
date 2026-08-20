@@ -3,9 +3,12 @@ layer: L2
 type: pattern
 tags: [tools, allowlist, deny, arg-prefix, optSpec, flag-matching, guardrail]
 created: 2026-08-15
-updated: 2026-08-17
+updated: 2026-08-20
 confidence: high
+status: superseded
 ---
+
+> **v5.0.0 已废弃**：子命令白名单工具（git/go/npm/golangci-lint）及 optSpec 匹配器全删。所有外部命令统一走 `shell` 工具。此模式保留供参考，不再适用于本仓库。
 
 # 子命令白名单 + 参数拒绝模式（allow-list 之上 deny 险参）
 
@@ -24,11 +27,9 @@ default 模式（无 shell）下外部命令经白名单工具（git/go/npm/gola
 5. **拒绝信息可自诊**：deny 文案列出「为什么拒 + 合法替代」（如「use the git tool instead」），模型能据此改道而非盲试。
 
 ## 关联
-- `default-mode-dev-tools-allowlist.md`（L2/decisions）——现行子命令集/决策依据
-- `default-mode-not-security-boundary.md`（L2/decisions）——攻击面记账与残余通道
-- `optional-proxy-rtk-integration.md`（L2/patterns）——这些工具的 rtk 代理层
+- `default-mode-dev-tools-allowlist.md`（L2/decisions，已 superseded）——历史决策依据
+- `default-mode-not-security-boundary.md`（L2/decisions，已 superseded）——攻击面记账
+- `optional-proxy-rtk-integration.md`（L2/patterns，已 superseded）——rtk 代理层
 
 ## 参考
-- `internal/miniagent/tools/flagmatch.go`（optSpec 匹配器）
-- `internal/miniagent/tools/tool_git.go`/`tool_go.go`/`tool_npm.go`/`tool_golint.go`（deny 应用点）
 - CHANGELOG v4.7.0 Fixed「git 短旗标/长选项缩写绕过」等条目（实测复现记录）

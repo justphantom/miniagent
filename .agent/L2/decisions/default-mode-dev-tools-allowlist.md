@@ -62,10 +62,5 @@ git/go/npm 工具优先经 rtk（输出紧凑代理），rtk 未部署时回退�
 - 真隔离责任在调用方 OS 层
 
 ## 参考
-- `internal/miniagent/tools/tool_git.go`（allow-list + rtk 代理）
-- `internal/miniagent/tools/tool_go.go`（allow-list + rtk 代理）
-- `internal/miniagent/tools/tool_npm.go`（allow-list + rtk 代理）
-- `internal/miniagent/tools/tool_golint.go`（allow-list）
-- `internal/miniagent/tools/tool_rename.go`、`tool_delete.go`（子树校验）
-- `internal/miniagent/tools/tool_helpers.go`（`rtkBin`/`rtkWrap`/`resolveConfinedPath`）
+- `internal/miniagent/tools/tool_helpers.go`（`resolveConfinedPath`）
 - commits `dd47d3c`→`30ff117`（逐步演进）

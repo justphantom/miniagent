@@ -1,24 +1,17 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-18
+updated: 2026-08-20
 ---
 
 # 当前会话
 
 ## 状态
-深度精简评估已沉淀至 `.agent/L1/assessment.md`，6 项改动已落地并跑绿 verify-gate（gofmt/build/vet/test-race/lint）：
-
-1. `main.go` 292→约253行：`buildRuntimeClients` 移入 `setup_providers.go`、`assembleHooks` 移入 `setup.go`
-2. `config_load.go` 227→约51行：`validateConfig`/`validateThinking`/`thinkingFieldBlacklist` 拆至 `config/validate.go`
-3. `version` 空时回落 `"dev"`（不再用空串）
-4. `loop_tools.go` 186→约100行：`handleToolCalls`/`fillPlaceholderTail` 拆至 `internal/miniagent/tool_handler.go`
-5. `compaction/budget.go` 287→约210行：`summaryTailStart`/`preserveRecentTokens`/`jointTailBudget`/`estimateRoundTokens` 拆至 `budget_tail.go`
-6. **移除 anthropic + responses provider**（breaking）：删 `internal/provider/{anthropic,responses}/` 31 文件；`Kind` 仅接受 `""`/`"openai"`；删 `provider.cache`；config 校验/`-list-models`/`FetchModelLimits` 统一 openai；`providerKind` 死代码清理
+代码审查与清理已完成：全面审查（正确性/健壮性/规范性）→ 修 C1+C2（v5.0.0 工具残留：execBackedTools 4 工具、restoreGitCredentials 死代码）→ 发版评估 → v5.1.0 tag 已推送（`9bc4edd`）。后由用户在 `9bdb60a` 提交深度精简（移除 anthropic/responses provider、拆分 oversized 文件），HEAD 已移至该提交。
 
 ## 待办
-- 变更未提交。确认后 commit（subject ≤72 字符，如 `chore: slim providers and split oversize files`）。
+- `.agent` 目录清理：L2 patterns 中 rtk/allowlist 模式已随 v5.0.0 删工具而废弃，需标 superseded；superseded decisions 中已删文件引用需清。
 
 ## 备注
-- CHANGELOG [Unreleased] 增补「移除 anthropic 与 responses provider」破坏性变更条目；README/ARCHITECTURE 同步。
-- 文档中历史 changelog 的 anthropic/responses 提及保留（历史记录，不改）。
+- 当前 provider 仅 openai + httpretry；`internal/provider/{anthropic,responses}/` 已删（31 文件）。
+- verify-gate 曾因 golangci-lint 与 Go 版本不兼容无法本地跑（环境问题，非代码）。

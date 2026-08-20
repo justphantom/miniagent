@@ -35,4 +35,4 @@ confidence: high
 - `adversarial-workflow-review`（L2/patterns）——机制化本 checklist
 
 ## 参考
-- 复审 workflow `wf_9a5bb427-2e2`
+- 复审 workflow（finder × verify 两轮）

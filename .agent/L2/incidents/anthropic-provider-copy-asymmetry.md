@@ -3,9 +3,12 @@ layer: L2
 type: incident
 tags: [provider, anthropic, openai, copy, asymmetry, review, wire, retry, validation]
 created: 2026-08-11
-updated: 2026-08-11
+updated: 2026-08-20
 confidence: high
+status: superseded
 ---
+
+> **v5.0.0 已废弃**：anthropic provider 已移除（`9bdb60a`），仅保留 openai + httpretry。此 incident 记录的历史经验供未来重加 provider 时参考，不再适用于当前代码库。
 
 # anthropic provider 复制 openai 时漏掉的对称项（评审捕到 5 bug）
 
@@ -39,4 +42,4 @@ anthropic provider（`internal/provider/anthropic/`）从 openai 复制 retry/st
 
 ## 参考
 - `internal/provider/anthropic/`（wire.go/wire_blocks.go/retry.go）、`cmd/miniagent/setup_http.go` buildAnthropicLLM
-- 评审 workflow `wf_f68db080`（首次）/`wf_9a5bb427`（复审）
+- 评审 workflow（finder × verify 两轮，各 20+ agents）

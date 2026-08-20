@@ -35,4 +35,4 @@ confidence: high
 - `producer-contract-change-ripple`（L2/patterns）——评审本质在跑的 checklist
 
 ## 参考
-- workflow `wf_f68db080-714`（首轮）、`wf_9a5bb427-2e2`（复审）
+- 对抗式 workflow 评审（finder × verify 两轮）

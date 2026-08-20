@@ -3,9 +3,12 @@ layer: L2
 type: pattern
 tags: [tools, rtk, proxy, optional-dep, once-value, fallback, external-binary]
 created: 2026-08-15
-updated: 2026-08-15
+updated: 2026-08-20
 confidence: high
+status: superseded
 ---
+
+> **v5.0.0 已废弃**：rtk 代理 + git/go/npm/lint 白名单工具全删。所有外部命令统一走 `shell` 工具。此模式保留供参考，不再适用于本仓库。
 
 # 可选外部代理（rtk）接入模式：探测 + 按子命令代理 + 零行为回退
 
@@ -32,5 +35,4 @@ confidence: high
 - 可选依赖（不强制部署）→ `OnceValue` + `rtkWrap` 零行为回退
 
 ## 参考
-- `internal/miniagent/tools/tool_helpers.go`（`rtkBin`/`rtkWrap`）
-- commit `626819a`
+- commit `626819a`（rtk 代理引入）
