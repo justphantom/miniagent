@@ -14,12 +14,12 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/compaction"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/miniagent/event"
-	"github.com/justphantom/miniagent/internal/miniagent/metrics"
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/compaction"
+	"github.com/justphantom/miniagent/miniagent/event"
+	"github.com/justphantom/miniagent/miniagent/metrics"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // version is injected at build time via make build using -ldflags "-X main.version=$(git describe --tags)";

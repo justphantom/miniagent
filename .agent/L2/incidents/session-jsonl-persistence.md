@@ -12,7 +12,7 @@ confidence: high
 append-only jsonl 落盘在崩溃 / 并发下易半写腐败。
 
 ## 背景
-`internal/miniagent/session/session.go` jsonl 首行 `type=session` metadata（model / workdir / provider / created），余 `type=message`；stdout 首条 NDJSON 即 session 事件供消费方捕获 id。
+`miniagent/session/session.go` jsonl 首行 `type=session` metadata（model / workdir / provider / created），余 `type=message`；stdout 首条 NDJSON 即 session 事件供消费方捕获 id。
 
 ## 做法
 1. `AppendMessages` 正常轮追加 `result.NewMessages`，失败轮不固化。
@@ -34,5 +34,5 @@ append-only 崩溃只污染尾行。
 3. **写盘期忽略信号** 是防半写的最后一道闸。
 
 ## 参考
-- `internal/miniagent/session/session.go`、`lock_unix.go`、`lock_windows.go`、`validate.go`
+- `miniagent/session/session.go`、`lock_unix.go`、`lock_windows.go`、`validate.go`
 - commit `00038cf`

@@ -12,10 +12,10 @@ import (
 
 	"log/slog"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/miniagent/event"
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
+	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/event"
+	"github.com/justphantom/miniagent/miniagent/policy"
 )
 
 func mustParseLogLevel(s string) slog.Level {

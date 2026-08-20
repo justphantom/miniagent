@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // writeSessionConfig writes a temporary config pointing at srvURL, with session.dir=sessionDir and mode=auto (workdir is passed explicitly per caller; required in all modes).

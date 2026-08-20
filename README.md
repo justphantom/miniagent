@@ -6,14 +6,14 @@
 - 默认非流式：每次 LLM 调用是普通 POST，等完整响应返回；传 `-stream` 改走 SSE，增量发 `text_delta`/`reasoning_delta` 事件
 - 会话：默认无状态；`-save-session` 新建并落盘（id 内部生成），`-session <id>` 接续已存在会话；均以 jsonl append-only 落盘（首行 metadata + 每条 message），跨进程接续对话。二者互斥
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
-- 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`internal/miniagent/platform_windows.go`）
+- 平台：Linux/macOS/Windows。Unix 用 `setpgid`/`killpg`/`flock`/`O_NOFOLLOW`；Windows 用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T /F`、字节区间锁、Lstat 拒绝最终分量符号链接（`miniagent/platform_windows.go`）
 - 通信：stdin 进 / NDJSON 出 / stderr 写日志（`log/slog` 文本格式）
 - 工具：单模式 8 个：`read` / `write` / `edit` / `grep` / `glob` / `ast` / `web` / `shell`。隔离全交运行用户的 OS 权限（容器/低权 UID/文件权限），agent 层不做安全保障
 - 取消：监听 `SIGINT`/`SIGTERM`，通过 context 取消正在进行的 LLM 调用和工具执行；**session 保存期间临时忽略信号**，避免截断 session 文件
 
 ## 架构：极简核心 + 开放钩子
 
-miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.Run`）：发 prompt → LLM 回工具则执行回灌 → 直到最终文本或撞迭代上限。核心**不做任何上下文管理**——压缩、记忆、溢出检测、token 估算都**不在循环里**。一切上下文策略经 `LoopHooks` 外挂：
+miniagent 的核心是一个**无策略的 ReAct 循环**（`miniagent.Run`）：发 prompt → LLM 回工具则执行回灌 → 直到最终文本或撞迭代上限。核心**不做任何上下文管理**——压缩、记忆、溢出检测、token 估算都**不在循环里**。一切上下文策略经 `LoopHooks` 外挂：
 
 | 钩子 | 触发点 | 用途 |
 |------|--------|------|
@@ -34,10 +34,10 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.
 
 **极简模式**：`BeforeLLM=nil` → 核心原样发送 transcript，零上下文管理。要压缩，挂 `NewCompaction`：
 
-> 注：以下 import 路径位于 `internal/` 下，Go 禁止外部模块导入，当前仅作架构示意；将核心、`compaction` 等移出 `internal/` 的库化计划于 **5.0.0**。
+> 注：所有核心包已移出 `internal/`，外部 Go 模块可直接 `import "github.com/justphantom/miniagent/miniagent"`。
 
 ```go
-import "github.com/justphantom/miniagent/internal/miniagent/compaction"
+import "github.com/justphantom/miniagent/miniagent/compaction"
 
 before, _ := compaction.NewCompaction(compaction.CompactionOptions{
     Chat: chat, ContextWindow: 120000, Model: model, Auto: true, MaxTokens: maxTokens,
@@ -46,7 +46,7 @@ hooks := miniagent.LoopHooks{BeforeLLM: before} // 第二返回值 after 自 4.2
 result, err := miniagent.Run(ctx, chat, cfg, prompt, hooks, logger)
 ```
 
-`compaction.NewCompaction` 封装摘要压缩引擎（超窗摘要中段 + 有损 fallback + 主动裁剪 + 静默溢出检测），是「压缩作为外挂」的默认实现，独立成 `internal/miniagent/compaction` 子包。**不挂它即得无压缩的极简 agent；想换压缩策略，实现自己的 `BeforeLLM` 即可，核心零改动。** CLI 默认装配 `compaction.NewCompaction`，故命令行行为不变。
+`compaction.NewCompaction` 封装摘要压缩引擎（超窗摘要中段 + 有损 fallback + 主动裁剪 + 静默溢出检测），是「压缩作为外挂」的默认实现，独立成 `miniagent/compaction` 子包。**不挂它即得无压缩的极简 agent；想换压缩策略，实现自己的 `BeforeLLM` 即可，核心零改动。** CLI 默认装配 `compaction.NewCompaction`，故命令行行为不变。
 
 **自定义外挂示例**（注入一条长期记忆，仅本轮可见、不进 transcript）：
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // generateSessionID outputs only latin letters/digits/- (passes ValidateSessionID), with a timestamp prefix.

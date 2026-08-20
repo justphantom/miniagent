@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/miniagent"
 )
 
 // TextResponse builds non-streaming chat completions JSON: a single choice with a plain-text reply and a fixed usage of {1,1}.

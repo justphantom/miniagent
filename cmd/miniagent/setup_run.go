@@ -3,10 +3,10 @@ package main
 import (
 	"log/slog"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/compaction"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/compaction"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // loopCfg overrides flag defaults per resolved (cli>config) to construct LoopConfig (loop body + policy-carrier fields;

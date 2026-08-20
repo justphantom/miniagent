@@ -10,9 +10,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/event"
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/event"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // runReplay: id → path → load → replay. Failure prints to stderr + exit 1 (error wording matches resolveSessionForRun).

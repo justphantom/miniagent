@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/provider/openai"
+	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/provider/openai"
 )
 
 // modelSource is one provider endpoint to list models from: the decoupled view of a provider

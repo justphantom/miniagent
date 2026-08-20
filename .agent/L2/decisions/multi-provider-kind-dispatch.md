@@ -40,5 +40,5 @@ status: superseded
 - `streaming-sse-robustness`（L2/incidents）—— SSE 健壮性组，anthropic parseSSE 复用同款中断检测/幂等重试。
 
 ## 参考
-- `cmd/miniagent/setup_http.go`（Kind 分派）、`main.go`（接口签名）、`internal/miniagent/config/config.go`（Kind 字段）
+- `cmd/miniagent/setup_http.go`（Kind 分派）、`main.go`（接口签名）、`miniagent/config/config.go`（Kind 字段）
 - 评估 workflow（finder × verify 两轮，三方案 A/B/C 对照，差异矩阵）

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/miniagent"
 )
 
 // ---- Test-side copies of the openai package's wire / retry logic (kept in sync with the openai package implementation)----

@@ -13,7 +13,7 @@ status: superseded
 # anthropic provider 复制 openai 时漏掉的对称项（评审捕到 5 bug）
 
 ## 现象
-anthropic provider（`internal/provider/anthropic/`）从 openai 复制 retry/stream/client/wire 后，5 个「openai 路径有、anthropic 路径漏」的不对称项漏改：
+anthropic provider（`provider/anthropic/`）从 openai 复制 retry/stream/client/wire 后，5 个「openai 路径有、anthropic 路径漏」的不对称项漏改：
 1. **role=system 折叠缺失**（wire_blocks.go）：核心 `summarizeAtLimit` 注入 role=system 消息；openai wire 透传，anthropic `case RoleSystem:` 空体丢弃 → 撞迭代上限时收尾指令丢失。修：折叠进 top-level system。
 2. **max_tokens model 级绕过**（config.go）：anthropic 只校验 provider 级 max_tokens>0；model 级 0 经 pickMPG 覆盖 → 每次 400。修：model 循环加 kind=anthropic 校验。
 3. **HTTP 529 不重试**（retry.go）：`shouldRetryStatus` 逐字抄 openai（429/5xx），漏 Anthropic 专属 529 overloaded。修：加字面量 529。
@@ -41,5 +41,5 @@ anthropic provider（`internal/provider/anthropic/`）从 openai 复制 retry/st
 - `streaming-sse-robustness`（L2/incidents）——SSE 健壮性（retry/idempotency 部分重叠）
 
 ## 参考
-- `internal/provider/anthropic/`（wire.go/wire_blocks.go/retry.go）、`cmd/miniagent/setup_http.go` buildAnthropicLLM
+- `provider/anthropic/`（wire.go/wire_blocks.go/retry.go）、`cmd/miniagent/setup_http.go` buildAnthropicLLM
 - 评审 workflow（finder × verify 两轮，各 20+ agents）

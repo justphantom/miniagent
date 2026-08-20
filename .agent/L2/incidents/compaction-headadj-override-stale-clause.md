@@ -26,5 +26,5 @@ confidence: high
 - `producer-contract-change-ripple`（L2/patterns）——通用化的本类模式
 
 ## 参考
-- `internal/miniagent/compaction/budget.go:262-279`、`split.go:157-228`
-- `internal/miniagent/compaction/compaction_test.go` TestJointTailBudget
+- `miniagent/compaction/budget.go:262-279`、`split.go:157-228`
+- `miniagent/compaction/compaction_test.go` TestJointTailBudget

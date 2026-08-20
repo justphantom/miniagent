@@ -11,7 +11,7 @@ confidence: high
 ## 现象
 LLM 调用（`callLLMOnce`）与工具调用（`safeCall`）都有 recover 兜底，但 `LoopHooks` 全部字段（现 9 个，见 `loop_api.go`）与 `CompactingHook` 的所有调用点（`loop.go` BeforeLLM/AfterLLM/OnLLMError、`loop_extra.go` OnDelta、`loop_tools.go` OnToolUse/OnToolResult/ShapeToolResult、`compaction/assemble.go` `applyCompactingHook`）全是裸 error 检查、无 defer recover——第三方钩子 panic 直接崩进程，本轮未持久化的 NewMessages 丢失。
 
-## 修复（commit `d37e2fc`，`internal/miniagent/loop.go:Run`）
+## 修复（commit `d37e2fc`，`miniagent/loop.go:Run`）
 在既有 defer 里加顶层 `if r:=recover(); r!=nil { err=fmt.Errorf("run panicked: %v", r) }`；recover 跑在字段赋值前，使 transcript 仍能存活供 session 持久化。比逐个钩子包裹更保护，也兜核心逻辑 panic。
 
 ## 理由（刻意取舍）
@@ -28,5 +28,5 @@ LLM 调用（`callLLMOnce`）与工具调用（`safeCall`）都有 recover 兜�
 - `CompactingHook` error → 中止本次压缩、走 lossy fallback。
 
 ## 参考
-- `internal/miniagent/loop.go`（`Run`）、`loop_api.go`（`StepOutput`）、`loop_tools.go`
+- `miniagent/loop.go`（`Run`）、`loop_api.go`（`StepOutput`）、`loop_tools.go`
 - commit `d37e2fc`

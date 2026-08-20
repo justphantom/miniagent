@@ -8,9 +8,9 @@ import (
 
 	"log/slog"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/provider/openai"
+	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/provider/openai"
 )
 
 // buildLLM constructs the main provider's LLM (OpenAI Chat Completions). The returned LLM also satisfies

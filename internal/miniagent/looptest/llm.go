@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/text"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/text"
 )
 
 // FakeTransport replays preset non-streaming JSON bodies in call order. LastBody records the last request body;

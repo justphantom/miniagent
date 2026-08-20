@@ -3,8 +3,8 @@ package main
 import (
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/tools"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/tools"
 )
 
 // buildTools registers the 8 builtin tools (read/write/edit/grep/glob/ast/shell/web).

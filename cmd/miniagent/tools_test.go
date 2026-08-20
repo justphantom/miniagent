@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
+	"github.com/justphantom/miniagent/miniagent"
 )
 
 func toolNames(tools []miniagent.Tool) map[string]bool {

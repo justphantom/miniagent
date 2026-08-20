@@ -62,5 +62,5 @@ git/go/npm 工具优先经 rtk（输出紧凑代理），rtk 未部署时回退�
 - 真隔离责任在调用方 OS 层
 
 ## 参考
-- `internal/miniagent/tools/tool_helpers.go`（`resolveConfinedPath`）
+- `miniagent/tools/tool_helpers.go`（`resolveConfinedPath`）
 - commits `dd47d3c`→`30ff117`（逐步演进）

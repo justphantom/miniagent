@@ -36,8 +36,8 @@ updated: 2026-08-18
 - `jointTailBudget`/`preserveRecentTokens`/`estimateRoundTokens` 拆到 `budget_tail.go`
 
 ### 6. 移除 anthropic + responses provider
-- 删除 `internal/provider/anthropic/` 全部 17 文件
-- 删除 `internal/provider/responses/` 全部 14 文件
+- 删除 `provider/anthropic/` 全部 17 文件
+- 删除 `provider/responses/` 全部 14 文件
 - 简化 `providerKind` 仅支持 `""`/`"openai"`，`providerKind` 死代码清除
 - 更新 config 校验（`validate.go` 删 anthropic 专属校验 / responses thinking.field 校验）
 - 更新 `-list-models`/`FetchModelLimits` 统一 openai 路径

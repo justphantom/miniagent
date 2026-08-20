@@ -17,7 +17,7 @@ default 模式（无 shell）下外部命令经白名单工具（git/go/npm/gola
 
 ## 匹配器演进（前缀 → optSpec）
 - **v1 `strings.Fields` + `HasPrefix` 前缀匹配**（2026-08-15）：快速失效，系统性绕过（见下）。
-- **v2 `optSpec` 归一化匹配器**（2026-08-17，`internal/miniagent/tools/flagmatch.go`）：短旗标全等+等号粘合、单破折长名全等、双破折唯一前缀缩写识别。修复：`push -f`/`-d`（--force/--delete 最高频短形）、`commit --am`（≡`--amend` 改写 HEAD）、`npm --C` 双横线、`--registry=` 单横线等全族绕过。
+- **v2 `optSpec` 归一化匹配器**（2026-08-17，`miniagent/tools/flagmatch.go`）：短旗标全等+等号粘合、单破折长名全等、双破折唯一前缀缩写识别。修复：`push -f`/`-d`（--force/--delete 最高频短形）、`commit --am`（≡`--amend` 改写 HEAD）、`npm --C` 双横线、`--registry=` 单横线等全族绕过。
 
 ## 核心教训
 1. **前缀匹配（HasPrefix）对旗标是错误抽象**：`-m` 前缀拒不掉 `-mmsg` 粘合与 `--am` 缩写，且误杀 `commit -am`；必须归一化到 optSpec（名/形/粘合值）再判。

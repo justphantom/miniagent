@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent/config"
+	"github.com/justphantom/miniagent/config"
 )
 
 // listAllModels static entries: no ModelsURL → StaticModels surfaced without any HTTP.

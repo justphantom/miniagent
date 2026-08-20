@@ -54,7 +54,7 @@ default 拦「一步直呼危险命令」+「直接文件路径绕过」（.git 
 
 ## .git 封锁（2026-08-16）
 文件工具直接访问 `.git/**` 绕过 git 工具 allow-list（hooks 执行链 / remote 改写外传 / config 凭证泄漏），已封：
-- **两层检查**：`cmd/miniagent/sandbox.go checkConfine`（confineWrap 侧：read/write/edit/grep/glob）+ `internal/miniagent/tools/tool_helpers.go resolveConfinedPath`（rename/delete 侧）各加 `.git` 前缀拒绝（`dotGitWithinRoot`：rel 路径任一分量 == `.git` 即拒，覆盖嵌套 submodule 布局；两处同名 helper 各自私有，维持 cmd→core 依赖单向）。
+- **两层检查**：`cmd/miniagent/sandbox.go checkConfine`（confineWrap 侧：read/write/edit/grep/glob）+ `miniagent/tools/tool_helpers.go resolveConfinedPath`（rename/delete 侧）各加 `.git` 前缀拒绝（`dotGitWithinRoot`：rel 路径任一分量 == `.git` 即拒，覆盖嵌套 submodule 布局；两处同名 helper 各自私有，维持 cmd→core 依赖单向）。
 - **读也拒**（read/grep/glob/grep 显式 path 指向 `.git/config` 会泄漏 remote URL/凭证）；grep/glob 递归遍历本就 SkipDir `.git`（`tool_glob.go`/`tool_grep.go`），显式 path 现在同拒。
 - **auto 模式不套 confineWrap，不拦**（auto 本就无约束，语义一致）；仅 default + confineAuto 生效。
 - 拒绝信息指向 git 工具：`path %q targets the .git directory (default mode); use the git tool instead`。
@@ -65,6 +65,6 @@ default 拦「一步直呼危险命令」+「直接文件路径绕过」（.git 
 ## 参考
 - `cmd/miniagent/tools.go`（`buildTools`，shell auto-only 注册门）
 - `cmd/miniagent/sandbox.go`（`checkConfine`，写工具 confine 边界）
-- `internal/miniagent/tools/tool_shell.go`（`scrubEnv`，环境剥离）
-- `internal/miniagent/policy/confirm_on_tool_use.go`
+- `miniagent/tools/tool_shell.go`（`scrubEnv`，环境剥离）
+- `miniagent/policy/confirm_on_tool_use.go`
 - commits `1b00e63`、`24bf12b`；`30ecd18`（GuardShell，2026-08-16 删除）

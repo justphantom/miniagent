@@ -14,7 +14,7 @@ confidence: high
 ## 做法
 
 ### A. summary 体积自适应 CW
-- `deriveSummaryMaxChars`（`internal/miniagent/compaction/assemble.go`）默认 `min(5000, CW/5)`；CW<=0 回落 5000。summary token 占 CW ~10%，防 summary 自身 > `CW×4/5`。
+- `deriveSummaryMaxChars`（`miniagent/compaction/assemble.go`）默认 `min(5000, CW/5)`；CW<=0 回落 5000。summary token 占 CW ~10%，防 summary 自身 > `CW×4/5`。
 - `deriveSummaryMaxTokens` 从 `maxChars` 派生 `maxChars/2`（与 `EstimateTokens` 的 CJK≈1token/2chars 同口径），替代固定 1024 偏紧值（commit `7a051d4`）。显式 `summary_max_chars` / `summary_max_tokens` 仍可 override；同源派生保证「只配 chars 时 token 自动跟随」。
 
 ### B. jointTailBudget（`compaction/budget.go`）
@@ -34,5 +34,5 @@ confidence: high
 3. 硬下限 `CW<~1536` 为物理极限不可由压缩解；`tokenBudget<=0` 回落纯轮数兼容无窗 / 旧 session。
 
 ## 参考
-- `internal/miniagent/compaction/assemble.go`、`budget.go`、`split.go`、`history_dedup.go`、`history_reasoning.go`
+- `miniagent/compaction/assemble.go`、`budget.go`、`split.go`、`history_dedup.go`、`history_reasoning.go`
 - commits `7a051d4`、`d37e2fc`、`956e3f8`

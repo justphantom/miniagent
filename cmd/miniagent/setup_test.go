@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/provider/openai"
+	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/provider/openai"
 )
 
 func TestHTTPTimeoutFromConfig_RejectsNegative(t *testing.T) {

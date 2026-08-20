@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // defaultSessionDir is the fallback directory when session.dir is not configured (overridden by config in Phase C).

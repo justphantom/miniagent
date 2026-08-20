@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // resolveSession (os.Exit-free core) unlocks the previously-untestable error paths: resume-missing and load-failure used

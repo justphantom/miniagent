@@ -30,6 +30,6 @@ miniagent 定位为极简、无内置策略的 ReAct agent 核心库。核心循
 3. 依赖方向是当前架构最健康的一点，子包外迁会断链。
 
 ## 参考
-- `internal/miniagent/loop.go`、`internal/miniagent/loop_api.go`
+- `miniagent/loop.go`、`miniagent/loop_api.go`
 - `cmd/miniagent/main.go`（钩子装配）
 - commits `7ce5c47`、`d641129`

@@ -12,9 +12,9 @@ import (
 
 	"log/slog"
 
-	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/miniagent/event"
-	"github.com/justphantom/miniagent/internal/provider/openai"
+	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/miniagent/event"
+	"github.com/justphantom/miniagent/provider/openai"
 )
 
 // warnProviderInsecureURLs warns about plaintext key transmission for http (non-loopback) URLs used by the provider.

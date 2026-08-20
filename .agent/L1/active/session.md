@@ -13,5 +13,5 @@ updated: 2026-08-20
 - `.agent` 目录清理：L2 patterns 中 rtk/allowlist 模式已随 v5.0.0 删工具而废弃，需标 superseded；superseded decisions 中已删文件引用需清。
 
 ## 备注
-- 当前 provider 仅 openai + httpretry；`internal/provider/{anthropic,responses}/` 已删（31 文件）。
+- 当前 provider 仅 openai + httpretry；`provider/{anthropic,responses}/` 已删（31 文件）。
 - verify-gate 曾因 golangci-lint 与 Go 版本不兼容无法本地跑（环境问题，非代码）。

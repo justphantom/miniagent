@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/justphantom/miniagent/internal/miniagent"
-	"github.com/justphantom/miniagent/internal/miniagent/session"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // parseNDJSON parses the combined output line-by-line into a list of events, skipping empty lines
