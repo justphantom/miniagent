@@ -42,6 +42,9 @@ type ProviderConfig struct {
 	// (a connection drop) as success, returning the partial Response. For non-compliant endpoints (some vLLM/Ollama configs)
 	// that emit content then close with no terminator; default false = the drop is a hard error. Affects streaming only.
 	StreamAllowUnterminated *bool `json:"stream_allow_unterminated,omitempty"`
+	// Cache is a v5.0.0 removed key (provider.cache): kept as a json field so DisallowUnknownFields
+	// does not reject old configs. The value is silently ignored.
+	Cache *bool `json:"cache,omitempty"`
 }
 
 // ModelConfig is the configuration for a single model under a provider: Name is required, the rest are model-level parameters
@@ -90,6 +93,9 @@ type DefaultsConfig struct {
 	SummaryCreateInstruction string `json:"summary_create_instruction,omitempty"`
 	SummaryUpdateInstruction string `json:"summary_update_instruction,omitempty"`
 	SummaryTemplate          string `json:"summary_template,omitempty"`
+	// Mode is a v5.0.0 removed key (defaults.mode): kept as a json field so DisallowUnknownFields
+	// does not reject old configs. The value is silently ignored — miniagent has no mode since 5.0.0.
+	Mode string `json:"mode,omitempty"`
 }
 
 // RunConfig's duration fields use *string ("30s"); Resolve parses them into time.Duration,
@@ -134,6 +140,10 @@ type RunConfig struct {
 	// ContextUseRealUsage controls whether the compaction threshold prefers the provider's real usage (§P0-B). nil/unset=enabled (default);
 	// false=kill-switch, falling back to pure local estimateTokens. When no real usage is available it falls back automatically, so zero regression.
 	ContextUseRealUsage *bool `json:"context_use_real_usage,omitempty"`
+	// ConfineEvalSymlinks / ConfineAuto are v5.0.0 removed keys (run.confine_eval_symlinks / run.confine_auto):
+	// kept as json fields so DisallowUnknownFields does not reject old configs. Values are silently ignored.
+	ConfineEvalSymlinks *bool `json:"confine_eval_symlinks,omitempty"`
+	ConfineAuto         *bool `json:"confine_auto,omitempty"`
 	// ToolOutputDir is the root directory for persisting tool output (§P1-A); empty=disabled. When unset, main.go derives it from the
 	// session directory (<sessionDir>/<id>.tool-output/). Tools exceeding the limit write full text to disk, and the history Content is
 	// replaced with a preview + path hint.

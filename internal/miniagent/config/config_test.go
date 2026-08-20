@@ -125,6 +125,24 @@ func TestLoadConfig_DupProviderName(t *testing.T) {
 	}
 }
 
+// v5.0.0 removed keys (defaults.mode / provider.cache / run.confine_* ) must be tolerated in old configs —
+// the CHANGELOG promises "旧 config 无需改即可加载". They are kept as json fields (silently ignored) so
+// DisallowUnknownFields does not reject them, while genuine typos (chaturl) still fail.
+func TestLoadConfig_OldRemovedKeysTolerated(t *testing.T) {
+	base := func(run string) string {
+		return `{"providers":[{"name":"main","chat_url":"https://a/v1/chat/completions"` + run + `}],"defaults":{"provider":"main","model":"m","mode":"default"}}`
+	}
+	for _, body := range []string{
+		base(``),               // defaults.mode
+		base(`, "cache":true`), // provider.cache
+		`{"providers":[{"name":"main","chat_url":"https://a/v1/chat/completions"}],"defaults":{"provider":"main","model":"m"},"run":{"confine_eval_symlinks":true,"confine_auto":false}}`,
+	} {
+		if _, err := LoadConfig(writeTmpConfig(t, body)); err != nil {
+			t.Errorf("old config with removed key should load: %s → %v", body, err)
+		}
+	}
+}
+
 func TestLoadConfig_BadChatURL(t *testing.T) {
 	body := `{"providers":[{"name":"p","chat_url":"ftp://x"}]}`
 	if _, err := LoadConfig(writeTmpConfig(t, body)); err == nil {
