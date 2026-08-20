@@ -19,13 +19,12 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
 	"github.com/justphantom/miniagent/internal/miniagent/metrics"
-	"github.com/justphantom/miniagent/internal/miniagent/policy"
 	"github.com/justphantom/miniagent/internal/miniagent/session"
 )
 
 // version is injected at build time via make build using -ldflags "-X main.version=$(git describe --tags)";
-// we do not hardcode a literal here to avoid stale values after release. Empty string when not injected.
-var version string
+// falls back to "dev" when not injected (plain go build).
+var version = "dev"
 
 type cliFlags struct {
 	provider           *string
@@ -250,43 +249,4 @@ func main() {
 	}
 }
 
-// buildRuntimeClients constructs the main provider's LLM and (when compaction crosses providers) the
-// summarization Doer. compChat is left nil when compaction uses the same provider (compaction falls back to
-// llm, which satisfies miniagent.Doer). os.Exit on missing key or invalid endpoint.
-func buildRuntimeClients(resolved *config.Resolved, apiKey string, logger *slog.Logger) (miniagent.LLM, miniagent.Doer) {
-	llm := buildLLM(apiKey, resolved.Provider, logger, httpTimeoutOf(resolved))
-	if resolved.CompactionProvider.Name != resolved.Provider.Name {
-		key := resolveFinalKey(resolved.CompactionProvider.Key)
-		if key == "" {
-			fmt.Fprintf(os.Stderr, "miniagent: compaction provider API key missing (provider.key / $MINIAGENT_API_KEY)\n")
-			os.Exit(1)
-		}
-		warnProviderInsecureURLs(resolved.CompactionProvider)
-		return llm, buildDoer(key, resolved.CompactionProvider, logger, httpTimeoutOf(resolved))
-	}
-	return llm, nil
-}
-
-// assembleHooks assembles LoopHooks: event output (buildHooks) + compaction before/after + three default policy attachments
-// (OnLLMError history-tightening retry / OnBudget estimation+circuit-break / ShapeToolResult truncation+persist). The core Run has zero policies; this function assembles them to restore full capability.
-func assembleHooks(
-	compBefore func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error),
-	compAfter func(context.Context, int, miniagent.Response) error,
-	resultOnly bool, confirmDestructive bool, baseCfg miniagent.LoopConfig, tools []miniagent.Tool, limits miniagent.Limits, logger *slog.Logger,
-) miniagent.LoopHooks {
-	hooks := buildHooks(resultOnly)
-	hooks.BeforeLLM = compBefore
-	hooks.AfterLLM = compAfter
-	hooks.OnLLMError = policy.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
-	hooks.OnBudget = policy.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
-	hooks.ShapeToolResult = policy.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
-	// S-2 (opt-in): wrap OnToolUse with a destructive-tool confirmation gate. buildHooks returns empty hooks (no
-	// OnToolUse) for -result-only/subagent mode, so this wraps AFTER buildHooks in both paths — when enabled the gate
-	// is active even for subagents (deny-by-default, since they have no TTY), closing the otherwise-uncovered
-	// autonomous path; when disabled ConfirmOnToolUse is the identity, leaving behavior unchanged.
-	hooks.OnToolUse = policy.ConfirmOnToolUse(hooks.OnToolUse, policy.ConfirmCfg{
-		Enabled:     confirmDestructive,
-		AutoApprove: os.Getenv("MINIAGENT_AUTO_APPROVE") == "1",
-	})
-	return hooks
-}
+// buildRuntimeClients / assembleHooks live in setup_providers.go / setup.go.

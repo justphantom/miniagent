@@ -9,13 +9,12 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/provider/anthropic"
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
 // modelSource is one provider endpoint to list models from: the decoupled view of a provider
 // entry (config.ProviderConfig maps onto this at the cmd layer) so the provider packages do not
-// depend on the CLI config layer. Kind ""/"openai" → OpenAI-compatible client; "anthropic" → Anthropic client.
+// depend on the CLI config layer. Only OpenAI-compatible Chat Completions is supported.
 type modelSource struct {
 	Name         string
 	Kind         string
@@ -57,11 +56,7 @@ func modelSources(providers []config.ProviderConfig) []modelSource {
 // listAllModels aggregates the available models across multiple providers and returns them as a
 // slice of providerModel (provider/model kept separate, plus optional capability limits reported
 // by the endpoint). It requests each provider's ModelsURL concurrently (at most 8 in flight);
-// static models (no ModelsURL) return the config directly without a GET. kind=anthropic providers
-// dispatch to the Anthropic /v1/models client; kind="" / "openai" / "responses" all use the
-// OpenAI-compatible client (the Responses API reuses the OpenAI /v1/models endpoint, no dedicated
-// responses client exists). A single provider failure is logged as a warning
-// but the rest continue; the first error (if any) is returned at the end.
+// static models (no ModelsURL) return the config directly without a GET.
 // keyFor returns the final API key per provider; when httpClient is non-nil its transport/timeout is reused.
 func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpTimeout time.Duration, logger *slog.Logger) ([]providerModel, error) {
 	if httpTimeout <= 0 {
@@ -101,18 +96,6 @@ func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpT
 					models = make([]openai.ModelInfo, 0, len(p.StaticModels))
 					for _, id := range p.StaticModels {
 						models = append(models, openai.ModelInfo{ID: id})
-					}
-				}
-			} else if p.Kind == "anthropic" {
-				llm, e := anthropic.NewClient(keyFor(p), p.ChatURL, p.ModelsURL, httpClient, logger, p.Headers, false)
-				if e != nil {
-					err = e
-				} else {
-					anthModels, e2 := llm.ListModels(ctx)
-					err = e2
-					models = make([]openai.ModelInfo, 0, len(anthModels))
-					for _, m := range anthModels {
-						models = append(models, openai.ModelInfo{ID: m.ID, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens})
 					}
 				}
 			} else {

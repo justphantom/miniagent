@@ -20,7 +20,7 @@ type SessionConfig struct {
 
 type ProviderConfig struct {
 	Name      string `json:"name"`
-	Kind      string `json:"kind,omitempty"` // wire format: "" / "openai" (Chat Completions, default), "responses", or "anthropic"
+	Kind      string `json:"kind,omitempty"` // wire format: "" / "openai" (Chat Completions, default)
 	ChatURL   string `json:"chat_url"`
 	ModelsURL string `json:"models_url,omitempty"`
 	Key       string `json:"key,omitempty"`
@@ -42,9 +42,6 @@ type ProviderConfig struct {
 	// (a connection drop) as success, returning the partial Response. For non-compliant endpoints (some vLLM/Ollama configs)
 	// that emit content then close with no terminator; default false = the drop is a hard error. Affects streaming only.
 	StreamAllowUnterminated *bool `json:"stream_allow_unterminated,omitempty"`
-	// Cache (anthropic only) toggles prompt-caching cache_control breakpoints on the system prompt and the
-	// last user message. nil=auto (anthropic provider defaults to enabled); false=kill-switch. No effect on openai.
-	Cache *bool `json:"cache,omitempty"`
 }
 
 // ModelConfig is the configuration for a single model under a provider: Name is required, the rest are model-level parameters

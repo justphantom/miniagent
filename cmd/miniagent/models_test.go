@@ -130,30 +130,3 @@ func TestListAllModels_OrderStable(t *testing.T) {
 		t.Fatalf("order not stable: %+v", ids)
 	}
 }
-
-// listAllModels kind=anthropic: dispatches to the Anthropic /v1/models endpoint (x-api-key auth).
-func TestListAllModels_AnthropicDispatch(t *testing.T) {
-	var gotKey, gotVer string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotKey = r.Header.Get("X-Api-Key")
-		gotVer = r.Header.Get("Anthropic-Version")
-		fmt.Fprint(w, `{"data":[{"id":"claude-opus-4-8","context_window":200000,"max_output_tokens":32000}]}`)
-	}))
-	defer srv.Close()
-	providers := []config.ProviderConfig{
-		{Name: "ant", Kind: "anthropic", Key: "sk-test", ChatURL: srv.URL, ModelsURL: srv.URL + "/v1/models"},
-	}
-	ids, err := listAllModels(context.Background(), providers, 30*time.Second, nil)
-	if err != nil {
-		t.Fatalf("listAllModels: %v", err)
-	}
-	if gotKey != "sk-test" || gotVer == "" {
-		t.Fatalf("anthropic auth headers missing: key=%q ver=%q", gotKey, gotVer)
-	}
-	if len(ids) != 1 || ids[0].Model != "claude-opus-4-8" {
-		t.Fatalf("ids = %+v", ids)
-	}
-	if ids[0].Limits.ContextWindow == nil || *ids[0].Limits.ContextWindow != 200000 {
-		t.Fatalf("anthropic limits not surfaced: %+v", ids[0].Limits)
-	}
-}

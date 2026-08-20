@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"github.com/justphantom/miniagent/internal/miniagent/config"
-	"github.com/justphantom/miniagent/internal/provider/anthropic"
 	"github.com/justphantom/miniagent/internal/provider/openai"
-	"github.com/justphantom/miniagent/internal/provider/responses"
 )
 
 func TestHTTPTimeoutFromConfig_RejectsNegative(t *testing.T) {
@@ -59,45 +57,6 @@ func TestBuildLLM_ChatTimeoutStreamNoTimeoutSharedTransport(t *testing.T) {
 	}
 	if ctr.ResponseHeaderTimeout == 0 {
 		t.Error("Transport.ResponseHeaderTimeout = 0, want >0")
-	}
-}
-
-// buildAnthropicLLM must wire StreamAllowUnterminated from config just like the openai path (buildOpenAILLM),
-// otherwise the opt-in is silently a no-op for kind=anthropic despite StreamClient honoring the field.
-func TestBuildLLM_AnthropicStreamAllowUnterminated(t *testing.T) {
-	t1 := true
-	llm := buildLLM("sk", config.ProviderConfig{Kind: "anthropic", ChatURL: "http://localhost:1234/v1/messages", StreamAllowUnterminated: &t1}, nil, 0)
-	p, ok := llm.(*anthropic.Provider)
-	if !ok {
-		t.Fatalf("buildLLM anthropic kind returned %T, want *anthropic.Provider", llm)
-	}
-	if !p.Stream.StreamAllowUnterminated {
-		t.Error("anthropic StreamClient.StreamAllowUnterminated = false, want true (must be wired from config)")
-	}
-	// Default (nil) stays false.
-	llm0 := buildLLM("sk", config.ProviderConfig{Kind: "anthropic", ChatURL: "http://localhost:1234/v1/messages"}, nil, 0)
-	if p0, ok := llm0.(*anthropic.Provider); !ok || p0.Stream.StreamAllowUnterminated {
-		t.Error("anthropic StreamAllowUnterminated should default to false when config is nil")
-	}
-}
-
-func TestBuildLLM_Responses(t *testing.T) {
-	yes := true
-	p := config.ProviderConfig{Kind: "responses", ChatURL: "http://localhost:1234/v1/responses", StreamAllowUnterminated: &yes}
-	llm := buildLLM("sk", p, nil, time.Second)
-	provider, ok := llm.(*responses.Provider)
-	if !ok {
-		t.Fatalf("buildLLM responses returned %T", llm)
-	}
-	if provider.Chat.HTTP.Timeout != time.Second || provider.Stream.HTTP.Timeout != 0 {
-		t.Errorf("chat/stream timeout = %v/%v", provider.Chat.HTTP.Timeout, provider.Stream.HTTP.Timeout)
-	}
-	if !provider.Stream.StreamAllowUnterminated {
-		t.Error("StreamAllowUnterminated not wired")
-	}
-	doer := buildDoer("sk", p, nil, time.Second)
-	if _, ok := doer.(*responses.Client); !ok {
-		t.Fatalf("buildDoer responses returned %T", doer)
 	}
 }
 

@@ -16,24 +16,11 @@ const (
 	// empirically, design §15.4). By default deriveSummaryMaxChars scales it with the window via
 	// min(summaryMaxChars, ContextWindow/summaryCharsPerWindowRatio) (direction A) — large windows take this value,
 	// small windows adapt, avoiding summary itself > CW×4/5 causing termination after compaction (boundary of B).
-	// Explicit user summary_max_chars overrides.
 	summaryMaxChars = 5000
 	// summaryCharsPerWindowRatio: default summaryMaxChars = ContextWindow/this. Using 5 → summary tokens
-	// (chars/2) occupy ~10% of CW, leaving ~90% for head+tail+LLM output — balancing "summary information density"
-	// against "not squeezing tail/output". Smaller values (e.g. 8) make the summary more compact and lower the CW
-	// floor but reduce information; larger values (e.g. 4) do the opposite. Mirrors the built-in ratio style of
-	// tailBudgetFraction; explicit user summary_max_chars overrides the derived value. Note: even if summary is
-	// shrunk to 0, CW<~1.5k may still terminate (request-level overhead 400 + system + schema + head occupying more
-	// than half of CW — a physical limit, not solvable by this ratio; see the hard boundary in deriveSummaryMaxChars).
+	// (chars/2) occupy ~10% of CW, leaving ~90% for head+tail+LLM output.
 	summaryCharsPerWindowRatio = 5
 	// summaryMaxTokens is the fallback constant for the summary output token cap, derived from summaryMaxChars (/2).
-	// Consistent with EstimateTokens' CJK≈1token/2chars: chars/2 is exactly the token upper bound needed for "pure CJK
-	// summary filling the chars limit" — pure Chinese exactly fills it (boundary), any sparser content (English
-	// paths/symbols) is truncated by chars first, with no extra token truncation or waste. The original fixed 1024 was
-	// too tight for CJK: 1024 tokens≈1500 Chinese characters, well below summaryMaxChars=5000, so Chinese summaries
-	// were implicitly truncated by MaxTokens to ~30% of the design value (third-evaluation L3-5).
-	// Serves as both the fallback for summarizeMiddle (maxSummaryTokens<=0) and the fallback in deriveSummaryMaxTokens
-	// for abnormal input.
 	summaryMaxTokens = summaryMaxChars / 2
 )
 
@@ -43,14 +30,9 @@ const (
 type ContextBudget struct {
 	ContextWindow int // 0 = no proactive compaction
 	KeepRecent    int // <=0 falls back to contextKeepRecent
-	// KeepReasoning is the number of most recent assistant messages whose reasoning is preserved during proactive reasoning cleanup (<=0 falls back to contextKeepReasoning).
-	// FitHistory clears Reasoning from non-recent N assistant messages on the fitted result (P1).
 	KeepReasoning int
-	// KeepToolArgs is the number of most recent assistant messages whose args are preserved during proactive tool_call args compression (<=0 falls back to contextKeepToolArgs).
-	// FitHistory compresses large write/edit args from non-recent N assistant messages on the fitted result (P4).
-	KeepToolArgs int
-	// KeepReasoningChars is the character cap for a single Reasoning message within the keep window (P7). After stripStaleReasoning,
-	// FitHistory applies head-tail splitting (threshold rune) to overly long Reasoning of the most recent N assistant messages.
+	KeepToolArgs  int
+	// KeepReasoningChars is the character cap for a single Reasoning message within the keep window (P7).
 	// 0=falls back to contextKeepReasoningChars; <0=disabled (no truncation); >0=custom threshold.
 	KeepReasoningChars int
 	SummarizerPrompt   string
@@ -58,29 +40,19 @@ type ContextBudget struct {
 	Model              string
 	System             string
 	Tools              []miniagent.Tool
-	// UseRealUsage controls whether estimateThreshold prefers real usage (§P0-B). false (kill-switch)
-	// uses local policy.EstimateTokens directly, falling back to old behavior; when true, if no real usage is available it still falls back to local estimation.
-	UseRealUsage bool
-	// Force=true causes FitHistory to skip the policy.EstimateTokens 4/5 gate and go directly into compactWithSummary+lossy fallback
-	// branch (§P1-B). Set by Run when the previous step's real usage hits isUsageOverflow, triggering compaction based on "proven real occupancy".
+	UseRealUsage       bool
+	// Force=true causes FitHistory to skip the policy.EstimateTokens 4/5 gate and go directly into compactWithSummary+lossy fallback.
 	Force bool
-	// PreserveRecentTokens is the token budget upper bound for retainedTail (§P1-E, ported from opencode preserve_recent_tokens).
-	// <=0=auto: floor(ContextWindow/tailBudgetFraction) clamp [min,max]; when ContextWindow<=0 returns 0 to disable,
-	// falling back to KeepRecent rounds mode (backward compatible with old sessions and no-window configs).
+	// PreserveRecentTokens is the token budget upper bound for retainedTail (§P1-E).
 	PreserveRecentTokens int
-	// SummaryMaxChars is the character cap for the summary, used by jointTailBudget to estimate summary token usage (CJK /2 basis). <=0 falls back
-	// to the summaryMaxChars constant. Injected by NewCompaction from opts.SummaryMaxChars (already resolved).
+	// SummaryMaxChars is the character cap for the summary, used by jointTailBudget.
 	SummaryMaxChars int
-	// Compacting triggers before each summary (inside compactWithSummary, before calling budget.Summarize), allowing injection
-	// of context or one-time replacement of summarizerPrompt (mirrors opencode experimental.session.compacting, §P2).
-	// nil=disabled. Run bridges from LoopHooks.OnCompacting when constructing budget.
+	// Compacting triggers before each summary (inside compactWithSummary, before calling budget.Summarize).
+	// nil=disabled.
 	Compacting CompactingHook
-	// SessionID is carried through budget into the compactWithSummary scope, read by applyCompactingHook (CompactingInput.SessionID).
+	// SessionID is carried through budget into the compactWithSummary scope.
 	SessionID string
-	// Summarize compresses the middle segment into summary text (already truncated to maxChars) + the miniagent.Usage of that call.
-	// When previousSummary is non-empty it runs in UPDATE mode (preserving the old summary as an anchor to update), extracted by compactWithSummary
-	// from legacy miniagent.KindSummary and passed down via this parameter. Injected by Run: func(ctx, model, summarizerPrompt,
-	// previousSummary, middle) → summarizeMiddle(...).
+	// Summarize compresses the middle segment into summary text + the miniagent.Usage of that call.
 	Summarize func(ctx context.Context, model, summarizerPrompt, previousSummary string, middle []miniagent.Message) (string, miniagent.Usage, error)
 }
 
@@ -209,79 +181,4 @@ func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReaso
 	return out
 }
 
-// summaryTailStart returns the index in msgs immediately AFTER the first miniagent.KindSummary message (the new summary
-// compactWithSummary emits), i.e. the start of the retained tail. Returns -1 when no KindSummary is present. Used by
-// FitHistory's summarized branch to apply the steady-state reasoning strip to the tail subslice only — everything
-// before the boundary (head + summaryMsg) is left untouched. compactWithSummary emits exactly one KindSummary (the old
-// summary, if any, is extracted as previousSummary and never enters out), so the first match is the new summary.
-func summaryTailStart(msgs []miniagent.Message) int {
-	for i, m := range msgs {
-		if m.Kind == miniagent.KindSummary {
-			return i + 1
-		}
-	}
-	return -1
-}
-
-// preserveRecentTokens resolves the upper bound of the retainedTail token budget (ported from opencode preserveRecentBudget, §P1-E):
-// budget.PreserveRecentTokens>0 returned directly; otherwise floor(budget.ContextWindow/tailBudgetFraction)
-// clamped to [minPreserveRecentTokens, maxPreserveRecentTokens]; budget.ContextWindow<=0 returns 0 (disabled → pure round-count mode).
-// Side-effect free, pure function, easy to test.
-func preserveRecentTokens(budget ContextBudget) int {
-	if budget.PreserveRecentTokens > 0 {
-		return budget.PreserveRecentTokens
-	}
-	if budget.ContextWindow <= 0 {
-		return 0
-	}
-	t := budget.ContextWindow / tailBudgetFraction
-	if t < minPreserveRecentTokens {
-		return minPreserveRecentTokens
-	}
-	if t > maxPreserveRecentTokens {
-		return maxPreserveRecentTokens
-	}
-	return t
-}
-
-// jointTailBudget returns the joint token budget for retainedTail (§B): deducts incompressible portions from CW×4/5 —
-// request-level system/schema/overhead (EstimateTokens([],System,Tools), appears once per request) + head round marginal +
-// summary upper bound estimate (summaryMaxChars/2, CJK densest calibre, same source as summaryMaxTokens derivation +
-// single-message envelope) — so tail proactively yields space to the incompressible summary, reducing from the source
-// the overflow-induced trim/termination under medium CW where head+summary+tail exceeds window. Takes min with
-// preserveRecentTokens (user's tail will upper bound): physical constraint ∧ will upper bound. CW<=0 falls back to
-// preserveRecentTokens (windowless pure round-count compatibility).
-//
-// headAdj refinement: when head is a single old KindSummary, compactWithSummary extracts it as prevSummary for UPDATE
-// and it doesn't enter out — in BOTH the default and override (SummarizerPrompt!="") paths — so headAdj=0 with no
-// erroneous deduction; otherwise (head is a regular round, which enters out) deduct estimateRoundTokens(head). avail<=0 (small CW:
-// summary+head+overhead already fills 4/5) → return 0, selectTailByTokens degrades to forcibly retaining most recent round,
-// FitHistory's trailing trim/error fallback. This function does not eliminate termination under extremely small CW;
-// direction A (deriveSummaryMaxChars scales summaryMaxChars with CW) pushes that boundary up to CW<~1536 — beyond that
-// request-level overhead+head dominates, not solvable by compaction budget (physical limit, see deriveSummaryMaxChars hard boundary).
-func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
-	if budget.ContextWindow <= 0 {
-		return preserveRecentTokens(budget)
-	}
-	target := budget.ContextWindow * 4 / 5
-	reqOverhead := policy.EstimateTokens(nil, budget.System, budget.Tools)
-	headAdj := 0
-	if len(headRounds) != 1 || headRounds[0].Kind != miniagent.KindSummary {
-		headAdj = estimateRoundTokens(headRounds)
-	}
-	maxChars := budget.SummaryMaxChars
-	if maxChars <= 0 {
-		maxChars = summaryMaxChars
-	}
-	summaryEstimate := maxChars/2 + policy.EnvelopePerMsgTokens
-	avail := target - reqOverhead - headAdj - summaryEstimate
-	return min(max(avail, 0), preserveRecentTokens(budget))
-}
-
-// estimateRoundTokens estimates the marginal tokens of a single round (content+reasoning+args+envelope), excluding
-// system/schema global overhead — those two are request-level constants counted only once in the tail total, so per-round
-// accumulation must use marginal estimation (otherwise each round re-counts 400+schema, systematically overestimating,
-// tail never meets budget). Used by selectTailByTokens for accumulation.
-func estimateRoundTokens(round []miniagent.Message) int {
-	return policy.EstimateTokens(round, "", nil) - policy.SystemOverheadTokens
-}
+// summaryTailStart / preserveRecentTokens / jointTailBudget / estimateRoundTokens live in budget_tail.go.

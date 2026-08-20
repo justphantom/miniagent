@@ -1,10 +1,7 @@
-// Package httpretry holds the vendor-agnostic HTTP retry primitives shared by
-// the openai and anthropic providers: the retry constants, the Retry-After
+// Package httpretry holds the vendor-agnostic HTTP retry primitives used by
+// the openai provider: the retry constants, the Retry-After
 // header parser, the backoff capper, the context-aware sleep, and a
-// parameterized retryable-status classifier. Provider-specific knowledge — the
-// exact set of retryable status codes beyond the common 429/5xx baseline, and
-// the 400-body heuristics that identify an unsupported thinking parameter —
-// stays in each provider package.
+// parameterized retryable-status classifier.
 package httpretry
 
 import (

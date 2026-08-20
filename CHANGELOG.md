@@ -10,6 +10,7 @@
 
 ### Changed
 - **内部重构**：模型清单聚合逻辑从 `openai` 包上移至 `cmd` 层，消除 `openai→anthropic` 跨 provider 依赖；`execBackedTools` 清理 v5.0.0 已删工具残留。对外契约（CLI/NDJSON/config）零变化。
+- **破坏性变更：移除 anthropic 与 responses provider**：删除 `internal/provider/anthropic/`（17 文件）与 `internal/provider/responses/`（14 文件）；`ProviderConfig.Kind` 仅接受 `""`/`"openai"`（其他值加载报错）；删除 `provider.cache`、`thinking.map` 的 anthropic JSON 对象语义与 responses 专属校验；`-list-models`/`FetchModelLimits` 统一走 openai client。迁移：`kind=anthropic` 配置改走 OpenAI Chat Completions 兼容网关；`kind=responses` 移除。
 
 ## [5.0.0] - 2026-08-18
 

@@ -14,7 +14,6 @@ import (
 
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
-	"github.com/justphantom/miniagent/internal/provider/anthropic"
 	"github.com/justphantom/miniagent/internal/provider/openai"
 )
 
@@ -55,10 +54,8 @@ func providerKeyByName(providers []config.ProviderConfig, name string) string {
 
 // FetchModelLimits GETs the provider's models endpoint once and returns the limits reported for
 // modelID (non-standard context_window/max_output_tokens extensions; nil fields when the endpoint
-// omits them or the model is absent from the list). kind=anthropic dispatches to the Anthropic
-// /v1/models client — the official endpoint reports ids only, but proxy/gateway upstreams may add
-// the limit fields. Best-effort: errors are the caller's to warn and continue on (a down models
-// endpoint must not block the run; the fallback is config-only limits).
+// omits them or the model is absent from the list). Best-effort: errors are the caller's to warn and
+// continue on (a down models endpoint must not block the run; the fallback is config-only limits).
 func FetchModelLimits(ctx context.Context, p config.ProviderConfig, modelID, apiKey string, httpTimeout time.Duration, logger *slog.Logger) (config.ModelLimits, error) {
 	if p.ModelsURL == "" {
 		return config.ModelLimits{}, nil
@@ -66,33 +63,15 @@ func FetchModelLimits(ctx context.Context, p config.ProviderConfig, modelID, api
 	if httpTimeout <= 0 {
 		httpTimeout = 120 * time.Second
 	}
-	var models []anthropic.ModelInfo
-	if providerKind(p.Kind) == "anthropic" {
-		llm, err := anthropic.NewClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers, false)
-		if err != nil {
-			return config.ModelLimits{}, err
-		}
-		models, err = llm.ListModels(ctx)
-		if err != nil {
-			return config.ModelLimits{}, err
-		}
-	} else {
-		llm, err := openai.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers)
-		if err != nil {
-			return config.ModelLimits{}, err
-		}
-		om, err := llm.ListModels(ctx)
-		if err != nil {
-			return config.ModelLimits{}, err
-		}
-		// openai.ModelInfo and anthropic.ModelInfo share ID/ContextWindow/MaxOutputTokens shapes; normalize
-		// to the anthropic slice so a single match loop serves both kinds (no shared interface needed for 2 types).
-		models = make([]anthropic.ModelInfo, 0, len(om))
-		for _, m := range om {
-			models = append(models, anthropic.ModelInfo{ID: m.ID, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens})
-		}
+	llm, err := openai.NewChatClient(apiKey, p.ChatURL, p.ModelsURL, newHTTPClient(httpTimeout, newHTTPTransport()), logger, p.Headers)
+	if err != nil {
+		return config.ModelLimits{}, err
 	}
-	for _, m := range models {
+	om, err := llm.ListModels(ctx)
+	if err != nil {
+		return config.ModelLimits{}, err
+	}
+	for _, m := range om {
 		if m.ID == modelID {
 			return config.ModelLimits{ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens}, nil
 		}

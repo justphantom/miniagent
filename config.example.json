@@ -23,52 +23,6 @@
         }
       },
       "stream_allow_unterminated": false
-    },
-    {
-      "name": "openai-responses",
-      "kind": "responses",
-      "chat_url": "https://api.openai.com/v1/responses",
-      "models_url": "https://api.openai.com/v1/models",
-      "key": "sk-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-      "models": [
-        {"name": "gpt-5.5", "max_tokens": 8192, "context_window": 200000}
-      ],
-      "thinking": {
-        "field": "reasoning",
-        "map": {
-          "off": "off",
-          "minimal": "minimal",
-          "low": "low",
-          "medium": "medium",
-          "high": "high",
-          "xhigh": "xhigh",
-          "max": "max"
-        }
-      }
-    },
-    {
-      "name": "anthropic",
-      "kind": "anthropic",
-      "chat_url": "https://api.anthropic.com/v1/messages",
-      "models_url": "https://api.anthropic.com/v1/models",
-      "key": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
-      "max_tokens": 64000,
-      "models": [
-        {"name": "claude-sonnet-5", "context_window": 200000},
-        {"name": "claude-opus-4-8", "context_window": 200000}
-      ],
-      "headers": {
-        "X-Tenant-Id": "my-tenant"
-      },
-      "cache": true,
-      "thinking": {
-        "field": "thinking",
-        "map": {
-          "low": "{\"type\":\"adaptive\",\"effort\":\"low\"}",
-          "medium": "{\"type\":\"adaptive\",\"effort\":\"medium\"}",
-          "high": "{\"type\":\"adaptive\",\"effort\":\"high\"}"
-        }
-      }
     }
   ],
   "session": {

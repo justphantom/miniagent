@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/justphantom/miniagent/internal/miniagent"
 	"github.com/justphantom/miniagent/internal/miniagent/config"
 	"github.com/justphantom/miniagent/internal/miniagent/event"
+	"github.com/justphantom/miniagent/internal/miniagent/policy"
 )
 
 func mustParseLogLevel(s string) slog.Level {
@@ -244,4 +246,28 @@ func absConfigPath(configPath string) string {
 	}
 	p, _ := findDefaultConfigPath()
 	return p
+}
+
+// assembleHooks assembles LoopHooks: event output (buildHooks) + compaction before/after + three default policy attachments
+// (OnLLMError history-tightening retry / OnBudget estimation+circuit-break / ShapeToolResult truncation+persist). The core Run has zero policies; this function assembles them to restore full capability.
+func assembleHooks(
+	compBefore func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error),
+	compAfter func(context.Context, int, miniagent.Response) error,
+	resultOnly bool, confirmDestructive bool, baseCfg miniagent.LoopConfig, tools []miniagent.Tool, limits miniagent.Limits, logger *slog.Logger,
+) miniagent.LoopHooks {
+	hooks := buildHooks(resultOnly)
+	hooks.BeforeLLM = compBefore
+	hooks.AfterLLM = compAfter
+	hooks.OnLLMError = policy.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
+	hooks.OnBudget = policy.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
+	hooks.ShapeToolResult = policy.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
+	// S-2 (opt-in): wrap OnToolUse with a destructive-tool confirmation gate. buildHooks returns empty hooks (no
+	// OnToolUse) for -result-only/subagent mode, so this wraps AFTER buildHooks in both paths — when enabled the gate
+	// is active even for subagents (deny-by-default, since they have no TTY), closing the otherwise-uncovered
+	// autonomous path; when disabled ConfirmOnToolUse is the identity, leaving behavior unchanged.
+	hooks.OnToolUse = policy.ConfirmOnToolUse(hooks.OnToolUse, policy.ConfirmCfg{
+		Enabled:     confirmDestructive,
+		AutoApprove: os.Getenv("MINIAGENT_AUTO_APPROVE") == "1",
+	})
+	return hooks
 }

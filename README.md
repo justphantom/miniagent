@@ -2,7 +2,7 @@
 
 一个用 Go 标准库实现的最小 LLM agent。从 stdin 读取一个 prompt，驱动 ReAct 循环（LLM ↔ 工具调用），把过程事件和最终结果以 NDJSON（每行一个 JSON 对象）写到 stdout。
 
-- 后端：OpenAI Chat Completions / OpenAI Responses / Anthropic Messages API（config 模式 provider 各自的完整 chat/models URL）
+- 后端：OpenAI Chat Completions（config 模式 provider 各自的完整 chat/models URL）
 - 默认非流式：每次 LLM 调用是普通 POST，等完整响应返回；传 `-stream` 改走 SSE，增量发 `text_delta`/`reasoning_delta` 事件
 - 会话：默认无状态；`-save-session` 新建并落盘（id 内部生成），`-session <id>` 接续已存在会话；均以 jsonl append-only 落盘（首行 metadata + 每条 message），跨进程接续对话。二者互斥
 - 最小重试：仅 429/500/502/503/504 + 网络错误自动重试 2 次（指数退避，支持 `Retry-After`）；其他 4xx/解析错误立即返回
@@ -30,7 +30,7 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`internal/miniagent.
 
 `StepOutput.View` 是发给 LLM 的消息；`Commit=true` 则同时替换运行 transcript（压缩语义）；`Persist` 追加到持久化增量；`ExtraUsage` 计入用量；`Compacted=true` 标记压缩（交互层据此 rewrite session）。
 
-**provider 也是外挂**：`Run` 依赖 `LLM` 接口（`Do` 非流式 + `DoStream` 流式），不绑死任何供应商。内置 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages provider；自定义 provider 实现 `LLM` 即可替换（本地、mock 等），核心零改动。压缩的摘要调用用更窄的 `Doer`（仅 `Do`）。工具是 `Tool.Call` 函数字段，核心不认识任何具体工具——`cfg.Tools []Tool` 由调用方自由组装。
+**provider 也是外挂**：`Run` 依赖 `LLM` 接口（`Do` 非流式 + `DoStream` 流式），不绑死任何供应商。内置 OpenAI Chat Completions provider；自定义 provider 实现 `LLM` 即可替换（本地、mock 等），核心零改动。压缩的摘要调用用更窄的 `Doer`（仅 `Do`）。工具是 `Tool.Call` 函数字段，核心不认识任何具体工具——`cfg.Tools []Tool` 由调用方自由组装。
 
 **极简模式**：`BeforeLLM=nil` → 核心原样发送 transcript，零上下文管理。要压缩，挂 `NewCompaction`：
 
@@ -442,7 +442,7 @@ system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `de
 ```
 
 **关键字段说明**：
-- `provider.chat_url` / `provider.models_url`：完整端点 URL（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages API，按 `kind`）。`kind=responses` 时 `chat_url` 指 `POST /v1/responses`，`models_url` 仍可用 OpenAI `GET /v1/models`；请求固定 `store:false` 并本地回放 encrypted reasoning。`kind=anthropic` 的 `models_url` 指向 Anthropic `GET /v1/models`，支持动态拉取模型列表与 `context_window`/`max_output_tokens` 扩展字段
+- `provider.chat_url` / `provider.models_url`：完整端点 URL（OpenAI Chat Completions，按 `kind`；kind 仅支持 `openai`/空）
 - `provider.key`：按字面量读取；明文入 config，注意文件权限（建议 `0600`），或改用 `$MINIAGENT_API_KEY`
 - `defaults.provider` / `defaults.model`：主会话 provider 名与 model id，**成对必填**（拆分后不再使用 `provider/id` 拼接串）
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式

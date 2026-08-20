@@ -8,9 +8,8 @@ import (
 
 // Retry semantics — the constants (MaxRetries / RetryBaseDelay / RetryMaxDelay),
 // the Retry-After / backoff / sleep helpers, and the common 429/5xx
-// retryable-status baseline — live in the vendor-agnostic httpretry package,
-// shared verbatim with the anthropic provider. This file holds only
-// OpenAI-specific 400-body classification.
+// retryable-status baseline — live in the vendor-agnostic httpretry package.
+// This file holds only OpenAI-specific 400-body classification.
 
 // isContextLengthError is identified in core (overflow.go, miniagent.IsContextLengthError):
 // 24 regexes + 4 exclusions (§P1-C). This package calls miniagent.IsContextLengthError to avoid forking.
