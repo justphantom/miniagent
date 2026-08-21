@@ -189,6 +189,10 @@ func TestWebSessions_ListAndReplay(t *testing.T) {
 	if len(list) != 1 || list[0].ID != sessionID {
 		t.Fatalf("list = %+v", list)
 	}
+	// Meta line fields must survive the listing: meta.Model is the modelSpec "provider/model".
+	if list[0].Provider != "p" || list[0].Model != "p/m" || list[0].Created == "" {
+		t.Errorf("list meta = %+v, want provider p model p/m with created", list[0])
+	}
 
 	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions/"+sessionID, nil)
 	rr := httptest.NewRecorder()

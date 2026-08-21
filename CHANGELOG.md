@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- **WebUI 会话列表不再整文件读盘**：`GET /api/sessions` 每条目改用 `session.LoadSessionMeta`（只读首行 meta，新增于 `miniagent/session`），替代 `LoadSession` 全量读+校验（O(全部会话字节)→O(元数据行)；每轮 turn 结束前端都会刷新列表）。首行非 meta/损坏/缺文件均零值 meta，校验仍归 `LoadSession`。
+- **WebUI 模型下拉切分 bug**：model id 含 `/` 时前端 `value.split("/")` 取 `[0]/[1]` 错切片 → provider/model 传空静默回落默认模型。改为 provider/model 走 `option.dataset`，不依赖文本切分。
+
 ### Added
 - **`-serve` WebUI（嵌入单页 + JSON/NDJSON API）**：`miniagent -serve` 启动 `net/http` 服务（纯 stdlib，go:embed 静态前端无构建链），提供登录页（`x-api-key` 鉴权，`subtle.ConstantTimeCompare` 常数时间比较）、`POST /api/turn`（NDJSON 流式，契约与 CLI stdout 逐字节一致，`session` 空则新建、非空则续跑）、`GET /api/sessions`（列表）、`GET /api/sessions/{id}`（重放最近 200 条消息为 NDJSON 事件流）、`GET /api/models`（provider/model 下拉数据源，复用 `-list-models` 逻辑）、`GET /api/whoami`（公开探测 `auth_required`）。配置新增 `web` 段：`web.listen`（默认 `127.0.0.1:8787`）、`web.key`（空回落 `$MINIAGENT_WEB_KEY`）；**远程 listen（非 loopback）必须配 key，否则启动拒绝**（key 是唯一安全边界，L0 #13 零安全 agent）。同 session 轮次经 `sync.Mutex` 串行化（防 `RewriteMessages` 首行竞态）；断连经 req ctx 取消 → `saveSession` 存已执行部分。
 - **轮管道库化：`turnEngine.runTurn`**（`run_turn.go`）把 CLI 一次轮的 resolve→session→clients→tools→hooks→Run→save 全序抽出为可复用函数（writer 注入、os.Exit-free），CLI 主路径与 `-serve` 共用；`buildLLM`/`buildDoer`/`buildRuntimeClients` 改返回 error（不再 `os.Exit`，服务进程可 500 应答而非崩溃）。`-serve` 与 `-list-models`/`-replay`/`-save-session`/`-session` 互斥。

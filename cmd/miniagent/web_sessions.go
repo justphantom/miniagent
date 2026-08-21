@@ -60,7 +60,8 @@ func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 			summary.Size = fi.Size()
 			summary.Modified = fi.ModTime().Format("2006-01-02 15:04")
 		}
-		if meta, _, err := session.LoadSession(filepath.Join(dir, e.Name()), maxSessionBytesOfConfig(s.cfg)); err == nil && meta.Type != "" {
+		// First meta line only (LoadSessionMeta): listing must not pay a full-file read per entry.
+		if meta, err := session.LoadSessionMeta(filepath.Join(dir, e.Name())); err == nil && meta.Type != "" {
 			summary.Provider, summary.Model, summary.Created = meta.Provider, meta.Model, meta.Created
 		}
 		out = append(out, summary)

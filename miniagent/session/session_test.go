@@ -68,6 +68,41 @@ func TestLoadSession_CorruptJSONFails(t *testing.T) {
 	}
 }
 
+// LoadSessionMeta returns the first meta line only, tolerating the same shapes LoadSession does
+// (missing file = zero meta; first line not a meta line = zero meta), without reading the body.
+func TestLoadSessionMeta(t *testing.T) {
+	dir := t.TempDir()
+	metaLine := `{"type":"session","id":"s","provider":"p","model":"m/glm","created":"2026-08-21"}`
+
+	path := filepath.Join(dir, "ok.jsonl")
+	writeLines(t, path, metaLine, `{"type":"message","role":"user","content":"x"}`)
+	meta, err := LoadSessionMeta(path)
+	if err != nil {
+		t.Fatalf("LoadSessionMeta: %v", err)
+	}
+	if meta.ID != "s" || meta.Provider != "p" || meta.Model != "m/glm" || meta.Created != "2026-08-21" {
+		t.Errorf("meta mismatch: %+v", meta)
+	}
+
+	// Same file with a multi-megabyte body: meta read stays O(first line).
+	bigBody := `{"type":"message","role":"user","content":"` + strings.Repeat("x", 4<<20) + `"}`
+	writeLines(t, path, metaLine, bigBody)
+	if meta, err = LoadSessionMeta(path); err != nil || meta.ID != "s" {
+		t.Errorf("large body: got (%+v, %v), want meta id s", meta, err)
+	}
+
+	// First line is a message (no meta line): zero meta, no error.
+	writeLines(t, path, `{"type":"message","role":"user","content":"x"}`)
+	if meta, err = LoadSessionMeta(path); err != nil || meta.Type != "" {
+		t.Errorf("message-first file: got (%+v, %v), want zero meta", meta, err)
+	}
+
+	// Non-existent file: zero meta, no error (LoadSession semantics).
+	if meta, err = LoadSessionMeta(filepath.Join(dir, "nope.jsonl")); err != nil || meta.Type != "" {
+		t.Errorf("missing file: got (%+v, %v), want zero meta", meta, err)
+	}
+}
+
 // A partial trailing line left by an append-only crash should be tolerated: the partial line is discarded and the preceding valid history is loaded.
 func TestLoadSession_ToleratesCorruptTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tail.jsonl")

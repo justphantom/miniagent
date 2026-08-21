@@ -140,13 +140,14 @@ async function sendTurn() {
   const workdir = $("workdir").value.trim();
   if (!prompt) { $("prompt").focus(); return; }
   if (!workdir) { $("workdir").focus(); return; }
-  const modelSel = $("model-sel").value.split("/");
+  const sel = $("model-sel");
+  const opt = sel.options[sel.selectedIndex];
   const body = {
     prompt,
     workdir,
     session,
-    provider: modelSel.length === 2 ? modelSel[0] : "",
-    model: modelSel.length === 2 ? modelSel[1] : "",
+    provider: opt ? opt.dataset.provider || "" : "",
+    model: opt ? opt.dataset.model || "" : "",
     thinking: $("thinking-sel").value,
   };
   sending = true;
@@ -200,6 +201,10 @@ async function loadModels() {
     for (const m of models) {
       const o = document.createElement("option");
       o.value = `${m.provider}/${m.model}`;
+      // provider/model ride in dataset, not value: model ids may contain "/" and a value
+      // split("/") mis-slices them (same ambiguity ModelRef exists to avoid).
+      o.dataset.provider = m.provider;
+      o.dataset.model = m.model;
       o.textContent = `${m.provider}/${m.model}`;
       sel.appendChild(o);
     }

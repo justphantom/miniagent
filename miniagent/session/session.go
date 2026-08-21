@@ -20,6 +20,10 @@ type SessionMeta = miniagent.SessionMeta
 // Overridden at runtime via Limits.MaxSessionBytes (<=0 uses this default); injected by LoadSession/AppendMessages/RewriteMessages.
 const maxSessionBytes = 50 << 20 // 50MB
 
+// metaLineMaxBytes caps the first-line read of LoadSessionMeta: the metadata line is tiny; a
+// truncated (over-cap) line fails json.Unmarshal and degrades to zero meta, never a full-buffer read.
+const metaLineMaxBytes = 64 << 10
+
 const (
 	sessionTypeSession = "session"
 	sessionTypeMessage = "message"
@@ -126,6 +130,36 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []miniagent.Message, 
 		return SessionMeta{}, nil, fmt.Errorf("session file %q: %w", path, err)
 	}
 	return meta, msgs, nil
+}
+
+// LoadSessionMeta reads only the first-line metadata of the jsonl (zero-value meta if absent,
+// non-existent file included). Listing callers must not pay LoadSession's full-file read per entry.
+// No corruption checks: the message body is not read here; LoadSession remains the strict validator.
+func LoadSessionMeta(path string) (SessionMeta, error) {
+	f, err := miniagent.OpenNoFollow(path, os.O_RDONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return SessionMeta{}, nil
+	}
+	if err != nil {
+		return SessionMeta{}, err
+	}
+	defer func() { _ = f.Close() }()
+	line, err := bufio.NewReader(io.LimitReader(f, metaLineMaxBytes)).ReadBytes('\n')
+	// A missing trailing '\n' (single-line file) still yields the bytes with io.EOF — that is meta material.
+	if err != nil && (len(line) == 0 || !errors.Is(err, io.EOF)) {
+		return SessionMeta{}, err
+	}
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(line), &probe); err != nil || probe.Type != sessionTypeSession {
+		return SessionMeta{}, nil // first line is a message or unparseable (crash residue): no meta to report
+	}
+	var meta SessionMeta
+	if err := json.Unmarshal(bytes.TrimSpace(line), &meta); err != nil {
+		return SessionMeta{}, nil
+	}
+	return meta, nil
 }
 
 // AppendMessages append-only appends msgs to the jsonl (writes the metadata line first when creating/empty). Write-side guardrails: flock

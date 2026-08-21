@@ -1,17 +1,18 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-20
+updated: 2026-08-21
 ---
 
 # 当前会话
 
 ## 状态
-代码审查与清理已完成：全面审查（正确性/健壮性/规范性）→ 修 C1+C2（v5.0.0 工具残留：execBackedTools 4 工具、restoreGitCredentials 死代码）→ 发版评估 → v5.1.0 tag 已推送（`9bc4edd`）。后由用户在 `9bdb60a` 提交深度精简（移除 anthropic/responses provider、拆分 oversized 文件），HEAD 已移至该提交。
+WebUI 审查 + 修复完成：审查最近两次提交（5b35329 `-serve` WebUI、21af462 fix）→ 确认 fix 提交无误 → 修复 feat 遗留问题 1/2：①`session.LoadSessionMeta`（只读首行 meta）替代会话列表的 `LoadSession` 全量读；②前端模型下拉 provider/model 改走 `option.dataset`（model id 含 `/` 时 split 错切片）。未提交（最高约束：禁止提交），diff 待用户审阅。
 
 ## 待办
+- 用户审阅本次 diff 后自行提交。
 - `.agent` 目录清理：L2 patterns 中 rtk/allowlist 模式已随 v5.0.0 删工具而废弃，需标 superseded；superseded decisions 中已删文件引用需清。
 
 ## 备注
-- 当前 provider 仅 openai + httpretry；`provider/{anthropic,responses}/` 已删（31 文件）。
-- verify-gate 曾因 golangci-lint 与 Go 版本不兼容无法本地跑（环境问题，非代码）。
+- WebUI 审查其余已确认可接受项：锁表无界（进程生命周期内有限）、登录 whoami 非 ok 仍写 localStorage（UX 小瑕疵）、os.ReadDir 失败 200+空数组、whoami 无鉴权暴露 version（有注释声明）。
+- verify-gate 全绿（gofmt/build/vet/test -race/lint 0 issues）；session.go 262 行、web_sessions.go 108 行，均 <300。
