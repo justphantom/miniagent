@@ -62,6 +62,22 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .composer-row input { flex: 1; min-width: 160px; }
 #send { min-width: 80px; }
 #send:disabled { opacity: .5; cursor: not-allowed; }
+/* ---- markdown rendering (subset: headings, lists, code, blockquote, bold/italic) ---- */
+.md h1, .md h2, .md h3 { margin: 12px 0 4px; font-weight: 600; }
+.md h1 { font-size: 16px; } .md h2 { font-size: 15px; } .md h3 { font-size: 14px; }
+.md h1:first-child, .md h2:first-child, .md h3:first-child { margin-top: 0; }
+.md p { margin: 4px 0; }
+.md ul { padding-left: 22px; margin: 4px 0; }
+.md li { margin: 2px 0; }
+.md blockquote { border-left: 3px solid var(--border); padding-left: 10px; margin: 4px 0; color: var(--muted); }
+.md code { font-family: ui-monospace, monospace; font-size: 12.5px; background: var(--bg); border-radius: 4px; padding: 1px 5px; }
+.md pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 6px 0; overflow-x: auto; }
+.md pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; }
+.md hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.md strong { font-weight: 600; }
+/* ev that contains rendered markdown should not use pre-wrap (blocks handle their own spacing) */
+.ev:has(.md) { white-space: normal; }
+
 @media (max-width: 640px) {
   body.nav-open #nav { position: absolute; inset: 0 auto 0 0; z-index: 10; width: min(280px, 85vw); background: var(--bg); border-right: 1px solid var(--border); box-shadow: 4px 0 24px rgba(0,0,0,.5); }
   header { padding: 8px 12px; gap: 8px; }

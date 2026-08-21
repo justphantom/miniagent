@@ -55,6 +55,56 @@ $("new-chat").addEventListener("click", () => {
 });
 
 // ---- events rendering ----
+// Markdown subset: #/##/###, ``` code, -/* list, > quote, ---, **bold**, *italic*, `code`, ~~del~~.
+// HTML is escaped first (XSS guard); block assembly runs after inline so code spans are untouched.
+function mdEsc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function mdInline(s) {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+}
+function mdRender(text) {
+  const lines = mdEsc(text).split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === "") { i++; continue; }
+    if (line.startsWith("```")) {
+      let code = "";
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) { code += lines[i] + "\n"; i++; }
+      i++;
+      out.push(`<pre class="md-code"><code>${code.trimEnd()}</code></pre>`);
+      continue;
+    }
+    if (line.startsWith("### ")) { out.push(`<h4>${mdInline(line.slice(4))}</h4>`); i++; continue; }
+    if (line.startsWith("## ")) { out.push(`<h3>${mdInline(line.slice(3))}</h3>`); i++; continue; }
+    if (line.startsWith("# ")) { out.push(`<h2>${mdInline(line.slice(2))}</h2>`); i++; continue; }
+    if (line.trim() === "---") { out.push("<hr>"); i++; continue; }
+    if (line.startsWith("> ")) {
+      let q = "";
+      while (i < lines.length && lines[i].startsWith("> ")) { q += lines[i].slice(2) + "\n"; i++; }
+      out.push(`<blockquote>${q.trim().split("\n").map(mdInline).join("<br>")}</blockquote>`);
+      continue;
+    }
+    if (line.startsWith("- ") || line.startsWith("* ")) {
+      let items = "";
+      while (i < lines.length && (lines[i].startsWith("- ") || lines[i].startsWith("* "))) {
+        items += `<li>${mdInline(lines[i].slice(2))}</li>`;
+        i++;
+      }
+      out.push(`<ul>${items}</ul>`);
+      continue;
+    }
+    out.push(`<p>${mdInline(line)}</p>`);
+    i++;
+  }
+  return out.join("");
+}
+
 function fmtTime(ms) { if (!ms) return ""; const d = new Date(ms), p = (n) => String(n).padStart(2, "0"); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
 function evDiv(cls, tag, ts) {
   const d = document.createElement("div");
@@ -88,8 +138,10 @@ function appendDelta(kind, text, ts) {
     const span = document.createElement("span");
     d.appendChild(span);
     d._span = span;
+    d._md = "";
     if (kind === "text") curText = d; else curReasoning = d;
   }
+  d._md += text;
   d._span.textContent += text;
 }
 function appendToolUse(ev) {
@@ -116,7 +168,19 @@ function appendToolResult(ev, toolNode) {
   const pre = target._pre;
   pre.textContent += (pre.textContent ? "\n" : "") + `→ ${ev.output || ""}${ev.is_error ? "  [error]" : ""}`;
 }
-function finishText() { curText = curReasoning = null; }
+// finishText flushes the accumulated markdown (stream is done or interrupted by a tool event).
+function finishText() {
+  for (const d of [curText, curReasoning]) {
+    if (d && d._md) {
+      const md = document.createElement("div");
+      md.className = "md";
+      md.innerHTML = mdRender(d._md);
+      d.replaceChild(md, d._span);
+      d._md = "";
+    }
+  }
+  curText = curReasoning = null;
+}
 
 function showSessionID(id) { const el = $("session-id"); el.textContent = id ? `会话 ${id}` : ""; el.title = id || "当前会话 ID"; }
 function renderEvent(ev) {
@@ -133,7 +197,10 @@ function renderEvent(ev) {
     case "result": {
       finishText();
       const d = evDiv("result", "result", ev.ts);
-      d.appendChild(document.createTextNode(ev.text || "(no text)"));
+      const md = document.createElement("div");
+      md.className = "md";
+      md.innerHTML = mdRender(ev.text || "(no text)");
+      d.appendChild(md);
       const u = document.createElement("div");
       u.className = "usage";
       u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}`;

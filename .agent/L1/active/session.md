@@ -11,7 +11,8 @@ updated: 2026-08-21
 
 ## 待办
 - 用户审阅本次 diff 后自行提交。
-- WebUI 会话删除已实现未提交（DELETE /api/sessions/{id} + 前端 ✕ 按钮，进行中会话 409；verify-gate 全绿），CHANGELOG 已同步。
+- WebUI 会话删除 + 移动端 ✕ 可见性修复 + 事件时间戳已提交（d669278）。
+- WebUI markdown 渲染已实现未提交（vanilla mdRender，流式累积→finishText 一次性渲染，XSS 实体转义；verify-gate 全绿），CHANGELOG 已同步。
 - `.agent` 目录清理：L2 patterns 中 rtk/allowlist 模式已随 v5.0.0 删工具而废弃，需标 superseded；superseded decisions 中已删文件引用需清。
 
 ## 备注
