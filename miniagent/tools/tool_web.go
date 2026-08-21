@@ -103,7 +103,7 @@ func runWeb(ctx context.Context, client *http.Client, args string, maxBytes, max
 	if err != nil {
 		return denyResult("build request failed: %v", err)
 	}
-	req.Header.Set("User-Agent", "miniagent-web/1.0")
+	req.Header.Set("User-Agent", miniagent.UserAgent())
 	req.Header.Set("Accept", "text/html,text/plain,application/json,*/*;q=0.8")
 	resp, err := client.Do(req)
 	if err != nil {

@@ -13,11 +13,10 @@ import (
 	"syscall"
 
 	"github.com/justphantom/miniagent/config"
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
-// version is injected at build time via make build using -ldflags "-X main.version=$(git describe --tags)";
-// falls back to "dev" when not injected (plain go build).
-var version = "dev"
+var version = miniagent.Version
 
 type cliFlags struct {
 	provider           *string
@@ -65,7 +64,7 @@ func parseFlags() *cliFlags {
 func main() {
 	f := parseFlags()
 	if *f.showVer {
-		fmt.Printf("miniagent %s\n", version)
+		fmt.Printf("miniagent %s\n", miniagent.Version)
 		os.Exit(0)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: mustParseLogLevel(*f.logLevel)}))

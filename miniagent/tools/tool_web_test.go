@@ -24,6 +24,20 @@ func callWeb(t *testing.T, tl miniagent.Tool, args string) miniagent.ToolResult 
 	return tl.Call(context.Background(), args)
 }
 
+func TestWeb_UserAgent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua := r.Header.Get("User-Agent")
+		if want := miniagent.UserAgent(); ua != want {
+			t.Errorf("User-Agent = %q, want %q", ua, want)
+		}
+	}))
+	defer srv.Close()
+	res := callWeb(t, newWebTool(t), `{"url":"`+srv.URL+`"}`)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+}
+
 func TestWeb_PlainText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("hello docs\nline two\n"))

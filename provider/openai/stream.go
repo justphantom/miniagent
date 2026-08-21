@@ -118,6 +118,7 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", miniagent.UserAgent())
 		// Inject provider custom headers; skip Authorization/Content-Type to prevent overriding auth and content type
 		// (aligned with the same-name loop in client.go / models.go — previously this loop omitted the skip, contradicting the field comment).
 		for k, v := range c.Headers {

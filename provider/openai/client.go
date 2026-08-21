@@ -164,8 +164,10 @@ func (c *ChatClient) doOnce(ctx context.Context, client *http.Client, u *url.URL
 	// Authorization and other sensitive headers before cross-origin redirects. If a custom
 	// CheckRedirect is added in the future, this semantics must be preserved.
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", miniagent.UserAgent())
 	// Inject provider custom headers; skip Authorization/Content-Type to avoid clobbering auth and
-	// content-type (matches the comment promise above).
+	// content-type (matches the comment promise above). User-Agent stays overridable: some gateways
+	// require a specific UA string to pass.
 	for k, v := range c.Headers {
 		if ck := http.CanonicalHeaderKey(k); ck == "Authorization" || ck == "Content-Type" {
 			continue

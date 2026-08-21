@@ -4,7 +4,7 @@ COMMIT := $(shell git describe --always --dirty --tags --match "v*")
 
 build:
 	mkdir -p bin
-	go build -ldflags "-s -w -X main.version=$(COMMIT)" -o bin/miniagent ./cmd/miniagent
+	go build -ldflags "-s -w -X main.version=$(COMMIT) -X github.com/justphantom/miniagent/miniagent.Version=$(COMMIT)" -o bin/miniagent ./cmd/miniagent
 
 test:
 	go test -race ./...

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/provider/httpretry"
 )
 
@@ -68,6 +69,7 @@ func (c *ChatClient) listModelsOnce(ctx context.Context, client *http.Client, u 
 		return nil, false, 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("User-Agent", miniagent.UserAgent())
 	// Inject provider custom headers; skip Authorization/Content-Type to avoid clobbering auth (same as ChatClient.doOnce).
 	for k, v := range c.Headers {
 		if ck := http.CanonicalHeaderKey(k); ck == "Authorization" || ck == "Content-Type" {
