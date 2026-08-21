@@ -69,6 +69,15 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 > `make verify` 含 `golangci-lint run`，非 Go 工具链自带，须先安装（无网环境注意预装）。
 
+## 部署（systemd）
+
+```bash
+make build
+sudo make deploy   # 装 bin/miniagent 为 systemd WebUI 服务并 enable --now
+```
+
+`deploy/deploy.sh` 完成：创建系统用户 `miniagent`、装 `/usr/local/bin/miniagent`、播种 `/etc/miniagent/miniagent.json`（首次从 `config.example.json` 复制，**启动前需编辑填入 provider key**）、`/var/lib/miniagent` 数据目录、安装并启动 `miniagent.service`。服务以 `-serve` 运行（WebUI），unit 见 `deploy/miniagent.service`（非 root 运行 + `NoNewPrivileges`/`ProtectSystem` 等基础硬化；agent 层 shell 仍无约束）。
+
 > `-version` 取 `git describe`（仅命中 annotated tag）。发版须用 `git tag -a v3.0.0 -m "..."`（annotated）且工作树干净；轻量 tag（`git tag v3.0.0`）或未提交改动会令 version 回落为短 sha。
 
 ## 环境变量
