@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-08-21
+
 ### Fixed
 - **CLI 补 `-serve` 互斥校验**：`-serve` 与 `-session`/`-save-session`/`-replay`/`-result-only` 组合此前静默忽略后者启动服务（CHANGELOG 已声明互斥但 main.go 无校验）；现在启动前报错退出 1。
 - **shell 非零退出码镜像进 Output**：`[exit N]` 追加到输出文本末尾（`ExitCode` 结构化字段保留，仅 NDJSON 事件层可见）。此前 `IsError`/`ExitCode` 均不进 wire（L0 #8），静默失败（空输出 + exit 1）在 LLM 看来与成功无异；文本标记是模型侧唯一失败信号。
@@ -12,14 +14,32 @@
 - **WebUI 模型下拉切分 bug**：model id 含 `/` 时前端 `value.split("/")` 取 `[0]/[1]` 错切片 → provider/model 传空静默回落默认模型。改为 provider/model 走 `option.dataset`，不依赖文本切分。
 
 ### Added
-- **WebUI markdown 渲染（vanilla，无依赖）**：流式 `text_delta`/`reasoning_delta` 累积到内存，`finishText()`（遇 `result`/`error`/工具事件打断）时一次性 `mdRender` 转 DOM；`result`/`tool_result` 的 `text`/`output` 也渲染。子集：# 标题、``` 代码块、-/* 列表、> 引用、---、**粗体**、*斜体*、`行内代码`、~~删除线~~。**XSS 防护：先 HTML 实体转义（&<>"）再 markdown 替换**，`innerHTML` 仅注入转义后内容；用户 prompt 保持 `textContent` 不渲染。
+- **WebUI 会话删除**：`DELETE /api/sessions/{id}` + 会话列表项 ✕ 按钮（confirm 确认；删当前会话重置聊天视图）。进行中轮次的会话拒绝删除（409，经 turn 锁 `TryLock` 检测），防写方续写复活/损坏文件。移动端可见：`@media (hover: none)` 强制 `.sess-del { visib…[args omitted]流式 `text_delta`/`reasoning_delta` 累积到内存，`finishText()`（遇 `result`/`error`/工具事件打断）时一次性 `mdRender` 转 DOM；`result`/`tool_result` 的 `text`/`output` 也渲染。子集：# 标题、``` 代码块、-/* 列表、> 引用、---、**粗体**、*斜体*、`行内代码`、~~删除线~~、**表格**（`| col |` + `|---|---|` 分隔行 + `:-` `:-:` `-:` 对齐；单元格先 esc() 再 mdInline()）。**XSS 防护：先 HTML 实体转义（&<>"）再 markdown 替换**，`innerHTML` 仅注入转义后内容；用户 prompt 保持 `textContent` 不渲染。
+- **WebUI header 会话 token 累计**：`result` 事件 `input_tokens`/`output_tokens` 累加显示于 header（`in=N out=N`）；新会话/打开历史会话清零（历史会话只累计打开后的轮次，无历史用量数据源）。
+- **WebUI 版本号展示**：登录页 h1 下 + header 右侧 `model-badge` 旁双点显示（`GET /api/whoami` 已返回 `version`，boot 时 `setVersion` 填充；移动端 <500px 隐藏 header 版，登录页常显便于排查服务版本）。
+- **WebUI 体验全面优化**：
+  - 中断：发送后按钮变「停止」，AbortController 断开流（后端 req ctx 取消 → 存已执行部分）。
+  - 流中断检测：NDJSON 流结束但无 result/error 事件 → 插入「连接中断」error 提示；网络异常也显示为 error 事件（附「重试」按钮）。
+  - 发送后清空 prompt + 保持焦点；桌面 Enter 发送 / Shift+Enter 换行（触屏设备反之）；发送中锁 composer 整行。
+  - 智能滚动：距底部 ≤80px 才跟随流，上翻时不拽回；「↓ 新消息」浮动按钮。
+  - 会话列表项加最后 assistant 消息预览（后端读 jsonl 末尾 ≤64KB 倒扫，不整文件读）。
+  - 长 assistant 文本 >20 行折叠 + 渐变遮罩 + 「展开」。
+  - 代码块一键复制按钮（mdRender 后处理 pre，clipboard API + execCommand 回退）。
+  - 暗/亮主题切换按钮（CSS 变量双主题，localStorage 记忆）。
+  - 移动端键盘适配：viewport-fit=cover + interactive-widget=resizes-content + 100dvh。
+  - 前端拆分 ES modules：md.js（markdown 渲染）/ store.js（状态+持久化）/ events.js（事件渲染）/ app.js（引导+会话+发送）。
 - **`-serve` WebUI（嵌入单页 + JSON/NDJSON API）**：`miniagent -serve` 启动 `net/http` 服务（纯 stdlib，go:embed 静态前端无构建链），提供登录页（`x-api-key` 鉴权，`subtle.ConstantTimeCompare` 常数时间比较）、`POST /api/turn`（NDJSON 流式，契约与 CLI stdout 逐字节一致，`session` 空则新建、非空则续跑）、`GET /api/sessions`（列表）、`GET /api/sessions/{id}`（重放最近 200 条消息为 NDJSON 事件流）、`GET /api/models`（provider/model 下拉数据源，复用 `-list-models` 逻辑）、`GET /api/whoami`（公开探测 `auth_required`）。配置新增 `web` 段：`web.listen`（默认 `127.0.0.1:8787`）、`web.key`（空回落 `$MINIAGENT_WEB_KEY`）；**远程 listen（非 loopback）必须配 key，否则启动拒绝**（key 是唯一安全边界，L0 #13 零安全 agent）。同 session 轮次经 `sync.Mutex` 串行化（防 `RewriteMessages` 首行竞态）；断连经 req ctx 取消 → `saveSession` 存已执行部分。
+
+## [6.0.0] - 2026-08-21
+
+> major：库化核心包（internal/ 外迁），破坏性移除 anthropic 与 responses provider；`result` 事件新增 `compacted`/`thinking_downgraded` 字段；内部重构去 cliFlags 依赖。迁移见下。
+
+### Added
+- **`result` NDJSON 事件新增 `compacted`/`thinking_downgraded` 布尔字段**：恒出键（false 默认），外部消费方可感知"本轮触发过摘要压缩"/"thinking 被降级丢弃"，无需解析 transcript。`EmitResult` 从 `Result.Compacted`/`ThinkingDowngraded` 回填。新增字段非破坏（既有消费方忽略未知键）；用严格 schema 校验的消费方需同步放宽。
+
+### Changed
 - **轮管道库化：`turnEngine.runTurn`**（`run_turn.go`）把 CLI 一次轮的 resolve→session→clients→tools→hooks→Run→save 全序抽出为可复用函数（writer 注入、os.Exit-free），CLI 主路径与 `-serve` 共用；`buildLLM`/`buildDoer`/`buildRuntimeClients` 改返回 error（不再 `os.Exit`，服务进程可 500 应答而非崩溃）。`-serve` 与 `-list-models`/`-replay`/`-save-session`/`-session` 互斥。
-
-### Changed
 - **内部重构：`loopCfg`/`warnNoBudgetFuse` 去 `cliFlags` 依赖**（改收 `maxIterDef`/`streamDef`/`sessionArg`），`buildHooks`/`emitRunError`/`emitRunResult`/`assembleHooks` 参数化 `io.Writer`（setup.go 拆出 `emit.go`）。CLI/NDJSON/config 既有契约零变化（全量测试回归通过）。
-
-### Changed
 - **内部重构**：模型清单聚合逻辑从 `openai` 包上移至 `cmd` 层，消除 `openai→anthropic` 跨 provider 依赖；`execBackedTools` 清理 v5.0.0 已删工具残留。对外契约（CLI/NDJSON/config）零变化。
 - **破坏性变更：移除 anthropic 与 responses provider**：删除 `internal/provider/anthropic/`（17 文件）与 `internal/provider/responses/`（14 文件）；`ProviderConfig.Kind` 仅接受 `""`/`"openai"`（其他值加载报错）；删除 `provider.cache`、`thinking.map` 的 anthropic JSON 对象语义与 responses 专属校验；`-list-models`/`FetchModelLimits` 统一走 openai client。迁移：`kind=anthropic` 配置改走 OpenAI Chat Completions 兼容网关；`kind=responses` 移除。
 - **库化：核心包移出 `internal/`**：`miniagent/`、`config/`、`provider/`、`text/` 升至顶层，外部 Go 模块可直接 `import "github.com/justphantom/miniagent/miniagent"`。CLI 行为零变化。
