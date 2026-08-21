@@ -42,4 +42,3 @@ func validateSessionMessage(m miniagent.Message) error {
 		return fmt.Errorf("unknown role %q", m.Role)
 	}
 }
-

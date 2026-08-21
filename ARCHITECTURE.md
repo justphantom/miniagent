@@ -13,14 +13,17 @@
 
 ## 2. 分层与目录
 
-核心（`miniagent`）已按职责拆成若干子包；`provider/` 与核心同级，提供可替换的 provider 实现。依赖单向：所有子包 → 核心，`cmd` → 核心/子包。
+核心（`miniagent`）已按职责拆成若干子包；`config/`/`provider/`/`text/` 与核心同级。依赖单向无环：**所有子包 → 核心（+ `text` 纯工具）**，无任何跨子包横向引用；`cmd` → 核心/子包。库化后所有包均可被外部 Go 模块直接导入。
 
 ```
-cmd/miniagent/        CLI 入口层
+cmd/miniagent/        CLI 入口层（库的装配消费者）
   main.go             组装主线（config→Resolve→key→workdir/session→system prompt→Run→save）
   setup_run.go        loopCfg / compactionOptions / warnNoBudgetFuse（Run 组装辅助）
   setup.go            config 查找、key 解析、hooks 构建、退出码
   setup_http.go       buildLLM / buildDoer（HTTP client 注入，provider Kind 分派）
+  setup_providers.go  buildRuntimeClients / providerKind 分派
+  setup_transport.go  newHTTPClient / newHTTPTransport
+  models.go           modelSource / listAllModels（模型清单聚合，Kind 分派）
   tools.go            buildTools：注册内置工具（单模式，shell 恒注册）
   session.go          -save-session/-session 解析与互斥
   prompts.go          默认 system prompt、subagent 引导、workdir 绝对路径注入
@@ -30,9 +33,11 @@ cmd/miniagent/        CLI 入口层
 miniagent/   核心库（零外部依赖，纯标准库）
   loop.go             Run：ReAct 主循环（defer 统一写命名返回，captureDowngrade 固化降级）
   loop_extra.go       callLLMWithDowngrade / callLLMOnce（含降级与 panic 兜底）
-  loop_tools.go       handleToolCalls / runToolsParallel / safeCall
+  loop_tools.go       runToolsParallel / safeCall（handleToolCalls 已拆至 tool_handler.go）
+  tool_handler.go     handleToolCalls / fillPlaceholderTail（工具执行业务流程）
   loop_api.go         domain 类型：LoopHooks/LoopConfig/Tool/ToolResult/StepInput/StepOutput/BudgetInput/Result/ThinkingMapping
-  message.go          Message / Usage domain 类型
+  message.go          Message / ToolCall / SessionMeta / ValidateToolPairing
+  token_estimate.go   EstimateTokens / EstimateResponseTokens / TrimForHistory / SystemOverheadTokens（纯估算与裁剪，核心持有以消除子包横向依赖）
   errors.go           哨兵 error：ErrBudgetExceeded/ErrContextLength/ErrThinkingUnsupported/ErrToolDenied
   limits.go           Limits 结构：运行时覆盖内置默认
   provider_api.go     LLM / Doer / Provider 接口
@@ -43,51 +48,51 @@ miniagent/compaction/  压缩引擎子包（「压缩作为外挂」的默认实
   compacting.go       NewCompaction（封装为 before/after 钩子，after 自 4.2.0 起=nil）+ CompactingHook/CompactingInput/CompactingOutput/applyCompactingHook
   assemble.go         摘要 prompt/模板：buildSummarizerSystem / summarizeMiddle / deriveSummaryMaxChars/MaxTokens
   budget.go           FitHistory 流水线、ContextBudget、applyContextStrips（P1/P4/P6/P7/P8'/P9b/P11）、tail 预算
+  budget_tail.go      jointTailBudget / preserveRecentTokens / estimateRoundTokens
   budget_const.go     压缩常量（summary/tail/reasoning/args 阈值）
   split.go            applyCompactionBarrier、compactWithSummary、selectTailByTokens
   compaction_split.go lastApplicableUsageIndex、isUsageOverflow（静默溢出判定）
   history_*.go        主动裁剪各阶段：reasoning(args)/dedup(shell)/dedup_read(read)/reasoning(P1/P7)
 
-miniagent/config/      配置解析子包
-  config.go           Config / Defaults / Run / Provider / CompactionProvider 类型
-  config_load.go      LoadConfig、validateConfig（Kind 枚举校验）
-  validate.go         validateConfig / validateThinking / thinkingFieldBlacklist
-  resolve.go          Resolve：cli>config>builtin 三态裁决产出 Resolved
-  url.go              BaseURL 校验
-
 miniagent/policy/      默认策略工厂
   loop_hooks_default.go NewDefaultOnBudget / NewDefaultOnLLMError / NewDefaultShapeToolResult
-  trim.go             trimHistoryForContext（ErrContextLength 收紧）
-  history_util.go     工具消息裁剪辅助
+  trim.go             TrimForHistory（薄转发到核心 miniagent.TrimForHistory）
+  history_util.go     trimHistoryForContext（ErrContextLength 收紧；token 估算已下沉核心）
   tool_output_store.go 工具输出落盘 store（超 limit 全文写盘 + 过期清理）
   confirm_on_tool_use.go 破坏性工具确认门禁（opt-in）
 
 miniagent/session/     会话持久化子包
-  session.go          LoadSession / AppendMessages（flock 跨进程锁 + append-only + 预序列化拒绝超限）
+  session.go          LoadSession / AppendMessages（flock 跨进程锁 + append-only + 预序列化拒绝超限；SessionMeta 别名自核心）
   session_rewrite.go  RewriteMessages（全量原子改写：CLI 主路径每轮落盘 + compaction 后真正丢弃旧历史）
-  validate.go         ValidateSessionID / ValidateToolPairing / validateSessionMessage
+  validate.go         ValidateSessionID / validateSessionMessage（ValidateToolPairing 已上移核心）
   lock_*.go           平台锁原语
 
 miniagent/tools/       内置工具实现
   tool_read/write/edit/grep/glob/ast.go  文件与符号搜索六工具（ast 为 Go 符号声明搜索）
-  tool_shell.go         命令执行（shell 恒注册）
+  tool_shell.go         命令执行（shell 恒注册，进程组隔离 + 超时 + 输出滑窗）
   tool_web.go         网页抓取（opt-in，SSRF 防护 + HTML 标签剥离）
-  tool_helpers.go     路径解析、schema 构造
-  output_accum.go     shell 输出字节滑窗累积器（保尾部）
+  tool_helpers.go     路径解析、schema 构造、decodeStrict
+  output_accum.go     shell 输出字节滑窗累积器（保尾部 + 落盘 spill）
   run_limited.go      drainPipe / waitOutputTimeout / UTF-8 边界缝合
   web_charset.go / web_text.go  网页字符集解码与 HTML 文本提取
 
 miniagent/event/       NDJSON 事件编码子包（session/tool_use/tool_result/result/error/delta/model/llm_request）
 miniagent/metrics/     OnStep 默认消费者：NewStepEmitter（per-step NDJSON 到 writer，best-effort 不终止循环）
-text/                  纯文本工具（NowMs / Truncate / TruncateTail / TruncateHeadTail）
 
+config/      配置解析子包（库化后独立顶层）
+  config.go           Config / Defaults / Run / Provider / CompactionProvider 类型（含 v5.0.0 废弃键 Mode/Cache/Confine*）
+  config_load.go      LoadConfig / decodeConfigStrict（DisallowUnknownFields + 废弃键容忍）
+  validate.go         validateConfig / validateThinking / thinkingFieldBlacklist
+  resolve.go          Resolve：cli>config>builtin 三态裁决产出 Resolved
+  resolve_helpers.go  三态裁决辅助：pickInt / findModelConfig / ParseDuration
+
+text/                  纯文本工具（NowMs / Truncate / TruncateHeadTail / ValidateURL）
 provider/openai/       OpenAI 兼容 provider（Chat Completions）
   wire.go             buildChatBody / parseChatResponse 序列化层
   client.go           ChatClient：非流式 + models 列表，重试/降级
   stream.go / stream_parse.go   流式 SSE
   models.go           ListModels
   retry.go            重试退避
-
 provider/httpretry/    共享重试原语（429/5xx 退避，厂商无关）
 ```
 
@@ -199,27 +204,28 @@ v5.0.0 起单模式，8 工具（上表全部）恒注册；`shell` 无任何 ag
 
 通过 `Provider` 配置分派到 `provider/` 下对应实现，核心经 `LLM` / `Doer` 接口调用，不感知底层协议：
 
-- **OpenAI 兼容**（`openai/`）：Chat Completions，`wire.go` 序列化层（含 thinking / tools），`client.go`（非流式+重试/降级）+ `stream.go`/`stream_parse.go`（SSE）+ `models.go`（动态 GET + 静态回落）。
+- **OpenAI 兼容**（`openai/`）：Chat Completions，`wire.go` 序列化层（含 thinking / tools），`client.go`（非流式+重试/降级）+ `stream.go`/`stream_parse.go`（SSE）+ `models.go`（动态 GET + 静态回落，单客户端 `ListModels`）。
 - **共享重试**（`httpretry/`）：厂商无关的 429/5xx 指数退避 + `retry_after` 解析，openai 使用。
 
-配置侧 `Provider.Kind`（`"openai"` 默认 / 空）决定 setup 层分派路径。
+配置侧 `Provider.Kind` 仅接受 `""`/`"openai"`（v5.0.0 删 anthropic/responses 后单 provider）。模型清单聚合（`cmd/miniagent/models.go`）在 cmd 层做 Kind 分派：`openai`/`responses`/`openai` 兼容全走 OpenAI 客户端；provider 包保持协议专属、互不依赖。`FetchModelLimits`（cmd 层）同样按 Kind 分派（当前仅 openai 分支）。
 
 ## 8. 会话持久化
 
-`miniagent/session/` 以 jsonl 持久化：首行 `SessionMeta`（含 provider/model/workdir/created/LLMRequests），后续每行一条 message。
+`miniagent/session/` 以 jsonl 持久化：首行 `SessionMeta`（含 provider/model/workdir/created/LLMRequests；类型定义在核心 `miniagent/message.go`，session 包以别名复用），后续每行一条 message。
 
 - **写（主路径恒 RewriteMessages）**：CLI 每轮 `saveSession` 全量重写——首行 `meta.LLMRequests` 跨轮累积，append-only 无法改首行；compaction 亦借此真正丢弃旧历史。临时文件同目录 + `os.Rename` 原子交换 + 父目录 fsync，写入/rename 失败均清理临时文件；写盘期忽略 SIGINT/SIGTERM。
 - **写（AppendMessages，库 API）**：append-only 追加保留给库化调用方——flock 跨进程锁防行交错非法 JSON；预序列化拒绝超限（size+pending > limit 即拒，避免成功写入后被 LoadSession 拒）；`ensureTrailingNewline` 写前截断崩溃半行残留；原子性靠 `f.Sync()`。CLI 主路径不再调用。
-- **读（LoadSession）**：`OpenNoFollow` + `LimitReader` 单次读取 + 单行 64KB 扫描缓冲；容忍末尾半行（崩溃残留），非末尾则报"mid-file corruption"。`ValidateToolPairing` 强制配对。
+- **读（LoadSession）**：`OpenNoFollow` + `LimitReader` 单次读取 + 单行 64KB 扫描缓冲；容忍末尾半行（崩溃残留），非末尾则报"mid-file corruption"。配对校验经核心 `ValidateToolPairing`。
 - **改写（RewriteMessages）**：CLI 主路径每轮全量落盘（非仅 compaction 触发）。临时文件同目录 + `os.Rename` 原子交换 + 父目录 fsync，写入/rename 失败均清理临时文件。
 
 ## 9. 配置与解析
 
-`miniagent/config/` 三态裁决（cli flag > config 文件 > 内置默认）：
+`config/` 三态裁决（cli flag > config 文件 > 内置默认）：
 
 - **config 文件查找**：`-config` 显式路径，否则 `$MINIAGENT_CONFIG`，否则 `~/.miniagent/miniagent.json`（找不到即报错，无静默回落）。
+- **严格解析**：`decodeConfigStrict` 拒绝未知字段（防拼写错误静默失效），但容忍 v5.0.0 已删键（`defaults.mode`/`provider.cache`/`run.confine_*`，作为废弃字段保留——旧 config 无需改即可加载）。
 - **Defaults 叠加**：`defaults.system_prompt`（未配则内置 defaultSystemPrompt）+ opt-in `defaults.rules_file`（工作目录内 basename 规则文件，追加到 system prompt 中段；防越界/注入）。
-- **Provider**：`kind`（openai 默认）、`name`/`chat_url`/`key`、`thinking`（level + provider 映射）、model 列表。
+- **Provider**：`kind`（仅 `""`/`openai`）、`name`/`chat_url`/`key`、`thinking`（level + provider 映射）、model 列表。
 - **Run/Compaction**：`max_iterations`/`max_total_tokens`/`max_duration`/`stream`/`confirm_destructive`/`tool_output_dir`/`context_*`/`summary_*`/`preserve_recent_tokens` 等。
 
 ## 10. 安全模型
@@ -241,10 +247,10 @@ stdout 一行一个 NDJSON 事件，类型：`session`（新建会话首条，�
 1. 核心循环 `Run` 零策略；一切策略经 `LoopHooks` 外挂。
 2. `LoopHooks` 9 个字段（含 `OnStep`）皆可 nil → 退化为极简 agent。
 3. `OnCompacting` 是 `ContextBudget` 字段（压缩内部钩子），**不在** `LoopHooks`。
-4. 依赖单向：`cmd` / 所有子包 → 核心；provider ↔ core 同级，provider 只 `import` core 类型。
-5. 领域类型 `Message/Usage/Request/Response/Tool/ToolResult/StepInput/StepOutput/BudgetInput` 居核心 `loop_api.go`。
+4. 依赖单向无环：所有子包 → 核心（+ `text` 纯工具），无任何跨子包横向引用。`cmd` / `config` / `provider` 与核心同级。
+5. 领域类型居核心 `miniagent/`：`Message/Usage/Request/Response/Tool/ToolResult/StepInput/StepOutput/BudgetInput`（`loop_api.go`）、`SessionMeta/ValidateToolPairing`（`message.go`）、`EstimateTokens/EstimateResponseTokens/TrimForHistory`（`token_estimate.go`）。
 6. `msgs`（上下文）与 `newMsgs`（本轮新增）分离，经 `appendMsg` 同步。
 7. 压缩只改 context-side copy，不动 newMsgs/持久化；真正丢弃旧历史靠 `RewriteMessages` 原子改写。
 8. think 降级经 `captureDowngrade` 跨步固化，主路径/重试/总结闭包共用同一处理点。
-9. provider 可替换；`Provider.Kind` 决定分派路径（仅 openai）。
+9. 单 provider（openai），`Provider.Kind` 仅 `""`/`"openai"`。LLM 接口不感知底层协议；provider 包仅 import 核心类型 + httpretry。
 10. 会话文件 jsonl：主路径恒全量 rewrite（同目录临时文件 + os.Rename 原子交换 + 父目录 fsync），flock + 预序列化拒绝超限 + 末尾半行容忍仍完整；AppendMessages 为库 API，CLI 主路径不调用。

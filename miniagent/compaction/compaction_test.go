@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-
 	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/provider/openai"
 )
