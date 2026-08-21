@@ -12,6 +12,9 @@ import (
 
 	"github.com/justphantom/miniagent/miniagent"
 )
+// SessionMeta is the metadata first line of the session jsonl. Re-exported from core.
+type SessionMeta = miniagent.SessionMeta
+
 
 // maxSessionBytes is the default size cap for session files: 50MB covers long sessions while preventing unbounded growth.
 // Overridden at runtime via Limits.MaxSessionBytes (<=0 uses this default); injected by LoadSession/AppendMessages/RewriteMessages.
@@ -22,17 +25,6 @@ const (
 	sessionTypeMessage = "message"
 )
 
-// SessionMeta is the metadata first line of the jsonl (type=session), facilitating session listing and multi-provider provenance.
-// LLMRequests records the cumulative count of LLM requests for this session (accumulated across multiple Run turns), used for usage tracking.
-type SessionMeta struct {
-	Type        string `json:"type"`
-	ID          string `json:"id"`
-	Model       string `json:"model"`
-	Workdir     string `json:"workdir"`
-	Provider    string `json:"provider"`
-	Created     string `json:"created"`
-	LLMRequests int    `json:"llm_requests,omitempty"`
-}
 
 // sessionLine is the write wrapper for message lines: embeds miniagent.Message to surface role/content/kind fields,
 // and adds type=message discrimination (the read side dispatches by type to SessionMeta or miniagent.Message).
@@ -131,7 +123,7 @@ func LoadSession(path string, opts ...int64) (SessionMeta, []miniagent.Message, 
 	}
 	// Scan finished: corruptLine still non-zero -> last line is half-written (append-only crash residual), tolerate and discard it,
 	// return the valid history so far. validateToolPairing still runs strictly: if the residual line broke pairing, report a clear error.
-	if err := ValidateToolPairing(msgs); err != nil {
+	if err := miniagent.ValidateToolPairing(msgs); err != nil {
 		return SessionMeta{}, nil, fmt.Errorf("session file %q: %w", path, err)
 	}
 	return meta, msgs, nil

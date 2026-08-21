@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/justphantom/miniagent/miniagent"
-	"github.com/justphantom/miniagent/miniagent/session"
 	"github.com/justphantom/miniagent/provider/openai"
 )
 
@@ -133,7 +132,7 @@ func TestSelectTailByTokens_RecentRoundExceedsBudget(t *testing.T) {
 	if !msgsContainContent(middle, "old") {
 		t.Errorf("the older round should go into middle: %+v", middle)
 	}
-	if err := session.ValidateToolPairing(tail); err != nil {
+	if err := miniagent.ValidateToolPairing(tail); err != nil {
 		t.Errorf("tail tool-call pairing should be self-consistent: %v", err)
 	}
 }
@@ -157,7 +156,7 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 	if len(shrunk[1].Content) >= 8000 {
 		t.Errorf("tool content should be compressed: len=%d", len(shrunk[1].Content))
 	}
-	if err := session.ValidateToolPairing(shrunk); err != nil {
+	if err := miniagent.ValidateToolPairing(shrunk); err != nil {
 		t.Errorf("pairing should be self-consistent after shrink: %v", err)
 	}
 }

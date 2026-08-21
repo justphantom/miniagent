@@ -5,7 +5,6 @@ package compaction
 import (
 	"context"
 	"fmt"
-	"github.com/justphantom/miniagent/miniagent/policy"
 	"log/slog"
 
 	"github.com/justphantom/miniagent/miniagent"
@@ -132,14 +131,14 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	// summarized: out=fitted with only the tail reasoning stripped (head + summaryMsg untouched); overall size still
 	// controlled by jointTailBudget (≤ CW×4/5).
 	// Post-compaction uses local EstimateTokens for gating (estimateThreshold reflects pre-compaction prefix; post-compaction real usage is stale, local is more accurate).
-	if policy.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
+	if miniagent.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
 			logger.Warn("still exceeds window, trimming to recent rounds", "msgs", len(out))
 		}
 	}
 	// Cache post-trim out token estimate: reused by both the check below and the error message (eliminates one of the original three EstimateTokens calls).
-	est := policy.EstimateTokens(out, budget.System, budget.Tools)
+	est := miniagent.EstimateTokens(out, budget.System, budget.Tools)
 	if est > budget.ContextWindow*4/5 {
 		return out, sm, summarized, true, sumUsage, est, fmt.Errorf("history exceeds context window (~%d tokens) even after lossy trimming — terminating to avoid burning requests in a loop", est)
 	}
@@ -157,9 +156,9 @@ func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReaso
 		if !dbg {
 			return fn(in)
 		}
-		before := policy.EstimateTokens(in, sys, tools)
+		before := miniagent.EstimateTokens(in, sys, tools)
 		o := fn(in)
-		if after := policy.EstimateTokens(o, sys, tools); before > after {
+		if after := miniagent.EstimateTokens(o, sys, tools); before > after {
 			logger.Debug("context budget: strip saved",
 				"stage", stage, "saved_tokens", before-after, "before_msgs", len(in), "after_msgs", len(o))
 		}
@@ -176,7 +175,7 @@ func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReaso
 	out = strip("P9b_dedupShell", func(m []miniagent.Message) []miniagent.Message { return dedupShellCommands(m, keepToolArgs) }, out)
 	if dbg {
 		logger.Debug("context budget: fit done",
-			"before_tokens", policy.EstimateTokens(msgs, sys, tools), "after_tokens", policy.EstimateTokens(out, sys, tools), "msgs", len(out))
+			"before_tokens", miniagent.EstimateTokens(msgs, sys, tools), "after_tokens", miniagent.EstimateTokens(out, sys, tools), "msgs", len(out))
 	}
 	return out
 }

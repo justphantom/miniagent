@@ -1,5 +1,7 @@
 package miniagent
 
+import "fmt"
+
 // Message role constants: loop/session/wire all match the same set of values; extracting constants
 // guards against spelling drift.
 const (
@@ -53,4 +55,45 @@ type ToolCall struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Args string `json:"args"` // raw JSON arguments string
+}
+
+// ValidateToolPairing validates that assistant.tool_calls and tool messages are paired one-to-one;
+// a break would be rejected by the endpoint with a 400, so it is intercepted up front.
+// Lives in core because it is a pure message-structure validation (no persistence or I/O),
+// shared by compaction (compactWithSummary) and session (LoadSession).
+func ValidateToolPairing(msgs []Message) error {
+	pending := map[string]bool{}
+	for i, m := range msgs {
+		switch m.Role {
+		case RoleAssistant:
+			for _, tc := range m.ToolCalls {
+				if pending[tc.ID] {
+					return fmt.Errorf("message %d: tool_call id %q duplicated", i+1, tc.ID)
+				}
+				pending[tc.ID] = true
+			}
+		case RoleTool:
+			if !pending[m.ToolCallID] {
+				return fmt.Errorf("message %d: tool message's tool_call_id %q has no matching assistant tool_call", i+1, m.ToolCallID)
+			}
+			delete(pending, m.ToolCallID)
+		}
+	}
+	if len(pending) > 0 {
+		return fmt.Errorf("%d assistant tool_call(s) missing matching tool result", len(pending))
+	}
+	return nil
+}
+
+// SessionMeta is the metadata first line of the session jsonl (type=session), facilitating session
+// listing and multi-provider provenance. LLMRequests records the cumulative count of LLM requests.
+// Lives in core because it is shared by session (persistence) and event (NDJSON output).
+type SessionMeta struct {
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	Model       string `json:"model"`
+	Workdir     string `json:"workdir"`
+	Provider    string `json:"provider"`
+	Created     string `json:"created"`
+	LLMRequests int    `json:"llm_requests,omitempty"`
 }

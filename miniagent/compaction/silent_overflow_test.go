@@ -92,7 +92,7 @@ func TestFitHistory_ForceCompactsRegardlessOfEstimate(t *testing.T) {
 		msgs = append(msgs, miniagent.Message{Role: miniagent.RoleUser, Content: "q" + strconv.Itoa(i)})
 	}
 	budget := ContextBudget{
-		ContextWindow: 1000000, // 4/5=800000: policy.EstimateTokens(~small) << threshold → normally not compacted
+		ContextWindow: 1000000, // 4/5=800000: miniagent.EstimateTokens(~small) << threshold → normally not compacted
 		KeepRecent:    3,
 		Force:         true,
 		Summarize:     testBudget(llm).Summarize,

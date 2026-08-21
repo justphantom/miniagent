@@ -1,7 +1,6 @@
 package compaction
 
 import (
-	"github.com/justphantom/miniagent/miniagent/policy"
 	"slices"
 
 	"github.com/justphantom/miniagent/miniagent"
@@ -82,7 +81,7 @@ func estimateMessageTokensLocal(m miniagent.Message) int {
 		n, c = text.CountCharsLocal(tc.Args)
 		nonCJK, cjk = nonCJK+n, cjk+c
 	}
-	return nonCJK/4 + cjk/2 + policy.EnvelopePerMsgTokens + policy.EnvelopePerToolCallTokens*len(m.ToolCalls)
+	return nonCJK/4 + cjk/2 + miniagent.EnvelopePerMsgTokens + miniagent.EnvelopePerToolCallTokens*len(m.ToolCalls)
 }
 
 // contextTokensFromUsage converts a single response's usage into "the total tokens of that request's prefix + output".
@@ -140,7 +139,7 @@ func estimateThreshold(msgs []miniagent.Message, system string, tools []miniagen
 			return t
 		}
 	}
-	return policy.EstimateTokens(msgs, system, tools)
+	return miniagent.EstimateTokens(msgs, system, tools)
 }
 
 // compactionBuffer is the flat token buffer reserved for model output and future-round growth (mirrors opencode

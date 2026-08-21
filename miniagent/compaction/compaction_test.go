@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justphantom/miniagent/miniagent/policy"
-	"github.com/justphantom/miniagent/miniagent/session"
 
 	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/provider/openai"
@@ -236,11 +234,11 @@ func TestCompactWithSummary_StripsMiddleBeforeSummarize(t *testing.T) {
 		t.Errorf("expected same path/offset reads to be deduped to placeholders, but captured tool has none")
 	}
 	// After reasoning cleared (~2400 tokens) + read dedup (6->1), size should be < 1500.
-	capturedTokens := policy.EstimateTokens(captured, "", nil)
+	capturedTokens := miniagent.EstimateTokens(captured, "", nil)
 	if capturedTokens > 1500 {
 		t.Errorf("middle size after strip should be < 1500 (reasoning cleared + read dedup), actual %d", capturedTokens)
 	}
-	if err := session.ValidateToolPairing(out); err != nil {
+	if err := miniagent.ValidateToolPairing(out); err != nil {
 		t.Errorf("pairing broken after strip: %v", err)
 	}
 }
@@ -304,7 +302,7 @@ func TestCompactWithSummary_Success(t *testing.T) {
 	if summary.Kind != miniagent.KindSummary {
 		t.Fatal("expected summary.Kind == miniagent.KindSummary")
 	}
-	if err := session.ValidateToolPairing(out); err != nil {
+	if err := miniagent.ValidateToolPairing(out); err != nil {
 		t.Errorf("result pairing broken: %v", err)
 	}
 	// Earliest 1 round + summary + most-recent 3 rounds

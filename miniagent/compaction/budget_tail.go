@@ -4,7 +4,6 @@ package compaction
 
 import (
 	"github.com/justphantom/miniagent/miniagent"
-	"github.com/justphantom/miniagent/miniagent/policy"
 )
 
 // summaryTailStart returns the index in msgs immediately AFTER the first miniagent.KindSummary message (the new summary
@@ -49,7 +48,7 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 		return preserveRecentTokens(budget)
 	}
 	target := budget.ContextWindow * 4 / 5
-	reqOverhead := policy.EstimateTokens(nil, budget.System, budget.Tools)
+	reqOverhead := miniagent.EstimateTokens(nil, budget.System, budget.Tools)
 	headAdj := 0
 	if len(headRounds) != 1 || headRounds[0].Kind != miniagent.KindSummary {
 		headAdj = estimateRoundTokens(headRounds)
@@ -58,7 +57,7 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 	if maxChars <= 0 {
 		maxChars = summaryMaxChars
 	}
-	summaryEstimate := maxChars/2 + policy.EnvelopePerMsgTokens
+	summaryEstimate := maxChars/2 + miniagent.EnvelopePerMsgTokens
 	avail := target - reqOverhead - headAdj - summaryEstimate
 	return min(max(avail, 0), preserveRecentTokens(budget))
 }
@@ -67,5 +66,5 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 // system/schema global overhead — those two are request-level constants counted only once in the tail total, so per-round
 // accumulation must use marginal estimation. Used by selectTailByTokens for accumulation.
 func estimateRoundTokens(round []miniagent.Message) int {
-	return policy.EstimateTokens(round, "", nil) - policy.SystemOverheadTokens
+	return miniagent.EstimateTokens(round, "", nil) - miniagent.SystemOverheadTokens
 }

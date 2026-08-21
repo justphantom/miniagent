@@ -9,7 +9,6 @@ import (
 	"slices"
 
 	"github.com/justphantom/miniagent/miniagent"
-	"github.com/justphantom/miniagent/miniagent/session"
 	"github.com/justphantom/miniagent/text"
 )
 
@@ -190,7 +189,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	}
 	// The middle segment must be self-contained pairing-wise: otherwise substituting it with a summary would leave
 	// orphaned tool_call/tool messages, and continuation would be rejected by the endpoint with a 400.
-	if err := session.ValidateToolPairing(middle); err != nil {
+	if err := miniagent.ValidateToolPairing(middle); err != nil {
 		return msgs, miniagent.Message{}, miniagent.Usage{}, fmt.Errorf("middle segment pairing is broken, cannot summarize safely: %w", err)
 	}
 	// Before summarizing, apply full strip to middle (keepN=0): middle is all non-recent objects about to be
@@ -205,7 +204,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 		compModel = budget.Model
 	}
 	// §P2: trigger the compaction hook before the summary LLM call (inject context / one-shot replace summarizerPrompt).
-	// It must run after session.ValidateToolPairing(middle) passes: context injection only appends user messages
+	// It must run after miniagent.ValidateToolPairing(middle) passes: context injection only appends user messages
 	// without tool_calls, so it does not break pairing.
 	effPrompt, effMiddle, herr := applyCompactingHook(ctx, budget.Compacting, budget.SessionID, compModel, budget.SummarizerPrompt, middle)
 	if herr != nil {

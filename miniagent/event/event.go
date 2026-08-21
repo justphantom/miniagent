@@ -9,7 +9,6 @@ import (
 	"io"
 
 	"github.com/justphantom/miniagent/miniagent"
-	"github.com/justphantom/miniagent/miniagent/session"
 	"github.com/justphantom/miniagent/text"
 )
 
@@ -84,7 +83,7 @@ func EmitError(w io.Writer, msg string) error {
 // EmitSession writes a session event (the first NDJSON stream entry, type=session). When -save-session creates a new session
 // it is emitted before Run, with the same structure as the session jsonl first-line metadata (id/model/workdir/provider/created),
 // so consumers can programmatically capture session metadata from the first stdout line and continue to the next round.
-func EmitSession(w io.Writer, meta session.SessionMeta) error {
+func EmitSession(w io.Writer, meta miniagent.SessionMeta) error {
 	if meta.Type == "" {
 		meta.Type = sessionEventType
 	}

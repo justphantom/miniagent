@@ -155,7 +155,7 @@ func TestValidateToolPairing_ErrorMessageIsOneBased(t *testing.T) {
 		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
 		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "dup", Name: "x", Args: "{}"}}},
 	}
-	err := ValidateToolPairing(msgs)
+	err := miniagent.ValidateToolPairing(msgs)
 	if err == nil {
 		t.Fatal("expected pairing error")
 	}

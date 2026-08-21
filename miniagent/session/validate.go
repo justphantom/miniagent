@@ -43,28 +43,3 @@ func validateSessionMessage(m miniagent.Message) error {
 	}
 }
 
-// ValidateToolPairing validates that assistant.tool_calls and tool messages are paired one-to-one; a break would
-// be rejected by the endpoint with a 400, so it is intercepted up front with the position indicated.
-func ValidateToolPairing(msgs []miniagent.Message) error {
-	pending := map[string]bool{}
-	for i, m := range msgs {
-		switch m.Role {
-		case miniagent.RoleAssistant:
-			for _, tc := range m.ToolCalls {
-				if pending[tc.ID] {
-					return fmt.Errorf("message %d: tool_call id %q duplicated", i+1, tc.ID)
-				}
-				pending[tc.ID] = true
-			}
-		case miniagent.RoleTool:
-			if !pending[m.ToolCallID] {
-				return fmt.Errorf("message %d: tool message's tool_call_id %q has no matching assistant tool_call", i+1, m.ToolCallID)
-			}
-			delete(pending, m.ToolCallID)
-		}
-	}
-	if len(pending) > 0 {
-		return fmt.Errorf("%d assistant tool_call(s) missing matching tool result", len(pending))
-	}
-	return nil
-}

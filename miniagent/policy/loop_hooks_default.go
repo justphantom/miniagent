@@ -53,11 +53,11 @@ func NewDefaultOnBudget(maxTotalTokens int, logger *slog.Logger) func(context.Co
 				if in.PreEstimate > 0 {
 					total.InputTokens += in.PreEstimate
 				} else {
-					total.InputTokens += EstimateTokens(in.ToSend, in.System, in.Tools)
+					total.InputTokens += miniagent.EstimateTokens(in.ToSend, in.System, in.Tools)
 				}
 			}
 			if outZero {
-				total.OutputTokens += estimateResponseTokens(in.Resp)
+				total.OutputTokens += miniagent.EstimateResponseTokens(in.Resp)
 			}
 		}
 		if maxTotalTokens > 0 && total.InputTokens+total.OutputTokens > maxTotalTokens {
