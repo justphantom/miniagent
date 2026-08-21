@@ -174,12 +174,14 @@ return finishMaxIterations
 | P1 | `stripStaleReasoning` | 清非最近 N 条 assistant 的 Reasoning |
 | P7 | `truncateKeptReasoning` | 窗口内超长 Reasoning 头尾截断（默认 4000 rune） |
 | P4 | `stripStaleToolArgs` | 非窗口 write/edit args 压缩为前缀占位 |
-| P6 | `dedupReadResults` | 同 (path,offset) 重复 read 结果折叠（仅保留首次） |
+| P6 | `dedupReadResults` | 同 (path,offset) 重复 read 结果折叠（保留**最后一次**、折叠早次：旧内容已被新读覆盖，keep-last 是 P6b 语义要求） |
 | P11 | `foldStaleReadResults` | 同 path 后有新成功写入/编辑时，读结果折叠为占位 |
 | P8' | `foldStaleWriteEditArgs` | 同 path 后有后成功写入/编辑时，前写/edit args 折叠 |
 | P9b | `dedupShellCommands` | 归一化命令签名重复 shell 折叠（仅保最新一次） |
 
 **silent overflow 检测**（`compaction/compaction_split.go:isUsageOverflow`）：检测上一步真实 usage 是否已溢出窗口（`lastApplicableUsageIndex` 定位最近一条可用 usage，考虑 summary 消息的边界），命中即下一步设 `Force=true` 直接摘要。
+
+> **能力边界**：silent-overflow 检测依赖端点返回真实 `usage`。不回 usage 的流式端点上所有 assistant.Usage 为零 → 无锚 → 门控自动回退本地估算（`policy.EstimateTokens`），但 Force 检测依旧无锚，该端点三层防御只剩两层（本地估算门控 + 被动 ErrContextLength 重试）。配置键 `run.compaction.auto` 的静默检测在此类端点失效属已知边界，非回归。
 
 ## 6. 工具系统
 

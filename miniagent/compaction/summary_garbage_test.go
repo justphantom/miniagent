@@ -63,7 +63,9 @@ func TestIsSummaryGarbage_SectionAndCustomPromptRules(t *testing.T) {
 		want                                             bool
 	}{
 		{"tool-call markup rejected", "x <tool_call> y", "", "", "", "", true},
-		{"code fence rejected", "result:\n```go\nf()\n```", "", "", "", "", true},
+		{"leading code fence rejected", "```go\nf()\n```", "", "", "", "", true},
+		{"leading fence with leading blanks rejected", "\n\n```\ncmd\n```", "", "", "", "", true},
+		{"in-body code fence passes", "## Goal: a\n\nran:\n```sh\ncmd\n```\n\n## Progress: b", "", "", "", "", false},
 		{"template-less default rejected", "just some prose", "", "", "", "", true},
 		{"two sections pass", "## Goal: a\n\n## Progress: b", "", "", "", "", false},
 		{"one section rejected", "## Goal: a\n\nprose", "", "", "", "", true},

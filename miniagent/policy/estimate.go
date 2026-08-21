@@ -17,6 +17,15 @@ import (
 // systemOverheadTokens is the fixed per-request token overhead of the system prompt + request envelope.
 const systemOverheadTokens = 400
 
+// Exported mirrors of the default-estimate constants, so the compaction package can pin its marginal math
+// (budget_tail.go / estimateMessageTokensLocal) to the same contract via a consistency test — if the default
+// overheads change, the mirror comparison fails instead of silently drifting the tail budget.
+const (
+	SystemOverheadTokens      = systemOverheadTokens
+	EnvelopePerMsgTokens      = envelopePerMsgTokens
+	EnvelopePerToolCallTokens = envelopePerToolCallTokens
+)
+
 const (
 	envelopePerMsgTokens      = 4
 	envelopePerToolCallTokens = 20

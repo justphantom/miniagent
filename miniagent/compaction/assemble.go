@@ -117,20 +117,40 @@ func stripSummaryPrefix(content string) string {
 const proseOnlyRetryDirective = "\n\nYour previous output was REJECTED: it was not prose summary text (it contained tool-call markup or raw code). OUTPUT PROSE ONLY: the summary text itself, no <tool_call> tags, no code blocks, no tool invocations."
 
 // summaryGarbageMarkers are output shapes that can never be a legitimate summary — a summarizer that echoes tool-call
-// markup or emits a bare code fence is producing an executable draft, not a summary (see the corrupted-summary incident:
-// such output persisted as KindSummary becomes a prompt-injection vector on resume). Structural check, prefix-free.
-var summaryGarbageMarkers = []string{"<tool_call>", "<tool_calls>", "</tool_call>", "```"}
+// markup is producing an executable draft, not a summary (see the corrupted-summary incident: such output persisted as
+// KindSummary becomes a prompt-injection vector on resume). Structural check, prefix-free.
+// Note: a code fence is NOT in the list — summaries legitimately quote multi-line commands and error strings verbatim
+// (the built-in template demands it), so an in-body fence is only rejected when it is the summary's shape (leading
+// fence, see firstLineIsCodeFence); blanket rejection misfired on legal CJK technical summaries and forced an
+// unnecessary lossy fallback.
+var summaryGarbageMarkers = []string{"<tool_call>", "<tool_calls>", "</tool_call>"}
+
+// firstLineIsCodeFence reports whether t opens with a code fence (first non-blank line starts with ```): such output
+// is a code block with no prose — an executable draft, not a summary. An in-body fence (commands/errors quoted inside
+// an otherwise prose summary) is legitimate and passes.
+func firstLineIsCodeFence(t string) bool {
+	for line := range strings.Lines(t) {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		return strings.HasPrefix(strings.TrimSpace(line), "```")
+	}
+	return false
+}
 
 // isSummaryGarbage reports whether t is structurally unfit to persist as a KindSummary: containing tool-call markup,
-// a bare code fence, or (when the built-in summarizer shape is in effect) lacking ≥2 of the template section headings.
-// A custom summarizerPrompt (config defaults, CompactOnly option, or CompactingHook override), custom instructions, or a
-// custom template disables the section check — only markup rejection applies there, since a custom prompt may bake in
-// its own structure.
+// opening with a bare code fence, or (when the built-in summarizer shape is in effect) lacking ≥2 of the template
+// section headings. A custom summarizerPrompt (config defaults, CompactOnly option, or CompactingHook override),
+// custom instructions, or a custom template disables the section check — only markup rejection applies there, since a
+// custom prompt may bake in its own structure.
 func isSummaryGarbage(t, summarizerPrompt, createInstr, updateInstr, template string) bool {
 	for _, m := range summaryGarbageMarkers {
 		if strings.Contains(t, m) {
 			return true
 		}
+	}
+	if firstLineIsCodeFence(t) {
+		return true
 	}
 	if summarizerPrompt != "" || createInstr != "" || updateInstr != "" || template != "" {
 		return false

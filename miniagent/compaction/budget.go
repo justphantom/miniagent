@@ -46,6 +46,11 @@ type ContextBudget struct {
 	// PreserveRecentTokens is the token budget upper bound for retainedTail (§P1-E).
 	PreserveRecentTokens int
 	// SummaryMaxChars is the character cap for the summary, used by jointTailBudget.
+	// Callers constructing ContextBudget directly (library users of the exported FitHistory) must derive this via
+	// deriveSummaryMaxChars (min(summaryMaxChars, ContextWindow/summaryCharsPerWindowRatio)) BEFORE use;
+	// a raw ContextBudget with SummaryMaxChars<=0 falls back to a fixed 5000 upper bound (~2504 tokens) in
+	// jointTailBudget, which on a small ContextWindow pessimistically zeroes the tail budget and degrades to
+	// pure round-count mode. NewCompaction derives it automatically.
 	SummaryMaxChars int
 	// Compacting triggers before each summary (inside compactWithSummary, before calling budget.Summarize).
 	// nil=disabled.
