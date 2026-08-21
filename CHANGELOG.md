@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **shell 非零退出码镜像进 Output**：`[exit N]` 追加到输出文本末尾（`ExitCode` 结构化字段保留，仅 NDJSON 事件层可见）。此前 `IsError`/`ExitCode` 均不进 wire（L0 #8），静默失败（空输出 + exit 1）在 LLM 看来与成功无异；文本标记是模型侧唯一失败信号。
 - **WebUI 会话列表不再整文件读盘**：`GET /api/sessions` 每条目改用 `session.LoadSessionMeta`（只读首行 meta，新增于 `miniagent/session`），替代 `LoadSession` 全量读+校验（O(全部会话字节)→O(元数据行)；每轮 turn 结束前端都会刷新列表）。首行非 meta/损坏/缺文件均零值 meta，校验仍归 `LoadSession`。
 - **WebUI 模型下拉切分 bug**：model id 含 `/` 时前端 `value.split("/")` 取 `[0]/[1]` 错切片 → provider/model 传空静默回落默认模型。改为 provider/model 走 `option.dataset`，不依赖文本切分。
 

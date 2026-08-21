@@ -93,7 +93,10 @@ func runShellCommand(ctx context.Context, workdir, command string, timeout time.
 				// so the LLM never sees the contradictory IsError=false + negative exit code.
 				return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\ncommand terminated by signal: %v.", ee)}
 			}
-			return miniagent.ToolResult{Output: body, ExitCode: ee.ExitCode()}
+			// The exit code is ALSO appended to Output text: IsError/ExitCode never reach the wire
+			// (L0 #8), so a silent failure (empty output, exit 1) would read as success. ExitCode
+			// itself is kept for the NDJSON event layer's structured field.
+			return miniagent.ToolResult{Output: body + fmt.Sprintf("\n[exit %d]", ee.ExitCode()), ExitCode: ee.ExitCode()}
 		}
 		return miniagent.ToolResult{IsError: true, ExitCode: miniagent.ExitCodeNotSet, Output: body + fmt.Sprintf("\nexecution failed: %v", err)}
 	}

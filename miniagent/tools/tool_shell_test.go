@@ -38,7 +38,8 @@ func TestShell_CwdIsWorkspaceRoot(t *testing.T) {
 }
 
 // Non-zero exit is a legitimate command result: IsError=false, ExitCode=the command's exit code, stdout fully retained.
-// The old version treated non-zero exit as IsError=true and concatenated the exit code into Output text; it now uses a structured ExitCode.
+// The exit code is also mirrored into Output ("[exit N]") — IsError/ExitCode never reach the wire, so without the
+// text marker a silent failure (empty output, exit 1) would read as success to the LLM.
 func TestShell_NonZeroExitReturnsExitCode(t *testing.T) {
 	s := ShellTool(t.TempDir(), 0, 0, 0)
 	res := s.Call(context.Background(), `{"command":"echo out; exit 3"}`)
@@ -50,6 +51,17 @@ func TestShell_NonZeroExitReturnsExitCode(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "out") {
 		t.Errorf("stdout lost: Output = %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "[exit 3]") {
+		t.Errorf("Output missing exit marker: %q", res.Output)
+	}
+	// Silent failure: no output at all, non-zero exit — the marker is the only failure signal on the wire.
+	res = s.Call(context.Background(), `{"command":"exit 1"}`)
+	if res.IsError || res.ExitCode != 1 {
+		t.Fatalf("silent failure: IsError=%v ExitCode=%d", res.IsError, res.ExitCode)
+	}
+	if !strings.HasSuffix(strings.TrimRight(res.Output, "\n"), "[exit 1]") {
+		t.Errorf("silent failure Output = %q, want it to end with [exit 1]", res.Output)
 	}
 }
 
