@@ -75,5 +75,9 @@
     "model": "gpt-4o-mini",
     "auto": true,
     "reserved": 0
+  },
+  "web": {
+    "listen": "127.0.0.1:8787",
+    "key": ""
   }
 }

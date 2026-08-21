@@ -129,11 +129,11 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 ## WebUI（-serve）
 
-`miniagent -serve` 启动内置 HTTP 服务（纯 stdlib + `go:embed` 单页，无构建链），把同一个 agent 通过浏览器暴露为对话界面。**注意：agent 层零安全（shell 无约束），服务是长驻进程——请只在自己可信的环境开放。**
+`miniagent -serve` 启动内置 HTTP 服务（纯 stdlib + `go:embed` 单页，无构建链），把同一个 agent 通过浏览器暴露为对话界面。**注意：agent 层零安全（shell 无约束），服务是长驻进程——请只在自己可信的环境开放。前端已做 XSS 防护（markdown 渲染先 HTML 实体转义再替换），但 agent 层无安全保障，恶意用户仍可通过 shell 工具执行任意命令。**
 
 - **鉴权**：登录页输入访问密钥，请求带 `x-api-key` 头（常数时间比较）。密钥取 `web.key` 或 `$MINIAGENT_WEB_KEY`；两者皆空则仅允许 **loopback** listen（无鉴权，本机信任），**非 loopback（如 `0.0.0.0:8787`）无 key 时启动直接拒绝**。远程开放建议配反向代理 + TLS。
 - **配置**（`web` 段）：`listen`（默认 `127.0.0.1:8787`）、`key`。
-- **界面**：左侧会话列表（点击载入最近 200 条历史），右侧新会话/续跑表单（prompt/workdir 必填，provider/model/thinking 下拉——数据源 `GET /api/models`）。
+- **界面**：左侧会话列表（点击载入最近 200 条历史；会话项可删除 ✕、显示最后 assistant 消息预览），右侧聊天区（新会话/续跑表单 prompt/workdir 必填，provider/model/thinking 下拉——数据源 `GET /api/models`）。**markdown 渲染**（标题/粗体/斜体/代码/列表/引用/表格/删除线，XSS 实体转义保护），**流式累积→一次性渲染**（无闪烁）。**暗亮主题切换**（🌙/☀️，localStorage 记忆）。**中断**：发送中按钮变「停止」，AbortController 断开流（后端 req ctx 取消 → 存已执行部分）。**智能滚动**：上翻不拽回 + 「↓ 新消息」浮动按钮。**长文本折叠**：>20 行自动折叠+展开。**代码块复制按钮**。**header 显示**当前会话 id、累计 token 量（in=N out=M）、版本号、模型名。
 - **API**：`POST /api/turn`（NDJSON 流式，契约与 CLI stdout 逐字节一致；`session` 空则新建、非空则续跑）、`GET /api/sessions`、`GET /api/sessions/{id}`、`GET /api/models`；除公开探测的 `GET /api/whoami` 外全部走 `x-api-key` 鉴权。
 - **streaming**：`run.stream` 配置控制是否发 `text_delta`/`reasoning_delta`（默认非流式，界面显示最终文本与工具事件）。
 
@@ -156,8 +156,8 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 | type | 何时输出 | 字段 |
 |------|---------|------|
 | `session` | `-save-session` 新建会话时，作为 NDJSON **首条**事件（Run 之前） | `id`, `model`, `workdir`, `provider`, `created` |
-| `text_delta` / `reasoning_delta` | 流式模式（`-stream`）下 LLM 输出增量 | `step`, `text` |
-| `tool_use` | 每次 LLM 请求工具调用（工具执行前） | `name`, `input` |
+| `text_delta` / `reasoning_delta` | 流式模式（`-stream`）下 LLM 输出增量 | `step`, `text`, `ts` |
+| `tool_use` | 每次 LLM 请求工具调用（工具执行前） | `name`, `input`, `ts` |
 | `tool_result` | 每次工具执行后 | `name`, `call_id`, `output`(截断), `truncated`, `is_error`, `exit_code`(仅 shell) |
 | `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `llm_requests`, `finish`, `compacted`, `thinking_downgraded` |
 | `error` | 主流程失败，**终态** | `message` |

@@ -14,9 +14,8 @@ confidence: high
 ## 1. 发版前评估（半小时内可完成）
 - 基线核验：工作区 clean、与 origin 同步、`git describe --tags` 看积压量、verify-gate 全绿（build/vet/test -race/lint）。
 - CHANGELOG `[Unreleased]` 存量盘点：**同 section 多段交替出现 = 多轮修补未合并**，定版前必须同类合并（Added/Changed/Removed/Fixed 各一段）。
-- 版本号定级看两个先例：
-  - v4.4.0 / v4.7.0：**工具面/CLI 行为 breaking 归 minor + 显式迁移说明**（工具是交互契约，非库 API；库 API breaking 才 major）。
-  - `core-zero-policy-loophooks-decoupling`：库化（internal/ 外迁）预留 5.0.0。
+- 历史积压检查：**`git show vPrevTag:CHANGELOG.md` 确认上一版 CHANGELOG 的 `[Unreleased]` 已回填为定版段。缺则补（v6.0.0 踩过：tag 打在 Unreleased 上，无 [6.0.0] 段，且 v5.1.0 段完全缺失）。** 回填时对比 `git log --oneline vPrevTag..vCurTag` 确保条目无遗漏。
+- 归属校准：确认 `[Unreleased]` 的条目都是当前版本的新增（而非上一版未回填的残——v6.1.0 踩过：轮管道库化/模型清单聚合/compacted 字段误归入 [6.1.0]，实际属 v6.0.0/5.1.0）。
 
 ## 2. 新工具接入的文档同步（v4.7.0 踩过：`ast` 工具全缺）
 新增内置工具后必查五处，漏一处即文档与注册表漂移：

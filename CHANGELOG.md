@@ -32,17 +32,22 @@
 
 ## [6.0.0] - 2026-08-21
 
-> major：库化核心包（internal/ 外迁），破坏性移除 anthropic 与 responses provider；`result` 事件新增 `compacted`/`thinking_downgraded` 字段；内部重构去 cliFlags 依赖。迁移见下。
+> major：库化核心包（internal/ 外迁），破坏性移除 anthropic 与 responses provider；内部重构去 cliFlags 依赖；轮管道库化。迁移见下。
+
+### Changed
+- **轮管道库化：`turnEngine.runTurn`**（`run_turn.go`）把 CLI 一次轮的 resolve→session→clients→tools→hooks→Run→save 全序抽出为可复用函数（writer 注入、os.Exit-free），CLI 主路径与 `-serve` 共用；`buildLLM`/`buildDoer`/`buildRuntimeClients` 改返回 error（不再 `os.Exit`，服务进程可 500 应答而非崩溃）。`-serve` 与 `-list-models`/`-replay`/`-save-session`/`-session` 互斥。
+- **内部重构：`loopCfg`/`warnNoBudgetFuse` 去 `cliFlags` 依赖**（改收 `maxIterDef`/`streamDef`/`sessionArg`），`buildHooks`/`emitRunError`/`emitRunResult`/`assembleHooks` 参数化 `io.Writer`（setup.go 拆出 `emit.go`）。CLI/NDJSON/config 既有契约零变化（全量测试回归通过）。
+- **破坏性变更：移除 anthropic 与 responses provider**：删除 `internal/provider/anthropic/`（17 文件）与 `internal/provider/responses/`（14 文件）；`ProviderConfig.Kind` 仅接受 `""`/`"openai"`（其他值加载报错）；删除 `provider.cache`、`thinking.map` 的 anthropic JSON 对象语义与 responses 专属校验；`-list-models`/`FetchModelLimits` 统一走 openai client。迁移：`kind=anthropic` 配置改走 OpenAI Chat Completions 兼容网关；`kind=responses` 移除。
+- **库化：核心包移出 `internal/`**：`miniagent/`、`config/`、`provider/`、`text/` 升至顶层，外部 Go 模块可直接 `import "github.com/justphantom/miniagent/miniagent"`。CLI 行为零变化。
+
+## [5.1.0] - 2026-08-19
 
 ### Added
 - **`result` NDJSON 事件新增 `compacted`/`thinking_downgraded` 布尔字段**：恒出键（false 默认），外部消费方可感知"本轮触发过摘要压缩"/"thinking 被降级丢弃"，无需解析 transcript。`EmitResult` 从 `Result.Compacted`/`ThinkingDowngraded` 回填。新增字段非破坏（既有消费方忽略未知键）；用严格 schema 校验的消费方需同步放宽。
 
 ### Changed
-- **轮管道库化：`turnEngine.runTurn`**（`run_turn.go`）把 CLI 一次轮的 resolve→session→clients→tools→hooks→Run→save 全序抽出为可复用函数（writer 注入、os.Exit-free），CLI 主路径与 `-serve` 共用；`buildLLM`/`buildDoer`/`buildRuntimeClients` 改返回 error（不再 `os.Exit`，服务进程可 500 应答而非崩溃）。`-serve` 与 `-list-models`/`-replay`/`-save-session`/`-session` 互斥。
-- **内部重构：`loopCfg`/`warnNoBudgetFuse` 去 `cliFlags` 依赖**（改收 `maxIterDef`/`streamDef`/`sessionArg`），`buildHooks`/`emitRunError`/`emitRunResult`/`assembleHooks` 参数化 `io.Writer`（setup.go 拆出 `emit.go`）。CLI/NDJSON/config 既有契约零变化（全量测试回归通过）。
 - **内部重构**：模型清单聚合逻辑从 `openai` 包上移至 `cmd` 层，消除 `openai→anthropic` 跨 provider 依赖；`execBackedTools` 清理 v5.0.0 已删工具残留。对外契约（CLI/NDJSON/config）零变化。
-- **破坏性变更：移除 anthropic 与 responses provider**：删除 `internal/provider/anthropic/`（17 文件）与 `internal/provider/responses/`（14 文件）；`ProviderConfig.Kind` 仅接受 `""`/`"openai"`（其他值加载报错）；删除 `provider.cache`、`thinking.map` 的 anthropic JSON 对象语义与 responses 专属校验；`-list-models`/`FetchModelLimits` 统一走 openai client。迁移：`kind=anthropic` 配置改走 OpenAI Chat Completions 兼容网关；`kind=responses` 移除。
-- **库化：核心包移出 `internal/`**：`miniagent/`、`config/`、`provider/`、`text/` 升至顶层，外部 Go 模块可直接 `import "github.com/justphantom/miniagent/miniagent"`。CLI 行为零变化。
+
 
 ## [5.0.0] - 2026-08-18
 
