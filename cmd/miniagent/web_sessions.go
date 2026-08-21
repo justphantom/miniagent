@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/justphantom/miniagent/config"
 	"github.com/justphantom/miniagent/miniagent/session"
@@ -56,9 +55,10 @@ func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		id := strings.TrimSuffix(e.Name(), ".jsonl")
-		summary := sessionSummary{ID: id, Modified: infoModTime(e).Format("2006-01-02 15:04")}
+		summary := sessionSummary{ID: id}
 		if fi, err := e.Info(); err == nil {
 			summary.Size = fi.Size()
+			summary.Modified = fi.ModTime().Format("2006-01-02 15:04")
 		}
 		if meta, _, err := session.LoadSession(filepath.Join(dir, e.Name()), maxSessionBytesOfConfig(s.cfg)); err == nil && meta.Type != "" {
 			summary.Provider, summary.Model, summary.Created = meta.Provider, meta.Model, meta.Created
@@ -104,13 +104,4 @@ func (s *webServer) handleSessionReplay(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = replaySession(w, meta, tail)
-}
-
-// infoModTime returns the entry's modification time (zero on error).
-func infoModTime(e os.DirEntry) time.Time {
-	fi, err := e.Info()
-	if err != nil {
-		return time.Time{}
-	}
-	return fi.ModTime()
 }

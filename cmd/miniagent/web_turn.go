@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -28,7 +29,7 @@ type webTurnRequest struct {
 
 func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	var req webTurnRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPromptBytes+1<<16))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPromptBytes+(1<<16)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
@@ -40,6 +41,10 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Workdir == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workdir is required"})
+		return
+	}
+	if !filepath.IsAbs(req.Workdir) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workdir must be an absolute path"})
 		return
 	}
 	if int64(len(req.Prompt)) > maxPromptBytes {

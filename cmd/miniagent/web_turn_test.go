@@ -126,7 +126,7 @@ func TestWebTurn_ValidationErrors(t *testing.T) {
 	}{
 		{"empty prompt", `{"prompt":"","workdir":"/tmp"}`, http.StatusBadRequest},
 		{"missing workdir", `{"prompt":"hi"}`, http.StatusBadRequest},
-		{"relative workdir", `{"prompt":"hi","workdir":"rel/path"}`, http.StatusInternalServerError},
+		{"relative workdir", `{"prompt":"hi","workdir":"rel/path"}`, http.StatusBadRequest},
 		{"unknown field", `{"prompt":"hi","workdir":"/tmp","oops":1}`, http.StatusBadRequest},
 		{"bad json", `{not json`, http.StatusBadRequest},
 	}
