@@ -143,6 +143,25 @@ func TestCLI_RequiresWorkdir(t *testing.T) {
 	}
 }
 
+// -serve is mutually exclusive with the one-shot session/replay flags (it owns the process;
+// silently ignoring them would start a server the flags never reach).
+func TestCLI_ServeMutex(t *testing.T) {
+	for _, extra := range []string{"-session", "-save-session", "-replay", "-result-only"} {
+		args := []string{"-serve", extra}
+		switch extra {
+		case "-session", "-replay":
+			args = append(args, "x")
+		}
+		code, out := runMainBin(t, "prompt", configArgs(t, "http://127.0.0.1:1", args...), "MINIAGENT_API_KEY=sk-test")
+		if code != 1 {
+			t.Errorf("%s: code = %d, want 1", extra, code)
+		}
+		if !strings.Contains(out, "mutually exclusive") {
+			t.Errorf("%s: missing mutex error: %s", extra, out)
+		}
+	}
+}
+
 // -stream and -result-only are mutually exclusive.
 func TestCLI_StreamResultOnlyMutex(t *testing.T) {
 	args := configArgs(t, "http://127.0.0.1:1", "-stream", "-result-only")

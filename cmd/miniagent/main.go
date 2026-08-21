@@ -89,6 +89,12 @@ func main() {
 	}
 
 	if *f.serve {
+		// -serve owns the process (long-running); one-shot turn/replay flags make no sense here and
+		// would be silently ignored — reject instead (CHANGELOG documents the mutual exclusion).
+		if *f.session != "" || *f.saveSession || *f.replay != "" || *f.resultOnly {
+			fmt.Fprintln(os.Stderr, "miniagent: -serve is mutually exclusive with -session/-save-session/-replay/-result-only")
+			os.Exit(1)
+		}
 		runServe(ctx, cfg, absConfigPath(*f.configPath), logger)
 		return
 	}

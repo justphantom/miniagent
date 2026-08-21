@@ -7,7 +7,7 @@ updated: 2026-08-21
 # 当前会话
 
 ## 状态
-WebUI 审查 + 修复完成：①`session.LoadSessionMeta`（只读首行 meta）替代会话列表全量读；②前端模型下拉 provider/model 改走 `option.dataset`。随后工具 LLM 友好度评估 → 修硬伤：shell 非零退出码镜像进 Output（`[exit N]` 追加文本末尾，`tool_shell.go:96` 附近；`ExitCode` 结构化字段保留给事件层；理由：IsError/ExitCode 不进 wire，静默失败在模型侧与成功无异）。三处改动均未提交，diff 待用户审阅。
+三轮评估 + 修复完成：①WebUI 两次提交审查 → 修列表全量读（`LoadSessionMeta`）+ 前端模型切分（dataset）；②工具 LLM 友好度评估 → 修 shell 退出码镜像（`[exit N]`）；③核心循环/CLI/WebUI 评估 → 修 `-serve` 互斥（`main.go` 补校验，与 `-session/-save-session/-replay/-result-only` 组合报错退出 1）。四处改动均未提交，diff 待用户审阅。
 
 ## 待办
 - 用户审阅本次 diff 后自行提交。
