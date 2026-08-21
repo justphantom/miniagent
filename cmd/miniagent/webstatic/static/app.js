@@ -6,6 +6,7 @@ const KEY = "miniagent.web.key";
 let key = localStorage.getItem(KEY) || "";
 let session = "";       // current session id ("" = next send creates one)
 let sending = false;
+let sessionInTokens = 0, sessionOutTokens = 0; // accumulated this session (from result events)
 
 function authHeaders() { return { "x-api-key": key }; }
 
@@ -49,6 +50,7 @@ $("logout").addEventListener("click", () => { localStorage.removeItem(KEY); loca
 $("menu-btn").addEventListener("click", () => document.body.classList.toggle("nav-open"));
 $("new-chat").addEventListener("click", () => {
   session = "";
+  sessionInTokens = sessionOutTokens = 0;
   $("events").innerHTML = "";
   document.title = "miniagent";
   showSessionID("");
@@ -182,7 +184,14 @@ function finishText() {
   curText = curReasoning = null;
 }
 
-function showSessionID(id) { const el = $("session-id"); el.textContent = id ? `会话 ${id}` : ""; el.title = id || "当前会话 ID"; }
+function showSessionID(id) {
+  const el = $("session-id");
+  el.textContent = id ? `会话 ${id}` : "";
+  el.title = id || "当前会话 ID";
+  const tok = $("session-tokens");
+  tok.textContent = sessionInTokens || sessionOutTokens ? `in=${sessionInTokens} out=${sessionOutTokens}` : "";
+  tok.title = "当前会话累计 token（来自 result 事件）";
+}
 function renderEvent(ev) {
   switch (ev.type) {
     case "session":
@@ -196,6 +205,9 @@ function renderEvent(ev) {
     case "tool_result": appendToolResult(ev, null); break;
     case "result": {
       finishText();
+      sessionInTokens += ev.input_tokens || 0;
+      sessionOutTokens += ev.output_tokens || 0;
+      showSessionID(session); // refresh token counter
       const d = evDiv("result", "result", ev.ts);
       const md = document.createElement("div");
       md.className = "md";
@@ -349,6 +361,7 @@ async function deleteSession(id) {
 
 async function openSession(id) {
   session = id;
+  sessionInTokens = sessionOutTokens = 0;
   document.title = `miniagent · ${id}`;
   document.body.classList.remove("nav-open");
   $("events").innerHTML = "";
