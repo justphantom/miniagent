@@ -6,6 +6,7 @@ import (
 	"github.com/justphantom/miniagent/config"
 	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/miniagent/compaction"
+	"github.com/justphantom/miniagent/miniagent/policy"
 	"github.com/justphantom/miniagent/miniagent/session"
 )
 
@@ -88,6 +89,7 @@ func compactionOptions(resolved *config.Resolved, meta session.SessionMeta, main
 		Auto:                     resolved.CompactionAuto,
 		Reserved:                 resolved.CompactionReserved,
 		SessionID:                meta.ID,
+		EstimateTokens:           policy.EstimateTokens,
 		Logger:                   logger,
 	}
 }

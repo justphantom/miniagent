@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/justphantom/miniagent/miniagent/policy"
 	"github.com/justphantom/miniagent/miniagent/session"
 
 	"github.com/justphantom/miniagent/miniagent"
@@ -84,17 +85,17 @@ func TestEstimateTokensFromUsage(t *testing.T) {
 // §P0-B estimateThreshold: no usage or kill-switch=false falls back to policy.EstimateTokens; with usage and the switch on, uses the real value.
 func TestEstimateThreshold_Fallback(t *testing.T) {
 	msgs := []miniagent.Message{{Role: miniagent.RoleUser, Content: "hello world"}}
-	want := miniagent.EstimateTokens(msgs, "sys", nil)
-	if got := estimateThreshold(msgs, "sys", nil, true); got != want {
+	want := policy.EstimateTokens(msgs, "sys", nil)
+	if got := estimateThreshold(msgs, "sys", nil, policy.EstimateTokens, true); got != want {
 		t.Errorf("no usage fallback: estimateThreshold=%d, want policy.EstimateTokens=%d", got, want)
 	}
 	// kill-switch=false also falls back to policy.EstimateTokens (even with usage).
 	msgs2 := []miniagent.Message{{Role: miniagent.RoleAssistant, Ts: 1, Usage: uPtr(100, 50)}}
-	want2 := miniagent.EstimateTokens(msgs2, "sys", nil)
-	if got := estimateThreshold(msgs2, "sys", nil, false); got != want2 {
+	want2 := policy.EstimateTokens(msgs2, "sys", nil)
+	if got := estimateThreshold(msgs2, "sys", nil, policy.EstimateTokens, false); got != want2 {
 		t.Errorf("kill-switch=false: estimateThreshold=%d, want policy.EstimateTokens=%d", got, want2)
 	}
-	if got := estimateThreshold(msgs2, "sys", nil, true); got != 150 {
+	if got := estimateThreshold(msgs2, "sys", nil, policy.EstimateTokens, true); got != 150 {
 		t.Errorf("kill-switch=true with usage: estimateThreshold=%d, want 150 (100+50)", got)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/policy"
 )
 
 const (
@@ -52,7 +53,9 @@ type ContextBudget struct {
 	// SessionID is carried through budget into the compactWithSummary scope.
 	SessionID string
 	// Summarize compresses the middle segment into summary text + the miniagent.Usage of that call.
-	Summarize func(ctx context.Context, model, summarizerPrompt, previousSummary string, middle []miniagent.Message) (string, miniagent.Usage, error)
+	Summarize      func(ctx context.Context, model, summarizerPrompt, previousSummary string, middle []miniagent.Message) (string, miniagent.Usage, error)
+	EstimateTokens func(msgs []miniagent.Message, system string, tools []miniagent.Tool) int
+	// EstimateTokens is the token estimation callback; nil falls back to round-count mode.
 }
 
 // FitHistory is the single entry point of Run phase 2: summarize middle when over 80% of window, fall back to
@@ -69,6 +72,11 @@ type ContextBudget struct {
 //
 // Does not touch newMsgs — persistence-layer summary insertion/dedup is done by Run via mergePersisted (loop.go:216).
 func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBudget, logger *slog.Logger) (out []miniagent.Message, summary miniagent.Message, summarized, committed bool, usage miniagent.Usage, viewEstimate int, err error) {
+	// Nil EstimateTokens: default to the standard estimate (policy.EstimateTokens) so token-budget decisions work
+	// without requiring every caller to wire the callback; tests constructing ContextBudget directly stay correct.
+	if budget.EstimateTokens == nil {
+		budget.EstimateTokens = policy.EstimateTokens
+	}
 	keepReasoning := budget.KeepReasoning
 	if keepReasoning <= 0 {
 		keepReasoning = contextKeepReasoning
@@ -86,8 +94,8 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	// §P0-B: estimateThreshold prefers real usage, falls back to local estimate, covering the blind spot of policy.EstimateTokens for cached content.
 	// §P1-B: Force=true (last step's real usage hit isUsageOverflow) skips gating, directly enters compaction branch (Force only set when CW>0).
 	if !budget.Force {
-		stripped := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
-		if budget.ContextWindow <= 0 || estimateThreshold(stripped, budget.System, budget.Tools, budget.UseRealUsage) <= budget.ContextWindow*4/5 {
+		stripped := applyContextStrips(ctx, msgs, keepReasoning, keepReasoningChars, keepToolArgs, logger, stripEstimator(budget))
+		if budget.ContextWindow <= 0 || estimateThreshold(stripped, budget.System, budget.Tools, budget.EstimateTokens, budget.UseRealUsage) <= budget.ContextWindow*4/5 {
 			// Non-compaction: strip only this round's View (committed=false), transcript keeps original, next round recomputes strip from original.
 			return stripped, miniagent.Message{}, false, false, miniagent.Usage{}, 0, nil
 		}
@@ -109,7 +117,7 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	if !summarized {
 		// fallback lossy trim (raw): no jointTailBudget fallback, keep strip to prevent overflow.
 		out = compactHistory(msgs, keepRecent)
-		out = applyContextStrips(ctx, out, keepReasoning, keepReasoningChars, keepToolArgs, logger, budget.System, budget.Tools)
+		out = applyContextStrips(ctx, out, keepReasoning, keepReasoningChars, keepToolArgs, logger, stripEstimator(budget))
 	} else {
 		// §P1-post: apply the steady-state reasoning strip to the TAIL subslice only (head + summaryMsg untouched).
 		// out = [head?(nil), summaryMsg, tail...] and the new summaryMsg is the boundary compactWithSummary created;
@@ -131,14 +139,14 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 	// summarized: out=fitted with only the tail reasoning stripped (head + summaryMsg untouched); overall size still
 	// controlled by jointTailBudget (≤ CW×4/5).
 	// Post-compaction uses local EstimateTokens for gating (estimateThreshold reflects pre-compaction prefix; post-compaction real usage is stale, local is more accurate).
-	if miniagent.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
+	if budget.EstimateTokens(out, budget.System, budget.Tools) > budget.ContextWindow*4/5 {
 		out = trimRecentRounds(out, keepRecent)
 		if logger != nil {
 			logger.Warn("still exceeds window, trimming to recent rounds", "msgs", len(out))
 		}
 	}
 	// Cache post-trim out token estimate: reused by both the check below and the error message (eliminates one of the original three EstimateTokens calls).
-	est := miniagent.EstimateTokens(out, budget.System, budget.Tools)
+	est := budget.EstimateTokens(out, budget.System, budget.Tools)
 	if est > budget.ContextWindow*4/5 {
 		return out, sm, summarized, true, sumUsage, est, fmt.Errorf("history exceeds context window (~%d tokens) even after lossy trimming — terminating to avoid burning requests in a loop", est)
 	}
@@ -150,15 +158,23 @@ func FitHistory(ctx context.Context, msgs []miniagent.Message, budget ContextBud
 // identical; extracted here to avoid duplication and unify observability). logger at Debug level (CLI -log-level debug)
 // logs tokens saved at each stage (policy.EstimateTokens delta) and total before/after fit, for v11 §6 runtime
 // confirmation of "actually saved"; Info level (default) computes no delta, zero overhead. See each strip function's doc for semantics.
-func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReasoning, keepReasoningChars, keepToolArgs int, logger *slog.Logger, sys string, tools []miniagent.Tool) []miniagent.Message {
+// stripEstimator binds the estimate callback to the budget's system/tools, so debug logging in
+// applyContextStrips measures the full request-side overhead (system + schema), not just message bodies.
+func stripEstimator(budget ContextBudget) func([]miniagent.Message, string, []miniagent.Tool) int {
+	return func(m []miniagent.Message, _ string, _ []miniagent.Tool) int {
+		return budget.EstimateTokens(m, budget.System, budget.Tools)
+	}
+}
+
+func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReasoning, keepReasoningChars, keepToolArgs int, logger *slog.Logger, estimate func([]miniagent.Message, string, []miniagent.Tool) int) []miniagent.Message {
 	dbg := logger != nil && logger.Enabled(ctx, slog.LevelDebug)
 	strip := func(stage string, fn func([]miniagent.Message) []miniagent.Message, in []miniagent.Message) []miniagent.Message {
 		if !dbg {
 			return fn(in)
 		}
-		before := miniagent.EstimateTokens(in, sys, tools)
+		before := estimate(in, "", nil)
 		o := fn(in)
-		if after := miniagent.EstimateTokens(o, sys, tools); before > after {
+		if after := estimate(o, "", nil); before > after {
 			logger.Debug("context budget: strip saved",
 				"stage", stage, "saved_tokens", before-after, "before_msgs", len(in), "after_msgs", len(o))
 		}
@@ -175,7 +191,7 @@ func applyContextStrips(ctx context.Context, msgs []miniagent.Message, keepReaso
 	out = strip("P9b_dedupShell", func(m []miniagent.Message) []miniagent.Message { return dedupShellCommands(m, keepToolArgs) }, out)
 	if dbg {
 		logger.Debug("context budget: fit done",
-			"before_tokens", miniagent.EstimateTokens(msgs, sys, tools), "after_tokens", miniagent.EstimateTokens(out, sys, tools), "msgs", len(out))
+			"before_tokens", estimate(msgs, "", nil), "after_tokens", estimate(out, "", nil), "msgs", len(out))
 	}
 	return out
 }

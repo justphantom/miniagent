@@ -1,11 +1,11 @@
 package compaction
 
-import "github.com/justphantom/miniagent/miniagent"
-
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/policy"
 	"log/slog"
 	"strings"
 	"testing"
@@ -312,7 +312,7 @@ func TestApplyContextStrips_Debug(t *testing.T) {
 	// Debug level: P11 should fold read r1 (superseded by write w1, outside the window); the log contains stage + saved_tokens + fit done.
 	var buf bytes.Buffer
 	dbg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	applyContextStrips(context.Background(), msgs, 1, 0, 2, dbg, "", nil)
+	applyContextStrips(context.Background(), msgs, 1, 0, 2, dbg, policy.EstimateTokens)
 	logs := buf.String()
 	if !strings.Contains(logs, "P11_foldRead") || !strings.Contains(logs, "saved_tokens") {
 		t.Errorf("Debug log should contain P11_foldRead and saved_tokens, got:\n%s", logs)
@@ -323,7 +323,7 @@ func TestApplyContextStrips_Debug(t *testing.T) {
 	// Info level: no strip saved log (zero overhead).
 	var buf2 bytes.Buffer
 	info := slog.New(slog.NewTextHandler(&buf2, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	applyContextStrips(context.Background(), msgs, 1, 0, 2, info, "", nil)
+	applyContextStrips(context.Background(), msgs, 1, 0, 2, info, func(m []miniagent.Message, _ string, _ []miniagent.Tool) int { return 0 })
 	if strings.Contains(buf2.String(), "strip saved") {
 		t.Errorf("Info level should not output strip saved")
 	}

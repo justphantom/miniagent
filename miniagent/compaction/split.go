@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/policy"
 	"github.com/justphantom/miniagent/text"
 )
 
@@ -33,7 +34,7 @@ func applyCompactionBarrier(msgs []miniagent.Message) []miniagent.Message {
 // that still fails the whole round goes to middle; everything before the boundary round goes to middle.
 // tokenBudget<=0 degrades to a pure "most recent maxTurns rounds" round-count mode (backward compatible). The
 // returned tail and middle are both flat []miniagent.Message (original order).
-func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int) (tail, middle []miniagent.Message) {
+func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int, estimate func([]miniagent.Message, string, []miniagent.Tool) int) (tail, middle []miniagent.Message) {
 	n := len(rounds)
 	if n == 0 {
 		return nil, nil
@@ -52,7 +53,7 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 			tailStart = i + 1 // maxTurns truncation: tail=rounds[i+1..], older goes to middle
 			break
 		}
-		size := estimateRoundTokens(rounds[i])
+		size := estimateRoundTokens(rounds[i], estimate)
 		// The most recent round (i==n-1) is force-included in the tail even if it alone exceeds tokenBudget: the
 		// recent context cannot be dropped; pushing it into middle would get it summarized away, making the model
 		// lose precise recent context. So only when i<n-1 do we take the boundary round at the budget overflow.
@@ -68,7 +69,7 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 	if boundary >= 0 {
 		// The boundary round tries to split/shrink and prepend to the tail; on success that round (post-compression) does not enter middle.
 		remaining := tokenBudget - total
-		if fitted, ok := splitOrShrinkToRound(rounds[boundary], remaining); ok {
+		if fitted, ok := splitOrShrinkToRound(rounds[boundary], remaining, estimate); ok {
 			tail = append(append([]miniagent.Message{}, fitted...), tail...)
 			middle = flatten(rounds[:boundary]) // boundary round already included in tail, removed from middle
 		}
@@ -93,12 +94,12 @@ func selectTailByTokens(rounds [][]miniagent.Message, maxTurns, tokenBudget int)
 // rounds [A(tc)+tools]; within a single round there is no safe non-tool message boundary to split on, so that
 // function always returned nil for production rounds — deleted as YAGNI, which also removes the hidden danger of
 // its success path dropping the boundary round's prefix.)
-func splitOrShrinkToRound(round []miniagent.Message, remaining int) ([]miniagent.Message, bool) {
+func splitOrShrinkToRound(round []miniagent.Message, remaining int, estimate func([]miniagent.Message, string, []miniagent.Tool) int) ([]miniagent.Message, bool) {
 	if remaining <= 0 {
 		return nil, false
 	}
-	shrunk := shrinkRoundToolContents(round, remaining)
-	if estimateRoundTokens(shrunk) <= remaining {
+	shrunk := shrinkRoundToolContents(round, remaining, estimate)
+	if estimateRoundTokens(shrunk, estimate) <= remaining {
 		return shrunk, true
 	}
 	return nil, false
@@ -110,13 +111,13 @@ func splitOrShrinkToRound(round []miniagent.Message, remaining int) ([]miniagent
 // It scales each tool content's char count by the ratio of the round's current estimateRoundTokens to tokenBudget
 // (reusing text.TruncateHeadTail head 1/4 + tail 3/4). tokenBudget<=0 returns a copy as-is; with no tool messages
 // compression is pointless but a copy is still returned (the caller judges fit).
-func shrinkRoundToolContents(round []miniagent.Message, tokenBudget int) []miniagent.Message {
+func shrinkRoundToolContents(round []miniagent.Message, tokenBudget int, estimate func([]miniagent.Message, string, []miniagent.Tool) int) []miniagent.Message {
 	out := make([]miniagent.Message, len(round))
 	copy(out, round)
 	if tokenBudget <= 0 {
 		return out
 	}
-	cur := estimateRoundTokens(out)
+	cur := estimateRoundTokens(out, estimate)
 	if cur <= tokenBudget {
 		return out
 	}
@@ -154,6 +155,9 @@ func shrinkRoundToolContents(round []miniagent.Message, tokenBudget int) []minia
 // On the next turn, after the barrier hits the new summary, the old summary is dropped; a non-summary first round
 // (a normal user round) keeps the original behavior.
 func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniagent.Message, keepRecent int) (out []miniagent.Message, summary miniagent.Message, usage miniagent.Usage, err error) {
+	if budget.EstimateTokens == nil {
+		budget.EstimateTokens = policy.EstimateTokens
+	}
 	// FitHistory is an exported function; a direct caller may forget to set Summarize — when nil, summarization is
 	// impossible, return an error so FitHistory falls back to lossy compaction (NewCompaction always sets Summarize
 	// internally, the production path never hits this branch).
@@ -171,7 +175,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	// pure round-count mode (backward compatible with old sessions / no window). §P1-E boundary-round fine-split
 	// (split/shrink) semantics unchanged.
 	tokenBudget := jointTailBudget(budget, head)
-	tail, middleCore := selectTailByTokens(rounds[1:], keepRecent, tokenBudget)
+	tail, middleCore := selectTailByTokens(rounds[1:], keepRecent, tokenBudget, budget.EstimateTokens)
 	prevSummary := ""
 	if len(head) == 1 && head[0].Kind == miniagent.KindSummary {
 		// Both default and override paths extract the old summary as the UPDATE anchor (previousSummary) and do NOT
@@ -198,7 +202,7 @@ func compactWithSummary(ctx context.Context, budget ContextBudget, msgs []miniag
 	// model's CW. applyContextStrips only mutates fields, never deletes messages, never touches ToolCallID, so
 	// pairing is unchanged (ValidateToolPairing above already passed). logger=nil → dbg=false strips at zero
 	// overhead. The UPDATE old summary goes via prevSummary and never enters middle (both default and override).
-	middle = applyContextStrips(ctx, middle, 0, 0, 0, nil, budget.System, budget.Tools)
+	middle = applyContextStrips(ctx, middle, 0, 0, 0, nil, stripEstimator(budget))
 	compModel := budget.CompactionModel
 	if compModel == "" {
 		compModel = budget.Model

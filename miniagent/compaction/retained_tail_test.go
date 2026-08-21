@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"context"
+	"github.com/justphantom/miniagent/miniagent/policy"
 	"net/http"
 	"strings"
 	"testing"
@@ -48,7 +49,7 @@ func TestSelectTailByTokens_TokenBudget(t *testing.T) {
 			{Role: miniagent.RoleTool, ToolCallID: "c1", Content: bigTool}},
 		{{Role: miniagent.RoleUser, Content: "d"}}, // recent
 	}
-	tail, middle := selectTailByTokens(rounds, 4, 50)
+	tail, middle := selectTailByTokens(rounds, 4, 50, policy.EstimateTokens)
 	if !msgsContainContent(tail, "d") {
 		t.Errorf("tail should contain the recent small round d: %+v", tail)
 	}
@@ -72,7 +73,7 @@ func TestSelectTailByTokens_LegacyFallback(t *testing.T) {
 		{{Role: miniagent.RoleUser, Content: "d"}},
 		{{Role: miniagent.RoleUser, Content: "e"}},
 	}
-	tail, middle := selectTailByTokens(rounds, 2, 0)
+	tail, middle := selectTailByTokens(rounds, 2, 0, policy.EstimateTokens)
 	if len(tail) != 2 || !msgsContainContent(tail, "d") || !msgsContainContent(tail, "e") {
 		t.Errorf("tail should be the most recent 2 rounds [d,e]: %+v", tail)
 	}
@@ -87,7 +88,7 @@ func TestSelectTailByTokens_AllFit(t *testing.T) {
 		{{Role: miniagent.RoleUser, Content: "a"}},
 		{{Role: miniagent.RoleUser, Content: "b"}},
 	}
-	tail, middle := selectTailByTokens(rounds, 5, 1000)
+	tail, middle := selectTailByTokens(rounds, 5, 1000, policy.EstimateTokens)
 	if len(tail) != 2 || !msgsContainContent(tail, "a") || !msgsContainContent(tail, "b") {
 		t.Errorf("all-fit: tail should be all 2 rounds: %+v", tail)
 	}
@@ -110,7 +111,7 @@ func TestSelectTailByTokens_RecentRoundExceedsBudget(t *testing.T) {
 			{Role: miniagent.RoleTool, ToolCallID: "c1", Content: "ok"},
 		},
 	}
-	tail, middle := selectTailByTokens(rounds, 4, 50)
+	tail, middle := selectTailByTokens(rounds, 4, 50, policy.EstimateTokens)
 	if len(tail) == 0 {
 		t.Fatalf("tail must not be empty: even if the most recent round alone exceeds the budget it must be merged into tail")
 	}
@@ -143,7 +144,7 @@ func TestShrinkRoundToolContents_PairingPreserved(t *testing.T) {
 		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "c1", Name: "t", Args: "{}"}}, Content: ""},
 		{Role: miniagent.RoleTool, ToolCallID: "c1", Content: strings.Repeat("x", 8000)},
 	}
-	shrunk := shrinkRoundToolContents(round, 200)
+	shrunk := shrinkRoundToolContents(round, 200, policy.EstimateTokens)
 	if len(shrunk) != 2 {
 		t.Fatalf("the round length after shrink should be unchanged (2 items): %d", len(shrunk))
 	}

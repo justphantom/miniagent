@@ -94,6 +94,7 @@ func NewCompaction(opts CompactionOptions) (before func(context.Context, miniage
 		PreserveRecentTokens: opts.PreserveRecentTokens,
 		SummaryMaxChars:      maxChars,
 		Compacting:           opts.OnCompacting,
+		EstimateTokens:       opts.EstimateTokens,
 		SessionID:            opts.SessionID,
 		Summarize: func(ctx context.Context, model, sys, prevSummary string, middle []miniagent.Message) (string, miniagent.Usage, error) {
 			if opts.Chat == nil {

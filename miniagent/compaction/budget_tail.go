@@ -4,6 +4,17 @@ package compaction
 
 import (
 	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/policy"
+)
+
+// Fixed token-estimate overheads mirrored from the default estimate callback contract (policy.EstimateTokens):
+// the callback counts a request-level systemOverheadTokens(400) once per request, plus per-message envelope.
+// Marginal per-round accumulation (estimateRoundTokens) must exclude the request-level constant, so it is
+// mirrored here; a replacement callback sharing this contract stays compatible.
+const (
+	systemOverheadTokens      = 400
+	envelopePerMsgTokens      = 4
+	envelopePerToolCallTokens = 20
 )
 
 // summaryTailStart returns the index in msgs immediately AFTER the first miniagent.KindSummary message (the new summary
@@ -47,17 +58,20 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 	if budget.ContextWindow <= 0 {
 		return preserveRecentTokens(budget)
 	}
+	if budget.EstimateTokens == nil {
+		budget.EstimateTokens = policy.EstimateTokens
+	}
 	target := budget.ContextWindow * 4 / 5
-	reqOverhead := miniagent.EstimateTokens(nil, budget.System, budget.Tools)
+	reqOverhead := budget.EstimateTokens(nil, budget.System, budget.Tools)
 	headAdj := 0
 	if len(headRounds) != 1 || headRounds[0].Kind != miniagent.KindSummary {
-		headAdj = estimateRoundTokens(headRounds)
+		headAdj = estimateRoundTokens(headRounds, budget.EstimateTokens)
 	}
 	maxChars := budget.SummaryMaxChars
 	if maxChars <= 0 {
 		maxChars = summaryMaxChars
 	}
-	summaryEstimate := maxChars/2 + miniagent.EnvelopePerMsgTokens
+	summaryEstimate := maxChars/2 + envelopePerMsgTokens
 	avail := target - reqOverhead - headAdj - summaryEstimate
 	return min(max(avail, 0), preserveRecentTokens(budget))
 }
@@ -65,6 +79,6 @@ func jointTailBudget(budget ContextBudget, headRounds []miniagent.Message) int {
 // estimateRoundTokens estimates the marginal tokens of a single round (content+reasoning+args+envelope), excluding
 // system/schema global overhead — those two are request-level constants counted only once in the tail total, so per-round
 // accumulation must use marginal estimation. Used by selectTailByTokens for accumulation.
-func estimateRoundTokens(round []miniagent.Message) int {
-	return miniagent.EstimateTokens(round, "", nil) - miniagent.SystemOverheadTokens
+func estimateRoundTokens(round []miniagent.Message, estimate func([]miniagent.Message, string, []miniagent.Tool) int) int {
+	return estimate(round, "", nil) - systemOverheadTokens
 }

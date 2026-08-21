@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/policy"
 	"github.com/justphantom/miniagent/provider/openai"
 )
 
@@ -233,7 +234,7 @@ func TestCompactWithSummary_StripsMiddleBeforeSummarize(t *testing.T) {
 		t.Errorf("expected same path/offset reads to be deduped to placeholders, but captured tool has none")
 	}
 	// After reasoning cleared (~2400 tokens) + read dedup (6->1), size should be < 1500.
-	capturedTokens := miniagent.EstimateTokens(captured, "", nil)
+	capturedTokens := policy.EstimateTokens(captured, "", nil)
 	if capturedTokens > 1500 {
 		t.Errorf("middle size after strip should be < 1500 (reasoning cleared + read dedup), actual %d", capturedTokens)
 	}

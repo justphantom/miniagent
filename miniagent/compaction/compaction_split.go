@@ -52,7 +52,10 @@ type CompactionOptions struct {
 	SessionID string
 	// OnCompacting is the pre-summary hook (inject context / one-shot replace summarizerPrompt); nil=disabled.
 	OnCompacting CompactingHook
-	Logger       *slog.Logger
+	// EstimateTokens is the token estimation callback used by compaction for budget decisions.
+	// When nil, compaction falls back to round-count mode (disables token-based tail selection).
+	EstimateTokens func(msgs []miniagent.Message, system string, tools []miniagent.Tool) int
+	Logger         *slog.Logger
 }
 
 // This file is the "history tools" portion of the compaction subsystem (split out from history_util.go), used
@@ -81,7 +84,7 @@ func estimateMessageTokensLocal(m miniagent.Message) int {
 		n, c = text.CountCharsLocal(tc.Args)
 		nonCJK, cjk = nonCJK+n, cjk+c
 	}
-	return nonCJK/4 + cjk/2 + miniagent.EnvelopePerMsgTokens + miniagent.EnvelopePerToolCallTokens*len(m.ToolCalls)
+	return nonCJK/4 + cjk/2 + envelopePerMsgTokens + envelopePerToolCallTokens*len(m.ToolCalls)
 }
 
 // contextTokensFromUsage converts a single response's usage into "the total tokens of that request's prefix + output".
@@ -133,13 +136,13 @@ func estimateTokensFromUsage(msgs []miniagent.Message) (tokens int, ok bool) {
 }
 
 // estimateThreshold wraps the "real usage first, fall back to local" strategy for a single FitHistory call site.
-func estimateThreshold(msgs []miniagent.Message, system string, tools []miniagent.Tool, useRealUsage bool) int {
+func estimateThreshold(msgs []miniagent.Message, system string, tools []miniagent.Tool, estimate func([]miniagent.Message, string, []miniagent.Tool) int, useRealUsage bool) int {
 	if useRealUsage {
 		if t, ok := estimateTokensFromUsage(msgs); ok {
 			return t
 		}
 	}
-	return miniagent.EstimateTokens(msgs, system, tools)
+	return estimate(msgs, system, tools)
 }
 
 // compactionBuffer is the flat token buffer reserved for model output and future-round growth (mirrors opencode
