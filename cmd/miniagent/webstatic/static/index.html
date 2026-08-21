@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>miniagent</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="login" class="overlay hidden">
+  <form class="card" id="login-form">
+    <h1>miniagent</h1>
+    <p class="muted">输入访问密钥继续</p>
+    <input id="key" type="password" placeholder="x-api-key" autocomplete="current-password">
+    <button type="submit" id="login-btn">解锁</button>
+    <p id="login-err" class="err"></p>
+  </form>
+</div>
+<div id="app" class="hidden">
+  <header>
+    <button id="menu-btn" class="ghost" type="button">☰</button>
+    <h1>miniagent</h1>
+    <span class="flex-1"></span>
+    <span id="model-badge" class="muted" title="当前模型"></span>
+    <button id="logout" class="ghost">退出</button>
+  </header>
+  <div id="layout">
+    <nav id="nav">
+      <button id="new-chat" class="primary" type="button">＋ 新会话</button>
+      <div id="session-list"></div>
+    </nav>
+    <div id="overlay"></div>
+    <main>
+      <div id="events"></div>
+      <div id="composer">
+        <textarea id="prompt" rows="3" placeholder="输入提示词…（Ctrl+Enter 发送）"></textarea>
+        <div class="composer-row">
+          <input id="workdir" placeholder="/absolute/workdir（必填）">
+          <select id="model-sel"></select>
+          <select id="thinking-sel">
+            <option value="">thinking: 默认</option>
+            <option value="off">off</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
+          </select>
+          <button id="send" class="primary" type="button">发送</button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

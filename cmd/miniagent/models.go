@@ -26,15 +26,15 @@ type modelSource struct {
 
 // providerModel pairs a provider name with one model entry.
 type providerModel struct {
-	Provider string
-	Model    string
-	Limits   modelLimits
+	Provider string      `json:"provider"`
+	Model    string      `json:"model"`
+	Limits   modelLimits `json:"limits"`
 }
 
 // modelLimits mirrors the capability limit fields reported by models endpoints.
 type modelLimits struct {
-	ContextWindow   *int
-	MaxOutputTokens *int
+	ContextWindow   *int `json:"context_window,omitempty"`
+	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
 }
 
 // modelSources maps config providers onto the cmd-layer decoupled view.

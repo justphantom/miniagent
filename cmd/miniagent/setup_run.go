@@ -14,7 +14,7 @@ import (
 // compaction policies are attached via NewCompaction, other policies via NewDefault* hook factories, core Run has zero policies).
 // resolved.System must already be non-empty (the production path guarantees this via assembleSystemPrompt at main.go:147);
 // loopCfg does not re-default it — a missing System here is a caller bug, surfaced as an empty prompt rather than silently papered over.
-func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
+func loopCfg(resolved *config.Resolved, maxIterDef int, streamDef bool, history []miniagent.Message, tools []miniagent.Tool) miniagent.LoopConfig {
 	return miniagent.LoopConfig{
 		Model:              resolved.ModelID,
 		System:             resolved.System,
@@ -22,9 +22,9 @@ func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message
 		MaxTokens:          into(resolved.MaxTokens, 0),
 		Tools:              tools,
 		History:            history,
-		MaxIterations:      into(resolved.Run.MaxIterations, *f.maxIterations),
+		MaxIterations:      into(resolved.Run.MaxIterations, maxIterDef),
 		MaxTotalTokens:     into(resolved.RunConfig.MaxTotalTokens, 0),
-		Stream:             intoBool(resolved.Run.Stream, *f.stream),
+		Stream:             intoBool(resolved.Run.Stream, streamDef),
 		ThinkingLevel:      resolved.Thinking,
 		Thinking:           resolved.Provider.Thinking,
 		MaxToolResultChars: into(resolved.RunConfig.MaxToolResultChars, 0),
@@ -37,13 +37,13 @@ func loopCfg(resolved *config.Resolved, f *cliFlags, history []miniagent.Message
 // already bounded by soft fuses (max_iterations=20, CompactionAuto default-on, optional max-duration); the real footgun
 // is cross-turn -session resume accumulation and single Runs with iterations raised above 20. Warn (do NOT auto-pick a
 // budget — that would decide for the user) only when the fuse is unset AND the run is long-session-prone.
-func warnNoBudgetFuse(resolved *config.Resolved, f *cliFlags, logger *slog.Logger) {
-	iter := into(resolved.Run.MaxIterations, *f.maxIterations)
-	if !shouldWarnBudgetFuse(resolved.RunConfig.MaxTotalTokens != nil, *f.session, iter) {
+func warnNoBudgetFuse(resolved *config.Resolved, sessionArg string, maxIterDef int, logger *slog.Logger) {
+	iter := into(resolved.Run.MaxIterations, maxIterDef)
+	if !shouldWarnBudgetFuse(resolved.RunConfig.MaxTotalTokens != nil, sessionArg, iter) {
 		return
 	}
 	logger.Warn("run.max_tokens_total is not set: no cumulative token budget fuse",
-		"resume", *f.session != "", "max_iterations", iter,
+		"resume", sessionArg != "", "max_iterations", iter,
 		"hint", "set run.max_tokens_total to cap cumulative spend (especially across -session resumes)")
 }
 

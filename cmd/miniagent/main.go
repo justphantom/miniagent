@@ -10,16 +10,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/justphantom/miniagent/config"
-	"github.com/justphantom/miniagent/miniagent"
-	"github.com/justphantom/miniagent/miniagent/compaction"
-	"github.com/justphantom/miniagent/miniagent/event"
-	"github.com/justphantom/miniagent/miniagent/metrics"
-	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 // version is injected at build time via make build using -ldflags "-X main.version=$(git describe --tags)";
@@ -43,11 +36,13 @@ type cliFlags struct {
 	confirmDestructive *bool
 	metricsStep        *bool
 	replay             *string
+	serve              *bool
 }
 
 func parseFlags() *cliFlags {
 	f := &cliFlags{}
 	f.configPath = flag.String("config", "", "path to config file (default looks up ~/.miniagent/miniagent.json; errors if not found)")
+	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
 	f.thinking = flag.String("thinking", "", "thinking level off|minimal|low|medium|high|xhigh|max (default off)")
 	f.resultOnly = flag.Bool("result-only", false, "output only result.text (for subagent fork); mutually exclusive with -stream")
 	f.confirmDestructive = flag.Bool("confirm-destructive", false, "opt-in: prompt before write/edit and dangerous shell; in non-interactive/subagent mode destructive tools are denied unless MINIAGENT_AUTO_APPROVE=1")
@@ -58,7 +53,7 @@ func parseFlags() *cliFlags {
 	f.session = flag.String("session", "", "resume an existing session by id (resolved to a .jsonl file under session.dir; errors if not found)")
 	f.saveSession = flag.Bool("save-session", false, "create a new session and persist it (id generated internally; mutually exclusive with -session)")
 	f.replay = flag.String("replay", "", "replay the specified session (reads the session file and replays the process without calling the LLM; mutually exclusive with -save-session/-session/-result-only)")
-	f.logLevel = flag.String("log-level", "info", "log level: debug|info|warn|error")
+	f.serve = flag.Bool("serve", false, "start the WebUI HTTP server (config web.listen, default 127.0.0.1:8787; auth via web.key/$MINIAGENT_WEB_KEY)")
 	f.maxIterations = flag.Int("max-iterations", 0, "upper bound on LLM calls per turn (0=default 20)")
 	f.stream = flag.Bool("stream", false, "stream output (SSE); non-streaming by default")
 	f.listModels = flag.Bool("list-models", false, "list available model ids on the endpoint then exit")
@@ -93,6 +88,11 @@ func main() {
 		return
 	}
 
+	if *f.serve {
+		runServe(ctx, cfg, absConfigPath(*f.configPath), logger)
+		return
+	}
+
 	resolved, err := config.Resolve(cfg, collectOverrides(f))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
@@ -115,138 +115,34 @@ func main() {
 		return
 	}
 
-	apiKey := resolveFinalKey(resolved.Provider.Key)
-
 	validateConversation(resolved, f)
-	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "miniagent: API key missing (provider.key / $MINIAGENT_API_KEY)")
-		os.Exit(1)
-	}
-	warnInsecureURL(resolved.Provider.ChatURL)
-
-	// Best-effort auto-fill: when config has not set ContextWindow/MaxTokens (model>provider>global
-	// all nil), GET the provider's models endpoint once and fill from the non-standard
-	// context_window/max_output_tokens fields. Never overrides an explicit config value. Errors are
-	// warned and swallowed — a down models endpoint must not block the run.
-	if resolved.MaxTokens == nil || resolved.ContextWindow == nil {
-		limits, fetchErr := FetchModelLimits(ctx, resolved.Provider, resolved.ModelID, apiKey, httpTimeoutOf(resolved), logger)
-		if fetchErr != nil {
-			logger.Warn("auto-fill model limits skipped", "model", resolved.ModelID, "error", fetchErr)
-		} else {
-			if resolved.MaxTokens == nil && limits.MaxOutputTokens != nil {
-				resolved.MaxTokens = limits.MaxOutputTokens
-			}
-			if resolved.ContextWindow == nil && limits.ContextWindow != nil {
-				resolved.ContextWindow = limits.ContextWindow
-			}
-		}
-	}
-
-	sessionDir := defaultSessionDir
-	if resolved.Session.Dir != "" {
-		sessionDir = resolved.Session.Dir
-	}
-	workdir := effectiveWorkdir(f)
-	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
-	sessPath, meta, history := resolveSessionForRun(*f.saveSession, *f.session, sessionDir, modelSpec, resolved.Provider.Name, workdir, int64(maxSessionBytesOf(resolved)))
-	if *f.saveSession {
-		// New session: session metadata is emitted as the first NDJSON event on stdout (mirrors the first line of the jsonl) so consumers can programmatically capture the id to resume.
-		// The mutual-exclusion check guarantees -result-only never triggers this, so it does not pollute the pure-text stdout of subagents.
-		// ⚠️ id is emitted before Run, and jsonl is only persisted after Run succeeds; if Run fails / stdin is empty, the id captured by the consumer does not exist on disk — the consumer must verify the exit code.
-		if err := event.EmitSession(os.Stdout, meta); err != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: emit session: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	// System prompt: config defaults.system_prompt with the built-in defaultSystemPrompt fallback, then subagent guidance (see assembleSystemPrompt).
-	resolved.System = assembleSystemPrompt(resolved.System, resolved.SubagentGuidance, absConfigPath(*f.configPath), workdir, resolved.RulesFile)
-
-	// Apply runtime config overrides (precedence: config>builtin).
-	limits := miniagent.Limits{
-		MaxReadFileBytes:       maxReadFileBytesOf(resolved),
-		MaxShellOutputChars:    maxShellOutputCharsOf(resolved),
-		ShellStreamWindowBytes: into(resolved.RunConfig.ShellStreamWindowBytes, 0),
-		MaxGrepMatches:         into(resolved.RunConfig.GrepMaxMatches, 0),
-		MaxSessionBytes:        maxSessionBytesOf(resolved),
-		ContextTrimToolChars:   into(resolved.RunConfig.ContextTrimToolChars, 0),
-	}
-
-	// Main provider chat/stream + summary compChat (when crossing providers); os.Exit on missing key or invalid endpoint.
-	llm, compChat := buildRuntimeClients(resolved, apiKey, logger)
-
-	// §P1-A: tool output persist directory — explicit config wins; otherwise, when -save-session/-session is active, derive from the session directory
-	// as <sessionDir>/<id>.tool-output/ (disabled when there is no session and no config set).
-	toolOutputDir := ""
-	if resolved.RunConfig.ToolOutputDir != nil && *resolved.RunConfig.ToolOutputDir != "" {
-		toolOutputDir = *resolved.RunConfig.ToolOutputDir
-	} else if sessPath != "" {
-		toolOutputDir = filepath.Join(filepath.Dir(sessPath), strings.TrimSuffix(filepath.Base(sessPath), ".jsonl")+".tool-output")
-	}
-
-	tools := buildTools(workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), webTimeoutOf(resolved), into(resolved.RunConfig.MaxFileResultChars, 0), limits)
-	baseCfg := loopCfg(resolved, f, history, tools)
-	warnNoBudgetFuse(resolved, f, logger)
-	baseCfg.ToolOutputDir = toolOutputDir
-	if resolved.Run.ToolOutputRetention != nil {
-		baseCfg.ToolOutputRetention = *resolved.Run.ToolOutputRetention
-	}
-	// Compaction as a plugin: obtain before/after via NewCompaction; the three default policies (OnLLMError/OnBudget/ShapeToolResult) are attached via assembleHooks.
-	compBefore, compAfter := compaction.NewCompaction(compactionOptions(resolved, meta, llm, compChat, baseCfg.System, tools, logger))
-	hooks := assembleHooks(compBefore, compAfter, *f.resultOnly, intoBool(resolved.Run.ConfirmDestructive, *f.confirmDestructive), baseCfg, tools, limits, logger)
-	if *f.metricsStep {
-		hooks.OnStep = metrics.NewStepEmitter(os.Stderr).Emit
-	}
 
 	prompt := mustReadPrompt(ctx, os.Stdin)
-	// runCtx carries the -max-duration timeout (if any); constructed after stdin read — mustReadPrompt uses the signal ctx and is unconstrained.
-	// If runCtx were constructed earlier, a slow stdin would consume the max-duration budget causing Run to get an already-expired ctx (DeadlineExceeded exit 1).
-	runCtx := ctx
-	if d := maxDurationOf(resolved); d > 0 {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(runCtx, d)
-		defer cancel()
+	eng := &turnEngine{
+		cfg:           cfg,
+		cfgPath:       absConfigPath(*f.configPath),
+		logger:        logger,
+		buildClients:  buildRuntimeClients,
+		protectSignal: true,
 	}
-	result, err := miniagent.Run(runCtx, llm, baseCfg, string(prompt), hooks, logger)
-
-	// saveSession recovers the already-executed part of this turn for resume: Run via defer guarantees result.Messages/NewMessages are returned on
-	// error/cancel paths as well, and tool_call↔tool_result pairing is completed by fillPlaceholderTail — hence it persists
-	// not only on the success path but also on error/cancel paths, eliminating the "tool already executed, jsonl not appended" orphan inconsistency
-	// (e.g. tool-output residual while jsonl stops at the previous turn). SIGINT/SIGTERM are ignored during save: avoid truncating the session file or leaving temp files behind.
-	// Returns saveErr for the caller to decide the exit code: failure on the success path still exits 1 (original semantics); error/cancel paths only warn without changing the code.
-	saveSession := func() (saveErr error) {
-		if sessPath == "" || len(result.NewMessages) == 0 {
-			return nil
-		}
-		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
-		// Accumulate the cross-turn cumulative LLM request count into the session metadata first line.
-		// Always use RewriteMessages: the first meta line (LLMRequests) needs updating, append-only cannot change the first line.
-		// The session file has a MaxSessionBytes upper bound and saveSession is a single call off the hot path, so the full rewrite cost is negligible.
-		meta.LLMRequests += result.LLMRequests
-		saveErr = session.RewriteMessages(sessPath, meta, result.Messages, int64(limits.MaxSessionBytes))
-		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
-		return saveErr
+	spec := turnSpec{
+		prompt:      string(prompt),
+		workdir:     effectiveWorkdir(f),
+		sessionArg:  *f.session,
+		saveNew:     *f.saveSession,
+		resultOnly:  *f.resultOnly,
+		maxIterDef:  *f.maxIterations,
+		metricsStep: *f.metricsStep,
+		overrides:   collectOverrides(f),
 	}
-
+	err = eng.runTurn(ctx, spec, os.Stdout)
 	if err != nil {
-		// Signal cancellation (SIGINT/SIGTERM) takes code 130 to exit cleanly, does not emit error (review P3 SIGINT exit code).
-		// Cancellation also persists: pairing is complete, recovering the executed part for the next continuation.
 		if errors.Is(err, context.Canceled) {
-			if se := saveSession(); se != nil {
-				fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", se)
-			}
 			os.Exit(130)
 		}
-		emitRunError(err, *f.resultOnly, logger)
-		if se := saveSession(); se != nil {
-			fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", se)
-		}
-		os.Exit(1)
-	}
-	emitRunResult(result, resolved.ModelID, *f.resultOnly, logger)
-	if se := saveSession(); se != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", se)
+		// Mid-run failures already streamed an NDJSON error event (stdout contract); the stderr line
+		// duplicates it for humans — pre-refactor behavior printed resolve/session/key errors here.
+		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 		os.Exit(1)
 	}
 }
-
-// buildRuntimeClients / assembleHooks live in setup_providers.go / setup.go.

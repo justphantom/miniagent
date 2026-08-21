@@ -95,6 +95,7 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 -result-only             仅输出 result.text（subagent fork 用）；与 -stream、-save-session 互斥。失败输出 "error: <msg>" + 退出码 1
 -save-session            新建会话并落盘（id 内部生成，stdout NDJSON 首条 `session` 事件输出；与 -session、-result-only 互斥）
 -session string          接续已有会话的 id（在 session.dir 解析为 .jsonl；不存在则报错；仅允许字母/数字/-）
+-serve                  启动 WebUI HTTP 服务（config web.listen，默认 127.0.0.1:8787；鉴权 web.key/$MINIAGENT_WEB_KEY；与 -list-models/-replay/-save-session/-session 互斥）
 -stream                  流式输出（SSE）：增量发 text_delta/reasoning_delta 事件；默认非流式
 -thinking string         思考级别（默认 off；启用时 provider 必声明 thinking{field,map}，wire 必经映射，见 config.example.json）
 -version                 显示版本号并退出
@@ -124,6 +125,17 @@ make verify     # verify-gate 五步（gofmt/build/vet/test -race/lint）
 
 - `-version`：打印 `miniagent <version>`，退出码 0。
 - `-list-models`：列出可用模型后退出，每行一条 NDJSON `model` 事件（`provider`/`model` 分离字段，model id 含 `/` 时也可靠解析）。
+- `-serve`：启动 WebUI HTTP 服务（详见下文「WebUI（-serve）」）。
+
+## WebUI（-serve）
+
+`miniagent -serve` 启动内置 HTTP 服务（纯 stdlib + `go:embed` 单页，无构建链），把同一个 agent 通过浏览器暴露为对话界面。**注意：agent 层零安全（shell 无约束），服务是长驻进程——请只在自己可信的环境开放。**
+
+- **鉴权**：登录页输入访问密钥，请求带 `x-api-key` 头（常数时间比较）。密钥取 `web.key` 或 `$MINIAGENT_WEB_KEY`；两者皆空则仅允许 **loopback** listen（无鉴权，本机信任），**非 loopback（如 `0.0.0.0:8787`）无 key 时启动直接拒绝**。远程开放建议配反向代理 + TLS。
+- **配置**（`web` 段）：`listen`（默认 `127.0.0.1:8787`）、`key`。
+- **界面**：左侧会话列表（点击载入最近 200 条历史），右侧新会话/续跑表单（prompt/workdir 必填，provider/model/thinking 下拉——数据源 `GET /api/models`）。
+- **API**：`POST /api/turn`（NDJSON 流式，契约与 CLI stdout 逐字节一致；`session` 空则新建、非空则续跑）、`GET /api/sessions`、`GET /api/sessions/{id}`、`GET /api/models`；除公开探测的 `GET /api/whoami` 外全部走 `x-api-key` 鉴权。
+- **streaming**：`run.stream` 配置控制是否发 `text_delta`/`reasoning_delta`（默认非流式，界面显示最终文本与工具事件）。
 
 ### 主对话流程的前置检查
 

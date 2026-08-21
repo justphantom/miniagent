@@ -6,7 +6,11 @@
 ## [Unreleased]
 
 ### Added
-- **`result` NDJSON 事件新增 `compacted`/`thinking_downgraded` 布尔字段**：恒出键（false 默认），外部消费方可感知"本轮触发过摘要压缩"/"thinking 被降级丢弃"，无需解析 transcript。`EmitResult` 从 `Result.Compacted`/`ThinkingDowngraded` 回填。新增字段非破坏（既有消费方忽略未知键）；用严格 schema 校验的消费方需同步放宽。
+- **`-serve` WebUI（嵌入单页 + JSON/NDJSON API）**：`miniagent -serve` 启动 `net/http` 服务（纯 stdlib，go:embed 静态前端无构建链），提供登录页（`x-api-key` 鉴权，`subtle.ConstantTimeCompare` 常数时间比较）、`POST /api/turn`（NDJSON 流式，契约与 CLI stdout 逐字节一致，`session` 空则新建、非空则续跑）、`GET /api/sessions`（列表）、`GET /api/sessions/{id}`（重放最近 200 条消息为 NDJSON 事件流）、`GET /api/models`（provider/model 下拉数据源，复用 `-list-models` 逻辑）、`GET /api/whoami`（公开探测 `auth_required`）。配置新增 `web` 段：`web.listen`（默认 `127.0.0.1:8787`）、`web.key`（空回落 `$MINIAGENT_WEB_KEY`）；**远程 listen（非 loopback）必须配 key，否则启动拒绝**（key 是唯一安全边界，L0 #13 零安全 agent）。同 session 轮次经 `sync.Mutex` 串行化（防 `RewriteMessages` 首行竞态）；断连经 req ctx 取消 → `saveSession` 存已执行部分。
+- **轮管道库化：`turnEngine.runTurn`**（`run_turn.go`）把 CLI 一次轮的 resolve→session→clients→tools→hooks→Run→save 全序抽出为可复用函数（writer 注入、os.Exit-free），CLI 主路径与 `-serve` 共用；`buildLLM`/`buildDoer`/`buildRuntimeClients` 改返回 error（不再 `os.Exit`，服务进程可 500 应答而非崩溃）。`-serve` 与 `-list-models`/`-replay`/`-save-session`/`-session` 互斥。
+
+### Changed
+- **内部重构：`loopCfg`/`warnNoBudgetFuse` 去 `cliFlags` 依赖**（改收 `maxIterDef`/`streamDef`/`sessionArg`），`buildHooks`/`emitRunError`/`emitRunResult`/`assembleHooks` 参数化 `io.Writer`（setup.go 拆出 `emit.go`）。CLI/NDJSON/config 既有契约零变化（全量测试回归通过）。
 
 ### Changed
 - **内部重构**：模型清单聚合逻辑从 `openai` 包上移至 `cmd` 层，消除 `openai→anthropic` 跨 provider 依赖；`execBackedTools` 清理 v5.0.0 已删工具残留。对外契约（CLI/NDJSON/config）零变化。

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/justphantom/miniagent/miniagent"
@@ -125,6 +126,19 @@ func validateConfig(cfg *Config) error {
 	}
 	if _, _, err := resolveOptionalPair(cfg, "compaction", cfg.Compaction.Provider, cfg.Compaction.Model, defProv, defModel); err != nil {
 		return err
+	}
+	return validateWeb(cfg.Web)
+}
+
+// validateWeb checks web.listen is a parseable host:port when set. The remote-without-key rejection lives at
+// -serve startup (not here) because the effective key folds in $MINIAGENT_WEB_KEY, which the config layer
+// must not read (config load stays env-free).
+func validateWeb(w WebConfig) error {
+	if w.Listen == "" {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(w.Listen); err != nil {
+		return fmt.Errorf("web.listen %q: %w", w.Listen, err)
 	}
 	return nil
 }

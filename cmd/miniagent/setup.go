@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,9 +12,6 @@ import (
 	"log/slog"
 
 	"github.com/justphantom/miniagent/config"
-	"github.com/justphantom/miniagent/miniagent"
-	"github.com/justphantom/miniagent/miniagent/event"
-	"github.com/justphantom/miniagent/miniagent/policy"
 )
 
 func mustParseLogLevel(s string) slog.Level {
@@ -196,46 +192,6 @@ func maxSessionBytesOf(resolved *config.Resolved) int {
 	return 0
 }
 
-func buildHooks(resultOnly bool) miniagent.LoopHooks {
-	if resultOnly {
-		// subagent fork: stdout is plain-text result, no NDJSON events emitted.
-		return miniagent.LoopHooks{}
-	}
-	emit := event.ToolUseWriter(os.Stdout)
-	return miniagent.LoopHooks{
-		OnToolUse: func(name, input string) error { return emit(name, input) },
-		OnToolResult: func(name, callID string, r miniagent.ToolResult) error {
-			return event.EmitToolResult(os.Stdout, name, callID, r)
-		},
-		OnDelta: func(step int, kind miniagent.DeltaKind, text string) error {
-			return event.EmitDelta(os.Stdout, step, kind, text)
-		},
-	}
-}
-
-func emitRunError(err error, resultOnly bool, logger *slog.Logger) {
-	if resultOnly {
-		fmt.Printf("error: %s\n", err.Error())
-		return
-	}
-	if eerr := event.EmitError(os.Stdout, err.Error()); eerr != nil {
-		logger.Warn("emit error failed", "error", eerr)
-		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
-	}
-}
-
-func emitRunResult(result miniagent.Result, model string, resultOnly bool, logger *slog.Logger) {
-	if resultOnly {
-		fmt.Println(result.Text)
-		return
-	}
-	if err := event.EmitResult(os.Stdout, result, model); err != nil {
-		logger.Warn("emit result failed", "error", err)
-		fmt.Fprintf(os.Stderr, "miniagent: emit result failed: %v (text: %.200q)\n", err, result.Text)
-		os.Exit(1)
-	}
-}
-
 // absConfigPath returns the absolute path of the actually-loaded config (explicit -config or default ~/.miniagent/miniagent.json),
 // for subagent fork bootstrap injection. cfg is always non-nil (S1 removed bare mode).
 // Logic mirrors requireConfig: explicit -config > ~/.miniagent/miniagent.json.
@@ -246,28 +202,4 @@ func absConfigPath(configPath string) string {
 	}
 	p, _ := findDefaultConfigPath()
 	return p
-}
-
-// assembleHooks assembles LoopHooks: event output (buildHooks) + compaction before/after + three default policy attachments
-// (OnLLMError history-tightening retry / OnBudget estimation+circuit-break / ShapeToolResult truncation+persist). The core Run has zero policies; this function assembles them to restore full capability.
-func assembleHooks(
-	compBefore func(context.Context, miniagent.StepInput) (miniagent.StepOutput, error),
-	compAfter func(context.Context, int, miniagent.Response) error,
-	resultOnly bool, confirmDestructive bool, baseCfg miniagent.LoopConfig, tools []miniagent.Tool, limits miniagent.Limits, logger *slog.Logger,
-) miniagent.LoopHooks {
-	hooks := buildHooks(resultOnly)
-	hooks.BeforeLLM = compBefore
-	hooks.AfterLLM = compAfter
-	hooks.OnLLMError = policy.NewDefaultOnLLMError(logger, limits.ContextTrimToolChars)
-	hooks.OnBudget = policy.NewDefaultOnBudget(baseCfg.MaxTotalTokens, logger)
-	hooks.ShapeToolResult = policy.NewDefaultShapeToolResult(tools, baseCfg.ToolOutputDir, baseCfg.ToolOutputRetention, baseCfg.MaxToolResultChars, logger)
-	// S-2 (opt-in): wrap OnToolUse with a destructive-tool confirmation gate. buildHooks returns empty hooks (no
-	// OnToolUse) for -result-only/subagent mode, so this wraps AFTER buildHooks in both paths — when enabled the gate
-	// is active even for subagents (deny-by-default, since they have no TTY), closing the otherwise-uncovered
-	// autonomous path; when disabled ConfirmOnToolUse is the identity, leaving behavior unchanged.
-	hooks.OnToolUse = policy.ConfirmOnToolUse(hooks.OnToolUse, policy.ConfirmCfg{
-		Enabled:     confirmDestructive,
-		AutoApprove: os.Getenv("MINIAGENT_AUTO_APPROVE") == "1",
-	})
-	return hooks
 }

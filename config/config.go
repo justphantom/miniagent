@@ -12,6 +12,7 @@ type Config struct {
 	Defaults   DefaultsConfig   `json:"defaults"`
 	Run        RunConfig        `json:"run"`
 	Compaction CompactionConfig `json:"compaction"`
+	Web        WebConfig        `json:"web"`
 }
 
 type SessionConfig struct {
@@ -55,6 +56,15 @@ type ModelConfig struct {
 	MaxTokens     *int    `json:"max_tokens,omitempty"`
 	ContextWindow *int    `json:"context_window,omitempty"`
 	Thinking      *string `json:"thinking,omitempty"` // model-level level (model has no wire mapping, key "thinking" is the level)
+}
+
+// WebConfig configures the -serve WebUI (embed.FS single-page + JSON API). Listen defaults to 127.0.0.1:8787
+// in the cmd layer; key resolution: config web.key > $MINIAGENT_WEB_KEY. Both empty: loopback listen runs without
+// auth (local trust), non-loopback is rejected at validation — the key is the only boundary over the zero-safety
+// agent (L0 #13), so remote exposure without it is a hard error.
+type WebConfig struct {
+	Listen string `json:"listen,omitempty"`
+	Key    string `json:"key,omitempty"`
 }
 
 // ModelRef is a usable provider/model combination (the return unit of ListAllModels).
