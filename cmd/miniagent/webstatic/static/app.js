@@ -51,25 +51,38 @@ $("new-chat").addEventListener("click", () => {
   session = "";
   $("events").innerHTML = "";
   document.title = "miniagent";
+  showSessionID("");
 });
 
 // ---- events rendering ----
-function evDiv(cls, tag) {
+function fmtTime(ms) { if (!ms) return ""; const d = new Date(ms), p = (n) => String(n).padStart(2, "0"); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
+function evDiv(cls, tag, ts) {
   const d = document.createElement("div");
   d.className = "ev " + cls;
-  if (tag) { const t = document.createElement("div"); t.className = "tag"; t.textContent = tag; d.appendChild(t); }
+  if (tag) {
+    const t = document.createElement("div");
+    t.className = "tag";
+    const label = document.createElement("span");
+    label.textContent = tag;
+    t.appendChild(label);
+    const time = document.createElement("span");
+    time.className = "time";
+    time.textContent = fmtTime(ts);
+    t.appendChild(time);
+    d.appendChild(t);
+  }
   return d;
 }
 function appendUserPrompt(text) {
-  const d = evDiv("user", "user");
+  const d = evDiv("user", "user", Date.now());
   d.appendChild(document.createTextNode(text));
   $("events").appendChild(d);
 }
 let curText = null, curReasoning = null;
-function appendDelta(kind, text) {
+function appendDelta(kind, text, ts) {
   let d = kind === "text" ? curText : curReasoning;
   if (!d) {
-    d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking");
+    d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking", ts);
     if (kind === "reasoning") d.style.opacity = "0.75";
     $("events").appendChild(d);
     const span = document.createElement("span");
@@ -83,7 +96,12 @@ function appendToolUse(ev) {
   const d = document.createElement("details");
   d.className = "ev tool";
   const s = document.createElement("summary");
-  s.textContent = `🔧 ${ev.name}`;
+  const name = document.createElement("span");
+  name.textContent = `🔧 ${ev.name}`;
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = fmtTime(ev.ts);
+  s.appendChild(name); s.appendChild(time);
   d.appendChild(s);
   const pre = document.createElement("pre");
   pre.textContent = ev.input || "";
@@ -100,19 +118,21 @@ function appendToolResult(ev, toolNode) {
 }
 function finishText() { curText = curReasoning = null; }
 
+function showSessionID(id) { const el = $("session-id"); el.textContent = id ? `会话 ${id}` : ""; el.title = id || "当前会话 ID"; }
 function renderEvent(ev) {
   switch (ev.type) {
     case "session":
       session = ev.id;
       document.title = `miniagent · ${ev.id}`;
+      showSessionID(ev.id);
       break;
-    case "text_delta": appendDelta("text", ev.text); break;
-    case "reasoning_delta": appendDelta("reasoning", ev.text); break;
+    case "text_delta": appendDelta("text", ev.text, ev.ts); break;
+    case "reasoning_delta": appendDelta("reasoning", ev.text, ev.ts); break;
     case "tool_use": appendToolUse(ev); break;
     case "tool_result": appendToolResult(ev, null); break;
     case "result": {
       finishText();
-      const d = evDiv("result", "result");
+      const d = evDiv("result", "result", ev.ts);
       d.appendChild(document.createTextNode(ev.text || "(no text)"));
       const u = document.createElement("div");
       u.className = "usage";
@@ -123,7 +143,7 @@ function renderEvent(ev) {
     }
     case "error": {
       finishText();
-      const d = evDiv("error", "error");
+      const d = evDiv("error", "error", ev.ts || Date.now());
       d.appendChild(document.createTextNode(ev.error || ev.message || "unknown error"));
       $("events").appendChild(d);
       break;
@@ -210,6 +230,7 @@ async function loadModels() {
     }
   } catch { /* dropdown stays default */ }
 }
+let sessionMeta = {}; // id → { workdir, model, ... } captured from the session list
 
 async function loadSessions() {
   try {
@@ -219,6 +240,7 @@ async function loadSessions() {
     const box = $("session-list");
     box.innerHTML = "";
     for (const s of list) {
+      sessionMeta[s.id] = s;
       const b = document.createElement("button");
       b.className = "sess-item" + (s.id === session ? " active" : "");
       b.type = "button";
@@ -226,12 +248,36 @@ async function loadSessions() {
       top.textContent = s.model || s.id;
       const sid = document.createElement("div");
       sid.className = "sid";
-      sid.textContent = `${s.id} · ${s.created || ""}`;
+      sid.textContent = [s.id, s.workdir || "", s.created ? new Date(s.created).toLocaleString() : ""].filter(Boolean).join(" · ");
       b.appendChild(top); b.appendChild(sid);
       b.addEventListener("click", () => openSession(s.id));
+      const del = document.createElement("span");
+      del.className = "sess-del";
+      del.textContent = "✕";
+      del.title = "删除会话";
+      del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id); });
+      b.appendChild(del);
       box.appendChild(b);
     }
   } catch { /* keep old list */ }
+}
+
+async function deleteSession(id) {
+  if (!confirm(`删除会话 ${id}？此操作不可恢复。`)) return;
+  try {
+    const r = await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (r.status === 401) { showLogin("密钥已失效"); return; }
+    if (r.status === 409) { alert("该会话有轮次正在进行，无法删除"); return; }
+    if (!r.ok && r.status !== 404) { alert(`删除失败: HTTP ${r.status}`); return; }
+    delete sessionMeta[id];
+    if (session === id) {
+      session = "";
+      $("events").innerHTML = "";
+      document.title = "miniagent";
+      showSessionID("");
+    }
+    loadSessions();
+  } catch { alert("删除失败：网络错误"); }
 }
 
 async function openSession(id) {
@@ -240,6 +286,9 @@ async function openSession(id) {
   document.body.classList.remove("nav-open");
   $("events").innerHTML = "";
   curText = curReasoning = null;
+  const meta = sessionMeta[id];
+  if (meta && meta.workdir) $("workdir").value = meta.workdir;
+  showSessionID(id);
   try {
     const r = await api(`/api/sessions/${encodeURIComponent(id)}`);
     if (r.status === 401) { showLogin("密钥已失效"); return; }

@@ -16,10 +16,13 @@ import (
 const sessionEventType = "session"
 
 // toolUseEvent is the NDJSON event emitted for each tool call.
+// Ts is a Unix-millisecond timestamp (omitted when 0): the WebUI renders per-message time,
+// and replay passes the persisted message.Ts so historical messages show their original time.
 type toolUseEvent struct {
 	Type  string `json:"type"`
 	Name  string `json:"name"`
 	Input string `json:"input"`
+	Ts    int64  `json:"ts,omitempty"`
 }
 
 // resultEvent is the terminal event. text/model/input_tokens/output_tokens/steps/finish
@@ -36,6 +39,16 @@ type resultEvent struct {
 	Finish             string `json:"finish"`
 	Compacted          bool   `json:"compacted"`
 	ThinkingDowngraded bool   `json:"thinking_downgraded"`
+	Ts                 int64  `json:"ts,omitempty"`
+}
+
+// stamp resolves the optional Unix-ms timestamp argument: an explicit ts is preserved (replay
+// carries the persisted message.Ts), otherwise the event is stamped at emission time.
+func stamp(ts []int64) int64 {
+	if len(ts) > 0 && ts[0] > 0 {
+		return ts[0]
+	}
+	return text.NowMs()
 }
 
 type errorEvent struct {
@@ -45,8 +58,9 @@ type errorEvent struct {
 
 // EmitToolUse writes a tool_use event (tool name + raw JSON arguments). To emit events during offline replay just call it directly;
 // at runtime it is wrapped by ToolUseWriter into an OnToolUse hook triggered before tool execution.
-func EmitToolUse(w io.Writer, name, input string) error {
-	return json.NewEncoder(w).Encode(toolUseEvent{Type: "tool_use", Name: name, Input: input})
+// ts is an optional Unix-millisecond timestamp (0 → stamp now); the WebUI renders per-message time.
+func EmitToolUse(w io.Writer, name, input string, ts ...int64) error {
+	return json.NewEncoder(w).Encode(toolUseEvent{Type: "tool_use", Name: name, Input: input, Ts: stamp(ts)})
 }
 
 // ToolUseWriter returns an OnToolUse callback: each invocation writes the tool name and arguments as an
@@ -60,7 +74,7 @@ func ToolUseWriter(w io.Writer) miniagent.OnToolUse {
 // EmitResult writes the terminal result event. compacted/thinking_downgraded mirror
 // Result.Compacted/ThinkingDowngraded: consumers can detect "this round summarized" /
 // "thinking was dropped to a downgrade" without parsing the transcript.
-func EmitResult(w io.Writer, result miniagent.Result, model string) error {
+func EmitResult(w io.Writer, result miniagent.Result, model string, ts ...int64) error {
 	return json.NewEncoder(w).Encode(resultEvent{
 		Type:               "result",
 		Text:               result.Text,
@@ -72,6 +86,7 @@ func EmitResult(w io.Writer, result miniagent.Result, model string) error {
 		Finish:             result.Finish,
 		Compacted:          result.Compacted,
 		ThinkingDowngraded: result.ThinkingDowngraded,
+		Ts:                 stamp(ts),
 	})
 }
 
@@ -120,6 +135,7 @@ type toolResultEvent struct {
 	Truncated bool   `json:"truncated"`
 	IsError   bool   `json:"is_error"`
 	ExitCode  *int   `json:"exit_code,omitempty"`
+	Ts        int64  `json:"ts,omitempty"`
 }
 
 // execBackedTools 报告哪些工具有真实退出码语义（非零退出 = 命令结论而非工具故障）。
@@ -132,7 +148,7 @@ var execBackedTools = map[string]bool{
 // An IsError result is admitted only when ExitCode>0: exitAwareResult et al. set ExitCodeNotSet (-1)
 // on error paths, and validation-time rejections (denied option, decode failure) never execute a
 // command at all — the field is omitted instead of asserting a bogus 0.
-func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) error {
+func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult, ts ...int64) error {
 	out := text.Truncate(r.Output, maxToolResultEventChars, "…[tool_result truncated]")
 	ev := toolResultEvent{
 		Type:      "tool_result",
@@ -141,6 +157,7 @@ func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult) er
 		Output:    out,
 		Truncated: len([]rune(r.Output)) > maxToolResultEventChars,
 		IsError:   r.IsError,
+		Ts:        stamp(ts),
 	}
 	if execBackedTools[name] && (!r.IsError || r.ExitCode > 0) {
 		ec := r.ExitCode
@@ -154,11 +171,12 @@ type deltaEvent struct {
 	Type string `json:"type"`
 	Step int    `json:"step"`
 	Text string `json:"text"`
+	Ts   int64  `json:"ts,omitempty"`
 }
 
 // EmitDelta writes a delta event. kind determines type: text→text_delta, reasoning→reasoning_delta;
-// unknown kind produces no output (defensive).
-func EmitDelta(w io.Writer, step int, kind miniagent.DeltaKind, text string) error {
+// unknown kind produces no output (defensive). ts is an optional Unix-ms timestamp (0 → stamp now).
+func EmitDelta(w io.Writer, step int, kind miniagent.DeltaKind, text string, ts ...int64) error {
 	var t string
 	switch kind {
 	case miniagent.DeltaText:
@@ -168,5 +186,5 @@ func EmitDelta(w io.Writer, step int, kind miniagent.DeltaKind, text string) err
 	default:
 		return nil
 	}
-	return json.NewEncoder(w).Encode(deltaEvent{Type: t, Step: step, Text: text})
+	return json.NewEncoder(w).Encode(deltaEvent{Type: t, Step: step, Text: text, Ts: stamp(ts)})
 }

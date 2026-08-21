@@ -65,17 +65,17 @@ func replaySession(w io.Writer, meta session.SessionMeta, msgs []miniagent.Messa
 			lastText = m.Content
 			for _, c := range m.ToolCalls {
 				callName[c.ID] = c.Name
-				if err := event.EmitToolUse(w, c.Name, c.Args); err != nil {
+				if err := event.EmitToolUse(w, c.Name, c.Args, m.Ts); err != nil {
 					return err
 				}
 			}
 			if m.Reasoning != "" {
-				if err := event.EmitDelta(w, step, miniagent.DeltaReasoning, m.Reasoning); err != nil {
+				if err := event.EmitDelta(w, step, miniagent.DeltaReasoning, m.Reasoning, m.Ts); err != nil {
 					return err
 				}
 			}
 			if m.Content != "" {
-				if err := event.EmitDelta(w, step, miniagent.DeltaText, m.Content); err != nil {
+				if err := event.EmitDelta(w, step, miniagent.DeltaText, m.Content, m.Ts); err != nil {
 					return err
 				}
 			}
@@ -85,7 +85,7 @@ func replaySession(w io.Writer, meta session.SessionMeta, msgs []miniagent.Messa
 			}
 		case miniagent.RoleTool:
 			r := miniagent.ToolResult{Output: m.Content, IsError: m.IsError}
-			if err := event.EmitToolResult(w, callName[m.ToolCallID], m.ToolCallID, r); err != nil {
+			if err := event.EmitToolResult(w, callName[m.ToolCallID], m.ToolCallID, r, m.Ts); err != nil {
 				return err
 			}
 		}

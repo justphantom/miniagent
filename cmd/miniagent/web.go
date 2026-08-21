@@ -114,6 +114,7 @@ func (s *webServer) mux() *http.ServeMux {
 	api.HandleFunc("POST /api/turn", s.handleTurn)
 	api.HandleFunc("GET /api/sessions", s.handleSessionsList)
 	api.HandleFunc("GET /api/sessions/{id}", s.handleSessionReplay)
+	api.HandleFunc("DELETE /api/sessions/{id}", s.handleSessionDelete)
 	mux.Handle("/api/", s.requireAuth(api))
 	return mux
 }

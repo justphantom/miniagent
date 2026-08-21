@@ -214,3 +214,36 @@ func TestEmitDelta(t *testing.T) {
 		t.Errorf("event = %+v", ev)
 	}
 }
+
+func TestEmitTs(t *testing.T) {
+	// Explicit ts is preserved (replay path); omitted ts is stamped >0 (runtime path).
+	var buf bytes.Buffer
+	if err := EmitToolUse(&buf, "read", `{}`, 42); err != nil {
+		t.Fatalf("EmitToolUse: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev["ts"] != float64(42) {
+		t.Errorf("ts = %v, want 42", ev["ts"])
+	}
+	for _, emit := range []func() error{
+		func() error { return EmitToolUse(&buf, "read", `{}`) },
+		func() error { return EmitDelta(&buf, 1, miniagent.DeltaText, "hi") },
+		func() error { return EmitToolResult(&buf, "read", "c1", miniagent.ToolResult{Output: "o"}) },
+		func() error { return EmitResult(&buf, miniagent.Result{Text: "t"}, "m") },
+	} {
+		buf.Reset()
+		if err := emit(); err != nil {
+			t.Fatalf("emit: %v", err)
+		}
+		var ev map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if ts, _ := ev["ts"].(float64); ts <= 0 {
+			t.Errorf("event ts = %v, want >0 (auto-stamped): %v", ev["ts"], ev["type"])
+		}
+	}
+}

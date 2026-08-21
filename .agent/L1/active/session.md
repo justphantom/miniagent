@@ -11,8 +11,9 @@ updated: 2026-08-21
 
 ## 待办
 - 用户审阅本次 diff 后自行提交。
+- WebUI 会话删除已实现未提交（DELETE /api/sessions/{id} + 前端 ✕ 按钮，进行中会话 409；verify-gate 全绿），CHANGELOG 已同步。
 - `.agent` 目录清理：L2 patterns 中 rtk/allowlist 模式已随 v5.0.0 删工具而废弃，需标 superseded；superseded decisions 中已删文件引用需清。
 
 ## 备注
 - WebUI 审查其余已确认可接受项：锁表无界（进程生命周期内有限）、登录 whoami 非 ok 仍写 localStorage（UX 小瑕疵）、os.ReadDir 失败 200+空数组、whoami 无鉴权暴露 version（有注释声明）。
-- verify-gate 全绿（gofmt/build/vet/test -race/lint 0 issues）；session.go 262 行、web_sessions.go 108 行，均 <300。
+- verify-gate 全绿（gofmt/build/vet/test -race/lint 0 issues）；session.go 262 行、web_sessions.go 153 行、app.css 76 行，均 <300。
