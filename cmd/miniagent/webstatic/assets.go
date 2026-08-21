@@ -5,7 +5,7 @@ package webstatic
 
 import "embed"
 
-//go:embed static/index.html static/app.js static/app.css
+//go:embed static/index.html static/app.css static/app.js static/store.js static/events.js static/md.js
 var FS embed.FS
 
 // Read returns one embedded static file by name.

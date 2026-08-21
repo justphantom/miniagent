@@ -1,27 +1,24 @@
-/* miniagent WebUI — dark, minimal, no framework. */
-* { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #0f1115; --panel: #161a22; --border: #2a3040; --fg: #d7dce6;
-  --muted: #7b8496; --accent: #4f8cff; --ok: #3fb96a; --err: #e0563f;
+  --bg: #0d1117; --panel: #161b22; --border: #30363d;
+  --fg: #e6edf3; --muted: #8b949e;
+  --accent: #58a6ff; --err: #f85149; --ok: #3fb950;
 }
-body { background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, sans-serif; height: 100vh; }
-.hidden { display: none !important; }
-.muted { color: var(--muted); }
-.err { color: var(--err); min-height: 20px; }
-.flex-1 { flex: 1; }
-.overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 50; }
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 32px; width: 320px; display: flex; flex-direction: column; gap: 12px; }
-.card h1 { font-size: 20px; }
-input, textarea, select, button {
-  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 6px; padding: 8px 10px; font: inherit; outline: none;
+:root[data-theme="light"] {
+  --bg: #f6f8fa; --panel: #ffffff; --border: #d0d7de;
+  --fg: #1f2328; --muted: #59636e;
+  --accent: #0969da; --err: #cf222e; --ok: #1a7f37;
 }
-input:focus, textarea:focus { border-color: var(--accent); }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; }
+input, textarea, select, button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+input:disabled, textarea:disabled, select:disabled { opacity: .55; }
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
-.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { border-color: var(--err); color: var(--err); }
+.muted { color: var(--muted); }
+.flex-1 { flex: 1; }
 .ghost { background: transparent; }
-#app { display: flex; flex-direction: column; height: 100vh; }
+#app { display: flex; flex-direction: column; height: 100dvh; }
 header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 header h1 { font-size: 16px; flex-shrink: 0; }
 .session-id { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -35,58 +32,72 @@ body.nav-open #overlay { position: absolute; inset: 0; background: rgba(0,0,0,.5
 #session-list { display: flex; flex-direction: column; gap: 4px; }
 .sess-item { text-align: left; padding: 8px; border-radius: 6px; border: 1px solid transparent; position: relative; }
 .sess-item .sess-del { position: absolute; top: 6px; right: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
-.sess-item:hover .sess-del { color: var(--err); }
-.sess-item .sess-del:hover { color: var(--err); }
-@media (hover: none) {
-  /* touch devices have no hover — always show delete so it is reachable; suppress on tap by toggling via JS,
-     here we keep it visible since there's no :active equivalent for a span. */
-  .sess-item .sess-del { visibility: visible; }
-}
+.sess-item:hover .sess-del, .sess-item .sess-del:hover { color: var(--err); }
 .sess-item:hover { border-color: var(--border); background: var(--panel); }
 .sess-item.active { border-color: var(--accent); background: var(--panel); }
 .sess-item .sid { font-size: 12px; color: var(--muted); }
-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.sess-item .preview { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 #events { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.ev { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel); white-space: pre-wrap; word-break: break-word; max-width: 900px; }
+.ev { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel); max-width: 900px; }
 .ev.user { border-color: var(--accent); }
-.ev .tag { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; gap: 8px; }
+.ev .tag { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.ev .tag .retry { font-size: 11px; padding: 0 6px; border-radius: 4px; }
 .time { color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .ev.tool { font-family: ui-monospace, monospace; font-size: 12.5px; }
-.ev.tool summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
-.ev.tool pre { margin-top: 6px; overflow-x: auto; }
+.ev.tool summary { cursor: pointer; color: var(--accent); font-size: 12.5px; display: flex; justify-content: space-between; }
+.ev.tool pre { margin-top: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+.ev.error { border-color: var(--err); }
 .ev.result { border-color: var(--ok); }
 .ev .usage { font-size: 11px; color: var(--muted); }
+#to-bottom { display: none; position: absolute; right: 24px; bottom: 130px; border-radius: 50%; width: 36px; height: 36px; padding: 0; background: var(--panel); z-index: 2; }
 #composer { border-top: 1px solid var(--border); padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-#prompt { resize: vertical; min-height: 60px; }
+#prompt { resize: none; min-height: 60px; max-height: 200px; }
 .composer-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .composer-row input { flex: 1; min-width: 160px; }
-#send { min-width: 80px; }
-#send:disabled { opacity: .5; cursor: not-allowed; }
+#login { display: flex; align-items: center; justify-content: center; height: 100dvh; }
+#login-form { display: flex; flex-direction: column; gap: 12px; width: 300px; }
+#login-form h1 { font-size: 20px; text-align: center; }
+#login-err { color: var(--err); font-size: 13px; min-height: 18px; }
+#version-badge { font-size: 11px; opacity: 0.8; flex-shrink: 0; }
+#version-login { display: block; font-size: 12px; margin-top: -6px; }
+@media (max-width: 500px) { #version-badge { display: none; } }
+
 /* ---- markdown rendering (subset: headings, lists, code, blockquote, bold/italic) ---- */
 .md h1, .md h2, .md h3 { margin: 12px 0 4px; font-weight: 600; }
 .md h1 { font-size: 16px; } .md h2 { font-size: 15px; } .md h3 { font-size: 14px; }
-.md h1:first-child, .md h2:first-child, .md h3:first-child { margin-top: 0; }
 .md p { margin: 4px 0; }
-.md ul { padding-left: 22px; margin: 4px 0; }
-.md li { margin: 2px 0; }
-.md blockquote { border-left: 3px solid var(--border); padding-left: 10px; margin: 4px 0; color: var(--muted); }
-.md code { font-family: ui-monospace, monospace; font-size: 12.5px; background: var(--bg); border-radius: 4px; padding: 1px 5px; }
-.md pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 6px 0; overflow-x: auto; }
-.md pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; }
-.md hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
-.md strong { font-weight: 600; }
-/* ev that contains rendered markdown should not use pre-wrap (blocks handle their own spacing) */
-.ev:has(.md) { white-space: normal; }
+.md ul { margin: 4px 0; padding-left: 20px; }
+.md pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow-x: auto; font-family: ui-monospace, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; position: relative; }
+.md code { font-family: ui-monospace, monospace; font-size: 12.5px; background: var(--bg); border-radius: 4px; padding: 1px 4px; }
+.md pre code { padding: 0; background: none; }
+.md table { border-collapse: collapse; margin: 8px 0; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; font-size: 13.5px; }
+.md th { background: var(--bg); }
+.md blockquote { border-left: 3px solid var(--border); margin: 4px 0; padding-left: 10px; color: var(--muted); }
+.md hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+.md code::-webkit-scrollbar, .md pre::-webkit-scrollbar { height: 6px; }
+.md code::-webkit-scrollbar-thumb, .md pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-@media (max-width: 640px) {
-  body.nav-open #nav { position: absolute; inset: 0 auto 0 0; z-index: 10; width: min(280px, 85vw); background: var(--bg); border-right: 1px solid var(--border); box-shadow: 4px 0 24px rgba(0,0,0,.5); }
-  header { padding: 8px 12px; gap: 8px; }
-  #logout { padding: 6px 10px; flex-shrink: 0; }
-  #events { padding: 10px; gap: 8px; }
-  .ev { max-width: 100%; }
-  #composer { padding: 10px 12px; }
-  .composer-row input, .composer-row select { flex: 1 1 100%; min-width: 0; }
-  .composer-row #send { flex: 1 1 100%; min-width: 0; padding: 10px; }
-  #menu-btn { padding: 6px 10px; }
+/* copy button floats over fenced code blocks */
+.code-wrap { position: relative; }
+.code-wrap .copy-btn { position: absolute; top: 4px; right: 4px; font-size: 11px; padding: 2px 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); cursor: pointer; }
+.code-wrap .copy-btn:hover { color: var(--fg); border-color: var(--accent); }
+
+/* long assistant/result bodies collapse behind a fade + expand toggle */
+.ev.collapse .ev-body { max-height: 240px; overflow: hidden; position: relative; }
+.ev.collapse .ev-body::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(transparent, var(--panel)); }
+.ev .expand-btn { font-size: 12px; padding: 2px 10px; margin-top: 4px; color: var(--accent); background: transparent; }
+
+@media (hover: none) {
+  /* touch devices have no hover — always show the delete affordance */
+  .sess-item .sess-del { visibility: visible; }
 }
+
 @media (min-width: 800px) { body.nav-open #nav { display: flex; } #nav { display: flex; } #overlay { display: none; } #menu-btn { display: none; } }
+@media (max-width: 640px) {
+  header { padding: 8px 10px; gap: 8px; }
+  #events { padding: 10px; }
+  .ev { max-width: 100%; }
+  .composer-row input, .composer-row select { width: 100%; flex: none; }
+}

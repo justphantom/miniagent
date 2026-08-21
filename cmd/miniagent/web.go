@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -104,9 +105,12 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 // except /api/whoami, which the login page needs to probe whether a key is required.
 func (s *webServer) mux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", s.serveStatic("index.html", "text/html; charset=utf-8"))
-	mux.HandleFunc("GET /app.js", s.serveStatic("app.js", "text/javascript; charset=utf-8"))
-	mux.HandleFunc("GET /app.css", s.serveStatic("app.css", "text/css; charset=utf-8"))
+	// "GET /{$}" matches only the root path — plain "GET /" would conflict with the
+	// method-agnostic "/api/" subtree (root pattern beats it by method specificity).
+	mux.HandleFunc("GET /{$}", s.serveStatic("index.html"))
+	for _, f := range []string{"index.html", "app.js", "app.css", "store.js", "events.js", "md.js"} {
+		mux.HandleFunc("GET /"+f, s.serveStatic(f))
+	}
 	mux.HandleFunc("GET /api/whoami", s.whoami)
 
 	api := http.NewServeMux()
@@ -140,7 +144,12 @@ func (s *webServer) whoami(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"auth_required": s.key != "", "version": version})
 }
 
-func (s *webServer) serveStatic(name, ctype string) http.HandlerFunc {
+func (s *webServer) serveStatic(name string) http.HandlerFunc {
+	ctype := map[string]string{
+		".html": "text/html; charset=utf-8",
+		".css":  "text/css; charset=utf-8",
+		".js":   "text/javascript; charset=utf-8",
+	}[filepath.Ext(name)]
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := webstatic.Read(name)
 		if err != nil {

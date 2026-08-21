@@ -1,61 +1,56 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
-<title>miniagent</title>
-<link rel="stylesheet" href="/app.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>miniagent</title>
+  <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<div id="login" class="overlay hidden">
-  <form class="card" id="login-form">
-    <h1>miniagent</h1>
-    <p class="muted">输入访问密钥继续</p>
-    <input id="key" type="password" placeholder="x-api-key" autocomplete="current-password">
-    <button type="submit" id="login-btn">解锁</button>
-    <p id="login-err" class="err"></p>
-  </form>
-</div>
-<div id="app" class="hidden">
+  <div id="login">
+    <form id="login-form" autocomplete="off">
+      <h1>miniagent</h1>
+      <span id="version-login" class="muted" title="服务端版本"></span>
+      <input id="key-input" type="password" placeholder="API Key" autocomplete="off">
+      <button type="submit">进入</button>
+      <p id="login-err"></p>
+    </form>
+  </div>
+
+  <div id="app" style="display:none">
   <header>
     <button id="menu-btn" class="ghost" type="button">☰</button>
     <h1>miniagent</h1>
     <span id="session-id" class="session-id muted" title="当前会话 ID"></span>
     <span id="session-tokens" class="session-id muted" title="当前会话累计 token"></span>
     <span class="flex-1"></span>
+    <span id="version-badge" class="muted" title="服务端版本"></span>
     <span id="model-badge" class="muted" title="当前模型"></span>
+    <button id="theme-btn" class="ghost" type="button" title="切换主题">◐</button>
     <button id="logout" class="ghost">退出</button>
   </header>
   <div id="layout">
     <nav id="nav">
-      <button id="new-chat" class="primary" type="button">＋ 新会话</button>
+      <button id="new-chat" type="button">＋ 新会话</button>
       <div id="session-list"></div>
     </nav>
     <div id="overlay"></div>
     <main>
       <div id="events"></div>
+      <button id="to-bottom" type="button" title="回到底部">↓</button>
       <div id="composer">
-        <textarea id="prompt" rows="3" placeholder="输入提示词…（Ctrl+Enter 发送）"></textarea>
         <div class="composer-row">
-          <input id="workdir" placeholder="/absolute/workdir（必填）">
-          <select id="model-sel"></select>
-          <select id="thinking-sel">
-            <option value="">thinking: 默认</option>
-            <option value="off">off</option>
-            <option value="minimal">minimal</option>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="xhigh">xhigh</option>
-            <option value="max">max</option>
-          </select>
-          <button id="send" class="primary" type="button">发送</button>
+          <input id="workdir" placeholder="工作目录（绝对路径）">
+          <select id="model"><option>默认模型</option></select>
+        </div>
+        <div class="composer-row">
+          <textarea id="prompt" placeholder="输入任务，Enter 发送，Shift+Enter 换行"></textarea>
+          <button id="send" type="button">发送</button>
         </div>
       </div>
     </main>
   </div>
-</div>
-<script src="/app.js"></script>
+  </div>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

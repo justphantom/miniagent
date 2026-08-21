@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -166,6 +167,32 @@ func TestWebSessionDelete_InFlight_Conflict(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("file removed despite in-flight turn: %v", err)
+	}
+}
+
+// Last assistant message preview: sessionPreview reads the file tail (≤64KB) backwards,
+// so a long session costs O(tail), not O(file).
+func TestSessionPreview(t *testing.T) {
+	dir := t.TempDir()
+	path, err := session.ResolveSessionPath("prev-1", dir)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	meta := session.SessionMeta{Type: "session", ID: "prev-1", Created: "2026-01-01T00:00:00Z"}
+	if err := session.AppendMessages(path, meta, []miniagent.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "final\nanswer"},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if got := sessionPreview(path); got != "final answer" {
+		t.Errorf("preview = %q, want %q", got, "final answer")
+	}
+	// No assistant message → empty preview; missing file → empty (no error surfaced to listing).
+	if got := sessionPreview(filepath.Join(dir, "nope.jsonl")); got != "" {
+		t.Errorf("missing file preview = %q, want empty", got)
 	}
 }
 

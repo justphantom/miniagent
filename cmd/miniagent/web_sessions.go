@@ -5,6 +5,7 @@ package main
 // reuses one parser for live turns and historical replay).
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/justphantom/miniagent/config"
+	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/miniagent/session"
 )
 
@@ -23,7 +25,7 @@ const maxHistoryMessages = 200
 
 // sessionSummary is one row of GET /api/sessions. Created/provider/model come from the jsonl
 // first meta line; workdir is surfaced so the UI can switch the active workdir when a session is
-// opened; size and mtime from the file itself.
+// opened; size and mtime from the file itself; preview is the tail of the last assistant message.
 type sessionSummary struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
@@ -32,6 +34,7 @@ type sessionSummary struct {
 	Created  string `json:"created"`
 	Size     int64  `json:"size"`
 	Modified string `json:"modified"`
+	Preview  string `json:"preview"`
 }
 
 // maxSessionBytesOfConfig reads run.max_session_bytes straight from the config (no Resolve):
@@ -44,6 +47,8 @@ func maxSessionBytesOfConfig(cfg *config.Config) int64 {
 }
 
 func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
+	// Per-entry cost: LoadSessionMeta (first line) + sessionPreview (file tail ≤64KB),
+	// never a full-file LoadSession — the listing is refreshed after every turn.
 	dir := defaultSessionDir
 	if s.cfg.Session.Dir != "" {
 		dir = s.cfg.Session.Dir
@@ -68,12 +73,53 @@ func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 		if meta, err := session.LoadSessionMeta(filepath.Join(dir, e.Name())); err == nil && meta.Type != "" {
 			summary.Provider, summary.Model, summary.Workdir, summary.Created = meta.Provider, meta.Model, meta.Workdir, meta.Created
 		}
+		summary.Preview = sessionPreview(filepath.Join(dir, e.Name()))
 		out = append(out, summary)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Modified > out[j].Modified
 	})
 	writeJSON(w, http.StatusOK, out)
+}
+
+// sessionPreview reads the last 8KB of the session file and returns the tail of the last
+// assistant message content (one line, capped). Best-effort: any failure → "".
+func sessionPreview(path string) string {
+	const tail = 8 << 10
+	f, err := miniagent.OpenNoFollow(path, os.O_RDONLY, 0)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	off := int64(0)
+	if st.Size() > tail {
+		off = st.Size() - tail
+	}
+	buf := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil {
+		return ""
+	}
+	preview := ""
+	for line := range strings.SplitSeq(string(buf), "\n") {
+		if !strings.Contains(line, `"role":"assistant"`) {
+			continue
+		}
+		var m struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(line), &m); err == nil && m.Content != "" {
+			preview = m.Content
+		}
+	}
+	preview = strings.Join(strings.Fields(preview), " ")
+	if len([]rune(preview)) > 60 {
+		preview = string([]rune(preview)[:60]) + "…"
+	}
+	return preview
 }
 
 func (s *webServer) handleSessionReplay(w http.ResponseWriter, r *http.Request) {

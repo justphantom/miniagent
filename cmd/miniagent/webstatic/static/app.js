@@ -1,266 +1,267 @@
-// WebUI frontend: login overlay (x-api-key), session list, turn composer, NDJSON event stream.
-// Vanilla JS, no build step; the NDJSON contract is identical to the CLI stdout stream.
 "use strict";
+
+// miniagent -serve WebUI: auth gate, session list, NDJSON streaming composer.
+// ES modules, no build step; assets are embedded by webstatic (go:embed).
+
+import { state, setKey, api, authHeaders, showSessionID, resetTokenCount, saveWorkdir, loadWorkdir, saveTheme, loadTheme, setVersion } from "./store.js";
+import { appendUserPrompt, renderEvent, finishText } from "./events.js";
+
 const $ = (id) => document.getElementById(id);
-const KEY = "miniagent.web.key";
-let key = localStorage.getItem(KEY) || "";
-let session = "";       // current session id ("" = next send creates one)
-let sending = false;
-let sessionInTokens = 0, sessionOutTokens = 0; // accumulated this session (from result events)
+state.lastPrompt = ""; // last sent prompt, used by the error retry button
 
-function authHeaders() { return { "x-api-key": key }; }
+// ---- auth gate ----
 
-async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
-  if (r.status === 401) throw new Error("unauthorized");
-  return r;
-}
-
-function showLogin(err = "") {
-  $("app").classList.add("hidden");
-  $("login").classList.remove("hidden");
-  $("login-err").textContent = err;
-  $("key").focus();
-}
-function showApp() {
-  $("login").classList.add("hidden");
-  $("app").classList.remove("hidden");
-  loadModels();
-  loadSessions();
-}
-
-$("login-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  key = $("key").value.trim();
-  $("login-err").textContent = "";
+async function boot() {
+  const theme = loadTheme();
+  if (theme) document.documentElement.dataset.theme = theme;
   try {
     const r = await fetch("/api/whoami");
-    if (r.ok && key) {
-      const probe = await fetch("/api/sessions", { headers: authHeaders() });
-      if (probe.status === 401) throw new Error("密钥不正确");
-    }
-    localStorage.setItem(KEY, key);
-    showApp();
-  } catch {
-    $("login-err").textContent = "连接失败，请重试";
-  }
+    const w = await r.json();
+    if (w.version) setVersion(w.version);
+    if (!w.auth_required) { showApp(); return; }
+  } catch { /* fall through to key check */ }
+  if (!state.key) { showLogin(); return; }
+  try {
+    const probe = await fetch("/api/sessions", { headers: authHeaders() });
+    if (probe.ok) { showApp(); return; }
+  } catch { /* offline probe falls through to login */ }
+  showLogin();
+}
+
+function showLogin() { $("login").style.display = "flex"; $("app").style.display = "none"; $("key-input").focus(); }
+function showApp() {
+  $("login").style.display = "none"; $("app").style.display = "flex";
+  const savedWd = loadWorkdir();
+  if (savedWd) $("workdir").value = savedWd;
+  loadModels(); loadSessions(); $("prompt").focus();
+}
+
+$("login-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const v = $("key-input").value.trim();
+  if (!v) return;
+  state.key = v;
+  fetch("/api/sessions", { headers: authHeaders() }).then((r) => {
+    if (r.ok) { setKey(v); showApp(); }
+    else { $("login-err").textContent = "key 无效或服务不可达"; }
+  }).catch(() => { $("login-err").textContent = "无法连接服务"; });
+});
+$("logout").addEventListener("click", () => { setKey(""); location.reload(); });
+$("theme-btn").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "light" ? "" : "light";
+  document.documentElement.dataset.theme = next;
+  saveTheme(next);
 });
 
-$("logout").addEventListener("click", () => { localStorage.removeItem(KEY); location.reload(); });
+// ---- auto-scroll: follow only when near bottom, otherwise show a jump button ----
+
+let stickBottom = true;
+const NEAR_BOTTOM = 80;
+
+function eventsEl() { return $("events"); }
+
+eventsEl().addEventListener("scroll", () => {
+  const el = eventsEl();
+  stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
+  $("to-bottom").style.display = stickBottom ? "none" : "block";
+});
+$("to-bottom").addEventListener("click", () => { eventsEl().scrollTop = eventsEl().scrollHeight; });
+
+const scrollMo = new MutationObserver(() => { if (stickBottom) eventsEl().scrollTop = eventsEl().scrollHeight; });
+
+// ---- composer ----
+
 $("menu-btn").addEventListener("click", () => document.body.classList.toggle("nav-open"));
 $("new-chat").addEventListener("click", () => {
-  session = "";
-  sessionInTokens = sessionOutTokens = 0;
-  $("events").innerHTML = "";
+  state.session = "";
+  resetTokenCount();
+  eventsEl().innerHTML = "";
   document.title = "miniagent";
   showSessionID("");
+  $("prompt").focus();
 });
 
-// ---- events rendering ----
-// Markdown subset: #/##/###, ``` code, -/* list, > quote, ---, **bold**, *italic*, `code`, ~~del~~.
-// HTML is escaped first (XSS guard); block assembly runs after inline so code spans are untouched.
-function mdEsc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-function mdInline(s) {
-  return s
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/~~([^~]+)~~/g, "<del>$1</del>");
-}
-function mdRender(text) {
-  const lines = mdEsc(text).split("\n");
-  const out = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.trim() === "") { i++; continue; }
-    if (line.startsWith("```")) {
-      let code = "";
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) { code += lines[i] + "\n"; i++; }
-      i++;
-      out.push(`<pre class="md-code"><code>${code.trimEnd()}</code></pre>`);
-      continue;
-    }
-    if (line.startsWith("### ")) { out.push(`<h4>${mdInline(line.slice(4))}</h4>`); i++; continue; }
-    if (line.startsWith("## ")) { out.push(`<h3>${mdInline(line.slice(3))}</h3>`); i++; continue; }
-    if (line.startsWith("# ")) { out.push(`<h2>${mdInline(line.slice(2))}</h2>`); i++; continue; }
-    if (line.trim() === "---") { out.push("<hr>"); i++; continue; }
-    if (line.startsWith("> ")) {
-      let q = "";
-      while (i < lines.length && lines[i].startsWith("> ")) { q += lines[i].slice(2) + "\n"; i++; }
-      out.push(`<blockquote>${q.trim().split("\n").map(mdInline).join("<br>")}</blockquote>`);
-      continue;
-    }
-    if (line.startsWith("- ") || line.startsWith("* ")) {
-      let items = "";
-      while (i < lines.length && (lines[i].startsWith("- ") || lines[i].startsWith("* "))) {
-        items += `<li>${mdInline(lines[i].slice(2))}</li>`;
-        i++;
-      }
-      out.push(`<ul>${items}</ul>`);
-      continue;
-    }
-    out.push(`<p>${mdInline(line)}</p>`);
-    i++;
-  }
-  return out.join("");
-}
+// Enter sends on desktop (Shift+Enter = newline); mobile keeps Enter = newline.
+const isTouch = matchMedia("(hover: none)").matches;
+$("prompt").addEventListener("keydown", (e) => {
+  if (!isTouch && e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("send").click(); }
+});
+$("prompt").addEventListener("input", () => {
+  const el = $("prompt");
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 200) + "px";
+});
 
-function fmtTime(ms) { if (!ms) return ""; const d = new Date(ms), p = (n) => String(n).padStart(2, "0"); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
-function evDiv(cls, tag, ts) {
-  const d = document.createElement("div");
-  d.className = "ev " + cls;
-  if (tag) {
-    const t = document.createElement("div");
-    t.className = "tag";
-    const label = document.createElement("span");
-    label.textContent = tag;
-    t.appendChild(label);
-    const time = document.createElement("span");
-    time.className = "time";
-    time.textContent = fmtTime(ts);
-    t.appendChild(time);
-    d.appendChild(t);
-  }
-  return d;
-}
-function appendUserPrompt(text) {
-  const d = evDiv("user", "user", Date.now());
-  d.appendChild(document.createTextNode(text));
-  $("events").appendChild(d);
-}
-let curText = null, curReasoning = null;
-function appendDelta(kind, text, ts) {
-  let d = kind === "text" ? curText : curReasoning;
-  if (!d) {
-    d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking", ts);
-    if (kind === "reasoning") d.style.opacity = "0.75";
-    $("events").appendChild(d);
-    const span = document.createElement("span");
-    d.appendChild(span);
-    d._span = span;
-    d._md = "";
-    if (kind === "text") curText = d; else curReasoning = d;
-  }
-  d._md += text;
-  d._span.textContent += text;
-}
-function appendToolUse(ev) {
-  const d = document.createElement("details");
-  d.className = "ev tool";
-  const s = document.createElement("summary");
-  const name = document.createElement("span");
-  name.textContent = `🔧 ${ev.name}`;
-  const time = document.createElement("span");
-  time.className = "time";
-  time.textContent = fmtTime(ev.ts);
-  s.appendChild(name); s.appendChild(time);
-  d.appendChild(s);
-  const pre = document.createElement("pre");
-  pre.textContent = ev.input || "";
-  d.appendChild(pre);
-  d._pre = pre;
-  $("events").appendChild(d);
-  curText = curReasoning = null;
-  return d;
-}
-function appendToolResult(ev, toolNode) {
-  const target = toolNode || appendToolUse({ name: ev.name || "tool", input: "" });
-  const pre = target._pre;
-  pre.textContent += (pre.textContent ? "\n" : "") + `→ ${ev.output || ""}${ev.is_error ? "  [error]" : ""}`;
-}
-// finishText flushes the accumulated markdown (stream is done or interrupted by a tool event).
-function finishText() {
-  for (const d of [curText, curReasoning]) {
-    if (d && d._md) {
-      const md = document.createElement("div");
-      md.className = "md";
-      md.innerHTML = mdRender(d._md);
-      d.replaceChild(md, d._span);
-      d._md = "";
-    }
-  }
-  curText = curReasoning = null;
-}
+$("send").addEventListener("click", () => { if (state.sending) { state.abort?.abort(); return; } send(); });
 
-function showSessionID(id) {
-  const el = $("session-id");
-  el.textContent = id ? `会话 ${id}` : "";
-  el.title = id || "当前会话 ID";
-  const tok = $("session-tokens");
-  tok.textContent = sessionInTokens || sessionOutTokens ? `in=${sessionInTokens} out=${sessionOutTokens}` : "";
-  tok.title = "当前会话累计 token（来自 result 事件）";
-}
-function renderEvent(ev) {
-  switch (ev.type) {
-    case "session":
-      session = ev.id;
-      document.title = `miniagent · ${ev.id}`;
-      showSessionID(ev.id);
-      break;
-    case "text_delta": appendDelta("text", ev.text, ev.ts); break;
-    case "reasoning_delta": appendDelta("reasoning", ev.text, ev.ts); break;
-    case "tool_use": appendToolUse(ev); break;
-    case "tool_result": appendToolResult(ev, null); break;
-    case "result": {
-      finishText();
-      sessionInTokens += ev.input_tokens || 0;
-      sessionOutTokens += ev.output_tokens || 0;
-      showSessionID(session); // refresh token counter
-      const d = evDiv("result", "result", ev.ts);
-      const md = document.createElement("div");
-      md.className = "md";
-      md.innerHTML = mdRender(ev.text || "(no text)");
-      d.appendChild(md);
-      const u = document.createElement("div");
-      u.className = "usage";
-      u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}`;
-      d.appendChild(u);
-      $("events").appendChild(d);
-      break;
-    }
-    case "error": {
-      finishText();
-      const d = evDiv("error", "error", ev.ts || Date.now());
-      d.appendChild(document.createTextNode(ev.error || ev.message || "unknown error"));
-      $("events").appendChild(d);
-      break;
-    }
-  }
-  const box = $("events");
-  box.scrollTop = box.scrollHeight;
-}
-
-// ---- send a turn (streams NDJSON) ----
-async function sendTurn() {
-  if (sending) return;
+async function send() {
+  if (state.sending) return;
   const prompt = $("prompt").value.trim();
   const workdir = $("workdir").value.trim();
-  if (!prompt) { $("prompt").focus(); return; }
-  if (!workdir) { $("workdir").focus(); return; }
-  const sel = $("model-sel");
-  const opt = sel.options[sel.selectedIndex];
-  const body = {
-    prompt,
-    workdir,
-    session,
-    provider: opt ? opt.dataset.provider || "" : "",
-    model: opt ? opt.dataset.model || "" : "",
-    thinking: $("thinking-sel").value,
-  };
-  sending = true;
-  $("send").disabled = true;
+  if (!prompt) { alert("请输入内容"); return; }
+  if (!workdir) { alert("请输入工作目录"); return; }
+  const sel = $("model");
+  const opt = sel.selectedOptions[0];
+  const body = { prompt, workdir, session: state.session, provider: opt?.dataset.provider || "", model: opt?.dataset.model || "", thinking: opt?.dataset.thinking || "" };
+
+  state.sending = true;
+  state.lastPrompt = prompt;
+  state.turnStartTs = 0;
+  state.abort = new AbortController();
+  setComposer(false);
   appendUserPrompt(prompt);
   $("prompt").value = "";
+  $("prompt").style.height = "auto";
+  $("prompt").focus();
+  saveWorkdir(workdir);
+  scrollMo.observe(eventsEl(), { childList: true, subtree: true, characterData: true });
+
+  let sawTerminal = false;
   try {
-    const r = await fetch("/api/turn", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.status === 401) { showLogin("密钥已失效"); return; }
-    if (!r.ok && !r.headers.get("Content-Type")?.includes("ndjson")) {
-      const j = await r.json().catch(() => ({}));
-      renderEvent({ type: "error", error: j.error || `HTTP ${r.status}` });
-      return;
+    const resp = await fetch("/api/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+      signal: state.abort.signal,
+    });
+    if (!resp.ok) {
+      let msg = resp.statusText;
+      try { msg = (await resp.json()).error || msg; } catch { /* non-JSON error body */ }
+      throw new Error(msg);
     }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === "result" || ev.type === "error") sawTerminal = true;
+          renderEvent(ev);
+        } catch (e) { console.log("bad ndjson line", line, e); }
+      }
+    }
+    if (buf.trim()) {
+      try { const ev = JSON.parse(buf); renderEvent(ev); if (ev.type === "result" || ev.type === "error") sawTerminal = true; } catch { /* trailing partial line */ }
+    }
+    // Stream ended without a terminal event = connection dropped mid-turn (e.g. server restart).
+    if (!sawTerminal) {
+      renderEvent({ type: "error", error: "连接中断：流意外结束，未收到 result/error 事件（会话已保存已执行部分，可点击重试续跑）", ts: Date.now() });
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      renderEvent({ type: "error", error: "已停止（会话已保存已执行部分）", ts: Date.now() });
+    } else {
+      renderEvent({ type: "error", error: "请求失败：" + e.message, ts: Date.now() });
+    }
+  } finally {
+    finishText();
+    state.sending = false;
+    state.abort = null;
+    setComposer(true);
+    scrollMo.disconnect();
+    loadSessions();
+  }
+}
+
+// Lock the composer while a turn runs; the send button becomes a stop button.
+function setComposer(enabled) {
+  $("prompt").disabled = !enabled;
+  $("workdir").disabled = !enabled;
+  $("model").disabled = !enabled;
+  $("send").textContent = enabled ? "发送" : "停止";
+  $("send").classList.toggle("danger", !enabled);
+}
+
+// ---- models / sessions ----
+
+async function loadModels() {
+  try {
+    const r = await api("/api/models");
+    const models = await r.json();
+    const sel = $("model");
+    sel.innerHTML = "";
+    for (const m of models) {
+      const o = document.createElement("option");
+      o.textContent = `${m.provider}/${m.model}`;
+      o.dataset.provider = m.provider;
+      o.dataset.model = m.model;
+      o.dataset.thinking = "";
+      sel.appendChild(o);
+    }
+  } catch { /* dropdown stays default */ }
+}
+
+let sessionMeta = {}; // id → { workdir, model, ... } captured from the session list
+
+async function loadSessions() {
+  try {
+    const r = await api("/api/sessions");
+    const list = await r.json();
+    if (!Array.isArray(list)) return;
+    const box = $("session-list");
+    box.innerHTML = "";
+    for (const s of list) {
+      sessionMeta[s.id] = s;
+      const b = document.createElement("button");
+      b.className = "sess-item" + (s.id === state.session ? " active" : "");
+      b.type = "button";
+      const top = document.createElement("div");
+      top.textContent = s.model || s.id;
+      const sid = document.createElement("div");
+      sid.className = "sid";
+      sid.textContent = [s.id, s.workdir || "", s.created ? new Date(s.created).toLocaleString() : ""].filter(Boolean).join(" · ");
+      b.appendChild(top); b.appendChild(sid);
+      if (s.preview) {
+        const pv = document.createElement("div");
+        pv.className = "preview";
+        pv.textContent = s.preview;
+        b.appendChild(pv);
+      }
+      const del = document.createElement("span");
+      del.className = "sess-del";
+      del.textContent = "✕";
+      del.title = "删除会话";
+      del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id); });
+      b.appendChild(del);
+      b.addEventListener("click", () => openSession(s.id));
+      box.appendChild(b);
+    }
+  } catch { /* keep old list */ }
+}
+
+async function deleteSession(id) {
+  if (!confirm(`删除会话 ${id}？此操作不可恢复。`)) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (id === state.session) {
+      state.session = "";
+      resetTokenCount();
+      eventsEl().innerHTML = "";
+      document.title = "miniagent";
+      showSessionID("");
+    }
+    loadSessions();
+  } catch (e) { alert("删除失败：" + e.message); }
+}
+
+async function openSession(id) {
+  state.session = id;
+  resetTokenCount();
+  document.title = `miniagent · ${id}`;
+  document.body.classList.remove("nav-open");
+  eventsEl().innerHTML = "";
+  stickBottom = true;
+  if (sessionMeta[id]?.workdir) { $("workdir").value = sessionMeta[id].workdir; saveWorkdir(sessionMeta[id].workdir); }
+  try {
+    const r = await api(`/api/sessions/${encodeURIComponent(id)}`);
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -273,126 +274,21 @@ async function sendTurn() {
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
         if (!line) continue;
-        try { renderEvent(JSON.parse(line)); } catch { /* tolerate half-line */ }
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === "result") { // accumulate historical usage for the token counter
+            state.sessionInTokens += ev.input_tokens || 0;
+            state.sessionOutTokens += ev.output_tokens || 0;
+          }
+          renderEvent(ev);
+        } catch { /* skip bad lines */ }
       }
     }
-  } catch (e) {
-    renderEvent({ type: "error", error: String(e) });
-  } finally {
-    sending = false;
-    $("send").disabled = false;
-    loadSessions();
-  }
-}
-$("send").addEventListener("click", sendTurn);
-$("prompt").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendTurn();
-});
-
-// ---- models / sessions ----
-async function loadModels() {
-  try {
-    const r = await api("/api/models");
-    if (!r.ok) return;
-    const models = await r.json();
-    const sel = $("model-sel");
-    sel.innerHTML = "<option value=\"\">模型: 默认</option>";
-    for (const m of models) {
-      const o = document.createElement("option");
-      o.value = `${m.provider}/${m.model}`;
-      // provider/model ride in dataset, not value: model ids may contain "/" and a value
-      // split("/") mis-slices them (same ambiguity ModelRef exists to avoid).
-      o.dataset.provider = m.provider;
-      o.dataset.model = m.model;
-      o.textContent = `${m.provider}/${m.model}`;
-      sel.appendChild(o);
-    }
-  } catch { /* dropdown stays default */ }
-}
-let sessionMeta = {}; // id → { workdir, model, ... } captured from the session list
-
-async function loadSessions() {
-  try {
-    const r = await api("/api/sessions");
-    if (!r.ok) return;
-    const list = await r.json();
-    const box = $("session-list");
-    box.innerHTML = "";
-    for (const s of list) {
-      sessionMeta[s.id] = s;
-      const b = document.createElement("button");
-      b.className = "sess-item" + (s.id === session ? " active" : "");
-      b.type = "button";
-      const top = document.createElement("div");
-      top.textContent = s.model || s.id;
-      const sid = document.createElement("div");
-      sid.className = "sid";
-      sid.textContent = [s.id, s.workdir || "", s.created ? new Date(s.created).toLocaleString() : ""].filter(Boolean).join(" · ");
-      b.appendChild(top); b.appendChild(sid);
-      b.addEventListener("click", () => openSession(s.id));
-      const del = document.createElement("span");
-      del.className = "sess-del";
-      del.textContent = "✕";
-      del.title = "删除会话";
-      del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id); });
-      b.appendChild(del);
-      box.appendChild(b);
-    }
-  } catch { /* keep old list */ }
+    if (buf.trim()) { try { renderEvent(JSON.parse(buf)); } catch { /* trailing partial line */ } }
+    showSessionID(state.session);
+    finishText();
+  } catch (e) { console.log("replay failed", e); }
+  $("prompt").focus();
 }
 
-async function deleteSession(id) {
-  if (!confirm(`删除会话 ${id}？此操作不可恢复。`)) return;
-  try {
-    const r = await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (r.status === 401) { showLogin("密钥已失效"); return; }
-    if (r.status === 409) { alert("该会话有轮次正在进行，无法删除"); return; }
-    if (!r.ok && r.status !== 404) { alert(`删除失败: HTTP ${r.status}`); return; }
-    delete sessionMeta[id];
-    if (session === id) {
-      session = "";
-      $("events").innerHTML = "";
-      document.title = "miniagent";
-      showSessionID("");
-    }
-    loadSessions();
-  } catch { alert("删除失败：网络错误"); }
-}
-
-async function openSession(id) {
-  session = id;
-  sessionInTokens = sessionOutTokens = 0;
-  document.title = `miniagent · ${id}`;
-  document.body.classList.remove("nav-open");
-  $("events").innerHTML = "";
-  curText = curReasoning = null;
-  const meta = sessionMeta[id];
-  if (meta && meta.workdir) $("workdir").value = meta.workdir;
-  showSessionID(id);
-  try {
-    const r = await api(`/api/sessions/${encodeURIComponent(id)}`);
-    if (r.status === 401) { showLogin("密钥已失效"); return; }
-    if (!r.ok) return;
-    const text = await r.text();
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      try { renderEvent(JSON.parse(line)); } catch { /* half-line */ }
-    }
-  } catch { /* ignore */ }
-}
-
-// ---- boot: probe auth requirement ----
-(async () => {
-  try {
-    const r = await fetch("/api/whoami");
-    const j = await r.json();
-    if (!j.auth_required) { showApp(); return; }
-    if (key) {
-      const probe = await fetch("/api/sessions", { headers: authHeaders() });
-      if (probe.ok) { showApp(); return; }
-    }
-    showLogin();
-  } catch {
-    showLogin("无法连接服务器");
-  }
-})();
+boot();
