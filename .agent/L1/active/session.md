@@ -19,7 +19,7 @@ updated: 2026-08-22
 - 未做（报告低项，需用户决定）：whoami 版本探测收紧、鉴权爆破限速、`__new__` 全局串行、BroadcastChannel 多标签同步、优雅停机加长 grace。
 
 ## 待办
-- 用户审阅本轮实施（diff 未提交）后决定：提交 or 继续收尾未实施项（M2 README 示例、H4 收尾、L 级打磨、M6 thinking 下拉）。
+- 用户已提交两 commit（c336033 P0-P3 全量 + 9dce7c1 剩余 M6/L11/L12）。补充审查结论：M6/L11/L12 实施正确（含 envsubst/sed 转换实测验证）；deploy.sh:65 注释夹中文「授权目录」；剩余 L14（L0:25 internal/* 旧布局）、L16（length 救回只看 Reasoning）、L17（常量表缺 8 键）、L18（ResultOnly 死字段）、L19（TOCTOU 纵深）、L20（locks 永不回收）仍未做，量级均为低危打磨，是否继续由用户定。
 
 ## 备注
 - verify-gate 全绿：gofmt 空/build/vet/test -race/golangci-lint 0 issues/≤300 行。
