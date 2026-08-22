@@ -1,9 +1,11 @@
 package main
 
-// web_turn.go handles POST /api/turn: parses the JSON request, serializes turns on the same
-// session file, and runs the turn engine with the per-request ResponseWriter as the NDJSON sink.
-// The streamed contract is byte-identical to the CLI stdout stream (L0 #12), so the frontend
-// reuses the same NDJSON parser logic.
+// web_turn.go handles POST /api/turn: parses the JSON request, reserves the session in the
+// turn registry (same-session turns still answer 409), runs the turn decoupled from the
+// request connection (D1: client disconnect/tab close does NOT cancel the agent — stopping is
+// an explicit POST /api/sessions/{id}/stop), and streams the entry's events back to the
+// caller as one subscriber among possibly many. The streamed contract stays byte-identical
+// to the CLI stdout stream (L0 #12).
 
 import (
 	"context"
@@ -12,7 +14,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/justphantom/miniagent/config"
@@ -30,6 +31,9 @@ type webTurnRequest struct {
 	Thinking string `json:"thinking"`
 }
 
+// (s.baseCtx), NOT from r.Context() — a client disconnect must not cancel the agent.
+//
+//nolint:contextcheck // D1: the turn context deliberately derives from the server lifetime
 func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	// CSRF defense (decisive when auth is off): a cross-site form/no-cors fetch cannot carry
 	// application/json — CORS-safelisted content types are text/plain, multipart and the
@@ -62,65 +66,124 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serialize turns on the same session: RewriteMessages is atomic but concurrent in-process
-	// turns would race the first meta line. New sessions have a fresh generated id (collision-free),
-	// so the lock only matters for resume. The entry for an empty key serializes new-turn requests
-	// globally — acceptable (they are interactive, not high-throughput).
-	lockKey := req.Session
-	if lockKey == "" {
-		lockKey = "__new__"
+	// New sessions get their id up front (generateSessionID is collision-free): the registry
+	// key is always the real session id, so two concurrent NEW turns no longer serialize on a
+	// global "__new__" slot — different sessions genuinely run in parallel.
+	id := req.Session
+	presetID := ""
+	if id == "" {
+		presetID = generateSessionID()
+		id = presetID
 	}
-	mu, _ := s.locks.LoadOrStore(lockKey, &sync.Mutex{})
-	if !mu.(*sync.Mutex).TryLock() {
-		// N7: a same-session turn is already running (≤10min by the web default timeout) — the
-		// client would otherwise hang with no feedback; answer 409 so the UI can say "turn in progress".
+
+	// web.max_concurrent_turns gate (D2: default 0 = unlimited). Non-blocking acquire: a
+	// full server answers 429 instead of queueing a request that would hold no feedback.
+	if s.turnSem != nil {
+		select {
+		case s.turnSem <- struct{}{}:
+			defer func() { <-s.turnSem }()
+		default:
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many concurrent turns (web.max_concurrent_turns)"})
+			return
+		}
+	}
+
+	// The turn context derives from the server lifetime, not the request: a disconnect must
+	// not kill the agent (D1). runTurn layers the config max_duration on top of this bound.
+	const defaultWebMaxDuration = 10 * time.Minute
+	turnCtx, cancel := context.WithTimeout(s.baseCtx, defaultWebMaxDuration)
+	defer cancel()
+
+	entry, busy := s.turns.register(id, cancel)
+	if busy {
+		cancel()
+		// Same-session turn already running (N7 semantics kept): the UI can attach to the
+		// running turn via GET /api/sessions/{id}/live instead of hanging or retrying.
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "a turn on this session is already in progress"})
 		return
 	}
-	defer mu.(*sync.Mutex).Unlock()
-
-	// Stream NDJSON: headers + a flush-wrapping writer. Once the first byte is written the status
-	// is implicitly 200; errors after that point are appended as NDJSON error events by runTurn itself.
-	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-Accel-Buffering", "no") // reverse proxies (nginx) must not buffer the NDJSON stream
-	flusher, _ := w.(http.Flusher)
-	nw := &ndjsonWriter{w: w, f: flusher}
-
-	// L15: web turn default timeout. run.max_duration defaults to nil → if a tool hangs and
-	// doesn't respect ctx, the session lock is held forever (409 on all subsequent turns).
-	// Apply a conservative default so a stuck turn self-recovers. runTurn already layers the
-	// config max_duration on top; a web default tighter than the config wins via ctx deadline.
-	const defaultWebMaxDuration = 10 * time.Minute
-	ctx, cancel := context.WithTimeout(r.Context(), defaultWebMaxDuration)
-	defer cancel()
+	s.turns.broadcastLife(lifeEvent("turn_started", id, ""))
 
 	spec := turnSpec{
 		prompt:     req.Prompt,
 		workdir:    req.Workdir,
 		sessionArg: req.Session,
-		saveNew:    req.Session == "", // empty session = create
-		maxIterDef: 0,                 // web: rely on config run.max_iterations / builtin default
+		sessionID:  presetID, // non-empty only for new sessions; resolveSession uses it verbatim
+		saveNew:    req.Session == "",
+		maxIterDef: 0, // web: rely on config run.max_iterations / builtin default
 		overrides:  webOverrides(req),
 	}
-	err := s.engine.runTurn(ctx, spec, nw)
+
+	go func() {
+		err := s.engine.runTurn(turnCtx, spec, entry)
+		s.turns.finish(id, err)
+		s.turns.broadcastLife(turnFinishedEvent(id, err))
+	}()
+
+	// This handler is now just one subscriber of the entry: the response mirrors what the
+	// engine wrote, but the turn keeps running after the client is gone.
+	replay, ch, ok := entry.subscribe()
+	defer entry.unsubscribe(ch)
+	if !ok { // turn finished before we subscribed (degenerate fast path)
+		s.writeTurnError(w, entry.result())
+		return
+	}
+	if len(replay) == 0 {
+		// Hold the 200 until the first event: an error before any NDJSON byte (missing
+		// resume session, bad config) must still answer structured JSON, as before.
+		line, ok := <-ch
+		if !ok {
+			s.writeTurnError(w, entry.result())
+			return
+		}
+		replay = append(replay, line)
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Accel-Buffering", "no") // reverse proxies (nginx) must not buffer the NDJSON stream
+	nw := &ndjsonWriter{w: w, f: flusherOf(w)}
+
+	for _, line := range replay {
+		if nw.WriteLine(line) != nil {
+			return // client gone mid-replay; turn continues on the bus
+		}
+	}
+	for {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				return // turn finished: every buffered line has been drained
+			}
+			if nw.WriteLine(line) != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return // client disconnected — the turn keeps running (D1)
+		}
+	}
+}
+
+// writeTurnError maps a turn error that produced no streamed events to a structured JSON
+// response (the pre-stream error contract: 404 for a missing resume session, 500 otherwise;
+// a stopped turn that streamed nothing is a clean 204).
+func (s *webServer) writeTurnError(w http.ResponseWriter, err error) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if errors.Is(err, errSessionNotFound) {
-		if nw.n == 0 {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			return
-		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	if err != nil {
-		if nw.n == 0 {
-			// No event streamed yet → safe to answer with a structured JSON error.
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		// Mid-turn failure: runTurn already emitted the error event; nothing else to do.
-		return
-	}
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+}
+
+// flusherOf returns the ResponseWriter's Flusher when the transport supports it.
+func flusherOf(w http.ResponseWriter) http.Flusher {
+	f, _ := w.(http.Flusher)
+	return f
 }
 
 // webOverrides builds CLIOverrides from the request's optional provider/model/thinking fields.

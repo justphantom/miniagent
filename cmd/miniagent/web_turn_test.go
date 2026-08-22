@@ -44,6 +44,12 @@ func (f *fakeLLM) DoStream(ctx context.Context, req miniagent.Request, onDelta f
 
 func newTurnTestServer(t *testing.T) (*webServer, *fakeLLM) {
 	t.Helper()
+	return newTurnTestServerOn(context.Background(), t)
+}
+
+// newTurnTestServerOn builds a turn server whose baseCtx the test controls (shutdown tests).
+func newTurnTestServerOn(baseCtx context.Context, t *testing.T) (*webServer, *fakeLLM) {
+	t.Helper()
 	fake := &fakeLLM{}
 	dir := t.TempDir()
 	cfg := &config.Config{
@@ -58,7 +64,7 @@ func newTurnTestServer(t *testing.T) (*webServer, *fakeLLM) {
 			return fake, nil, nil
 		},
 	}
-	return &webServer{cfg: cfg, engine: engine, key: "", logger: testLogger()}, fake
+	return newWebServer(baseCtx, cfg, engine, "", testLogger()), fake
 }
 
 func postTurn(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
@@ -303,4 +309,237 @@ func (c *countingLLM) Do(ctx context.Context, req miniagent.Request) (miniagent.
 
 func (c *countingLLM) DoStream(ctx context.Context, req miniagent.Request, onDelta func(miniagent.Delta) error) (miniagent.Response, error) {
 	return c.Do(ctx, req)
+}
+
+// blockLLM holds every call until release closes, then answers — the hook for
+// disconnect/stop tests that need a turn observably in flight.
+type blockLLM struct {
+	entered chan struct{} // closed on the first Do call
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockLLM) Do(ctx context.Context, req miniagent.Request) (miniagent.Response, error) {
+	b.once.Do(func() { close(b.entered) })
+	select {
+	case <-b.release:
+		return miniagent.Response{Text: "done", FinishReason: "stop"}, nil
+	case <-ctx.Done():
+		return miniagent.Response{}, ctx.Err()
+	}
+}
+
+func (b *blockLLM) DoStream(ctx context.Context, req miniagent.Request, onDelta func(miniagent.Delta) error) (miniagent.Response, error) {
+	return b.Do(ctx, req)
+}
+
+// awaitLLM blocks until the LLM's first call (bounded).
+func awaitLLM(t *testing.T, b *blockLLM) {
+	t.Helper()
+	select {
+	case <-b.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn never reached the LLM")
+	}
+}
+
+// D1: the turn context derives from the server lifetime, not the request. Canceling the
+// REQUEST context (client disconnect / tab close / view switch) must not cancel the agent —
+// the session file still gets the full turn.
+func TestWebTurn_DisconnectDoesNotKillTurn(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/turn", strings.NewReader(fmt.Sprintf(`{"prompt":"hi","workdir":%q}`, workdir)))
+	req.Header.Set("Content-Type", "application/json")
+	handlerDone := make(chan struct{})
+	go func() { defer close(handlerDone); s.mux().ServeHTTP(httptest.NewRecorder(), req) }()
+
+	awaitLLM(t, blocked)
+	cancel() // client vanishes mid-turn
+	<-handlerDone
+
+	close(blocked.release) // let the agent finish
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entries, _ := os.ReadDir(s.cfg.Session.Dir)
+		if len(entries) > 0 {
+			break // the turn completed and persisted despite the disconnect
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session file never persisted after client disconnect")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// D1's stop side: POST /api/sessions/{id}/stop cancels the in-flight turn; the executed part
+// is still saved (the partial-persist path), and the slot is released for a follow-up turn.
+func TestWebTurn_StopAPI(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(fmt.Sprintf(`{"prompt":"hi","workdir":%q}`, workdir)))
+		req.Header.Set("Content-Type", "application/json")
+		s.mux().ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	awaitLLM(t, blocked)
+
+	// No turn on an unrelated session → 404.
+	rec404 := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec404, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/sessions/none-such/stop", nil))
+	if rec404.Code != http.StatusNotFound {
+		t.Errorf("stop unknown session code = %d, want 404", rec404.Code)
+	}
+
+	id := onlyRunningSession(t, s)
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/sessions/"+id+"/stop", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("stop code = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	<-handlerDone // the canceled turn unwinds and saves
+
+	// The follow-up turn shares the injected LLM — release it so the resume can complete.
+	close(blocked.release)
+	// Slot released: a new turn on the same session is accepted (not 409).
+	rec2 := postTurn(t, s.mux(), fmt.Sprintf(`{"prompt":"again","workdir":%q,"session":%q}`, workdir, id))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("resume after stop code = %d: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// onlyRunningSession returns the single running registry entry's id.
+func onlyRunningSession(t *testing.T, s *webServer) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.turns.mu.Lock()
+		id := ""
+		n := 0
+		for k, e := range s.turns.m {
+			if e.kind == "running" {
+				id, n = k, n+1
+			}
+		}
+		s.turns.mu.Unlock()
+		if n == 1 {
+			return id
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected exactly 1 running entry, got %d", n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// Two NEW sessions started concurrently must both run — the old "__new__" global lock
+// serialized them; pre-generated ids key the registry by the real session id.
+func TestWebTurn_ConcurrentNewSessions(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+
+	done := make(chan int, 2)
+	for range 2 {
+		go func() {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(fmt.Sprintf(`{"prompt":"hi","workdir":%q}`, workdir)))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			s.mux().ServeHTTP(rec, req)
+			done <- rec.Code
+		}()
+	}
+	awaitLLM(t, blocked)
+	close(blocked.release)
+	for i := range 2 {
+		if code := <-done; code != http.StatusOK {
+			t.Errorf("concurrent new turn %d code = %d, want 200", i, code)
+		}
+	}
+	entries, _ := os.ReadDir(s.cfg.Session.Dir)
+	if len(entries) != 2 {
+		t.Errorf("persisted sessions = %d, want 2", len(entries))
+	}
+}
+
+// web.max_concurrent_turns: overflowing requests answer 429; finishing a turn frees a slot.
+func TestWebTurn_ConcurrencyCap(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	s.turnSem = make(chan struct{}, 1)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+
+	go func() {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(fmt.Sprintf(`{"prompt":"one","workdir":%q}`, workdir)))
+		req.Header.Set("Content-Type", "application/json")
+		s.mux().ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	awaitLLM(t, blocked)
+	rec := postTurn(t, s.mux(), fmt.Sprintf(`{"prompt":"two","workdir":%q}`, workdir))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("overflow code = %d, want 429: %s", rec.Code, rec.Body.String())
+	}
+	close(blocked.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec := postTurn(t, s.mux(), fmt.Sprintf(`{"prompt":"three","workdir":%q}`, workdir))
+		if rec.Code == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("slot never freed after turn finished (last code %d)", rec.Code)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Server shutdown (baseCtx cancel) cancels in-flight turns — the bounded-lifetime guarantee
+// that keeps a turn from outliving the server process.
+func TestWebTurn_ServerShutdownCancelsTurn(t *testing.T) {
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	s, _ := newTurnTestServerOn(baseCtx, t)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+	go func() {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(fmt.Sprintf(`{"prompt":"hi","workdir":%q}`, workdir)))
+		req.Header.Set("Content-Type", "application/json")
+		s.mux().ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	awaitLLM(t, blocked)
+	baseCancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.turns.mu.Lock()
+		n := len(s.turns.m)
+		s.turns.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("in-flight turn never unwound after baseCtx cancel")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

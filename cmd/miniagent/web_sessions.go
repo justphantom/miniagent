@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/justphantom/miniagent/config"
 	"github.com/justphantom/miniagent/miniagent"
@@ -161,8 +160,9 @@ func (s *webServer) handleSessionReplay(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleSessionDelete removes the session jsonl file. A session with a turn in flight is
-// rejected (409): deleting under an open writer would corrupt the file or resurrect it via
-// the writer's next append. Same id-allowlist validation as replay.
+// rejected (409): deleting under a running writer would corrupt the file or resurrect it via
+// the writer's next append. The registry's beginDelete slot blocks new turns for the remove's
+// duration (same id-allowlist validation as replay).
 func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := session.ValidateSessionID(id); err != nil {
@@ -179,16 +179,13 @@ func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Detect in-flight turns via the turn lock's TryLock rather than deleting the locks entry:
-	// the entry identity must stay stable for concurrent turns (LoadOrStore), and entry count
-	// is bounded by server-created session ids.
-	mu, _ := s.locks.LoadOrStore(id, &sync.Mutex{})
-	m := mu.(*sync.Mutex)
-	if !m.TryLock() {
+	// Reserve the session against new turns while removing the file. The old per-session
+	// mutex map is gone — the registry entry is released by defer, nothing lingers (L20).
+	if s.turns.beginDelete(id) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "session has a turn in progress"})
 		return
 	}
-	defer m.Unlock()
+	defer s.turns.finish(id, nil)
 
 	if err := os.Remove(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -199,12 +196,25 @@ func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Clean up the per-session tool-output directory (created as <id>.tool-output in run_turn.go)
-	// to prevent orphan accumulation (M7), and drop the lock entry (L20): the session is gone, so
-	// the mutex would otherwise linger for the process lifetime. Safe under TryLock: a concurrent
-	// turn holds this same mutex via LoadOrStore — we only reach here with it held, so no in-flight
-	// turn exists; a racing new turn re-creates the entry via LoadOrStore and locks the fresh mutex,
-	// at worst briefly losing serialization against a turn that started before the delete.
-	s.locks.Delete(id)
+	// to prevent orphan accumulation (M7).
 	_ = os.RemoveAll(path + ".tool-output")
+	s.turns.broadcastLife(lifeEvent("session_deleted", id, ""))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSessionStop cancels the session's in-flight turn (D1's explicit stop): the engine
+// takes the normal cancel path — the executed part is saved, subscribers see the stream end.
+func (s *webServer) handleSessionStop(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := session.ValidateSessionID(id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	entry, ok := s.turns.running(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no turn in progress"})
+		return
+	}
+	entry.cancel()
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/justphantom/miniagent/cmd/miniagent/webstatic"
@@ -35,7 +34,19 @@ type webServer struct {
 	key          string   // effective key; "" = no auth (loopback-only, enforced at startup)
 	allowedHosts []string // listen host variants the Host header may carry (DNS-rebinding defense); nil = skip (tests)
 	logger       *slog.Logger
-	locks        sync.Map // session id → *sync.Mutex: serialize turns on the same session file
+	turns        *turnRegistry   // in-flight turns/deletes: event bus + same-session serialization
+	baseCtx      context.Context // server lifetime; web turns derive from it, NOT from the request (D1)
+	turnSem      chan struct{}   // web.max_concurrent_turns gate; nil = unlimited
+}
+
+// newWebServer assembles the server state shared by runServe and tests. baseCtx owns the web
+// turn contexts so a client disconnect never cancels an agent turn (D1).
+func newWebServer(baseCtx context.Context, cfg *config.Config, engine *turnEngine, key string, logger *slog.Logger) *webServer {
+	s := &webServer{cfg: cfg, engine: engine, key: key, logger: logger, turns: newTurnRegistry(), baseCtx: baseCtx}
+	if n := cfg.Web.MaxConcurrentTurns; n > 0 {
+		s.turnSem = make(chan struct{}, n)
+	}
+	return s
 }
 
 // webKey resolves the effective WebUI key: config web.key > $MINIAGENT_WEB_KEY.
@@ -75,7 +86,8 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		os.Exit(1)
 	}
 	engine := &turnEngine{cfg: cfg, cfgPath: cfgPath, logger: logger, buildClients: buildRuntimeClients, protectSignal: false, transports: &transportCache{}}
-	s := &webServer{cfg: cfg, engine: engine, key: key, allowedHosts: hostVariants(addr, cfg.Web.AllowedHosts), logger: logger}
+	s := newWebServer(ctx, cfg, engine, key, logger)
+	s.allowedHosts = hostVariants(addr, cfg.Web.AllowedHosts)
 
 	srv := &http.Server{Addr: addr, Handler: s.mux(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
@@ -128,6 +140,7 @@ func (s *webServer) mux() http.Handler {
 	api.HandleFunc("GET /api/sessions", s.handleSessionsList)
 	api.HandleFunc("GET /api/sessions/{id}", s.handleSessionReplay)
 	api.HandleFunc("DELETE /api/sessions/{id}", s.handleSessionDelete)
+	api.HandleFunc("POST /api/sessions/{id}/stop", s.handleSessionStop)
 	mux.Handle("/api/", s.requireAuth(api))
 	return s.guard(mux)
 }
@@ -193,28 +206,25 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// ndjsonWriter streams the CLI-identical NDJSON contract over HTTP: each Write is one event
-// line, flushed immediately so the UI renders incrementally. n counts bytes written so the
-// handler can decide between a JSON error response (nothing streamed yet) and just returning.
+// ndjsonWriter streams NDJSON lines to the response, flushing after each so the UI renders
+// incrementally. A write error (client gone) is sticky — later lines are dropped and the
+// caller treats it as "stop mirroring"; the turn itself keeps running on the bus (D1).
 type ndjsonWriter struct {
 	w   io.Writer
 	f   http.Flusher
-	n   int64
 	err error
 }
 
-func (nw *ndjsonWriter) Write(p []byte) (int, error) {
+func (nw *ndjsonWriter) WriteLine(line string) error {
 	if nw.err != nil {
-		return 0, nw.err
+		return nw.err
 	}
-	n, err := nw.w.Write(p)
-	nw.n += int64(n)
-	if err != nil {
+	if _, err := nw.w.Write([]byte(line)); err != nil {
 		nw.err = err
-		return n, err
+		return err
 	}
 	if nw.f != nil {
 		nw.f.Flush()
 	}
-	return n, nil
+	return nil
 }

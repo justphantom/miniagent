@@ -68,6 +68,9 @@ type WebConfig struct {
 	// AllowedHosts extends the Host-header allowlist (DNS-rebinding defense) for deployments
 	// the server cannot derive itself: reverse-proxy domain names, external IPs behind NAT.
 	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+	// MaxConcurrentTurns caps simultaneously running web turns across all sessions; 0
+	// (default) = unlimited. Overflowing requests answer 429.
+	MaxConcurrentTurns int `json:"max_concurrent_turns,omitempty"`
 }
 
 // ModelRef is a usable provider/model combination (the return unit of ListAllModels).

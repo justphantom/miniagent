@@ -33,16 +33,21 @@ var errSessionNotFound = errors.New("session not found")
 // of terminating the process. resolveSessionForRun wraps it with the stderr+os.Exit(1) CLI behavior. Tests exercise the
 // previously-untestable error paths (resume missing, load failure) hermetically via a temp dir — real FS (faithful: keeps the
 // max_session_bytes / atomic-rename / crash-recovery semantics a memStore mock would silently drop), no new Store interface.
-//   - saveNew=true: create a new session (generateSessionID), construct meta, history=nil.
+//   - saveNew=true: create a new session (generateSessionID, or presetID when the web layer
+//     pre-generates the id so the turn registry can key the slot before the session exists),
+//     construct meta, history=nil.
 //   - sessionArg!="": resume; validate id + LoadSession; if the file does not exist (meta.Type=="") return a "not found" error.
 //   - both empty: stateless, return an empty path (main skips persistence).
-func resolveSession(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (sessPath string, meta session.SessionMeta, history []miniagent.Message, err error) {
+func resolveSession(saveNew bool, presetID, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (sessPath string, meta session.SessionMeta, history []miniagent.Message, err error) {
 	if !saveNew && sessionArg == "" {
 		return "", session.SessionMeta{}, nil, nil
 	}
 	id := sessionArg
 	if saveNew {
-		id = generateSessionID()
+		id = presetID
+		if id == "" {
+			id = generateSessionID()
+		}
 	}
 	sessPath, err = session.ResolveSessionPath(id, sessionDir)
 	if err != nil {
@@ -78,7 +83,7 @@ func resolveSession(saveNew bool, sessionArg, sessionDir, modelSpec, provider, w
 // resolveSessionForRun is the CLI entry: resolveSession + stderr + os.Exit(1) on error. The error messages are preserved
 // verbatim from the pre-refactor inline form (wrapped under "miniagent: " by this wrapper).
 func resolveSessionForRun(saveNew bool, sessionArg, sessionDir, modelSpec, provider, workdir string, maxSessionBytes int64) (string, session.SessionMeta, []miniagent.Message) {
-	sessPath, meta, history, err := resolveSession(saveNew, sessionArg, sessionDir, modelSpec, provider, workdir, maxSessionBytes)
+	sessPath, meta, history, err := resolveSession(saveNew, "", sessionArg, sessionDir, modelSpec, provider, workdir, maxSessionBytes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: %v\n", err)
 		os.Exit(1)

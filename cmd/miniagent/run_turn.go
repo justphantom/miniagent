@@ -32,6 +32,7 @@ type turnSpec struct {
 	prompt      string
 	workdir     string // required, absolute (validated here — the web layer must not trust input)
 	sessionArg  string // resume id; mutually exclusive with saveNew
+	sessionID   string // pre-generated new-session id (web layer keys its registry slot before the session exists); "" = generate inside
 	saveNew     bool   // create a new session
 	resultOnly  bool   // CLI -result-only: plain text, no NDJSON events
 	maxIterDef  int    // flag-level max_iterations fallback (web passes 0 = builtin default)
@@ -99,7 +100,7 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 		sessionDir = resolved.Session.Dir
 	}
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
-	sessPath, meta, history, err := resolveSession(spec.saveNew, spec.sessionArg, sessionDir, modelSpec, resolved.Provider.Name, spec.workdir, int64(maxSessionBytesOf(resolved)))
+	sessPath, meta, history, err := resolveSession(spec.saveNew, spec.sessionID, spec.sessionArg, sessionDir, modelSpec, resolved.Provider.Name, spec.workdir, int64(maxSessionBytesOf(resolved)))
 	if err != nil {
 		return err
 	}

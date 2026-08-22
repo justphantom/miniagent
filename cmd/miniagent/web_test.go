@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/justphantom/miniagent/config"
@@ -29,7 +28,7 @@ func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 
 func testWebServer(key string) *webServer {
 	cfg := &config.Config{Providers: []config.ProviderConfig{{Name: "p", ChatURL: "http://127.0.0.1:1/v1/chat/completions", Models: []config.ModelConfig{{Name: "m"}}}}, Defaults: config.DefaultsConfig{Provider: "p", Model: "m"}}
-	return &webServer{cfg: cfg, key: key, engine: &turnEngine{cfg: cfg, logger: testLogger()}, logger: testLogger()}
+	return newWebServer(context.Background(), cfg, &turnEngine{cfg: cfg, logger: testLogger()}, key, testLogger())
 }
 
 func TestWebRequireAuth(t *testing.T) {
@@ -134,9 +133,9 @@ func TestWebSessionDelete(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("file still exists after delete: %v", err)
 	}
-	// L20: a successful delete also drops the lock entry — it must not linger for the process lifetime.
-	if _, ok := s.locks.Load("del-1"); ok {
-		t.Error("locks entry still present after successful delete")
+	// L20: a successful delete releases the registry slot — nothing lingers for the process lifetime.
+	if _, ok := s.turns.running("del-1"); ok {
+		t.Error("registry entry still present after successful delete")
 	}
 	if rec := del("del-1"); rec.Code != http.StatusNotFound {
 		t.Errorf("delete missing code = %d, want 404", rec.Code)
@@ -160,12 +159,12 @@ func TestWebSessionDelete_InFlight_Conflict(t *testing.T) {
 	if err := session.AppendMessages(path, meta, []miniagent.Message{{Role: "user", Content: "hi"}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// Hold the turn lock as handleTurn would during a running turn.
-	mu := &sync.Mutex{}
-	s.locks.Store("busy-1", mu)
-	mu.Lock()
-	defer mu.Unlock()
-
+	// Hold the registry slot as handleTurn would during a running turn (kind=running blocks
+	// both new turns and deletes, mirroring the old held mutex).
+	if _, busy := s.turns.register("busy-1", func() {}); busy {
+		t.Fatal("register unexpectedly busy on a fresh registry")
+	}
+	defer s.turns.finish("busy-1", nil)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodDelete, "/api/sessions/busy-1", nil)
 	rec := httptest.NewRecorder()
 	s.mux().ServeHTTP(rec, req)

@@ -15,7 +15,7 @@ import (
 // Resume a non-existent session id → "not found" error (does not create a garbage session on a typo).
 func TestResolveSession_ResumeMissing(t *testing.T) {
 	dir := t.TempDir()
-	_, _, _, err := resolveSession(false, "20260101-000000-deadbeef", dir, "p/m", "p", "/wd", 0)
+	_, _, _, err := resolveSession(false, "", "20260101-000000-deadbeef", dir, "p/m", "p", "/wd", 0)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("resume missing: err = %v, want 'not found'", err)
 	}
@@ -35,7 +35,7 @@ func TestResolveSession_LoadCorrupt(t *testing.T) {
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err = resolveSession(false, id, dir, "p/m", "p", "/wd", 0)
+	_, _, _, err = resolveSession(false, "", id, dir, "p/m", "p", "/wd", 0)
 	if err == nil || !strings.Contains(err.Error(), "load session") {
 		t.Errorf("load corrupt: err = %v, want 'load session'", err)
 	}
@@ -43,7 +43,7 @@ func TestResolveSession_LoadCorrupt(t *testing.T) {
 
 // No session requested (both flags empty) → empty path, nil error, nil history (stateless run).
 func TestResolveSession_Stateless(t *testing.T) {
-	sessPath, _, history, err := resolveSession(false, "", t.TempDir(), "p/m", "p", "/wd", 0)
+	sessPath, _, history, err := resolveSession(false, "", "", t.TempDir(), "p/m", "p", "/wd", 0)
 	if err != nil {
 		t.Errorf("stateless: err = %v, want nil", err)
 	}
