@@ -65,4 +65,5 @@ install -m 0755 "$SCRIPT_DIR/../bin/miniagent" /usr/local/bin/miniagent
 
 systemctl daemon-reload
 systemctl enable --now $SERVICE
+systemctl restart $SERVICE
 systemctl status $SERVICE --no-pager || true
