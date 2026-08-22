@@ -75,9 +75,6 @@ func collectOverrides(f *cliFlags) config.CLIOverrides {
 	if set["stream"] {
 		o.Stream = f.stream
 	}
-	if set["result-only"] {
-		o.ResultOnly = f.resultOnly
-	}
 	if set["confirm-destructive"] {
 		o.ConfirmDestructive = f.confirmDestructive
 	}

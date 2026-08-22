@@ -9,10 +9,12 @@ import (
 // CLIOverrides collects the "explicitly passed" CLI parameters (main uses flag.Visit to distinguish unset),
 // for Resolve to arbitrate by cli>config>builtin precedence. A nil pointer means not passed. After P2 only
 // core CLI parameters remain; strategy parameters (summary/duration/window etc.) live only in config, so they are absent here.
+// -result-only is NOT here: it shapes output assembly (spec.resultOnly → emit hooks), not resolved run
+// parameters, so it bypasses Resolve entirely.
 type CLIOverrides struct {
-	Provider, Model, Thinking              *string
-	MaxIterations                          *int
-	Stream, ResultOnly, ConfirmDestructive *bool
+	Provider, Model, Thinking  *string
+	MaxIterations              *int
+	Stream, ConfirmDestructive *bool
 }
 
 // ResolvedRun holds the run parameters produced by Resolve — only fields that need arbitration or parsing
