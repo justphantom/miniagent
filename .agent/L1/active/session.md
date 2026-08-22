@@ -7,19 +7,28 @@ updated: 2026-08-23
 # 当前会话
 
 ## 状态
-- 用户要求：深入评估并输出实现方案文档——①WebUI 多会话同时进行 ②多浏览器消息/状态同步 ③thinking 文本渲染 markdown。
-- 已产出 `WEBUI_SYNC_PLAN.md`（评估+方案，分 P0-P4 五阶段），**未写实现代码**，待用户确认决策点 D1-D4。
+- WEBUI_SYNC_PLAN.md 全部落地（P0-P4），verify-gate 全绿（gofmt 空/build/vet/test -race 14 包/golangci-lint 0 issues/JS node --check 全过/非测试 .go ≤300 行），6 个提交（7f39383→143371a），工作树干净。
+- 决策 D1-D4 全按推荐实施并记录在 WEBUI_SYNC_PLAN.md §11 与 L2 webui-architecture §7-§10。
 
-## 关键评估结论（证据已核）
-- ①服务端不同 session 已可并发（per-session TryLock；共享状态核查全线程安全）；blocker：`__new__` 全局锁串行新建会话（web_turn.go:69）+ 前端切视图 abort fetch → r.Context() 取消 → 杀在途轮次（app.js:88/399）。
-- ②无推送通道；NDJSON 只发发起者；进行中轮次磁盘无落盘（saveSession 在 Run 后）→ 跨浏览器观战必须服务端缓冲。
-- ③node DOM shim 实测：finishText 已对 reasoning mdRender（与 CHANGELOG 自述一致）；差距在**流式阶段**纯文本直出原始 md 语法——thinking 恰是流式最长的可见内容。
-- 方案核心：turnRegistry 事件总线（引擎写总线、扇出订阅者、Write 恒 nil——OnToolUse emit 错误会终止轮次 tool_handler.go:35）+ turn ctx 脱离 r.Context() + 预生成 id 去 `__new__` + stop/live/events 三端点 + 前端多视图 detached DOM + thinking 300ms 节流重绘。
-- 传输选 fetch NDJSON 不选 EventSource（无法带 x-api-key 头）。
+## 落地清单（commit → 内容）
+- 7f39383 docs: 方案文档+决策确认（WEBUI_SYNC_PLAN.md）。
+- 6f51cbb P0: thinking 流式 markdown——300ms 节流 mdRender、首块立即绘制、>64KB 停重绘、隐藏视图跳过、复制/折叠仍 finish 绑定。
+- aed9e02 P1: turnRegistry 事件总线（web_bus.go）——turn ctx 派生 baseCtx（断连/切视图/关标签不杀轮次，nolint:contextcheck 有注释）、预生成 id 删 `__new__` 全局锁、stop API、`web.max_concurrent_turns`（429）、Write 恒 nil error、beginDelete 承载删除互斥。测试：web_bus_test.go 7 例 + web_turn_test.go 5 新例（断连不杀/stop/并发新建/上限/shutdown）。
+- 42169ed P2: web_live.go——GET /api/events（hello/turn_started/turn_finished/session_deleted/15s ping）、GET /api/sessions/{id}/live（事件 0 重放+live_end）、列表 running 字段；live.js（fetch NDJSON、2s 重连、attachLive 旁观）。
+- 0ab7467 P3: 前端多视图——views.js（#events 视口+每会话 .view、rekey、≤8 逐出、running 不逐出）、events.js 视图化（per-view curText/toolNodes/tokens/gen）、app.js 重写（切换不 abort、发送变停止走 stop API、409 升级旁观、lifecycle 驱动列表/旁观）、store.js 瘦身（会话态入 view）。
+- 143371a P4: CHANGELOG（Unreleased 含 Breaking 断连语义）、README WebUI 节重写、ARCHITECTURE cmd 树、L2 决策 §7-§10、config.example.json。
+
+## 关键实现事实（供后续轮次追溯）
+- 引擎 out 写 turnEntry；HTTP handler 只是订阅者：首事件前等 `<-ch`，!ok 时按 err 映射 404/500/204（writeTurnError），保持旧 JSON 错误契约。
+- 订阅握手在 entry.mu 内快照+注册原子化（无重无漏）；慢订阅 chan(64) 满即关闭淘汰；finish 关闭全部订阅 chan（缓冲可排空）。
+- live 重放含 `live_truncated {dropped:N}` 首行（缓冲 20000 行超限丢最旧）。
+- 测试技巧：blockLLM{entered,release}；流式断言用 mutex 化 syncRecorder（httptest.Recorder 非并发安全）。
+- Go 原始字符串 `` `...\n` `` 内 \n 是字面量——曾致总线测试少一行（已修，测试统一用 "...\n" 解释串）。
 
 ## 待办
-- 用户确认 D1 断连语义（推荐继续执行+stop 接管）/ D2 并发上限默认（推荐 0）/ D3 live 重连（推荐重建视图）/ D4 前端不引入测试框架。
-- 确认后按 P0(thinking)→P1(registry+解耦+stop)→P2(live/events)→P3(多视图)→P4(文档) 实施。
+- 无。P3 观察项 O7/O8 中 O8（并发上限）已顺带落地为 opt-in；O7 维持待决策。
+- 发布时 CHANGELOG Unreleased 段并入版本号。
 
 ## 备注
-- 工作树：新增 WEBUI_SYNC_PLAN.md 未提交（CLAUDE.md 禁止提交）；HEAD 0699c2e。
+- 冒烟实测（真实服务）：/api/events hello、/api/turn 契约不变、列表 running 字段、live_end 均符合预期。
+- 提交已按用户 2026-08-23 明确指令执行（覆盖 CLAUDE.md 禁提交的默认约束）。
