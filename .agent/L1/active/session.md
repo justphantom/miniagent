@@ -34,8 +34,9 @@ updated: 2026-08-22
 - CHANGELOG Unreleased 段补充。
 
 ## 待办
-- 遗留项已全部处置（未提交，最高约束）：① N5 失败态补齐（catch → 「加载失败：<原因>（点击重试）」，hint 挂 click 重试）；② N14 回填补 `!$("workdir").value.trim()` 守卫（显式输入恒胜隐式回填）；③ 新增 `webstatic/assets_test.go` TestNames（6 文件精确集合 + 每项可 Read，钉死路由注册契约）。CHANGELOG Unreleased 同步三处。verify-gate 全绿（15 包 ok，含新 webstatic 测试）。
-- 剩余：用户提交工作树（9 文件：app.js/app.css/assets_test.go/README/CHANGELOG/ASSESSMENT.md/.agent 2 件+删 assessment.md）；P3 N11/N12 维持待决策。ASSESSMENT.md §2-§5 已更新为「已处置」状态，综合 8.8。
+- 第三轮评估完成（ASSESSMENT.md 重写）：0 高 2 中 4 低新发现，60 项前轮整改零回退，综合 8.8→9.0。
+- 待用户定夺 §4 四项打磨（O4 删冗余监听/O5 grep glob 校验/O6 deploy fail-fast/O3 文档对齐，均 <15min）；P3 N11/N12 维持待决策。
+- 工作树：ASSESSMENT.md + session.md 未提交（最高约束禁提交）。
 
 ## 备注
 - verify-gate 全绿：gofmt 空/build/vet/test -race/golangci-lint 0 issues/≤300 行。

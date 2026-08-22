@@ -56,7 +56,7 @@
 
 ### Added
 - **WebUI 会话删除**：`DELETE /api/sessions/{id}` + 会话列表项 ✕ 按钮（confirm 确认；删当前会话重置聊天视图）。进行中轮次的会话拒绝删除（409，经 turn 锁 `TryLock` 检测），防写方续写复活/损坏文件。移动端可见：`@media (hover: none)` 强制 `.sess-del { visib…[args omitted]流式 `text_delta`/`reasoning_delta` 累积到内存，`finishText()`（遇 `result`/`error`/工具事件打断）时一次性 `mdRender` 转 DOM；`result`/`tool_result` 的 `text`/`output` 也渲染。子集：# 标题、``` 代码块、-/* 列表、> 引用、---、**粗体**、*斜体*、`行内代码`、~~删除线~~、**表格**（`| col |` + `|---|---|` 分隔行 + `:-` `:-:` `-:` 对齐；单元格先 esc() 再 mdInline()）。**XSS 防护：先 HTML 实体转义（&<>"）再 markdown 替换**，`innerHTML` 仅注入转义后内容；用户 prompt 保持 `textContent` 不渲染。
-- **WebUI header 会话 token 累计**：`result` 事件 `input_tokens`/`output_tokens` 累加显示于 header（`in=N out=N`）；新会话/打开历史会话清零（历史会话只累计打开后的轮次，无历史用量数据源）。
+- **WebUI header 会话 token 累计**：`result` 事件 `input_tokens`/`output_tokens` 累加显示于 header（`in=N out=N`）；新会话清零，打开历史会话时 replay 流中所有历史 result 的 token 均计入累计（无单独的历史用量数据源）。
 - **WebUI 版本号展示**：登录页 h1 下 + header 右侧 `model-badge` 旁双点显示（`GET /api/whoami` 已返回 `version`，boot 时 `setVersion` 填充；移动端 <500px 隐藏 header 版，登录页常显便于排查服务版本）。
 - **WebUI 体验全面优化**：
   - 中断：发送后按钮变「停止」，AbortController 断开流（后端 req ctx 取消 → 存已执行部分）。

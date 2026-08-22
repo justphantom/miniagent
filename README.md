@@ -144,7 +144,7 @@ sudo make deploy   # 装 bin/miniagent 为 systemd WebUI 服务并 enable --now
 - **鉴权**：登录页输入访问密钥，请求带 `x-api-key` 头（常数时间比较）。密钥取 `web.key` 或 `$MINIAGENT_WEB_KEY`；两者皆空则仅允许 **loopback** listen（无鉴权，本机信任），**非 loopback（如 `0.0.0.0:8787`）无 key 时启动直接拒绝**。远程开放建议配反向代理 + TLS。
 - **配置**（`web` 段）：`listen`（默认 `127.0.0.1:8787`）、`key`、`allowed_hosts`（Host 头白名单的额外条目，反代域名/外部 IP 场景）。
 - **请求来源防护**：全部请求校验 `Host` 头 ∈ 白名单（listen 地址 + loopback 变体；通配监听再加 hostname 与本机网卡地址；`web.allowed_hosts` 追加），拒绝 DNS rebinding；浏览器跨站请求（`Sec-Fetch-Site`/`Origin`）与 `POST /api/turn` 非 `application/json` Content-Type 一律 403/415，阻断无鉴权 loopback 模式下的 CSRF。
-- **界面**：左侧会话列表（点击载入最近 200 条历史；会话项可删除 ✕、显示最后 assistant 消息预览），右侧聊天区（新会话/续跑表单 prompt/workdir 必填，provider/model/thinking 下拉——数据源 `GET /api/models`）。**markdown 渲染**（标题/粗体/斜体/代码/列表/引用/表格/删除线，XSS 实体转义保护），**流式累积→一次性渲染**（无闪烁）。**暗亮主题切换**（◐/◑，localStorage 记忆）。**中断**：发送中按钮变「停止」，AbortController 断开流（后端 req ctx 取消 → 存已执行部分）。**智能滚动**：上翻不拽回 + 「↓ 新消息」浮动按钮。**长文本折叠**：>24 行自动折叠+展开。**代码块复制按钮**。**header 显示**当前会话 id、累计 token 量（in=N out=M）、版本号、模型名。
+- **界面**：左侧会话列表（点击载入最近 200 条历史；会话项可删除 ✕、显示最后 assistant 消息预览），右侧聊天区（新会话/续跑表单 prompt/workdir 必填，provider/model/thinking 下拉——数据源 `GET /api/models`）。**markdown 渲染**（标题/粗体/斜体/代码/列表/引用/表格/删除线，XSS 实体转义保护），**流式累积→一次性渲染**（无闪烁）。**暗亮主题切换**（◐/◑，localStorage 记忆）。**中断**：发送中按钮变「停止」，AbortController 断开流（后端 req ctx 取消 → 存已执行部分）。**智能滚动**：上翻不拽回 + 「↓ 新消息」浮动按钮。**长文本折叠**：>24 行自动折叠+展开。**代码块复制按钮**。**header 显示**当前会话 id、累计 token 量（in=N out=M，含 replay 历史）、版本号、模型名。
 - **API**：`POST /api/turn`（NDJSON 流式，契约与 CLI stdout 逐字节一致；`session` 空则新建、非空则续跑）、`GET /api/sessions`、`GET /api/sessions/{id}`、`GET /api/models`；除公开探测的 `GET /api/whoami` 外全部走 `x-api-key` 鉴权。
 - **streaming**：`run.stream` 配置控制是否发 `text_delta`/`reasoning_delta`（默认非流式，界面显示最终文本与工具事件）。
 
