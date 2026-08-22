@@ -17,7 +17,7 @@ RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=full
 PrivateTmp=true
-ReadWritePaths=${MINIAGENT_WORKDIR}
+ReadWritePaths=${MINIAGENT_WORKDIR} ${MINIAGENT_SESSION_DIR}
 
 [Install]
 WantedBy=multi-user.target

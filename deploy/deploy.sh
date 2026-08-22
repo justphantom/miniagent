@@ -22,7 +22,7 @@ if [ -f "$ENV_FILE" ]; then
 	. "$ENV_FILE"
 fi
 
-: "${MINIAGENT_WORKDIR:?}" "${MINIAGENT_CONFIG:?}" "${MINIAGENT_USER:?}" "${MINIAGENT_GROUP:?}"
+: "${MINIAGENT_WORKDIR:?}" "${MINIAGENT_CONFIG:?}" "${MINIAGENT_USER:?}" "${MINIAGENT_GROUP:?}" "${MINIAGENT_SESSION_DIR:?}"
 
 if ! command -v systemctl >/dev/null 2>&1; then
 	echo "deploy: systemctl not found (systemd only)" >&2
@@ -46,7 +46,7 @@ fi
 # Render unit from template, substituting the four variables.
 UNIT_TPL="$SCRIPT_DIR/miniagent.service.tpl"
 UNIT_DST=/etc/systemd/system/$SERVICE.service
-export MINIAGENT_WORKDIR MINIAGENT_CONFIG MINIAGENT_USER MINIAGENT_GROUP
+export MINIAGENT_WORKDIR MINIAGENT_CONFIG MINIAGENT_USER MINIAGENT_GROUP MINIAGENT_SESSION_DIR
 envsubst < "$UNIT_TPL" > "$UNIT_DST"
 chmod 0644 "$UNIT_DST"
 
@@ -58,8 +58,9 @@ if [ ! -f "$MINIAGENT_CONFIG" ]; then
 	echo "deploy: seeded $MINIAGENT_CONFIG from config.example.json — edit before starting"
 fi
 
-# Install data directory and binary.
+# Install data and session dirs, and binary.
 install -d -m 0750 -o "$MINIAGENT_USER" -g "$MINIAGENT_GROUP" "$MINIAGENT_WORKDIR"
+install -d -m 0750 -o "$MINIAGENT_USER" -g "$MINIAGENT_GROUP" "$MINIAGENT_SESSION_DIR"
 install -m 0755 "$SCRIPT_DIR/../bin/miniagent" /usr/local/bin/miniagent
 
 systemctl daemon-reload
