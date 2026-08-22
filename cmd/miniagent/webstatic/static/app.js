@@ -257,8 +257,6 @@ function confirmInline(msg, okText) {
       else if (e.key === "Enter" && document.activeElement === btnOk) close(true);
     };
     overlay.addEventListener("keydown", onKey);
-    btnCancel.addEventListener("keydown", onKey);
-    btnOk.addEventListener("keydown", onKey);
   });
 }
 
