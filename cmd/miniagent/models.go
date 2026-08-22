@@ -29,6 +29,10 @@ type providerModel struct {
 	Provider string      `json:"provider"`
 	Model    string      `json:"model"`
 	Limits   modelLimits `json:"limits"`
+	// Thinking is the model-level thinking level from config (static models only; dynamic
+	// /models endpoints do not declare it — frontend falls back to empty). Drives the WebUI
+	// thinking dropdown (M6): picking o3-mini@medium sends thinking=medium on POST /api/turn.
+	Thinking *string `json:"thinking,omitempty"`
 }
 
 // modelLimits mirrors the capability limit fields reported by models endpoints.
@@ -51,6 +55,26 @@ func modelSources(providers []config.ProviderConfig) []modelSource {
 		out = append(out, ms)
 	}
 	return out
+}
+
+// staticThinkingByModel maps model name → configured thinking level for a provider's static
+// models (config-level override, model>provider>defaults resolved here only for display; the
+// authoritative resolution happens in config.Resolve at turn time). Models without an explicit
+// override are absent from the map — the frontend then sends thinking="" letting Resolve decide.
+func staticThinkingByModel(providers []config.ProviderConfig, providerName string) map[string]string {
+	for _, p := range providers {
+		if p.Name != providerName {
+			continue
+		}
+		m := make(map[string]string, len(p.Models))
+		for _, mc := range p.Models {
+			if mc.Thinking != nil && *mc.Thinking != "" {
+				m[mc.Name] = *mc.Thinking
+			}
+		}
+		return m
+	}
+	return nil
 }
 
 // listAllModels aggregates the available models across multiple providers and returns them as a
@@ -118,8 +142,15 @@ func listAllModels(ctx context.Context, providers []config.ProviderConfig, httpT
 				return
 			}
 			paired := make([]providerModel, 0, len(models))
+			// Static models carry a config-level thinking override; look it up per provider so the
+			// WebUI dropdown can preselect it (dynamic /models responses have no thinking — empty).
+			thinkingByModel := staticThinkingByModel(providers, p.Name)
 			for _, m := range models {
-				paired = append(paired, providerModel{Provider: p.Name, Model: m.ID, Limits: modelLimits{ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens}})
+				pm := providerModel{Provider: p.Name, Model: m.ID, Limits: modelLimits{ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens}}
+				if t, ok := thinkingByModel[m.ID]; ok {
+					pm.Thinking = &t
+				}
+				paired = append(paired, pm)
 			}
 			mu.Lock()
 			results[p.Name] = paired

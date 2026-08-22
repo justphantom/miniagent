@@ -282,7 +282,7 @@ async function loadModels() {
       o.textContent = `${m.provider}/${m.model}`;
       o.dataset.provider = m.provider;
       o.dataset.model = m.model;
-      o.dataset.thinking = "";
+      o.dataset.thinking = m.thinking || "";
       sel.appendChild(o);
       if (saved === `${m.provider}/${m.model}`) { o.selected = true; restored = true; }
     }

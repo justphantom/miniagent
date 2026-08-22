@@ -26,6 +26,28 @@ func TestListAllModels_Static(t *testing.T) {
 	}
 }
 
+// staticThinkingByModel surfaces a model's config-level thinking override (M6): the WebUI
+// dropdown preselects it. A model without a thinking override must yield no entry.
+func TestStaticThinkingByModel(t *testing.T) {
+	level := "medium"
+	providers := []config.ProviderConfig{
+		{Name: "p", Models: []config.ModelConfig{
+			{Name: "o3-mini", Thinking: &level},
+			{Name: "gpt-4o"},
+		}},
+	}
+	got := staticThinkingByModel(providers, "p")
+	if got["o3-mini"] != "medium" {
+		t.Fatalf("o3-mini thinking = %q, want medium", got["o3-mini"])
+	}
+	if _, ok := got["gpt-4o"]; ok {
+		t.Fatalf("gpt-4o should have no thinking override, got %+v", got)
+	}
+	if len(staticThinkingByModel(providers, "nope")) != 0 {
+		t.Fatalf("unknown provider should yield empty map")
+	}
+}
+
 // listAllModels dynamic: two providers aggregated, both hit their models_url.
 func TestListAllModels_Dynamic(t *testing.T) {
 	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

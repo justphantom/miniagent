@@ -91,7 +91,7 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 		}
 	}
 
-	sessionDir := defaultSessionDir
+	sessionDir := defaultSessionDir()
 	if resolved.Session.Dir != "" {
 		sessionDir = resolved.Session.Dir
 	}

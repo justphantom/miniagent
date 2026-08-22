@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -79,5 +80,26 @@ func TestResolveSessionForRun_NewSession_FillsProvider(t *testing.T) {
 	}
 	if history != nil {
 		t.Errorf("history should be nil (new session has no history), got %v", history)
+	}
+}
+
+// defaultSessionDir falls back to the workdir-relative default unless $MINIAGENT_SESSION_DIR is set (L11).
+func TestDefaultSessionDir_Env(t *testing.T) {
+	const env = "MINIAGENT_SESSION_DIR"
+	old, had := os.LookupEnv(env)
+	t.Cleanup(func() {
+		if had {
+			os.Setenv(env, old)
+		} else {
+			os.Unsetenv(env)
+		}
+	})
+	os.Unsetenv(env)
+	if d := defaultSessionDir(); d != ".miniagent/sessions" {
+		t.Fatalf("default = %q, want .miniagent/sessions", d)
+	}
+	os.Setenv(env, "/var/lib/miniagent/sessions")
+	if d := defaultSessionDir(); d != "/var/lib/miniagent/sessions" {
+		t.Fatalf("env default = %q, want the session dir", d)
 	}
 }

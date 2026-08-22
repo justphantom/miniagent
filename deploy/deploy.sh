@@ -50,11 +50,21 @@ export MINIAGENT_WORKDIR MINIAGENT_CONFIG MINIAGENT_USER MINIAGENT_GROUP MINIAGE
 envsubst < "$UNIT_TPL" > "$UNIT_DST"
 chmod 0644 "$UNIT_DST"
 
+# L12: verify the render consumed every placeholder — a leftover ${VAR} means the template
+# referenced a variable envsubst couldn't substitute (typo in template vs the export list).
+if grep -q '\${' "$UNIT_DST"; then
+	echo "deploy: WARNING rendered unit still contains unsubstituted \${VAR} placeholders:" >&2
+	grep -n '\${' "$UNIT_DST" >&2 || true
+fi
+
 # Install config file (seed from example if absent).
 CONFIG_DIR=$(dirname "$MINIAGENT_CONFIG")
 install -d -m 0755 -o root -g root "$CONFIG_DIR"
 if [ ! -f "$MINIAGENT_CONFIG" ]; then
 	install -m 0640 -o root -g "$MINIAGENT_GROUP" "$SCRIPT_DIR/../config.example.json" "$MINIAGENT_CONFIG"
+	# L11: point the seeded config's session.dir at the deployed session dir so the授权目录
+	# (MINIAGENT_SESSION_DIR) is authoritative, not the example's relative ".sessions".
+	sed -i 's#"dir": *".sessions"#"dir": "'"$MINIAGENT_SESSION_DIR"'"#' "$MINIAGENT_CONFIG"
 	echo "deploy: seeded $MINIAGENT_CONFIG from config.example.json — edit before starting"
 fi
 

@@ -112,7 +112,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "miniagent: -replay is mutually exclusive with -save-session/-session/-result-only")
 			os.Exit(1)
 		}
-		sessionDir := defaultSessionDir
+		sessionDir := defaultSessionDir()
 		if resolved.Session.Dir != "" {
 			sessionDir = resolved.Session.Dir
 		}

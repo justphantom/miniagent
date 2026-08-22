@@ -14,8 +14,15 @@ import (
 	"github.com/justphantom/miniagent/miniagent/session"
 )
 
-// defaultSessionDir is the fallback directory when session.dir is not configured (overridden by config in Phase C).
-const defaultSessionDir = ".miniagent/sessions"
+// defaultSessionDir is the fallback directory when session.dir is not configured (overridden by
+// config in Phase C). Deploy sets $MINIAGENT_SESSION_DIR so the unit's session dir is honored
+// even when config.session.dir is absent (L11); otherwise a workdir-relative default is used.
+func defaultSessionDir() string {
+	if d := os.Getenv("MINIAGENT_SESSION_DIR"); d != "" {
+		return d
+	}
+	return ".miniagent/sessions"
+}
 
 // errSessionNotFound marks a resume whose session file does not exist. Sentinel (not a
 // fmt.Errorf) so the web layer can map it to 404; the CLI path prints it like any error.

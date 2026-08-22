@@ -9,6 +9,7 @@ User=${MINIAGENT_USER}
 Group=${MINIAGENT_GROUP}
 ExecStart=/usr/local/bin/miniagent -config ${MINIAGENT_CONFIG} -serve -workdir ${MINIAGENT_WORKDIR}
 WorkingDirectory=${MINIAGENT_WORKDIR}
+Environment=MINIAGENT_SESSION_DIR=${MINIAGENT_SESSION_DIR}
 Restart=on-failure
 RestartSec=5
 

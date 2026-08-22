@@ -49,7 +49,7 @@ func maxSessionBytesOfConfig(cfg *config.Config) int64 {
 func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 	// Per-entry cost: LoadSessionMeta (first line) + sessionPreview (file tail ≤8KB),
 	// never a full-file LoadSession — the listing is refreshed after every turn.
-	dir := defaultSessionDir
+	dir := defaultSessionDir()
 	if s.cfg.Session.Dir != "" {
 		dir = s.cfg.Session.Dir
 	}
@@ -130,7 +130,7 @@ func (s *webServer) handleSessionReplay(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session id is required"})
 		return
 	}
-	dir := defaultSessionDir
+	dir := defaultSessionDir()
 	if s.cfg.Session.Dir != "" {
 		dir = s.cfg.Session.Dir
 	}
@@ -169,7 +169,7 @@ func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	dir := defaultSessionDir
+	dir := defaultSessionDir()
 	if s.cfg.Session.Dir != "" {
 		dir = s.cfg.Session.Dir
 	}
