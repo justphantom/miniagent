@@ -73,7 +73,7 @@ func TestRun_ToolDeniedSkipped(t *testing.T) {
 		textResponse("done"),
 	}}
 	llm := testClients(tr)
-	hooks := LoopHooks{OnToolUse: func(name, input string) error {
+	hooks := LoopHooks{OnToolUse: func(name, callID, input string) error {
 		if name == "a" {
 			return ErrToolDenied
 		}
@@ -373,7 +373,7 @@ func TestRun_OnToolUseErrorKeepsPairing(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	stop := errors.New("downstream closed")
-	hooks := LoopHooks{OnToolUse: func(name, input string) error { return stop }}
+	hooks := LoopHooks{OnToolUse: func(name, callID, input string) error { return stop }}
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, stop) {
 		t.Fatalf("err = %v, want %v", err, stop)

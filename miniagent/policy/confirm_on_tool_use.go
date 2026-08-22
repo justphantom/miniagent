@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/justphantom/miniagent/miniagent"
@@ -13,10 +14,13 @@ import (
 // DefaultDangerWords are substrings in the "shell" tool's raw arguments that trigger the confirmation gate (in addition
 // to write/edit, which are always gated). A conservative heuristic, not a command parser — it raises the bar for the
 // common irreversible cases (force-remove, privilege escalation, disk/partition wipe, system power); it is deliberately
-// bypassable, since a confirmation layer is not a sandbox (see docs S-3).
+// bypassable, since a confirmation layer is not a sandbox.
 var DefaultDangerWords = []string{
 	"rm -rf", "rm -fr", "sudo", "mkfs", "reboot", "shutdown", "dd if=", "> /dev/sd", ":(){", "chmod -R",
 }
+
+// DefaultDestructiveTools are tool names always gated (overwrite/delete semantics).
+var DefaultDestructiveTools = []string{"write", "edit"}
 
 // ConfirmCfg controls the destructive-tool confirmation gate.
 type ConfirmCfg struct {
@@ -31,14 +35,13 @@ type ConfirmCfg struct {
 	Stdout io.Writer
 	// DangerWords overrides DefaultDangerWords for shell gating. nil → DefaultDangerWords.
 	DangerWords []string
+	// DestructiveTools overrides DefaultDestructiveTools for the always-gated list. nil → DefaultDestructiveTools.
+	DestructiveTools []string
 }
-
-// destructiveTools are tool names always gated (overwrite/delete semantics).
-var destructiveTools = map[string]bool{"write": true, "edit": true}
 
 // ConfirmOnToolUse wraps an existing OnToolUse emit callback with a destructive-tool confirmation gate.
 //
-// Design (docs/long-session-comprehensive-assessment.md §7 P0-2):
+// Design:
 //   - ORDER: emit runs FIRST, then the gate — so an upstream pipe-closed error still terminates the loop
 //     (handleToolCalls treats a non-ErrToolDenied OnToolUse error as terminal). Reversing the order would swallow that
 //     path and let a destructive op proceed after the consumer is gone.
@@ -64,13 +67,17 @@ func ConfirmOnToolUse(emit miniagent.OnToolUse, cfg ConfirmCfg) miniagent.OnTool
 	if words == nil {
 		words = DefaultDangerWords
 	}
-	return func(name, input string) error {
+	destructive := cfg.DestructiveTools
+	if destructive == nil {
+		destructive = DefaultDestructiveTools
+	}
+	return func(name, callID, input string) error {
 		if emit != nil {
-			if err := emit(name, input); err != nil {
+			if err := emit(name, callID, input); err != nil {
 				return err // upstream terminate (e.g. pipe closed): propagate before the gate.
 			}
 		}
-		if !needsConfirm(name, input, words) {
+		if !needsConfirm(name, input, words, destructive) {
 			return nil
 		}
 		if cfg.AutoApprove {
@@ -87,8 +94,8 @@ func ConfirmOnToolUse(emit miniagent.OnToolUse, cfg ConfirmCfg) miniagent.OnTool
 }
 
 // needsConfirm reports whether the tool invocation should be gated.
-func needsConfirm(name, input string, dangerWords []string) bool {
-	if destructiveTools[name] {
+func needsConfirm(name, input string, dangerWords, destructive []string) bool {
+	if slices.Contains(destructive, name) {
 		return true
 	}
 	if name == "shell" {

@@ -9,12 +9,24 @@ export function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// safeLink renders an escaped markdown link; http(s)/relative/mailto only — anything else
+// (javascript:, data:, vbscript:) degrades to escaped literal text, keeping href injection-proof.
+function safeLink(t, u) {
+  if (/^(https?:|mailto:|\/|#|\.)/i.test(u)) {
+    return `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`;
+  }
+  return `[${t}](${u})`;
+}
+
 function mdInline(s) {
   return esc(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
-    .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    .replace(/~~([^~]+)~~/g, "<del>$1</del>")
+    // L7: markdown links. Input is already HTML-escaped above, so a javascript: href can only
+    // break out via a quote — esc() neutralized it; still strip the scheme allowlist misses.
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t, u) => safeLink(t, u));
 }
 
 // splitRow splits a table row on unescaped pipes, trimming the outer empty cells produced

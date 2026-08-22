@@ -65,7 +65,7 @@ func replaySession(w io.Writer, meta session.SessionMeta, msgs []miniagent.Messa
 			lastText = m.Content
 			for _, c := range m.ToolCalls {
 				callName[c.ID] = c.Name
-				if err := event.EmitToolUse(w, c.Name, c.Args, m.Ts); err != nil {
+				if err := event.EmitToolUse(w, c.Name, c.ID, c.Args, m.Ts); err != nil {
 					return err
 				}
 			}

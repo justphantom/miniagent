@@ -21,10 +21,11 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`miniagent.Run`）�
 | `AfterLLM(ctx, step, resp) error` | 每步 LLM 响应后 | 用量记账、静默溢出判定 |
 | `OnBudget(ctx, step, BudgetInput, *Usage) error` | 每步用量累计后 | 零 usage 本地估算 fallback + 预算熔断（nil=不估算不熔断，见 `NewDefaultOnBudget`） |
 | `OnLLMError(ctx, step, msgs, err) ([]Message, bool, error)` | LLM 调用失败时 | 失败恢复（典型：`ErrContextLength` 收紧历史重试一次；nil=error 直接上抛） |
-| `OnToolUse(name, input) error` | 工具执行前 | 审批/拒绝（返回 `ErrToolDenied` 仅拒该工具，不终止循环） |
+| `OnToolUse(name, callID, input) error` | 工具执行前 | 审批/拒绝（返回 `ErrToolDenied` 仅拒该工具，不终止循环） |
 | `OnToolResult(name, callID, ToolResult) error` | 工具执行后 | 结果观察、事件下发 |
 | `ShapeToolResult(name, callID, step, ToolResult) (string, error)` | 结果入历史前 | 覆盖 tool 消息 content（截断/落盘/RAG 摘要；nil=内置默认成型） |
 | `OnDelta(step, kind, text) error` | 流式增量 | 实时输出 |
+| `OnStep(ctx, StepSnapshot)` | 每步迭代顶部（BeforeLLM 前） | 步骤级观测（transcript 增长、token 斜率、压缩次数；observe-only 无 error 返回，见 `metrics.NewStepEmitter`） |
 
 > 钩子契约、错误语义、不变量、时序的权威描述见 [ARCHITECTURE.md §4–§5](./ARCHITECTURE.md) 与 [HOOKS.md](./HOOKS.md)（每条溯源到 `file:line`）。本表为速查。
 
@@ -40,7 +41,7 @@ miniagent 的核心是一个**无策略的 ReAct 循环**（`miniagent.Run`）�
 import "github.com/justphantom/miniagent/miniagent/compaction"
 
 before, _ := compaction.NewCompaction(compaction.CompactionOptions{
-    Chat: chat, ContextWindow: 120000, Model: model, Auto: true, MaxTokens: maxTokens,
+    Chat: chat, ContextWindow: 120000, Model: model, Auto: true, SummaryMaxChars: 5000,
 })
 hooks := miniagent.LoopHooks{BeforeLLM: before} // 第二返回值 after 自 4.2.0 起=nil（溢出检测已并入 before）
 result, err := miniagent.Run(ctx, chat, cfg, prompt, hooks, logger)
@@ -431,7 +432,6 @@ system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `de
     "provider": "openai",
     "model": "gpt-4o",
     "thinking": "off",
-    "mode": "default",
     "summary_request": "请按以下格式总结：...",
     "summarizer_prompt": "你是代码审查助手。"
   },

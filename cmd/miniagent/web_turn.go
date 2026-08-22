@@ -6,12 +6,14 @@ package main
 // reuses the same NDJSON parser logic.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/justphantom/miniagent/config"
 )
@@ -81,6 +83,14 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	nw := &ndjsonWriter{w: w, f: flusher}
 
+	// L15: web turn default timeout. run.max_duration defaults to nil → if a tool hangs and
+	// doesn't respect ctx, the session lock is held forever (409 on all subsequent turns).
+	// Apply a conservative default so a stuck turn self-recovers. runTurn already layers the
+	// config max_duration on top; a web default tighter than the config wins via ctx deadline.
+	const defaultWebMaxDuration = 10 * time.Minute
+	ctx, cancel := context.WithTimeout(r.Context(), defaultWebMaxDuration)
+	defer cancel()
+
 	spec := turnSpec{
 		prompt:     req.Prompt,
 		workdir:    req.Workdir,
@@ -89,7 +99,7 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 		maxIterDef: 0,                 // web: rely on config run.max_iterations / builtin default
 		overrides:  webOverrides(req),
 	}
-	err := s.engine.runTurn(r.Context(), spec, nw)
+	err := s.engine.runTurn(ctx, spec, nw)
 	if errors.Is(err, errSessionNotFound) {
 		if nw.n == 0 {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})

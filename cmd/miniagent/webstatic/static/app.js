@@ -57,6 +57,7 @@ $("theme-btn").addEventListener("click", () => {
 
 let stickBottom = true;
 const NEAR_BOTTOM = 80;
+let generation = 0; // M8: snapshot per send(); new-chat/openSession bump it so stale stream events drop
 
 function eventsEl() { return $("events"); }
 
@@ -72,17 +73,23 @@ const scrollMo = new MutationObserver(() => { if (stickBottom) eventsEl().scroll
 // ---- composer ----
 
 $("menu-btn").addEventListener("click", () => document.body.classList.toggle("nav-open"));
+// Escape closes the drawer (L9 keyboard operability).
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.body.classList.remove("nav-open");
+});
 // Overlay closes the mobile drawer on tap (the ☰ toggle alone forced a two-step close).
 $("overlay").addEventListener("click", () => document.body.classList.remove("nav-open"));
 $("new-chat").addEventListener("click", () => {
   if (state.sending) { state.abort?.abort(); } // abort first: the in-flight stream must not leak into the fresh view
+  generation++; // invalidate stale stream events arriving after abort (M8)
   state.session = "";
   resetTokenCount();
   resetTransient();
   eventsEl().innerHTML = "";
+  stickBottom = true; // L10: reset so to-bottom button doesn't linger from previous turn
   document.title = "miniagent";
   showSessionID("");
-  $("prompt").focus();
+  if (!isTouch) { $("prompt").focus(); } // L6: avoid forcing keyboard open on mobile
 });
 
 // Enter sends on desktop (Shift+Enter = newline); mobile keeps Enter = newline.
@@ -112,6 +119,8 @@ async function send() {
   state.lastPrompt = prompt;
   state.turnStartTs = 0;
   state.abort = new AbortController();
+  const gen = generation; // M8: events from this stream are dropped if the view switched mid-turn
+  const isCurrent = () => gen === generation;
   setComposer(false);
   startWait();
   appendUserPrompt(prompt);
@@ -148,6 +157,7 @@ async function send() {
         if (!line) continue;
         try {
           const ev = JSON.parse(line);
+          if (!isCurrent()) return; // M8: view switched (new-chat/openSession) — drop stale event
           if (ev.type === "result" || ev.type === "error") sawTerminal = true;
           stopWait();
           renderEvent(ev);
@@ -155,7 +165,11 @@ async function send() {
       }
     }
     if (buf.trim()) {
-      try { const ev = JSON.parse(buf); renderEvent(ev); if (ev.type === "result" || ev.type === "error") sawTerminal = true; } catch { /* trailing partial line */ }
+      try {
+        const ev = JSON.parse(buf);
+        if (!isCurrent()) return; // M8
+        renderEvent(ev); if (ev.type === "result" || ev.type === "error") sawTerminal = true;
+      } catch { /* trailing partial line */ }
     }
     // Stream ended without a terminal event = connection dropped mid-turn (e.g. server restart).
     if (!sawTerminal) {
@@ -163,13 +177,15 @@ async function send() {
     }
   } catch (e) {
     if (e.name === "AbortError") {
+      // M8: abort after a view switch is expected — don't paint the stop card into the new view
+      if (!isCurrent()) return;
       renderEvent({ type: "error", error: "已停止（会话已保存已执行部分）", ts: Date.now() });
     } else {
       renderEvent({ type: "error", error: "请求失败：" + e.message, ts: Date.now() });
     }
   } finally {
     stopWait();
-    finishText();
+    if (isCurrent()) finishText(); // M8: leave a switched view's streaming blocks alone
     state.sending = false;
     state.abort = null;
     setComposer(true);
@@ -185,6 +201,45 @@ function inlineHint(msg) {
   el.textContent = msg;
   el.style.color = "var(--err)";
   setTimeout(() => { el.hidden = true; el.textContent = ""; el.style.color = ""; }, 2500);
+}
+
+// Inline confirm dialog (replaces native confirm()): resolves true on confirm, false otherwise.
+// L8: avoids native alert/confirm which clash with inlineHint style and are not keyboard-navigable.
+// okText labels the destructive action button (styled with --err), so the dialog is reusable.
+function confirmInline(msg, okText) {
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;";
+  const box = document.createElement("div");
+  box.style.cssText = "background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:320px;width:90%;";
+  const p = document.createElement("p");
+  p.textContent = msg;
+  p.style.cssText = "margin:0 0 16px;";
+  const btnOk = document.createElement("button");
+  btnOk.textContent = okText;
+  btnOk.style.cssText = "padding:6px 16px;background:var(--err);color:#fff;border:none;border-radius:4px;cursor:pointer;";
+  const btnCancel = document.createElement("button");
+  btnCancel.textContent = "取消";
+  btnCancel.style.cssText = "padding:6px 16px;background:transparent;color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer;margin-left:8px;";
+  const row = document.createElement("div");
+  row.style.cssText = "text-align:right;";
+  row.append(btnCancel, btnOk);
+  box.append(p, row);
+  overlay.append(box);
+  document.body.append(overlay);
+  btnCancel.focus();
+  return new Promise(resolve => {
+    const close = (v) => { overlay.remove(); resolve(v); };
+    btnOk.addEventListener("click", () => close(true));
+    btnCancel.addEventListener("click", () => close(false));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(false); });
+    const onKey = (e) => {
+      if (e.key === "Enter") close(true);
+      else if (e.key === "Escape") close(false);
+    };
+    overlay.addEventListener("keydown", onKey);
+    btnCancel.addEventListener("keydown", onKey);
+    btnOk.addEventListener("keydown", onKey);
+  });
 }
 
 // Wait indicator for non-streaming configs: between send and the first event the UI would
@@ -267,11 +322,15 @@ async function loadSessions() {
         pv.textContent = s.preview;
         b.appendChild(pv);
       }
-      const del = document.createElement("span");
-      del.className = "sess-del";
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "sess-del ghost";
       del.textContent = "✕";
       del.title = "删除会话";
+      del.setAttribute("aria-label", "删除会话");
+      del.tabIndex = -1;
       del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id); });
+      del.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); deleteSession(s.id); } });
       b.appendChild(del);
       b.addEventListener("click", () => openSession(s.id));
       box.appendChild(b);
@@ -280,19 +339,21 @@ async function loadSessions() {
 }
 
 async function deleteSession(id) {
-  if (!confirm(`删除会话 ${id}？此操作不可恢复。`)) return;
-  try {
-    await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (id === state.session) {
-      state.session = "";
-      resetTokenCount();
-      resetTransient();
-      eventsEl().innerHTML = "";
-      document.title = "miniagent";
-      showSessionID("");
-    }
-    loadSessions();
-  } catch (e) { alert("删除失败：" + e.message); }
+  if (await confirmInline(`删除会话 ${id}？此操作不可恢复。`, "删除")) {
+    try {
+      await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (id === state.session) {
+        state.session = "";
+        resetTokenCount();
+        resetTransient();
+        stickBottom = true;
+        eventsEl().innerHTML = "";
+        document.title = "miniagent";
+        showSessionID("");
+      }
+      loadSessions();
+    } catch (e) { inlineHint("删除失败：" + e.message); }
+  }
 }
 
 async function openSession(id) {
@@ -302,6 +363,8 @@ async function openSession(id) {
     state.abort?.abort();
   }
   state.session = id;
+  generation++; // invalidate stale events from the aborted session (M8)
+  const gen = generation; // a later new-chat/openSession bumps generation → drop this replay stream
   resetTokenCount();
   resetTransient();
   document.title = `miniagent · ${id}`;
@@ -325,19 +388,17 @@ async function openSession(id) {
         if (!line) continue;
         try {
           const ev = JSON.parse(line);
-          if (ev.type === "result") { // accumulate historical usage for the token counter
-            state.sessionInTokens += ev.input_tokens || 0;
-            state.sessionOutTokens += ev.output_tokens || 0;
-          }
+          if (gen !== generation) return; // M8: view switched mid-replay — stop painting
           renderEvent(ev);
         } catch { /* skip bad lines */ }
       }
     }
-    if (buf.trim()) { try { renderEvent(JSON.parse(buf)); } catch { /* trailing partial line */ } }
+    if (buf.trim()) { try { if (gen === generation) renderEvent(JSON.parse(buf)); } catch { /* trailing partial line */ } }
+    if (gen !== generation) return; // a newer view owns the DOM now — don't touch its title/id/focus
     showSessionID(state.session);
     finishText();
   } catch (e) { console.log("replay failed", e); }
-  $("prompt").focus();
+  if (!isTouch && gen === generation) { $("prompt").focus(); } // L6 + M8
 }
 
 boot();

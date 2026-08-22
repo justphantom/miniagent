@@ -36,7 +36,7 @@
     </nav>
     <div id="overlay"></div>
     <main>
-      <div id="events"></div>
+      <div id="events" aria-live="polite" aria-label="对话内容"></div>
       <button id="to-bottom" type="button" title="回到底部" aria-label="回到底部">↓</button>
       <div id="composer">
         <div class="composer-row">
@@ -44,7 +44,7 @@
           <select id="model" aria-label="模型"><option>默认模型</option></select>
         </div>
         <div class="composer-row">
-          <textarea id="prompt" placeholder="输入任务，Enter 发送，Shift+Enter 换行" aria-label="输入"></textarea>
+          <textarea id="prompt" placeholder="输入任务（桌面 Enter 发送 / Shift+Enter 换行；触屏 Enter 换行，点发送）" aria-label="输入"></textarea>
           <span id="wait" class="muted" hidden></span>
           <button id="send" type="button">发送</button>
         </div>

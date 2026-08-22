@@ -165,11 +165,14 @@ func checkWebHost(ctx context.Context, u *url.URL, allowPrivate bool) error {
 }
 
 // isPublicIP reports whether ip is public unicast: not loopback, private, link-local
-// (covers cloud metadata 169.254.169.254), multicast, unspecified, or interface-local multicast.
+// (covers cloud metadata 169.254.169.254), multicast, unspecified, interface-local multicast,
+// and additionally globally routable — IsGlobalUnicast also rejects reserved (240/4), benchmark
+// (198.18/15) and limited broadcast (255.255.255.255). NOTE: IsGlobalUnicast alone is NOT enough;
+// it returns true for RFC1918 private and IPv6 unique-local, so IsPrivate must stay.
 func isPublicIP(ip net.IP) bool {
 	blocked := ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsMulticast() || ip.IsUnspecified() || ip.IsInterfaceLocalMulticast()
-	return !blocked
+	return !blocked && ip.IsGlobalUnicast()
 }
 
 // readWebBody reads up to maxBytes+1 (the +1 detects truncation).

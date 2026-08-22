@@ -154,8 +154,8 @@ export function renderEvent(ev) {
       break;
     case "text_delta": appendDelta("text", ev.text, ev.ts); break;
     case "reasoning_delta": appendDelta("reasoning", ev.text, ev.ts); break;
-    case "tool_use": appendToolUse(ev); break;
-    case "tool_result": appendToolResult(ev, null); break;
+    case "tool_use": finishText(); appendToolUse(ev); break;
+    case "tool_result": finishText(); appendToolResult(ev, null); break;
     case "result": {
       finishText();
       if (ev.model) setModelBadge(ev.model);

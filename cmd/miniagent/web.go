@@ -83,6 +83,11 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		fmt.Fprintf(os.Stderr, "miniagent: web listen %s: %v\n", addr, err)
 		os.Exit(1)
 	}
+	if cfg.Run.ConfirmDestructive != nil && *cfg.Run.ConfirmDestructive {
+		// serve mode stdin is not a TTY → destructive tools are denied-by-default with no browser
+		// confirmation channel. Surface at startup so the operator understands why write/edit fail.
+		fmt.Fprintln(os.Stderr, "miniagent: -serve with confirm_destructive=true — destructive tools (write/edit/dangerous shell) will be DENIED (no TTY prompt); set MINIAGENT_AUTO_APPROVE=1 to allow")
+	}
 	fmt.Fprintf(os.Stderr, "miniagent: web ui listening on %s (auth %s)\n", addr, map[bool]string{true: "on", false: "off"}[key != ""])
 
 	errCh := make(chan error, 1)

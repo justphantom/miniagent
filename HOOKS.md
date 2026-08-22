@@ -179,7 +179,7 @@ handleToolCalls ──                                                    [loop_
 
 - **`NewCompaction(opts) → (before, after)`**（`compaction/compacting.go`）：返回一对钩子挂 `BeforeLLM`/`AfterLLM`，恢复完整压缩能力。`opts.Chat` 必须非 nil（摘要 LLM 调用需 client）。
 - **`OnBudget` 外挂**：main 用闭包把 `MaxTotalTokens` 判定从核心搬出（`main.go`）。自定义预算/熔断逻辑替换此闭包即可。
-- **`OnStep` 外挂**：main 用 `metrics.NewStepEmitter(os.Stderr).Emit` 挂 `OnStep`（`main.go:179`），每步输出 NDJSON。自定义观测（指标、日志）替换此闭包即可。
+- **`OnStep` 外挂**：cmd 用 `metrics.NewStepEmitter(os.Stderr).Emit` 挂 `OnStep`（`run_turn.go`，`spec.metricsStep` 时），每步输出 NDJSON。自定义观测（指标、日志）替换此闭包即可。
 - **`buildHooks(resultOnly)`**（`setup.go`）：组装事件输出钩子（`OnToolUse`/`OnToolResult`/`OnDelta`）。`resultOnly=true` 返回空 hooks（subagent fork 纯文本模式）。
 
 叠加自定义钩子时：压缩与预算必须各自独占 `BeforeLLM`/`OnBudget`（核心单字段）；事件类（`OnToolUse`/`OnToolResult`/`ShapeToolResult`/`OnDelta`/`OnStep`）如需叠加，在外层闭包内串联调用（如先调默认事件钩子再调自定义），不得互相覆盖。

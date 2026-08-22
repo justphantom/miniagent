@@ -45,10 +45,13 @@ type ToolResult struct {
 	ExitCode int
 }
 
-// OnToolUse is the pre-tool-execution callback: name is the tool name, input is the raw JSON arguments.
+// OnToolUse is the pre-tool-execution callback: name is the tool name, callID is the tool_call id
+// (guaranteed non-empty by handleToolCalls, which synthesizes synth_N_i when the LLM omits it),
+// input is the raw JSON arguments. callID enables the consumer to pair each tool_use event with its
+// corresponding tool_result (H1: without it, parallel tool results mount against the wrong use node).
 // Returning an error propagates up the call chain to Run — when the downstream is unwritable (the stdout pipe was closed early by
 // the consumer) it immediately terminates the loop to avoid burning more tokens. Passing nil means no notification.
-type OnToolUse func(name, input string) error
+type OnToolUse func(name, callID, input string) error
 
 // DeltaKind identifies the kind of LLM streaming delta, carried by the OnDelta callback (once streaming mode is enabled).
 type DeltaKind string
@@ -86,7 +89,9 @@ type LoopHooks struct {
 	OnLLMError func(ctx context.Context, step int, msgs []Message, callErr error) (recoveredMsgs []Message, retry bool, retErr error)
 	// OnToolUse notifies before tool execution; a returned error propagates up the chain to Run to terminate the loop (when the
 	// downstream pipe is closed). Returning the sentinel ErrToolDenied (defined in errors.go) only denies that tool, without terminating the loop.
-	OnToolUse func(name, input string) error
+	// The callID argument carries the tool_call id (synthesized synth_N_i when the LLM omits it), enabling consumers to
+	// pair tool_use events with their matching tool_result events for parallel tool calls.
+	OnToolUse func(name, callID, input string) error
 	// OnToolResult notifies after tool execution, passing through the ToolResult (including ExitCode / IsError). Multiple tool_calls within
 	// the same step execute in parallel; this callback notifies serially in tool_call order after all complete — it is not "notify as each tool
 	// completes", so real-time responsiveness is bounded by the slowest tool.

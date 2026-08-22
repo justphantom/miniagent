@@ -14,7 +14,7 @@ import (
 func TestToolUseWriter(t *testing.T) {
 	var buf bytes.Buffer
 	emit := ToolUseWriter(&buf)
-	if err := emit("read", `{"path":"a"}`); err != nil {
+	if err := emit("read", "tc1", `{"path":"a"}`); err != nil {
 		t.Fatalf("emit: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -218,7 +218,7 @@ func TestEmitDelta(t *testing.T) {
 func TestEmitTs(t *testing.T) {
 	// Explicit ts is preserved (replay path); omitted ts is stamped >0 (runtime path).
 	var buf bytes.Buffer
-	if err := EmitToolUse(&buf, "read", `{}`, 42); err != nil {
+	if err := EmitToolUse(&buf, "read", "tc1", `{}`, 42); err != nil {
 		t.Fatalf("EmitToolUse: %v", err)
 	}
 	var ev map[string]any
@@ -229,7 +229,7 @@ func TestEmitTs(t *testing.T) {
 		t.Errorf("ts = %v, want 42", ev["ts"])
 	}
 	for _, emit := range []func() error{
-		func() error { return EmitToolUse(&buf, "read", `{}`) },
+		func() error { return EmitToolUse(&buf, "read", "tc1", `{}`) },
 		func() error { return EmitDelta(&buf, 1, miniagent.DeltaText, "hi") },
 		func() error { return EmitToolResult(&buf, "read", "c1", miniagent.ToolResult{Output: "o"}) },
 		func() error { return EmitResult(&buf, miniagent.Result{Text: "t"}, "m") },

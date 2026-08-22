@@ -19,10 +19,11 @@ const sessionEventType = "session"
 // Ts is a Unix-millisecond timestamp (omitted when 0): the WebUI renders per-message time,
 // and replay passes the persisted message.Ts so historical messages show their original time.
 type toolUseEvent struct {
-	Type  string `json:"type"`
-	Name  string `json:"name"`
-	Input string `json:"input"`
-	Ts    int64  `json:"ts,omitempty"`
+	Type   string `json:"type"`
+	Name   string `json:"name"`
+	CallID string `json:"call_id"`
+	Input  string `json:"input"`
+	Ts     int64  `json:"ts,omitempty"`
 }
 
 // resultEvent is the terminal event. text/model/input_tokens/output_tokens/steps/finish
@@ -56,18 +57,18 @@ type errorEvent struct {
 	Message string `json:"message"`
 }
 
-// EmitToolUse writes a tool_use event (tool name + raw JSON arguments). To emit events during offline replay just call it directly;
+// EmitToolUse writes a tool_use event (tool name + call id + raw JSON arguments). To emit events during offline replay just call it directly;
 // at runtime it is wrapped by ToolUseWriter into an OnToolUse hook triggered before tool execution.
 // ts is an optional Unix-millisecond timestamp (0 → stamp now); the WebUI renders per-message time.
-func EmitToolUse(w io.Writer, name, input string, ts ...int64) error {
-	return json.NewEncoder(w).Encode(toolUseEvent{Type: "tool_use", Name: name, Input: input, Ts: stamp(ts)})
+func EmitToolUse(w io.Writer, name, callID, input string, ts ...int64) error {
+	return json.NewEncoder(w).Encode(toolUseEvent{Type: "tool_use", Name: name, CallID: callID, Input: input, Ts: stamp(ts)})
 }
 
-// ToolUseWriter returns an OnToolUse callback: each invocation writes the tool name and arguments as an
+// ToolUseWriter returns an OnToolUse callback: each invocation writes the tool name, call id and arguments as an
 // NDJSON tool_use event to w. Error contract per OnToolUse.
 func ToolUseWriter(w io.Writer) miniagent.OnToolUse {
-	return func(name, input string) error {
-		return EmitToolUse(w, name, input)
+	return func(name, callID, input string) error {
+		return EmitToolUse(w, name, callID, input)
 	}
 }
 

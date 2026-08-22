@@ -198,5 +198,8 @@ func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Clean up the per-session tool-output directory (created as <id>.tool-output in run_turn.go)
+	// to prevent orphan accumulation (M7).
+	_ = os.RemoveAll(path + ".tool-output")
 	w.WriteHeader(http.StatusNoContent)
 }

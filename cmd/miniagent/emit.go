@@ -25,7 +25,7 @@ func buildHooks(w io.Writer, resultOnly bool) miniagent.LoopHooks {
 	}
 	emit := event.ToolUseWriter(w)
 	return miniagent.LoopHooks{
-		OnToolUse: func(name, input string) error { return emit(name, input) },
+		OnToolUse: func(name, callID, input string) error { return emit(name, callID, input) },
 		OnToolResult: func(name, callID string, r miniagent.ToolResult) error {
 			return event.EmitToolResult(w, name, callID, r)
 		},

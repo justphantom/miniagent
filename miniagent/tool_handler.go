@@ -26,7 +26,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 	denied := make(map[string]bool)
 	if hooks.OnToolUse != nil {
 		for _, tc := range calls {
-			if err := hooks.OnToolUse(tc.Name, tc.Args); err != nil {
+			if err := hooks.OnToolUse(tc.Name, tc.ID, tc.Args); err != nil {
 				if errors.Is(err, ErrToolDenied) {
 					denied[tc.ID] = true
 					continue
