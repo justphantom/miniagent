@@ -65,3 +65,23 @@ func TestCallLLM_LengthEmptyNoThinking_NoRescue(t *testing.T) {
 		t.Errorf("no rescue expected: downgraded=%v requests=%d calls=%d", downgraded, requests, tr.calls)
 	}
 }
+
+// R1 with wire-state-only evidence: some endpoints return no reasoning_content text, only the opaque
+// ReasoningState — that alone still proves the budget went to thinking, so the rescue must fire (L16).
+func TestCallLLM_LengthEmptyReasoningStateOnly_Rescued(t *testing.T) {
+	tr := &recordingTransport{plan: []transportResp{
+		{status: http.StatusOK, body: `{"choices":[{"message":{"role":"assistant","content":"","reasoning_state":"opaque-wire-state"},"finish_reason":"length"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`},
+		{status: http.StatusOK, body: textResponse("the real answer")},
+	}}
+	llm := testClients(tr)
+	resp, downgraded, requests, err := callLLMWithDowngrade(context.Background(), llm, LoopConfig{Model: "m", ThinkingLevel: "medium", Thinking: &ThinkingMapping{Field: "reasoning_effort", Map: map[string]string{"medium": "medium"}}}, 1, []Message{{Role: "user", Content: "q"}}, LoopHooks{}, nil)
+	if err != nil {
+		t.Fatalf("callLLMWithDowngrade: %v", err)
+	}
+	if resp.Text != "the real answer" {
+		t.Errorf("Text = %q, want the retry's real answer", resp.Text)
+	}
+	if !downgraded || requests != 2 || tr.calls != 2 {
+		t.Errorf("rescue expected: downgraded=%v requests=%d calls=%d", downgraded, requests, tr.calls)
+	}
+}

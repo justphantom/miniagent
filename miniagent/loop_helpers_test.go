@@ -255,6 +255,7 @@ func testParseChatResponse(raw []byte) (Response, error) {
 				Content          string `json:"content"`
 				ReasoningContent string `json:"reasoning_content"`
 				Reasoning        string `json:"reasoning"`
+				ReasoningState   string `json:"reasoning_state"`
 				ToolCalls        []struct {
 					ID       string `json:"id"`
 					Function struct {
@@ -277,7 +278,7 @@ func testParseChatResponse(raw []byte) (Response, error) {
 		return Response{}, errors.New("llm response has no choices")
 	}
 	ch := v.Choices[0]
-	out := Response{Text: ch.Message.Content, Reasoning: ch.Message.ReasoningContent, FinishReason: ch.FinishReason}
+	out := Response{Text: ch.Message.Content, Reasoning: ch.Message.ReasoningContent, ReasoningState: ch.Message.ReasoningState, FinishReason: ch.FinishReason}
 	if out.Reasoning == "" {
 		out.Reasoning = ch.Message.Reasoning
 	}

@@ -37,7 +37,9 @@ func callLLMWithDowngrade(ctx context.Context, llm LLM, cfg LoopConfig, step int
 	// retry + downgraded flag prevents any loop). Narrow by design — only the empty-text sub-case: mid-sentence-cut
 	// text is left to the truncation warn below, since cheap auto-continuation isn't feasible. Best-effort: some
 	// providers don't free output budget when thinking drops, so the rescue is not guaranteed.
-	if err == nil && resp.FinishReason == "length" && resp.Text == "" && resp.Reasoning != "" && !downgraded && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
+	// The burn evidence is Reasoning OR ReasoningState: some endpoints return only the opaque wire state
+	// (no reasoning_content text), and that alone still proves the budget went to thinking.
+	if err == nil && resp.FinishReason == "length" && resp.Text == "" && (resp.Reasoning != "" || resp.ReasoningState != "") && !downgraded && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != ThinkingOff {
 		if logger != nil {
 			logger.Warn("length truncation with empty text; retrying once with thinking dropped to free output budget", "step", step)
 		}
