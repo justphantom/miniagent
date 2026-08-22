@@ -19,7 +19,7 @@ updated: 2026-08-22
 - 未做（报告低项，需用户决定）：whoami 版本探测收紧、鉴权爆破限速、`__new__` 全局串行、BroadcastChannel 多标签同步、优雅停机加长 grace。
 
 ## 待办
-- 用户已提交两 commit（c336033 P0-P3 全量 + 9dce7c1 剩余 M6/L11/L12）。补充审查结论：M6/L11/L12 实施正确（含 envsubst/sed 转换实测验证）；deploy.sh:65 注释夹中文「授权目录」；剩余 L14（L0:25 internal/* 旧布局）、L16（length 救回只看 Reasoning）、L17（常量表缺 8 键）、L18（ResultOnly 死字段）、L19（TOCTOU 纵深）、L20（locks 永不回收）仍未做，量级均为低危打磨，是否继续由用户定。
+- 第二轮评估落盘 ASSESSMENT.md（覆盖上轮报告）：上轮 45 项整改逐条核验全部真实落地；verify-gate 复跑全绿（557 测试）。新发现 15 项：中危 3（N1 CSP 阻断 index.html:10,20 内联 style 属性致每次刷新双面板 FOUC；N2 confirmInline Enter 在 btnCancel 聚焦时=确认删除，方向危险；N3 serve 每 turn 新建 Transport 无连接复用且无 IdleConnTimeout，fd 慢性累积）+ 低危 12（有序列表缺失/会话空态/README 两处微漂移/assessment.md 违 L1 约定/并发 turn 无 409/主题无态指示/静态名单双维护/网卡快照/无限速/回放 elapsed 失真/workdir 回填竞态等）。修复建议按 P0(N1/N2)→P1(N3/N4/N7)→P2→P3 排序，是否实施待用户定。
 
 ## 备注
 - verify-gate 全绿：gofmt 空/build/vet/test -race/golangci-lint 0 issues/≤300 行。

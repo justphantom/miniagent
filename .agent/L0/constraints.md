@@ -22,7 +22,7 @@ updated: 2026-08-18
 11. **session jsonl 持久化契约**：append-only + flock 跨进程锁 + 临时文件 `os.Rename` 原子 rewrite + 写前 `ensureTrailingNewline` 截崩溃半行 + 写盘期忽略 SIGINT/SIGTERM；新文件 0600、目录 0700。
 12. **stdout 是 NDJSON 机器契约**：`result` 事件 `text/model/input_tokens/output_tokens/steps` 不带 `omitempty`（为 0 也出键）；人类 prompt / 确认走 stderr。流式有 content 无 `[DONE]` 无 `finish_reason` 视为连接中断硬错（`errStreamUnterminated`）。
 13. **agent 层零安全保障**：v5.0.0 删 `-mode`/confineWrap/白名单工具/.git 封锁；`shell` 恒注册无约束、文件工具无路径限制。隔离完全靠运行用户的 OS 权限（容器/低权 UID/文件权限）。
-14. **依赖单向无环**：`cmd → core`、所有 `internal/*` 子包（compaction/event/provider/tools/policy/config/session/metrics/looptest）`→ core`，反向禁止；领域类型 `Message/Response/Usage/Request/Delta` 必须留核心包。
+14. **依赖单向无环**：`cmd → core`、所有子包（compaction/event/policy/tools/metrics，均已移出 `internal/` 可被外部导入；同级 config/provider/session/text）`→ core`，反向禁止；唯一横向边 compaction → policy（镜像常量钉死契约）；领域类型 `Message/Response/Usage/Request/Delta` 必须留核心包。
 
 ## 记忆系统元规则
 15. 遇历史决策/陌生报错/选型时的检索路由见根目录 `AGENTS.md`「路由」，本层不重复。

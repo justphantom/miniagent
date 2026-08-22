@@ -199,7 +199,12 @@ func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Clean up the per-session tool-output directory (created as <id>.tool-output in run_turn.go)
-	// to prevent orphan accumulation (M7).
+	// to prevent orphan accumulation (M7), and drop the lock entry (L20): the session is gone, so
+	// the mutex would otherwise linger for the process lifetime. Safe under TryLock: a concurrent
+	// turn holds this same mutex via LoadOrStore — we only reach here with it held, so no in-flight
+	// turn exists; a racing new turn re-creates the entry via LoadOrStore and locks the fresh mutex,
+	// at worst briefly losing serialization against a turn that started before the delete.
+	s.locks.Delete(id)
 	_ = os.RemoveAll(path + ".tool-output")
 	w.WriteHeader(http.StatusNoContent)
 }

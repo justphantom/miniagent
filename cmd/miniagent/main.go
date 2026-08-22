@@ -129,6 +129,7 @@ func main() {
 		logger:        logger,
 		buildClients:  buildRuntimeClients,
 		protectSignal: true,
+		transports:    &transportCache{},
 	}
 	spec := turnSpec{
 		prompt:      string(prompt),

@@ -175,6 +175,7 @@ export function renderEvent(ev) {
       u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}${elapsed}`;
       d.appendChild(u);
       eventsEl().appendChild(d);
+      state.turnStartTs = 0; // N13: replay streams several results — reset so the next turn's elapsed starts fresh
       break;
     }
     case "error": {

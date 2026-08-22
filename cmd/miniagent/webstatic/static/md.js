@@ -84,6 +84,17 @@ export function mdRender(src) {
       }
       out.push(`<ul>${items.join("")}</ul>`);
       continue;
+    } else if (/^\s*\d+\.\s+/.test(line)) {
+      // N4: ordered lists ("1. ") were rendered as plain <p> paragraphs before — LLM output
+      // is frequently ordered, so it presented as un-styled text. Number the items as typed;
+      // markdown's re-numbering from 1 is not reproduced (we emit <ol> and keep the source).
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(`<li>${mdInline(lines[i].replace(/^\s*\d+\.\s+/, ""))}</li>`);
+        i++;
+      }
+      out.push(`<ol>${items.join("")}</ol>`);
+      continue;
     } else if (/^>\s?/.test(line)) {
       const buf = [];
       while (i < lines.length && /^>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^>\s?/, "")); i++; }

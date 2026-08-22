@@ -137,6 +137,12 @@ func runWeb(ctx context.Context, client *http.Client, args string, maxBytes, max
 // checkWebHost resolves the URL hostname and rejects non-public targets (SSRF guard).
 // IP literals are checked directly; names are resolved and every resulting IP must be public
 // unicast. allowPrivate (test/CI hook) skips the check.
+//
+// Known TOCTOU window (defense-in-depth item, disclosed as a non-boundary in README): resolution
+// and the subsequent Dial happen in separate steps, so a DNS rebinder can answer this check with a
+// public IP and the actual connection with a private one. Closing it fully requires a custom
+// Dialer.Control that re-validates the connected address; not implemented since SSRF here is
+// read-only GET with no ambient credentials — treat this guard as raising the bar, not a sandbox.
 func checkWebHost(ctx context.Context, u *url.URL, allowPrivate bool) error {
 	if allowPrivate {
 		return nil

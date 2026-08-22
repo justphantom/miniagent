@@ -372,6 +372,10 @@ miniagent **不做任何 agent 层安全保障**（v5.0.0 删 `-mode`/confineWra
 | `maxFileResultInHistory` | 8000 | `run.max_file_result_chars` | read/edit 结果进入历史消息的字符数（代码内容，截断丢准确性） |
 | `contextTrimToolChars` | 2000 | `run.context_trim_tool_chars` | context 超限降级时把 tool 结果压到的字符数 |
 | `contextKeepRecent` | 4 | `run.context_keep_recent` | 摘要/有损压缩保留的最近轮数（首轮之外） |
+| `contextKeepReasoning` | 1 | `run.context_keep_reasoning` | 主动 reasoning 清理保留的最近 assistant 条数（其余清空；长链推理可调 2–3） |
+| `contextKeepReasoningChars` | 4000 | `run.context_keep_reasoning_chars` | 单条 Reasoning 字符上限（超限头 1/4+尾 3/4 截断；负值禁用） |
+| `contextKeepToolArgs` | 2 | `run.context_keep_tool_args` | 主动压缩保留 write/edit 参数的最近 assistant 条数（其余压成前缀占位） |
+| `preserveRecentTokens` | min 2000 / max 8000（`context_window/4`） | `run.preserve_recent_tokens` | 摘要压缩 tail 的 token 预算（clamp 到内置区间；<=0 用区间派生） |
 | `summaryMaxChars` | min(5000, `context_window/5`) | `run.summary_max_chars` | 摘要式压缩单条 summary 的字符上限；默认随窗口缩放（方向 A，小窗口自适应），大窗口取 5000 |
 | `summaryMaxTokens` | 2500（派生自 `summaryMaxChars/2`） | `run.summary_max_tokens` | 摘要请求输出 token 上限；<=0 由 `summaryMaxChars` 派生（CJK 最密口径，防中文摘要被 token 先截） |
 | `maxGrepMatches` / `maxGlobEntries` | 500 / 500 | `run.grep_max_matches`（仅 grep；glob 无独立键） | grep 命中行 / glob 命中条数上限 |
@@ -383,6 +387,14 @@ miniagent **不做任何 agent 层安全保障**（v5.0.0 删 `-mode`/confineWra
 | `shellTimeout` | 120s | `run.shell_timeout` | shell 命令超时（默认值，可被 config 覆盖） |
 | `fileOpTimeout` | 30s | `run.file_op_timeout` | read/edit/grep/glob 文件操作超时（默认值，可被 config 覆盖） |
 | `writeOpTimeout` | 30s | `run.write_timeout` | write 原子写入超时（默认值，可被 config 覆盖） |
+| `webTimeout` | 30s | `run.web_timeout` | web 工具单次抓取整体超时 |
+| `httpTimeout` | 120s | `run.http_timeout`（仅 `provider > global` 两层，无 model 级） | LLM chat/models 调用整体超时（流式无 Timeout，不被此键截断） |
+| `toolOutputRetention` | 168h | `run.tool_output_retention` | `run.tool_output_dir` 落盘文件的保留期（下次同会话 turn 构造 store 时清理过期） |
+| —（非常量开关） | — | `run.stream` | 是否发 `text_delta`/`reasoning_delta`（默认 false） |
+| —（非常量开关） | — | `run.confirm_destructive` | write/edit/危险 shell 执行前终端确认（非交互 stdin 恒拒；serve 形态启动时警告） |
+| —（非常量开关） | — | `run.max_duration` | 单轮墙钟上限（默认不限；`-serve` 另有 10min 默认兜底） |
+| —（非常量开关） | — | `run.max_iterations` / `run.max_tokens` / `run.max_tokens_total` | 迭代上限 / 请求输出 token 上限 / 单轮总 token 熔断（亦可 CLI/模型层） |
+| —（非常量开关） | — | `run.tool_output_dir` / `run.context_use_real_usage` / `run.shell_stream_window_bytes` | 工具结果落盘目录（空=每会话 `<id>.tool-output`） / 压缩预算优先真实 usage（默认开） / shell 输出滑窗字节（默认 `max_shell_output_chars×8`，保尾部） |
 
 ## 项目专属配置
 

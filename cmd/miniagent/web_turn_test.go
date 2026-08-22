@@ -54,7 +54,7 @@ func newTurnTestServer(t *testing.T) (*webServer, *fakeLLM) {
 	engine := &turnEngine{
 		cfg:    cfg,
 		logger: testLogger(),
-		buildClients: func(resolved *config.Resolved, apiKey string, logger *slog.Logger) (miniagent.LLM, miniagent.Doer, error) {
+		buildClients: func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
 			return fake, nil, nil
 		},
 	}
@@ -219,8 +219,10 @@ func TestWebSessions_ListAndReplay(t *testing.T) {
 	}
 }
 
-// Same-session turns serialize: with a slow fake LLM, the second request must not start until
-// the first finishes (RewriteMessages races would corrupt the shared file otherwise).
+// Same-session concurrent turns collide: N7 replaced the blocking mutex wait with TryLock, so
+// the second request answers 409 ("turn in progress") instead of hanging for up to the 10min web
+// turn timeout with no feedback. One turn must reach the LLM at a time (RewriteMessages races would
+// corrupt the shared file otherwise).
 func TestWebTurn_SameSessionSerialized(t *testing.T) {
 	s, _ := newTurnTestServer(t)
 	workdir := t.TempDir()
@@ -235,6 +237,7 @@ func TestWebTurn_SameSessionSerialized(t *testing.T) {
 
 	var mu sync.Mutex
 	concurrent, maxConcurrent := 0, 0
+	release := make(chan struct{})
 	slow := &countingLLM{onCall: func() {
 		mu.Lock()
 		concurrent++
@@ -242,30 +245,46 @@ func TestWebTurn_SameSessionSerialized(t *testing.T) {
 			maxConcurrent = concurrent
 		}
 		mu.Unlock()
-		time.Sleep(50 * time.Millisecond)
+		<-release // hold the turn open so the second request is guaranteed to collide
 		mu.Lock()
 		concurrent--
 		mu.Unlock()
 	}}
-	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger) (miniagent.LLM, miniagent.Doer, error) {
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
 		return slow, nil, nil
 	}
 
 	h := s.mux()
-	var wg sync.WaitGroup
-	for range 3 {
-		wg.Go(func() {
-			body := fmt.Sprintf(`{"prompt":"p","workdir":%q,"session":%q}`, workdir, sessionID)
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			r := httptest.NewRecorder()
-			h.ServeHTTP(r, req)
-			if r.Code != http.StatusOK {
-				t.Errorf("turn code = %d: %s", r.Code, r.Body.String())
-			}
-		})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		body := fmt.Sprintf(`{"prompt":"p","workdir":%q,"session":%q}`, workdir, sessionID)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, req)
+	}()
+	// Wait until the first turn has taken the session lock and entered the LLM.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		c := concurrent
+		mu.Unlock()
+		if c >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first turn never reached the LLM")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	wg.Wait()
+	// Second concurrent request on the same session → 409, no hang.
+	rec2 := postTurn(t, h, fmt.Sprintf(`{"prompt":"p","workdir":%q,"session":%q}`, workdir, sessionID))
+	if rec2.Code != http.StatusConflict {
+		t.Errorf("concurrent turn code = %d, want 409: %s", rec2.Code, rec2.Body.String())
+	}
+	close(release)
+	<-firstDone
 	mu.Lock()
 	defer mu.Unlock()
 	if maxConcurrent > 1 {

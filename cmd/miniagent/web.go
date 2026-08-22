@@ -74,7 +74,7 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		fmt.Fprintf(os.Stderr, "miniagent: web.listen %q is not loopback but no key is set (web.key or $%s); refusing to start\n", addr, webEnvKey)
 		os.Exit(1)
 	}
-	engine := &turnEngine{cfg: cfg, cfgPath: cfgPath, logger: logger, buildClients: buildRuntimeClients, protectSignal: false}
+	engine := &turnEngine{cfg: cfg, cfgPath: cfgPath, logger: logger, buildClients: buildRuntimeClients, protectSignal: false, transports: &transportCache{}}
 	s := &webServer{cfg: cfg, engine: engine, key: key, allowedHosts: hostVariants(addr, cfg.Web.AllowedHosts), logger: logger}
 
 	srv := &http.Server{Addr: addr, Handler: s.mux(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
@@ -112,10 +112,12 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 // The whole tree is wrapped in s.guard (Host/Origin validation — web_guard.go).
 func (s *webServer) mux() http.Handler {
 	mux := http.NewServeMux()
-	// "GET /{$}" matches only the root path — plain "GET /" would conflict with the
+	// GET /{$} serves index.html only at the root; plain "GET /" would conflict with the
 	// method-agnostic "/api/" subtree (root pattern beats it by method specificity).
 	mux.HandleFunc("GET /{$}", s.serveStatic("index.html"))
-	for _, f := range []string{"index.html", "app.js", "app.css", "store.js", "events.js", "md.js"} {
+	// N10: register every embedded static asset by name instead of hand-listing the 6 files in
+	// two places (webstatic assets.go now owns the canonical list via embed.FS).
+	for _, f := range webstatic.Names() {
 		mux.HandleFunc("GET /"+f, s.serveStatic(f))
 	}
 	mux.HandleFunc("GET /api/whoami", s.whoami)

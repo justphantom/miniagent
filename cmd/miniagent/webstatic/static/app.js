@@ -12,8 +12,7 @@ state.lastPrompt = ""; // last sent prompt, used by the error retry button
 // ---- auth gate ----
 
 async function boot() {
-  const theme = loadTheme();
-  if (theme) document.documentElement.dataset.theme = theme;
+  applyTheme(loadTheme());
   try {
     const r = await fetch("/api/whoami");
     const w = await r.json();
@@ -47,11 +46,17 @@ $("login-form").addEventListener("submit", (e) => {
   }).catch(() => { $("login-err").textContent = "无法连接服务"; });
 });
 $("logout").addEventListener("click", () => { setKey(""); location.reload(); });
-$("theme-btn").addEventListener("click", () => {
-  const next = document.documentElement.dataset.theme === "light" ? "" : "light";
-  document.documentElement.dataset.theme = next;
-  saveTheme(next);
-});
+const themeBtn = $("theme-btn");
+// N9: the theme button doubles as the current-theme indicator — ◐ dark / ◑ light, with a title
+// saying what a click does. Previously it gave no state feedback (always ◐, always "切换主题").
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t || "";
+  saveTheme(t || "");
+  const light = t === "light";
+  themeBtn.textContent = light ? "◑" : "◐";
+  themeBtn.title = light ? "切换到暗色" : "切换到亮色";
+}
+themeBtn.addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "light" ? "" : "light"));
 
 // ---- auto-scroll: follow only when near bottom, otherwise show a jump button ----
 
@@ -208,6 +213,8 @@ function inlineHint(msg) {
 // okText labels the destructive action button (styled with --err), so the dialog is reusable.
 function confirmInline(msg, okText) {
   const overlay = document.createElement("div");
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
   overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;";
   const box = document.createElement("div");
   box.style.cssText = "background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:320px;width:90%;";
@@ -227,14 +234,27 @@ function confirmInline(msg, okText) {
   overlay.append(box);
   document.body.append(overlay);
   btnCancel.focus();
+  const focusables = [btnCancel, btnOk];
+  // Focus trap: Tab cycles inside the box, Shift+Tab wraps backward, so keyboard users
+  // can't escape into the page behind the modal while it's open (N2).
+  overlay.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const last = focusables[focusables.length - 1], first = focusables[0];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
   return new Promise(resolve => {
     const close = (v) => { overlay.remove(); resolve(v); };
     btnOk.addEventListener("click", () => close(true));
     btnCancel.addEventListener("click", () => close(false));
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(false); });
     const onKey = (e) => {
-      if (e.key === "Enter") close(true);
-      else if (e.key === "Escape") close(false);
+      if (e.key === "Escape") close(false);
+      // N2: Enter confirms ONLY when focus is on the destructive button. Focus starts on
+      // Cancel; pressing Enter there must activate Cancel (the intuitive "my current button"
+      // action) — not confirm a session deletion by accident. Default button behavior already
+      // fires the focused button's click on Enter, so no special handling needed for that case.
+      else if (e.key === "Enter" && document.activeElement === btnOk) close(true);
     };
     overlay.addEventListener("keydown", onKey);
     btnCancel.addEventListener("keydown", onKey);
@@ -298,13 +318,25 @@ async function loadModels() {
 
 let sessionMeta = {}; // id → { workdir, model, ... } captured from the session list
 
+// N5: the session list needs states beyond "empty" — a fresh install or after deleting every
+// session otherwise shows a silent blank sidebar with no hint that the list loaded fine.
 async function loadSessions() {
+  const box = $("session-list");
+  box.innerHTML = "";
+  const hint = document.createElement("div");
+  hint.className = "muted sess-empty";
+  hint.textContent = "加载中…";
+  box.appendChild(hint);
   try {
     const r = await api("/api/sessions");
     const list = await r.json();
     if (!Array.isArray(list)) return;
-    const box = $("session-list");
     box.innerHTML = "";
+    if (list.length === 0) {
+      hint.textContent = "暂无会话，点击「＋ 新会话」开始";
+      box.appendChild(hint);
+      return;
+    }
     for (const s of list) {
       sessionMeta[s.id] = s;
       const b = document.createElement("button");

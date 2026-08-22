@@ -18,6 +18,9 @@ func newHTTPTransport() *http.Transport {
 		ResponseHeaderTimeout: 300 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		// N3: idle keep-alive sockets must not linger forever — a long-running -serve process
+		// would otherwise accumulate abandoned transports' connections (fd creep).
+		IdleConnTimeout: 90 * time.Second,
 	}
 }
 

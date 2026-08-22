@@ -26,7 +26,7 @@ func TestHTTPTimeoutFromConfig_RejectsNegative(t *testing.T) {
 // non-streaming Do fallback preventing hangs #3) + a StreamClient (no Timeout, body not cut P2-5); both
 // share the same *http.Transport (proxy/dial/TLS timeout, #2).
 func TestBuildLLM_ChatTimeoutStreamNoTimeoutSharedTransport(t *testing.T) {
-	llm, err := buildLLM("sk", config.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil, 0)
+	llm, err := buildLLM("sk", config.ProviderConfig{ChatURL: "http://localhost:1234/v1/chat/completions"}, nil, 0, &transportCache{})
 	if err != nil {
 		t.Fatalf("buildLLM: %v", err)
 	}

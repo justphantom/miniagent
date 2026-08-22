@@ -134,6 +134,10 @@ func TestWebSessionDelete(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("file still exists after delete: %v", err)
 	}
+	// L20: a successful delete also drops the lock entry — it must not linger for the process lifetime.
+	if _, ok := s.locks.Load("del-1"); ok {
+		t.Error("locks entry still present after successful delete")
+	}
 	if rec := del("del-1"); rec.Code != http.StatusNotFound {
 		t.Errorf("delete missing code = %d, want 404", rec.Code)
 	}

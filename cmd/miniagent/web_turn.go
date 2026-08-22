@@ -71,7 +71,12 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 		lockKey = "__new__"
 	}
 	mu, _ := s.locks.LoadOrStore(lockKey, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
+	if !mu.(*sync.Mutex).TryLock() {
+		// N7: a same-session turn is already running (≤10min by the web default timeout) — the
+		// client would otherwise hang with no feedback; answer 409 so the UI can say "turn in progress".
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "a turn on this session is already in progress"})
+		return
+	}
 	defer mu.(*sync.Mutex).Unlock()
 
 	// Stream NDJSON: headers + a flush-wrapping writer. Once the first byte is written the status

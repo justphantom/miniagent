@@ -40,13 +40,16 @@ type turnSpec struct {
 }
 
 // turnEngine holds turn-independent state: the loaded config, its absolute path (subagent
-// guidance injection), the logger, and an injectable client builder (tests pass a fake).
+// guidance injection), the logger, an injectable client builder (tests pass a fake) and the
+// per-provider transport cache (N3: web turns rebuild clients per request — the cache stops
+// the transport pool from being recreated each time).
 type turnEngine struct {
 	cfg           *config.Config
 	cfgPath       string
 	logger        *slog.Logger
-	buildClients  func(resolved *config.Resolved, apiKey string, logger *slog.Logger) (miniagent.LLM, miniagent.Doer, error)
-	protectSignal bool // CLI: signal.Ignore around session save; serve: signals owned by server
+	buildClients  func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error)
+	protectSignal bool            // CLI: signal.Ignore around session save; serve: signals owned by server
+	transports    *transportCache // N3: per-provider *http.Transport reuse for long-running serve mode
 }
 
 // runTurn executes one agent turn and streams NDJSON events to out. Error paths mirror the
@@ -118,7 +121,7 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 		ContextTrimToolChars:   into(resolved.RunConfig.ContextTrimToolChars, 0),
 	}
 
-	llm, compChat, err := e.buildClients(resolved, apiKey, e.logger)
+	llm, compChat, err := e.buildClients(resolved, apiKey, e.logger, e.transports)
 	if err != nil {
 		return err
 	}
