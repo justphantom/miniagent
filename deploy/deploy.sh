@@ -53,8 +53,9 @@ chmod 0644 "$UNIT_DST"
 # L12: verify the render consumed every placeholder — a leftover ${VAR} means the template
 # referenced a variable envsubst couldn't substitute (typo in template vs the export list).
 if grep -q '\${' "$UNIT_DST"; then
-	echo "deploy: WARNING rendered unit still contains unsubstituted \${VAR} placeholders:" >&2
+	echo "deploy: FATAL rendered unit still contains unsubstituted \${VAR} placeholders:" >&2
 	grep -n '\${' "$UNIT_DST" >&2 || true
+	exit 1
 fi
 
 # Install config file (seed from example if absent).
