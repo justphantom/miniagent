@@ -230,6 +230,17 @@ func TestHostVariants(t *testing.T) {
 		{"192.168.1.5:8787", []string{"192.168.1.5", "192.168.1.5:8787"}},
 		{"bad", []string{"bad"}},
 	}
+	// Wildcard bind adds the machine hostname (machine-dependent).
+	if hn, err := os.Hostname(); err == nil && hn != "" {
+		cases = append(cases, struct {
+			addr string
+			want []string
+		}{"0.0.0.0:8787", []string{"0.0.0.0", "0.0.0.0:8787", hn}})
+		cases = append(cases, struct {
+			addr string
+			want []string
+		}{"[::]:8787", []string{"::", "[::]:8787", hn}})
+	}
 	for _, c := range cases {
 		got := hostVariants(c.addr)
 		if !slices.Equal(got, c.want) {

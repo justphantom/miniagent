@@ -8,6 +8,7 @@ package main
 import (
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 )
@@ -57,6 +58,8 @@ func (s *webServer) hostAllowed(host string) bool {
 // hostVariants expands the listen address into every Host-header value a legitimate request
 // can carry: the literal host plus the port-less form, and for loopback the alternate
 // spellings (127.0.0.1 ↔ localhost — both resolve there; a client may type either).
+// For 0.0.0.0 / [::] (wildcard), the machine's hostname is added so it works out of the box
+// (a wildcard bind is reachable via any name that resolves to a local interface).
 func hostVariants(addr string) []string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -70,6 +73,13 @@ func hostVariants(addr string) []string {
 		for _, alt := range []string{"localhost", "127.0.0.1", "[::1]", "::1"} {
 			if !slices.ContainsFunc(variants, func(v string) bool { return strings.EqualFold(v, alt) }) {
 				variants = append(variants, alt)
+			}
+		}
+	}
+	if host == "0.0.0.0" || host == "[::]" || host == "::" {
+		if hn, err := os.Hostname(); err == nil && hn != "" {
+			if !slices.ContainsFunc(variants, func(v string) bool { return strings.EqualFold(v, hn) }) {
+				variants = append(variants, hn)
 			}
 		}
 	}
