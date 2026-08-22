@@ -75,7 +75,7 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		os.Exit(1)
 	}
 	engine := &turnEngine{cfg: cfg, cfgPath: cfgPath, logger: logger, buildClients: buildRuntimeClients, protectSignal: false}
-	s := &webServer{cfg: cfg, engine: engine, key: key, allowedHosts: hostVariants(addr), logger: logger}
+	s := &webServer{cfg: cfg, engine: engine, key: key, allowedHosts: hostVariants(addr, cfg.Web.AllowedHosts), logger: logger}
 
 	srv := &http.Server{Addr: addr, Handler: s.mux(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)

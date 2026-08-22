@@ -221,31 +221,36 @@ func TestListenHostIsLoopback(t *testing.T) {
 }
 
 func TestHostVariants(t *testing.T) {
+	// Wildcard binds also enumerate interface IPs, which vary by machine — assert the
+	// deterministic prefix and, for wildcards, that the hostname joined.
 	cases := []struct {
 		addr string
 		want []string
 	}{
-		{"127.0.0.1:8787", []string{"127.0.0.1", "127.0.0.1:8787", "localhost", "[::1]", "::1"}},
-		{"localhost:8787", []string{"localhost", "localhost:8787", "127.0.0.1", "[::1]", "::1"}},
-		{"192.168.1.5:8787", []string{"192.168.1.5", "192.168.1.5:8787"}},
+		{"127.0.0.1:8787", []string{"127.0.0.1", "localhost", "::1"}},
+		{"localhost:8787", []string{"localhost", "127.0.0.1", "::1"}},
+		{"192.168.1.5:8787", []string{"192.168.1.5"}},
 		{"bad", []string{"bad"}},
 	}
-	// Wildcard bind adds the machine hostname (machine-dependent).
-	if hn, err := os.Hostname(); err == nil && hn != "" {
-		cases = append(cases, struct {
-			addr string
-			want []string
-		}{"0.0.0.0:8787", []string{"0.0.0.0", "0.0.0.0:8787", hn}})
-		cases = append(cases, struct {
-			addr string
-			want []string
-		}{"[::]:8787", []string{"::", "[::]:8787", hn}})
-	}
 	for _, c := range cases {
-		got := hostVariants(c.addr)
+		got := hostVariants(c.addr, nil)
 		if !slices.Equal(got, c.want) {
 			t.Errorf("hostVariants(%q) = %v, want %v", c.addr, got, c.want)
 		}
+	}
+	if hn, err := os.Hostname(); err == nil && hn != "" {
+		for _, wc := range []string{"0.0.0.0:8787", "[::]:8787"} {
+			got := hostVariants(wc, nil)
+			if !slices.ContainsFunc(got, func(v string) bool { return strings.EqualFold(v, hn) }) {
+				t.Errorf("hostVariants(%q) = %v, want hostname %q included", wc, got, hn)
+			}
+		}
+	}
+	// extra (config web.allowed_hosts) appends after the derived variants; trimmed, deduped.
+	got := hostVariants("127.0.0.1:8787", []string{"agent.example.com", " 10.0.0.5 ", "localhost"})
+	want := []string{"127.0.0.1", "localhost", "::1", "agent.example.com", "10.0.0.5"}
+	if !slices.Equal(got, want) {
+		t.Errorf("hostVariants extra = %v, want %v", got, want)
 	}
 }
 
@@ -253,7 +258,7 @@ func TestHostVariants(t *testing.T) {
 // pass; cross-site Sec-Fetch-Site and cross-origin Origin headers are rejected.
 func TestWebGuard(t *testing.T) {
 	s := testWebServer("")
-	s.allowedHosts = hostVariants("127.0.0.1:8787")
+	s.allowedHosts = hostVariants("127.0.0.1:8787", nil)
 	h := s.mux()
 
 	cases := []struct {
@@ -296,6 +301,48 @@ func TestWebGuard(t *testing.T) {
 		if rec.Header().Get(hname) == "" {
 			t.Errorf("missing %s header", hname)
 		}
+	}
+}
+
+// Wildcard bind: the browser reaches the server via any local interface address, so those
+// (and the machine hostname) must pass the Host gate — this is the LAN-access deployment.
+func TestWebGuard_WildcardBind_InterfaceHosts(t *testing.T) {
+	s := testWebServer("")
+	s.cfg.Session.Dir = t.TempDir()
+	s.allowedHosts = hostVariants("0.0.0.0:8787", nil)
+	h := s.mux()
+	for _, host := range append(localInterfaceHosts(), "127.0.0.1", "localhost") {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("host %q: code = %d, want 200 (interface host of a wildcard bind)", host, rec.Code)
+		}
+	}
+}
+
+// web.allowed_hosts: reverse-proxy deployments add their public name explicitly.
+func TestWebGuard_ConfigAllowedHosts(t *testing.T) {
+	s := testWebServer("")
+	s.cfg.Session.Dir = t.TempDir()
+	s.allowedHosts = hostVariants("127.0.0.1:8787", []string{"agent.example.com"})
+	h := s.mux()
+	for _, host := range []string{"agent.example.com", "127.0.0.1:8787"} {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("host %q: code = %d, want 200", host, rec.Code)
+		}
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions", nil)
+	req.Host = "other.example.com"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("unlisted host code = %d, want 403", rec.Code)
 	}
 }
 
