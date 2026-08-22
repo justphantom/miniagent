@@ -5,6 +5,29 @@
 
 ## [Unreleased]
 
+### Added
+- **有序列表支持**（N4）：markdown 渲染器补 `<ol>`，LLM 高频输出的有序列表不再显示为 `<p>` 段落。
+- **会话列表空态/加载态**（N5）：新用户/全删后左侧栏显示「暂无会话」占位，加载中显示「加载中…」。
+- **主题按钮当前态指示**（N9）：按钮根据当前主题显示 ◐（暗色）/ ◑（亮色），title 提示切换方向。
+- **静态资源自动注册**（N10）：`webstatic.Names()` 遍历 `embed.FS` 注册路由，新增文件只需改一处（go:embed 指令）；`TestNames` 钉死文件集合契约（审查补）。
+
+### Fixed
+- **CSP 内联 style 阻断致 FOUC**（N1）：`#login`/`#app` 初始隐藏移入 CSS，`style-src 'self'` 不会再丢弃 display 属性，首次绘制不再双面板闪现。
+- **confirmInline Enter 语义危险**（N2）：Enter 仅在焦点在 btnOk 时确认（否则由按钮原生行为接管）；`role="dialog"`+焦点圈闭防 Tab 逃逸。
+- **serve 模式 Transport 连接泄漏**（N3）：`turnEngine.transportCache` 按 provider 名缓存 `*http.Transport`，每 turn 不再新建 TCP+TLS 连接；`IdleConnTimeout=90s` 回收空闲连接。
+- **同会话并发 turn 无反馈挂起**（N7）：`TryLock` 替代 `Lock`，失败即 409 `"turn in progress"`，不再阻塞 ≤10min 无反馈。
+- **会话列表失败态缺失**（N5 审查补）：API 失败后侧栏不再停留「加载中…」，改为「加载失败：<原因>（点击重试）」占位，三态齐。
+- **回放 elapsed 显示失真**（N13）：result 后重置 `turnStartTs`，多轮会话的每轮耗时分开计算。
+- **openSession workdir 不回填竞态**（N14）：replay 流首条 session 事件携带 workdir，刷新后秒点会话时 workdir 自动填回；审查后补空值守卫——用户已显式输入的 workdir 不再被会话值覆盖。
+
+### Changed
+- **`buildClients` 签名**（N3 内改）：新增 `cache *transportCache` 形参，`buildLLM`/`buildOpenAILLM`/`buildDoer` 共享缓存的 Transport。
+- **README 两处微漂移**（N6）：主题按钮字符从 🌙/☀️ 修正为 ◐/◑，长文本折叠阈值从 20→24 行（与代码 `LONG_TEXT_LINES=24` 一致）。
+- **app.css `@media (min-width:800px)` 格式化**（N15）：单行 4 规则拆分为分块多行。
+
+### Removed
+- **`.agent/L1/assessment.md`**（N8）：遗留文件，违反「L1 唯一文件 active/session.md」自建约定。
+
 ## [6.2.0] - 2026-08-22
 
 ### Added
