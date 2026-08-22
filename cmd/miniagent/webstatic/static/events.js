@@ -1,9 +1,12 @@
 "use strict";
 
-// ---- event rendering: NDJSON events → DOM, markdown body, collapse, copy button ----
+// ---- event rendering: NDJSON events → per-view DOM, markdown body, collapse, copy ----
+// Every render function takes the target view: views are independent (multi-session UI),
+// each holding its own in-flight delta nodes, tool-node map and token counters.
 
-import { mdRender, esc } from "./md.js";
-import { state, fmtTime, showSessionID, setModelBadge } from "./store.js";
+import { mdRender } from "./md.js";
+import { fmtTime } from "./store.js";
+import { activeView } from "./views.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
 
@@ -11,16 +14,14 @@ const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with 
 // md syntax (`**bold**`, fences) the whole time. Reparse at a fixed cadence instead of per
 // delta (O(deltas) reparses caused the original one-shot-render decision), and cap the live
 // buffer — pathological streams wait for finishText instead of re-parsing megabytes per tick.
+// Hidden views skip repaint (their buffers finalize at finishText).
 const STREAM_RENDER_MS = 300;
 const MAX_STREAM_MD_CHARS = 64 * 1024;
 
-let curText = null, curReasoning = null;
-let toolNodes = new Map(); // callID → tool <details> node, for exact tool_result pairing
+const dirtyViews = new Set(); // views with unrendered streaming buffers
 let streamTimer = 0;
 
-function eventsEl() { return document.getElementById("events"); }
-
-// evDiv: body "" = streaming span placeholder (caller appends), string = final markdown body.
+// evDiv: body "" = streaming container (caller appends), string = final markdown body.
 function evDiv(cls, tag, ts, body = "") {
   const d = document.createElement("div");
   d.className = "ev " + cls;
@@ -46,14 +47,14 @@ function evDiv(cls, tag, ts, body = "") {
   return d;
 }
 
-export function appendUserPrompt(text) {
+export function appendUserPrompt(view, text) {
   const d = evDiv("user", "user", Date.now());
   d.appendChild(document.createTextNode(text)); // user input stays plain text (no markdown)
-  eventsEl().appendChild(d);
+  view.dom.appendChild(d);
 }
 
-export function appendDelta(kind, text, ts) {
-  let d = kind === "text" ? curText : curReasoning;
+export function appendDelta(view, kind, text, ts) {
+  let d = kind === "text" ? view.curText : view.curReasoning;
   if (!d) {
     d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking", ts);
     if (kind === "reasoning") d.style.opacity = "0.75";
@@ -62,21 +63,24 @@ export function appendDelta(kind, text, ts) {
     md.className = "md";
     d.appendChild(md);
     d._mdEl = md;
-    eventsEl().appendChild(d);
-    if (kind === "text") curText = d; else curReasoning = d;
-    if (!streamTimer) streamTimer = setInterval(paintStreaming, STREAM_RENDER_MS);
+    view.dom.appendChild(d);
+    if (kind === "text") view.curText = d; else view.curReasoning = d;
   }
   d._md += text;
-  if (!d._painted) { d._mdEl.innerHTML = mdRender(d._md); d._painted = true; } // first chunk paints immediately, no 300ms blank
+  dirtyViews.add(view);
+  if (!streamTimer) streamTimer = setInterval(paintStreaming, STREAM_RENDER_MS);
+  if (!d._painted) { d._mdEl.innerHTML = mdRender(d._md); d._painted = true; } // first chunk paints immediately
 }
 
-// paintStreaming re-renders every in-flight text/reasoning buffer as markdown on the shared
-// timer. Copy buttons and collapse still bind once at finishText (re-binding per tick would
-// duplicate listeners on every <pre>).
+// paintStreaming re-renders every visible view's in-flight buffers on the shared timer. Copy
+// buttons and collapse still bind once at finishText (re-binding per tick would duplicate
+// listeners on every <pre>).
 function paintStreaming() {
-  for (const d of [curText, curReasoning]) {
-    if (!d || !d._mdEl) continue;
-    if (d._md.length <= MAX_STREAM_MD_CHARS) d._mdEl.innerHTML = mdRender(d._md);
+  for (const view of dirtyViews) {
+    if (view.dom.style.display === "none") continue; // hidden view: finishText finalizes
+    for (const d of [view.curText, view.curReasoning]) {
+      if (d?._mdEl && d._md.length <= MAX_STREAM_MD_CHARS) d._mdEl.innerHTML = mdRender(d._md);
+    }
   }
 }
 
@@ -113,7 +117,7 @@ function makeCollapsible(d, text) {
   d.appendChild(btn);
 }
 
-export function appendToolUse(ev) {
+export function appendToolUse(view, ev) {
   const d = document.createElement("details");
   d.className = "ev tool";
   const s = document.createElement("summary");
@@ -127,15 +131,15 @@ export function appendToolUse(ev) {
   const pre = document.createElement("pre");
   pre.textContent = ev.input || "";
   d.appendChild(pre);
-  eventsEl().appendChild(d);
-  if (ev.call_id) toolNodes.set(ev.call_id, d);
+  view.dom.appendChild(d);
+  if (ev.call_id) view.toolNodes.set(ev.call_id, d);
   return d;
 }
 
 // tool_result carries call_id: pair it with the exact tool_use node. Fallback to the last
 // tool block only when the id is unknown (replay of old sessions predating call_id).
-export function appendToolResult(ev, toolNode) {
-  const target = toolNode || (ev.call_id && toolNodes.get(ev.call_id)) || eventsEl().querySelector("details.ev.tool:last-of-type");
+export function appendToolResult(view, ev) {
+  const target = (ev.call_id && view.toolNodes.get(ev.call_id)) || view.dom.querySelector("details.ev.tool:last-of-type");
   if (!target) return;
   const pre = document.createElement("pre");
   pre.className = "out" + (ev.is_error ? " err" : "");
@@ -143,9 +147,8 @@ export function appendToolResult(ev, toolNode) {
   target.appendChild(pre);
 }
 
-export function finishText() {
-  if (streamTimer) { clearInterval(streamTimer); streamTimer = 0; }
-  for (const d of [curText, curReasoning]) {
+export function finishText(view) {
+  for (const d of [view.curText, view.curReasoning]) {
     if (!d) continue;
     if (d._mdEl) {
       d._mdEl.innerHTML = mdRender(d._md || ""); // final full-fidelity render
@@ -154,33 +157,30 @@ export function finishText() {
     makeCollapsible(d, d._md || "");
     delete d._md; delete d._mdEl; delete d._painted;
   }
-  curText = curReasoning = null;
+  view.curText = view.curReasoning = null;
+  dirtyViews.delete(view);
+  if (dirtyViews.size === 0 && streamTimer) { clearInterval(streamTimer); streamTimer = 0; }
 }
 
-// resetTransient drops per-view state (callID map); openSession/new-chat call this after
-// clearing the DOM so stale tool nodes from the previous view are never paired against.
-export function resetTransient() {
-  toolNodes = new Map();
+// resetTransient drops a view's per-view state — openSession/rebuild call this after clearing
+// the DOM so stale tool nodes are never paired against.
+export function resetTransient(view) {
+  view.toolNodes = new Map();
 }
 
-export function renderEvent(ev) {
-  if (state.turnStartTs === 0 && ev.ts) state.turnStartTs = ev.ts;
+export function renderEvent(view, ev) {
+  if (view.turnStartTs === 0 && ev.ts) view.turnStartTs = ev.ts;
   switch (ev.type) {
     case "session":
-      state.session = ev.id;
-      document.title = `miniagent · ${ev.id}`;
-      showSessionID(ev.id);
-      break;
-    case "text_delta": appendDelta("text", ev.text, ev.ts); break;
-    case "reasoning_delta": appendDelta("reasoning", ev.text, ev.ts); break;
-    case "tool_use": finishText(); appendToolUse(ev); break;
-    case "tool_result": finishText(); appendToolResult(ev, null); break;
+      break; // id/workdir are consumed by the caller (rekey/header) before render
+    case "text_delta": appendDelta(view, "text", ev.text, ev.ts); break;
+    case "reasoning_delta": appendDelta(view, "reasoning", ev.text, ev.ts); break;
+    case "tool_use": finishText(view); appendToolUse(view, ev); break;
+    case "tool_result": finishText(view); appendToolResult(view, ev); break;
     case "result": {
-      finishText();
-      if (ev.model) setModelBadge(ev.model);
-      state.sessionInTokens += ev.input_tokens || 0;
-      state.sessionOutTokens += ev.output_tokens || 0;
-      showSessionID(state.session); // refresh token counter
+      finishText(view);
+      view.tokens.in += ev.input_tokens || 0;
+      view.tokens.out += ev.output_tokens || 0;
       const d = evDiv("result", "result", ev.ts);
       const md = document.createElement("div");
       md.className = "md";
@@ -190,26 +190,29 @@ export function renderEvent(ev) {
       makeCollapsible(d, ev.text || "");
       const u = document.createElement("div");
       u.className = "usage";
-      const elapsed = state.turnStartTs && ev.ts ? ` · ${((ev.ts - state.turnStartTs) / 1000).toFixed(1)}s` : "";
+      const elapsed = view.turnStartTs && ev.ts ? ` · ${((ev.ts - view.turnStartTs) / 1000).toFixed(1)}s` : "";
       u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}${elapsed}`;
       d.appendChild(u);
-      eventsEl().appendChild(d);
-      state.turnStartTs = 0; // N13: replay streams several results — reset so the next turn's elapsed starts fresh
+      view.dom.appendChild(d);
+      view.turnStartTs = 0; // N13: replay streams several results — reset so the next turn's elapsed starts fresh
       break;
     }
     case "error": {
-      finishText();
+      finishText(view);
       const d = evDiv("error", "error", ev.ts || Date.now());
       d.appendChild(document.createTextNode(ev.error || ev.message || "unknown error"));
-      if (state.lastPrompt) {
+      if (view.lastPrompt) {
         const retry = document.createElement("button");
         retry.type = "button";
         retry.className = "ghost retry-btn";
         retry.textContent = "重试";
-        retry.addEventListener("click", () => { document.getElementById("prompt").value = state.lastPrompt; document.getElementById("send").click(); });
+        retry.addEventListener("click", () => {
+          document.getElementById("prompt").value = view.lastPrompt;
+          if (activeView() === view) document.getElementById("send").click(); // auto-send only when still on this view
+        });
         d.appendChild(retry);
       }
-      eventsEl().appendChild(d);
+      view.dom.appendChild(d);
       break;
     }
   }

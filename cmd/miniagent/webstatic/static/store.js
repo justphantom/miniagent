@@ -1,6 +1,8 @@
 "use strict";
 
 // ---- shared state, auth, persistence helpers ----
+// Session-bound state (session id, sending, tokens…) lives on the view objects in views.js,
+// not here — several sessions are open at once.
 
 const KEY = "miniagent.web.key";
 const WD_KEY = "miniagent.web.workdir";
@@ -9,12 +11,6 @@ const THEME_KEY = "miniagent.web.theme";
 
 export const state = {
   key: localStorage.getItem(KEY) || "",
-  session: "",        // current session id ("" = next send creates one)
-  sending: false,
-  abort: null,        // AbortController of the in-flight turn
-  sessionInTokens: 0,
-  sessionOutTokens: 0, // accumulated this session (from result events)
-  turnStartTs: 0,     // ts of first delta/result this turn, for elapsed display
 };
 
 export function setKey(k) { state.key = k; if (k) localStorage.setItem(KEY, k); else localStorage.removeItem(KEY); }
@@ -40,16 +36,17 @@ export function fmtTime(ms) {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-export function showSessionID(id) {
+// showSessionID renders the header for a view: session id plus the view's accumulated tokens.
+export function showSessionID(view) {
   const el = document.getElementById("session-id");
+  const id = view?.id || "";
   el.textContent = id ? `会话 ${id}` : "";
   el.title = id || "当前会话 ID";
   const tok = document.getElementById("session-tokens");
-  tok.textContent = state.sessionInTokens || state.sessionOutTokens ? `in=${state.sessionInTokens} out=${state.sessionOutTokens}` : "";
+  const t = view?.tokens || { in: 0, out: 0 };
+  tok.textContent = t.in || t.out ? `in=${t.in} out=${t.out}` : "";
   tok.title = "当前会话累计 token（来自 result 事件）";
 }
-
-export function resetTokenCount() { state.sessionInTokens = state.sessionOutTokens = 0; }
 
 // setVersion renders the server version (from /api/whoami) into both the login page and the header badge.
 // Idempotent: safe to call on boot and on every login retry.
