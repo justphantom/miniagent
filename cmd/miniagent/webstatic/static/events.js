@@ -7,8 +7,16 @@ import { state, fmtTime, showSessionID, setModelBadge } from "./store.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
 
+// Streaming markdown: reasoning deltas stream for minutes and the plain-text phase showed raw
+// md syntax (`**bold**`, fences) the whole time. Reparse at a fixed cadence instead of per
+// delta (O(deltas) reparses caused the original one-shot-render decision), and cap the live
+// buffer — pathological streams wait for finishText instead of re-parsing megabytes per tick.
+const STREAM_RENDER_MS = 300;
+const MAX_STREAM_MD_CHARS = 64 * 1024;
+
 let curText = null, curReasoning = null;
 let toolNodes = new Map(); // callID → tool <details> node, for exact tool_result pairing
+let streamTimer = 0;
 
 function eventsEl() { return document.getElementById("events"); }
 
@@ -49,15 +57,27 @@ export function appendDelta(kind, text, ts) {
   if (!d) {
     d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking", ts);
     if (kind === "reasoning") d.style.opacity = "0.75";
-    d._md = ""; // raw markdown buffer, rendered at finishText
+    d._md = ""; // raw markdown buffer, kept live by paintStreaming, finalized at finishText
+    const md = document.createElement("div");
+    md.className = "md";
+    d.appendChild(md);
+    d._mdEl = md;
     eventsEl().appendChild(d);
-    const span = document.createElement("span");
-    d.appendChild(span);
     if (kind === "text") curText = d; else curReasoning = d;
-    d._span = span;
+    if (!streamTimer) streamTimer = setInterval(paintStreaming, STREAM_RENDER_MS);
   }
   d._md += text;
-  d._span.textContent += text; // streaming: plain text, zero flicker
+  if (!d._painted) { d._mdEl.innerHTML = mdRender(d._md); d._painted = true; } // first chunk paints immediately, no 300ms blank
+}
+
+// paintStreaming re-renders every in-flight text/reasoning buffer as markdown on the shared
+// timer. Copy buttons and collapse still bind once at finishText (re-binding per tick would
+// duplicate listeners on every <pre>).
+function paintStreaming() {
+  for (const d of [curText, curReasoning]) {
+    if (!d || !d._mdEl) continue;
+    if (d._md.length <= MAX_STREAM_MD_CHARS) d._mdEl.innerHTML = mdRender(d._md);
+  }
 }
 
 // ---- collapsible blocks with one-click copy for code ----
@@ -124,16 +144,15 @@ export function appendToolResult(ev, toolNode) {
 }
 
 export function finishText() {
+  if (streamTimer) { clearInterval(streamTimer); streamTimer = 0; }
   for (const d of [curText, curReasoning]) {
     if (!d) continue;
-    if (d._span) d._span.remove();
-    const md = document.createElement("div");
-    md.className = "md";
-    md.innerHTML = mdRender(d._md || "");
-    d.appendChild(md);
-    addCopyButtons(md);
+    if (d._mdEl) {
+      d._mdEl.innerHTML = mdRender(d._md || ""); // final full-fidelity render
+      addCopyButtons(d._mdEl);
+    }
     makeCollapsible(d, d._md || "");
-    delete d._md; delete d._span;
+    delete d._md; delete d._mdEl; delete d._painted;
   }
   curText = curReasoning = null;
 }
