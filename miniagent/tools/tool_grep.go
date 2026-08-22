@@ -79,6 +79,19 @@ func runGrep(ctx context.Context, workspaceRoot, args string, maxMatches, maxOut
 	root := resolveToolPath(workspaceRoot, a.Path)
 	var globFn func(string) bool
 	if strings.TrimSpace(a.Glob) != "" {
+		a.Glob = strings.TrimSpace(a.Glob)
+		// Two-probe validation: filepath.Match on a bogus name returns false but no error if the
+		// pattern is syntactically valid (e.g. "*.go" doesn't match "glob-probe"), so we need a
+		// second probe that would match a valid pattern — a literal match probes the pattern for
+		// syntax errors (aligned with runGlob's globPatternMalformed + probe).
+		if _, err := filepath.Match(a.Glob, "probe"); err != nil {
+			return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("invalid glob: %v", err)}
+		}
+		// Separator-bounded probe: a valid glob like "*.go" matches "x.go" but not "probe"; a
+		// malformed glob like "[a-" fails on both.
+		if _, err := filepath.Match(a.Glob, "x.go"); err != nil {
+			return miniagent.ToolResult{IsError: true, Output: fmt.Sprintf("invalid glob: %v", err)}
+		}
 		globFn = func(name string) bool {
 			ok, _ := filepath.Match(a.Glob, name)
 			return ok

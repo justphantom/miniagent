@@ -78,6 +78,19 @@ func TestGrepTool_InvalidPattern(t *testing.T) {
 // A missing/inaccessible search root must surface as the real error, not "no matches": a typo'd path
 // is otherwise indistinguishable from an empty result and the agent stops searching (glob already
 // propagates the root error; grep must not diverge).
+// O5: a malformed glob must surface as an error, not a misleading "no matches".
+func TestGrepTool_InvalidGlob(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.go": "foo\n"})
+	res := GrepTool(dir, 0, 0, 0).Call(context.Background(), `{"pattern":"foo","glob":"[a-"}`)
+	if !res.IsError {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(res.Output, "invalid glob") {
+		t.Errorf("Output = %q", res.Output)
+	}
+}
+
 func TestGrepTool_MissingRootErrors(t *testing.T) {
 	dir := t.TempDir()
 	res := GrepTool(dir, 0, 0, 0).Call(context.Background(), `{"pattern":"foo","path":"nope"}`)
