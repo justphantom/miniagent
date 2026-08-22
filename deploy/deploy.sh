@@ -1,32 +1,66 @@
 #!/bin/sh
-# deploy.sh: install miniagent as a systemd WebUI service. Run: sudo make deploy
+# deploy.sh: install miniagent as a systemd WebUI service.
+# Sources deploy/.env.example (tracked) for defaults, then overlays deploy/.env (git-ignored)
+# for per-host overrides. Variables: MINIAGENT_WORKDIR / MINIAGENT_CONFIG / MINIAGENT_USER / MINIAGENT_GROUP.
+# Run: sudo make deploy
 set -eu
 
 SERVICE=miniagent
-UNIT_SRC="$(dirname "$0")/miniagent.service"
-UNIT_DST=/etc/systemd/system/$SERVICE.service
-CONFIG_DST=/etc/miniagent/miniagent.json
-DATA_DIR=/var/lib/miniagent
+SCRIPT_DIR="$(dirname "$0")"
+ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+ENV_FILE="$SCRIPT_DIR/.env"
+
+# ---- source .env.example (tracked defaults) ----
+if [ ! -f "$ENV_EXAMPLE" ]; then
+	echo "deploy: $ENV_EXAMPLE not found (corrupted checkout)" >&2
+	exit 1
+fi
+. "$ENV_EXAMPLE"
+
+# ---- optional .env override (git-ignored, per-host) ----
+if [ -f "$ENV_FILE" ]; then
+	. "$ENV_FILE"
+fi
+
+: "${MINIAGENT_WORKDIR:?}" "${MINIAGENT_CONFIG:?}" "${MINIAGENT_USER:?}" "${MINIAGENT_GROUP:?}"
 
 if ! command -v systemctl >/dev/null 2>&1; then
 	echo "deploy: systemctl not found (systemd only)" >&2
 	exit 1
 fi
 
-# Dedicated system user: agent 层 shell 无约束，至少让进程不以 root 运行。
-if ! id -u $SERVICE >/dev/null 2>&1; then
-	useradd --system --no-create-home --home-dir $DATA_DIR --shell /usr/sbin/nologin $SERVICE
+# Dedicated system user/group: agent 层 shell 无约束，至少让进程不以 root 运行。
+if ! getent group "$MINIAGENT_GROUP" >/dev/null 2>&1; then
+	groupadd --system "$MINIAGENT_GROUP"
+fi
+if ! id -u "$MINIAGENT_USER" >/dev/null 2>&1; then
+	useradd --system --no-create-home --home-dir "$MINIAGENT_WORKDIR" --shell /usr/sbin/nologin -g "$MINIAGENT_GROUP" "$MINIAGENT_USER"
 fi
 
-install -d -m 0750 -o $SERVICE -g $SERVICE $DATA_DIR
-install -d -m 0755 -o root -g root /etc/miniagent
-if [ ! -f "$CONFIG_DST" ]; then
-	install -m 0640 -o root -g $SERVICE config.example.json "$CONFIG_DST"
-	echo "deploy: seeded $CONFIG_DST from config.example.json — edit before starting"
+# Ensure envsubst is available (gettext package).
+if ! command -v envsubst >/dev/null 2>&1; then
+	echo "deploy: envsubst not found (install gettext)" >&2
+	exit 1
 fi
 
-install -m 0755 bin/miniagent /usr/local/bin/miniagent
-install -m 0644 "$UNIT_SRC" "$UNIT_DST"
+# Render unit from template, substituting the four variables.
+UNIT_TPL="$SCRIPT_DIR/miniagent.service.tpl"
+UNIT_DST=/etc/systemd/system/$SERVICE.service
+export MINIAGENT_WORKDIR MINIAGENT_CONFIG MINIAGENT_USER MINIAGENT_GROUP
+envsubst < "$UNIT_TPL" > "$UNIT_DST"
+chmod 0644 "$UNIT_DST"
+
+# Install config file (seed from example if absent).
+CONFIG_DIR=$(dirname "$MINIAGENT_CONFIG")
+install -d -m 0755 -o root -g root "$CONFIG_DIR"
+if [ ! -f "$MINIAGENT_CONFIG" ]; then
+	install -m 0640 -o root -g "$MINIAGENT_GROUP" "$SCRIPT_DIR/../config.example.json" "$MINIAGENT_CONFIG"
+	echo "deploy: seeded $MINIAGENT_CONFIG from config.example.json — edit before starting"
+fi
+
+# Install data directory and binary.
+install -d -m 0750 -o "$MINIAGENT_USER" -g "$MINIAGENT_GROUP" "$MINIAGENT_WORKDIR"
+install -m 0755 "$SCRIPT_DIR/../bin/miniagent" /usr/local/bin/miniagent
 
 systemctl daemon-reload
 systemctl enable --now $SERVICE

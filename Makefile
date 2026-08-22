@@ -27,8 +27,8 @@ verify:
 clean:
 	rm -rf bin/
 
-# deploy installs bin/miniagent as a systemd WebUI service (miniagent.service: user miniagent,
-# /etc/miniagent/miniagent.json, /var/lib/miniagent, systemctl enable --now).
+# deploy installs bin/miniagent as a systemd WebUI service. Variables (workdir/config/user/group)
+# are injected from deploy/.env.example (override per-host via deploy/.env) — edit before running.
 # Run make build first (dependency deliberately omitted so deploy never rebuilds).
 deploy:
 	sudo sh deploy/deploy.sh

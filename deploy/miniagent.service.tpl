@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=miniagent
-Group=miniagent
-ExecStart=/usr/local/bin/miniagent -config /etc/miniagent/miniagent.json -serve -workdir /var/lib/miniagent
-WorkingDirectory=/var/lib/miniagent
+User=${MINIAGENT_USER}
+Group=${MINIAGENT_GROUP}
+ExecStart=/usr/local/bin/miniagent -config ${MINIAGENT_CONFIG} -serve -workdir ${MINIAGENT_WORKDIR}
+WorkingDirectory=${MINIAGENT_WORKDIR}
 Restart=on-failure
 RestartSec=5
 
@@ -17,7 +17,7 @@ NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/miniagent
+ReadWritePaths=${MINIAGENT_WORKDIR}
 
 [Install]
 WantedBy=multi-user.target
