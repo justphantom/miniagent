@@ -5,6 +5,7 @@
 
 import { state, setKey, api, authHeaders, showSessionID, resetTokenCount, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, setModelBadge } from "./store.js";
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
+import { startEvents } from "./live.js";
 
 const $ = (id) => document.getElementById(id);
 state.lastPrompt = ""; // last sent prompt, used by the error retry button
@@ -33,6 +34,24 @@ function showApp() {
   const savedWd = loadWorkdir();
   if (savedWd) $("workdir").value = savedWd;
   loadModels(); loadSessions(); $("prompt").focus();
+  startLifecycleSync();
+}
+
+// ---- cross-browser sync: the global lifecycle feed refreshes the session list and running
+// dots in every open browser (P2). Live VIEW attach for sessions driven by others lands with
+// the multi-view rework.
+
+let lifeStop = null;
+let listRefreshTimer = 0;
+
+function startLifecycleSync() {
+  if (lifeStop) return;
+  lifeStop = startEvents((ev) => {
+    // Any lifecycle transition can change ordering (mtime), preview or the running flag —
+    // one debounced list refresh covers them all.
+    if (listRefreshTimer) return;
+    listRefreshTimer = setTimeout(() => { listRefreshTimer = 0; loadSessions(); }, 300);
+  });
 }
 
 $("login-form").addEventListener("submit", (e) => {
@@ -143,6 +162,11 @@ async function send() {
       body: JSON.stringify(body),
       signal: state.abort.signal,
     });
+    if (resp.status === 409) {
+      // Another window (or this one) is already driving this session — surface it instead
+      // of a bare "conflict" error.
+      throw new Error("该会话已有进行中的轮次（可能来自其他窗口），请稍候重试");
+    }
     if (!resp.ok) {
       let msg = resp.statusText;
       try { msg = (await resp.json()).error || msg; } catch { /* non-JSON error body */ }
@@ -338,7 +362,7 @@ async function loadSessions() {
     for (const s of list) {
       sessionMeta[s.id] = s;
       const b = document.createElement("button");
-      b.className = "sess-item" + (s.id === state.session ? " active" : "");
+      b.className = "sess-item" + (s.id === state.session ? " active" : "") + (s.running ? " running" : "");
       b.type = "button";
       const top = document.createElement("div");
       top.textContent = s.model || s.id;

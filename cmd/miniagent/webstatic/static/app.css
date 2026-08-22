@@ -43,6 +43,9 @@ body.nav-open #overlay { position: absolute; inset: 0; background: rgba(0,0,0,.5
 .sess-item:hover .sess-del, .sess-item .sess-del:hover { color: var(--err); }
 .sess-item:hover { border-color: var(--border); background: var(--panel); }
 .sess-item.active { border-color: var(--accent); background: var(--panel); }
+/* running turn indicator: breathing dot on the right edge of the row */
+.sess-item.running::after { content: ""; position: absolute; right: 26px; top: 50%; margin-top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: runningPulse 1.6s ease-in-out infinite; }
+@keyframes runningPulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .sess-item .sid { font-size: 12px; color: var(--muted); }
 .sess-item .preview { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
 main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }

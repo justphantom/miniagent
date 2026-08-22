@@ -24,7 +24,8 @@ const maxHistoryMessages = 200
 
 // sessionSummary is one row of GET /api/sessions. Created/provider/model come from the jsonl
 // first meta line; workdir is surfaced so the UI can switch the active workdir when a session is
-// opened; size and mtime from the file itself; preview is the tail of the last assistant message.
+// opened; size and mtime from the file itself; preview is the tail of the last assistant message;
+// running reports an in-flight turn (turnRegistry) for the sidebar's running indicator.
 type sessionSummary struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
@@ -34,6 +35,7 @@ type sessionSummary struct {
 	Size     int64  `json:"size"`
 	Modified string `json:"modified"`
 	Preview  string `json:"preview"`
+	Running  bool   `json:"running"`
 }
 
 // maxSessionBytesOfConfig reads run.max_session_bytes straight from the config (no Resolve):
@@ -75,6 +77,9 @@ func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 			summary.Provider, summary.Model, summary.Workdir, summary.Created = meta.Provider, meta.Model, meta.Workdir, meta.Created
 		}
 		summary.Preview = sessionPreview(filepath.Join(dir, e.Name()))
+		if _, running := s.turns.running(id); running {
+			summary.Running = true
+		}
 		out = append(out, summary)
 	}
 	sort.Slice(out, func(i, j int) bool {
