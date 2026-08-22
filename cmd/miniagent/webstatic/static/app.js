@@ -367,7 +367,13 @@ async function loadSessions() {
       b.addEventListener("click", () => openSession(s.id));
       box.appendChild(b);
     }
-  } catch { /* keep old list */ }
+  } catch (e) {
+    // The old list was already cleared for "加载中…" — failing silently would strand that
+    // placeholder forever. Show the error with a retry instead (third state, N5).
+    hint.textContent = `加载失败：${e.message}（点击重试）`;
+    hint.style.cursor = "pointer";
+    hint.addEventListener("click", () => loadSessions());
+  }
 }
 
 async function deleteSession(id) {
@@ -404,6 +410,9 @@ async function openSession(id) {
   eventsEl().innerHTML = "";
   stickBottom = true;
   if (sessionMeta[id]?.workdir) { $("workdir").value = sessionMeta[id].workdir; saveWorkdir(sessionMeta[id].workdir); }
+  // N14: sessionMeta may be stale (refresh → click before loadSessions finishes). The replay
+  // stream's first event (session) carries workdir — fill the input if still empty.
+  let workdirFilled = !!sessionMeta[id]?.workdir;
   try {
     const r = await api(`/api/sessions/${encodeURIComponent(id)}`);
     const reader = r.body.getReader();
@@ -421,6 +430,14 @@ async function openSession(id) {
         try {
           const ev = JSON.parse(line);
           if (gen !== generation) return; // M8: view switched mid-replay — stop painting
+          // N14: if the session event carries workdir and the input is still empty, fill it.
+          // The empty-input guard keeps a user-typed workdir from being overwritten by the
+          // session's own — an explicit value always wins over an implicit one.
+          if (!workdirFilled && ev.type === "session" && ev.workdir && !$("workdir").value.trim()) {
+            $("workdir").value = ev.workdir;
+            saveWorkdir(ev.workdir);
+            workdirFilled = true;
+          }
           renderEvent(ev);
         } catch { /* skip bad lines */ }
       }

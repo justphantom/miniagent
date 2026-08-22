@@ -109,7 +109,13 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
 
 /* sess-del is visible on all devices — touch included; no hover-gated rule needed (L3) */
 
-@media (min-width: 800px) { body.nav-open #nav { display: flex; } #nav { display: flex; } #overlay { display: none; } #menu-btn { display: none; } }
+@media (min-width: 800px) {
+  /* N15: desktop — the nav is always visible (no drawer); overlay and hamburger are hidden. */
+  #nav { display: flex; }
+  body.nav-open #nav { display: flex; }
+  #overlay { display: none; }
+  #menu-btn { display: none; }
+}
 @media (max-width: 640px) {
   header { padding: 8px 10px; gap: 8px; }
   #events { padding: 10px; }
