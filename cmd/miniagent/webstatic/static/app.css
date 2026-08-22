@@ -50,8 +50,10 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
 .ev.error { border-color: var(--err); }
 .ev.result { border-color: var(--ok); }
 .ev .usage { font-size: 11px; color: var(--muted); }
-#to-bottom { display: none; position: absolute; right: 24px; bottom: 130px; border-radius: 50%; width: 36px; height: 36px; padding: 0; background: var(--panel); z-index: 2; }
-#composer { border-top: 1px solid var(--border); padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+#to-bottom { display: none; position: absolute; right: 24px; bottom: 150px; border-radius: 50%; width: 36px; height: 36px; padding: 0; background: var(--panel); z-index: 2; }
+#composer { border-top: 1px solid var(--border); padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; }
+/* ≥16px on input controls: iOS Safari force-zooms on focus below that and does not zoom back out */
+#composer input, #composer textarea, #composer select { font-size: 16px; }
 #prompt { resize: none; min-height: 60px; max-height: 200px; }
 .composer-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .composer-row input { flex: 1; min-width: 160px; }
@@ -71,7 +73,7 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
 .md pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow-x: auto; font-family: ui-monospace, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; position: relative; }
 .md code { font-family: ui-monospace, monospace; font-size: 12.5px; background: var(--bg); border-radius: 4px; padding: 1px 4px; }
 .md pre code { padding: 0; background: none; }
-.md table { border-collapse: collapse; margin: 8px 0; max-width: 100%; }
+.md table { border-collapse: collapse; margin: 8px 0; max-width: 100%; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; font-size: 13.5px; }
 .md th { background: var(--bg); }
 .md blockquote { border-left: 3px solid var(--border); margin: 4px 0; padding-left: 10px; color: var(--muted); }
@@ -85,9 +87,13 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
 .code-wrap .copy-btn:hover { color: var(--fg); border-color: var(--accent); }
 
 /* long assistant/result bodies collapse behind a fade + expand toggle */
-.ev.collapse .ev-body { max-height: 240px; overflow: hidden; position: relative; }
-.ev.collapse .ev-body::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(transparent, var(--panel)); }
+.ev.collapsed .md { max-height: 240px; overflow: hidden; position: relative; }
+.ev.collapsed .md::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(transparent, var(--panel)); }
 .ev .expand-btn { font-size: 12px; padding: 2px 10px; margin-top: 4px; color: var(--accent); background: transparent; }
+
+/* tool output blocks: errors read as errors (is_error was invisible before) */
+.ev.tool pre.out { border-left: 3px solid var(--border); }
+.ev.tool pre.out.err { border-left-color: var(--err); color: var(--err); }
 
 @media (hover: none) {
   /* touch devices have no hover — always show the delete affordance */

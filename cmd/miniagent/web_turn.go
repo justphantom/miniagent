@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,13 @@ type webTurnRequest struct {
 }
 
 func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
+	// CSRF defense (decisive when auth is off): a cross-site form/no-cors fetch cannot carry
+	// application/json — CORS-safelisted content types are text/plain, multipart and the
+	// urlencoded forms. Rejecting anything else closes the forged-POST hole outright.
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content-type must be application/json"})
+		return
+	}
 	var req webTurnRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPromptBytes+(1<<16)))
 	dec.DisallowUnknownFields()
@@ -69,6 +77,7 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Accel-Buffering", "no") // reverse proxies (nginx) must not buffer the NDJSON stream
 	flusher, _ := w.(http.Flusher)
 	nw := &ndjsonWriter{w: w, f: flusher}
 
@@ -81,6 +90,13 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 		overrides:  webOverrides(req),
 	}
 	err := s.engine.runTurn(r.Context(), spec, nw)
+	if errors.Is(err, errSessionNotFound) {
+		if nw.n == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		return
+	}
 	if err != nil {
 		if nw.n == 0 {
 			// No event streamed yet → safe to answer with a structured JSON error.

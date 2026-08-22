@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 
 // defaultSessionDir is the fallback directory when session.dir is not configured (overridden by config in Phase C).
 const defaultSessionDir = ".miniagent/sessions"
+
+// errSessionNotFound marks a resume whose session file does not exist. Sentinel (not a
+// fmt.Errorf) so the web layer can map it to 404; the CLI path prints it like any error.
+var errSessionNotFound = errors.New("session not found")
 
 // resolveSession is the os.Exit-free, testable core of resolveSessionForRun: it adjudicates the session across three states
 // (mutual exclusion is guaranteed by validateConversation so saveNew+sessionArg are never both true) and returns errors instead
@@ -52,8 +57,10 @@ func resolveSession(saveNew bool, sessionArg, sessionDir, modelSpec, provider, w
 				Created:  time.Now().Format(time.RFC3339),
 			}
 		} else {
-			// Resume but the file does not exist → error (prevent creating a garbage session on a typo; use -save-session to create a new one).
-			return "", session.SessionMeta{}, nil, fmt.Errorf("session %q not found (use -save-session to create a new one)", id)
+			// Resume but the file does not exist → sentinel error (prevent creating a garbage session
+			// on a typo; use -save-session to create a new one). Wraps errSessionNotFound so the web
+			// layer can map it to 404 while the message keeps the CLI hint.
+			return "", session.SessionMeta{}, nil, fmt.Errorf("%w: session %q (use -save-session to create a new one)", errSessionNotFound, id)
 		}
 	} else {
 		warnSessionMismatch(meta, modelSpec, workdir)

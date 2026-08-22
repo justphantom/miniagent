@@ -30,11 +30,12 @@ const defaultWebListen = "127.0.0.1:8787"
 const webEnvKey = "MINIAGENT_WEB_KEY"
 
 type webServer struct {
-	cfg    *config.Config
-	engine *turnEngine
-	key    string // effective key; "" = no auth (loopback-only, enforced at startup)
-	logger *slog.Logger
-	locks  sync.Map // session id → *sync.Mutex: serialize turns on the same session file
+	cfg          *config.Config
+	engine       *turnEngine
+	key          string   // effective key; "" = no auth (loopback-only, enforced at startup)
+	allowedHosts []string // listen host variants the Host header may carry (DNS-rebinding defense); nil = skip (tests)
+	logger       *slog.Logger
+	locks        sync.Map // session id → *sync.Mutex: serialize turns on the same session file
 }
 
 // webKey resolves the effective WebUI key: config web.key > $MINIAGENT_WEB_KEY.
@@ -74,9 +75,9 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		os.Exit(1)
 	}
 	engine := &turnEngine{cfg: cfg, cfgPath: cfgPath, logger: logger, buildClients: buildRuntimeClients, protectSignal: false}
-	s := &webServer{cfg: cfg, engine: engine, key: key, logger: logger}
+	s := &webServer{cfg: cfg, engine: engine, key: key, allowedHosts: hostVariants(addr), logger: logger}
 
-	srv := &http.Server{Addr: addr, Handler: s.mux(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: s.mux(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "miniagent: web listen %s: %v\n", addr, err)
@@ -103,7 +104,8 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 
 // mux wires routes: static pages are public (no secrets embedded); /api/* is auth-gated
 // except /api/whoami, which the login page needs to probe whether a key is required.
-func (s *webServer) mux() *http.ServeMux {
+// The whole tree is wrapped in s.guard (Host/Origin validation — web_guard.go).
+func (s *webServer) mux() http.Handler {
 	mux := http.NewServeMux()
 	// "GET /{$}" matches only the root path — plain "GET /" would conflict with the
 	// method-agnostic "/api/" subtree (root pattern beats it by method specificity).
@@ -120,7 +122,7 @@ func (s *webServer) mux() *http.ServeMux {
 	api.HandleFunc("GET /api/sessions/{id}", s.handleSessionReplay)
 	api.HandleFunc("DELETE /api/sessions/{id}", s.handleSessionDelete)
 	mux.Handle("/api/", s.requireAuth(api))
-	return mux
+	return s.guard(mux)
 }
 
 // requireAuth rejects requests whose x-api-key does not constant-time-match the effective key.

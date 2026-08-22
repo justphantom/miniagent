@@ -8,12 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,7 +29,7 @@ func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 
 func testWebServer(key string) *webServer {
 	cfg := &config.Config{Providers: []config.ProviderConfig{{Name: "p", ChatURL: "http://127.0.0.1:1/v1/chat/completions", Models: []config.ModelConfig{{Name: "m"}}}}, Defaults: config.DefaultsConfig{Provider: "p", Model: "m"}}
-	return &webServer{cfg: cfg, key: key, engine: &turnEngine{cfg: cfg, logger: testLogger()}}
+	return &webServer{cfg: cfg, key: key, engine: &turnEngine{cfg: cfg, logger: testLogger()}, logger: testLogger()}
 }
 
 func TestWebRequireAuth(t *testing.T) {
@@ -40,10 +42,10 @@ func TestWebRequireAuth(t *testing.T) {
 	}{
 		{"missing key", "", http.StatusUnauthorized},
 		{"wrong key", "nope", http.StatusUnauthorized},
-		{"correct key", "secret", http.StatusOK}, // GET /api/sessions on empty dir
+		{"correct key", "secret", http.StatusOK}, // GET /api/models (no session-dir dependency)
 	}
 	for _, c := range cases {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/models", nil)
 		if c.key != "" {
 			req.Header.Set("X-Api-Key", c.key)
 		}
@@ -57,6 +59,7 @@ func TestWebRequireAuth(t *testing.T) {
 
 func TestWebRequireAuth_EmptyKey_NoGate(t *testing.T) {
 	s := testWebServer("") // loopback mode: key empty → auth off
+	s.cfg.Session.Dir = t.TempDir()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions", nil)
 	rec := httptest.NewRecorder()
 	s.mux().ServeHTTP(rec, req)
@@ -214,5 +217,110 @@ func TestListenHostIsLoopback(t *testing.T) {
 		if got := listenHostIsLoopback(c.addr); got != c.want {
 			t.Errorf("listenHostIsLoopback(%q) = %v, want %v", c.addr, got, c.want)
 		}
+	}
+}
+
+func TestHostVariants(t *testing.T) {
+	cases := []struct {
+		addr string
+		want []string
+	}{
+		{"127.0.0.1:8787", []string{"127.0.0.1", "127.0.0.1:8787", "localhost", "[::1]", "::1"}},
+		{"localhost:8787", []string{"localhost", "localhost:8787", "127.0.0.1", "[::1]", "::1"}},
+		{"192.168.1.5:8787", []string{"192.168.1.5", "192.168.1.5:8787"}},
+		{"bad", []string{"bad"}},
+	}
+	for _, c := range cases {
+		got := hostVariants(c.addr)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("hostVariants(%q) = %v, want %v", c.addr, got, c.want)
+		}
+	}
+}
+
+// The guard is the DNS-rebinding / CSRF line: with allowedHosts set, only expected Hosts
+// pass; cross-site Sec-Fetch-Site and cross-origin Origin headers are rejected.
+func TestWebGuard(t *testing.T) {
+	s := testWebServer("")
+	s.allowedHosts = hostVariants("127.0.0.1:8787")
+	h := s.mux()
+
+	cases := []struct {
+		name   string
+		host   string
+		header map[string]string
+		want   int
+	}{
+		{"host with port", "127.0.0.1:8787", nil, http.StatusOK},
+		{"host localhost variant", "localhost", nil, http.StatusOK},
+		{"rebound host", "attacker.com", nil, http.StatusForbidden},
+		{"same-origin fetch-site", "127.0.0.1:8787", map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusOK},
+		{"no fetch-site (curl)", "127.0.0.1:8787", map[string]string{"Sec-Fetch-Site": ""}, http.StatusOK},
+		{"cross-site fetch-site", "127.0.0.1:8787", map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"same-origin origin", "127.0.0.1:8787", map[string]string{"Origin": "http://127.0.0.1:8787"}, http.StatusOK},
+		{"cross-origin origin", "127.0.0.1:8787", map[string]string{"Origin": "http://evil.com"}, http.StatusForbidden},
+	}
+	s.cfg.Session.Dir = t.TempDir()
+	for _, c := range cases {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions", nil)
+		req.Host = c.host
+		for k, v := range c.header {
+			if v != "" {
+				req.Header.Set(k, v)
+			}
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s: code = %d, want %d", c.name, rec.Code, c.want)
+		}
+	}
+
+	// Security headers on a passing response.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1:8787"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	for _, hname := range []string{"X-Frame-Options", "Content-Security-Policy", "X-Content-Type-Options"} {
+		if rec.Header().Get(hname) == "" {
+			t.Errorf("missing %s header", hname)
+		}
+	}
+}
+
+// CSRF: a no-cors form POST cannot carry application/json — anything else is 415.
+// Combined with the guard above this closes the loopback forged-POST hole.
+func TestWebTurnContentTypeEnforced(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	for _, ct := range []string{"", "text/plain", "multipart/form-data", "application/x-www-form-urlencoded"} {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(`{"prompt":"hi","workdir":"/tmp"}`))
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		rec := httptest.NewRecorder()
+		s.mux().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("content-type %q: code = %d, want 415", ct, rec.Code)
+		}
+	}
+}
+
+func TestWebTurn_ResumeMissingSession404(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	workdir := t.TempDir()
+	rec := postTurn(t, s.mux(), fmt.Sprintf(`{"prompt":"hi","workdir":%q,"session":"nope-123"}`, workdir))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("resume missing code = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebSessionsList_UnreadableDir(t *testing.T) {
+	s := testWebServer("")
+	s.cfg.Session.Dir = filepath.Join(t.TempDir(), "missing")
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions", nil)
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("list unreadable dir code = %d, want 500", rec.Code)
 	}
 }

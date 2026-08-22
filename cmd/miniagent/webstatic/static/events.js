@@ -3,11 +3,12 @@
 // ---- event rendering: NDJSON events → DOM, markdown body, collapse, copy button ----
 
 import { mdRender, esc } from "./md.js";
-import { state, fmtTime, showSessionID } from "./store.js";
+import { state, fmtTime, showSessionID, setModelBadge } from "./store.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
 
 let curText = null, curReasoning = null;
+let toolNodes = new Map(); // callID → tool <details> node, for exact tool_result pairing
 
 function eventsEl() { return document.getElementById("events"); }
 
@@ -107,11 +108,14 @@ export function appendToolUse(ev) {
   pre.textContent = ev.input || "";
   d.appendChild(pre);
   eventsEl().appendChild(d);
+  if (ev.call_id) toolNodes.set(ev.call_id, d);
   return d;
 }
 
+// tool_result carries call_id: pair it with the exact tool_use node. Fallback to the last
+// tool block only when the id is unknown (replay of old sessions predating call_id).
 export function appendToolResult(ev, toolNode) {
-  const target = toolNode || eventsEl().querySelector("details.ev.tool:last-of-type");
+  const target = toolNode || (ev.call_id && toolNodes.get(ev.call_id)) || eventsEl().querySelector("details.ev.tool:last-of-type");
   if (!target) return;
   const pre = document.createElement("pre");
   pre.className = "out" + (ev.is_error ? " err" : "");
@@ -134,6 +138,12 @@ export function finishText() {
   curText = curReasoning = null;
 }
 
+// resetTransient drops per-view state (callID map); openSession/new-chat call this after
+// clearing the DOM so stale tool nodes from the previous view are never paired against.
+export function resetTransient() {
+  toolNodes = new Map();
+}
+
 export function renderEvent(ev) {
   if (state.turnStartTs === 0 && ev.ts) state.turnStartTs = ev.ts;
   switch (ev.type) {
@@ -148,6 +158,7 @@ export function renderEvent(ev) {
     case "tool_result": appendToolResult(ev, null); break;
     case "result": {
       finishText();
+      if (ev.model) setModelBadge(ev.model);
       state.sessionInTokens += ev.input_tokens || 0;
       state.sessionOutTokens += ev.output_tokens || 0;
       showSessionID(state.session); // refresh token counter

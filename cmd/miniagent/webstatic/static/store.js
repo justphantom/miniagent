@@ -4,6 +4,7 @@
 
 const KEY = "miniagent.web.key";
 const WD_KEY = "miniagent.web.workdir";
+const MODEL_KEY = "miniagent.web.model";
 const THEME_KEY = "miniagent.web.theme";
 
 export const state = {
@@ -19,6 +20,8 @@ export const state = {
 export function setKey(k) { state.key = k; if (k) localStorage.setItem(KEY, k); else localStorage.removeItem(KEY); }
 export function saveWorkdir(wd) { localStorage.setItem(WD_KEY, wd); }
 export function loadWorkdir() { return localStorage.getItem(WD_KEY) || ""; }
+export function saveModel(m) { localStorage.setItem(MODEL_KEY, m); }
+export function loadModel() { return localStorage.getItem(MODEL_KEY) || ""; }
 export function saveTheme(t) { localStorage.setItem(THEME_KEY, t); }
 export function loadTheme() { return localStorage.getItem(THEME_KEY) || ""; }
 
@@ -56,4 +59,11 @@ export function setVersion(v) {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
   }
+}
+
+// setModelBadge fills the header's current-model badge: from the model dropdown selection
+// or the result event's model field (covers config-default turns where no dropdown item matched).
+export function setModelBadge(m) {
+  const el = document.getElementById("model-badge");
+  if (el) el.textContent = m || "";
 }

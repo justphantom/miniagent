@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div id="login">
+  <div id="login" style="display:none">
     <form id="login-form" autocomplete="off">
       <h1>miniagent</h1>
       <span id="version-login" class="muted" title="服务端版本"></span>
@@ -19,14 +19,14 @@
 
   <div id="app" style="display:none">
   <header>
-    <button id="menu-btn" class="ghost" type="button">☰</button>
+    <button id="menu-btn" class="ghost" type="button" aria-label="打开会话列表">☰</button>
     <h1>miniagent</h1>
     <span id="session-id" class="session-id muted" title="当前会话 ID"></span>
     <span id="session-tokens" class="session-id muted" title="当前会话累计 token"></span>
     <span class="flex-1"></span>
     <span id="version-badge" class="muted" title="服务端版本"></span>
     <span id="model-badge" class="muted" title="当前模型"></span>
-    <button id="theme-btn" class="ghost" type="button" title="切换主题">◐</button>
+    <button id="theme-btn" class="ghost" type="button" title="切换主题" aria-label="切换主题">◐</button>
     <button id="logout" class="ghost">退出</button>
   </header>
   <div id="layout">
@@ -37,14 +37,15 @@
     <div id="overlay"></div>
     <main>
       <div id="events"></div>
-      <button id="to-bottom" type="button" title="回到底部">↓</button>
+      <button id="to-bottom" type="button" title="回到底部" aria-label="回到底部">↓</button>
       <div id="composer">
         <div class="composer-row">
-          <input id="workdir" placeholder="工作目录（绝对路径）">
-          <select id="model"><option>默认模型</option></select>
+          <input id="workdir" placeholder="工作目录（绝对路径）" aria-label="工作目录">
+          <select id="model" aria-label="模型"><option>默认模型</option></select>
         </div>
         <div class="composer-row">
-          <textarea id="prompt" placeholder="输入任务，Enter 发送，Shift+Enter 换行"></textarea>
+          <textarea id="prompt" placeholder="输入任务，Enter 发送，Shift+Enter 换行" aria-label="输入"></textarea>
+          <span id="wait" class="muted" hidden></span>
           <button id="send" type="button">发送</button>
         </div>
       </div>

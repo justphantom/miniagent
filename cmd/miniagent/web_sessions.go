@@ -47,7 +47,7 @@ func maxSessionBytesOfConfig(cfg *config.Config) int64 {
 }
 
 func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
-	// Per-entry cost: LoadSessionMeta (first line) + sessionPreview (file tail ≤64KB),
+	// Per-entry cost: LoadSessionMeta (first line) + sessionPreview (file tail ≤8KB),
 	// never a full-file LoadSession — the listing is refreshed after every turn.
 	dir := defaultSessionDir
 	if s.cfg.Session.Dir != "" {
@@ -55,7 +55,9 @@ func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		writeJSON(w, http.StatusOK, []sessionSummary{})
+		// 500, not 200+[]: an unreadable session dir is a config error (wrong session.dir),
+		// and an empty list would silently mask it.
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read sessions dir: " + err.Error()})
 		return
 	}
 	out := make([]sessionSummary, 0, len(entries))
@@ -154,6 +156,7 @@ func (s *webServer) handleSessionReplay(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
 	_ = replaySession(w, meta, tail)
 }
 

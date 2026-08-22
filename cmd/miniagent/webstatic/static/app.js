@@ -3,8 +3,8 @@
 // miniagent -serve WebUI: auth gate, session list, NDJSON streaming composer.
 // ES modules, no build step; assets are embedded by webstatic (go:embed).
 
-import { state, setKey, api, authHeaders, showSessionID, resetTokenCount, saveWorkdir, loadWorkdir, saveTheme, loadTheme, setVersion } from "./store.js";
-import { appendUserPrompt, renderEvent, finishText } from "./events.js";
+import { state, setKey, api, authHeaders, showSessionID, resetTokenCount, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, setModelBadge } from "./store.js";
+import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 
 const $ = (id) => document.getElementById(id);
 state.lastPrompt = ""; // last sent prompt, used by the error retry button
@@ -72,9 +72,13 @@ const scrollMo = new MutationObserver(() => { if (stickBottom) eventsEl().scroll
 // ---- composer ----
 
 $("menu-btn").addEventListener("click", () => document.body.classList.toggle("nav-open"));
+// Overlay closes the mobile drawer on tap (the ☰ toggle alone forced a two-step close).
+$("overlay").addEventListener("click", () => document.body.classList.remove("nav-open"));
 $("new-chat").addEventListener("click", () => {
+  if (state.sending) { state.abort?.abort(); } // abort first: the in-flight stream must not leak into the fresh view
   state.session = "";
   resetTokenCount();
+  resetTransient();
   eventsEl().innerHTML = "";
   document.title = "miniagent";
   showSessionID("");
@@ -98,8 +102,8 @@ async function send() {
   if (state.sending) return;
   const prompt = $("prompt").value.trim();
   const workdir = $("workdir").value.trim();
-  if (!prompt) { alert("请输入内容"); return; }
-  if (!workdir) { alert("请输入工作目录"); return; }
+  if (!prompt) { inlineHint("请输入内容"); return; }
+  if (!workdir) { inlineHint("请输入工作目录"); return; }
   const sel = $("model");
   const opt = sel.selectedOptions[0];
   const body = { prompt, workdir, session: state.session, provider: opt?.dataset.provider || "", model: opt?.dataset.model || "", thinking: opt?.dataset.thinking || "" };
@@ -109,6 +113,7 @@ async function send() {
   state.turnStartTs = 0;
   state.abort = new AbortController();
   setComposer(false);
+  startWait();
   appendUserPrompt(prompt);
   $("prompt").value = "";
   $("prompt").style.height = "auto";
@@ -144,6 +149,7 @@ async function send() {
         try {
           const ev = JSON.parse(line);
           if (ev.type === "result" || ev.type === "error") sawTerminal = true;
+          stopWait();
           renderEvent(ev);
         } catch (e) { console.log("bad ndjson line", line, e); }
       }
@@ -162,6 +168,7 @@ async function send() {
       renderEvent({ type: "error", error: "请求失败：" + e.message, ts: Date.now() });
     }
   } finally {
+    stopWait();
     finishText();
     state.sending = false;
     state.abort = null;
@@ -169,6 +176,31 @@ async function send() {
     scrollMo.disconnect();
     loadSessions();
   }
+}
+
+// Inline validation hint (replaces alert()): transient, next to the composer.
+function inlineHint(msg) {
+  const el = $("wait");
+  el.hidden = false;
+  el.textContent = msg;
+  el.style.color = "var(--err)";
+  setTimeout(() => { el.hidden = true; el.textContent = ""; el.style.color = ""; }, 2500);
+}
+
+// Wait indicator for non-streaming configs: between send and the first event the UI would
+// otherwise look dead (no deltas arrive until the terminal result).
+let waitTimer = 0;
+function startWait() {
+  const el = $("wait");
+  let dots = 0;
+  el.hidden = false;
+  waitTimer = setInterval(() => { dots = (dots + 1) % 4; el.textContent = `等待响应${".".repeat(dots)}`; }, 400);
+}
+function stopWait() {
+  if (!waitTimer) return;
+  clearInterval(waitTimer);
+  waitTimer = 0;
+  $("wait").hidden = true;
 }
 
 // Lock the composer while a turn runs; the send button becomes a stop button.
@@ -188,6 +220,8 @@ async function loadModels() {
     const models = await r.json();
     const sel = $("model");
     sel.innerHTML = "";
+    const saved = loadModel();
+    let restored = false;
     for (const m of models) {
       const o = document.createElement("option");
       o.textContent = `${m.provider}/${m.model}`;
@@ -195,7 +229,15 @@ async function loadModels() {
       o.dataset.model = m.model;
       o.dataset.thinking = "";
       sel.appendChild(o);
+      if (saved === `${m.provider}/${m.model}`) { o.selected = true; restored = true; }
     }
+    if (restored) setModelBadge(saved);
+    sel.addEventListener("change", () => {
+      const opt = sel.selectedOptions[0];
+      const v = opt?.dataset.model ? `${opt.dataset.provider}/${opt.dataset.model}` : "";
+      saveModel(v);
+      setModelBadge(v);
+    });
   } catch { /* dropdown stays default */ }
 }
 
@@ -244,6 +286,7 @@ async function deleteSession(id) {
     if (id === state.session) {
       state.session = "";
       resetTokenCount();
+      resetTransient();
       eventsEl().innerHTML = "";
       document.title = "miniagent";
       showSessionID("");
@@ -253,8 +296,14 @@ async function deleteSession(id) {
 }
 
 async function openSession(id) {
+  if (state.sending) {
+    // In-flight stream must not leak into the switched view: abort first (the server still
+    // saves the executed part), then swap.
+    state.abort?.abort();
+  }
   state.session = id;
   resetTokenCount();
+  resetTransient();
   document.title = `miniagent · ${id}`;
   document.body.classList.remove("nav-open");
   eventsEl().innerHTML = "";

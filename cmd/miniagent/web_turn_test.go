@@ -257,6 +257,7 @@ func TestWebTurn_SameSessionSerialized(t *testing.T) {
 		wg.Go(func() {
 			body := fmt.Sprintf(`{"prompt":"p","workdir":%q,"session":%q}`, workdir, sessionID)
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
 			r := httptest.NewRecorder()
 			h.ServeHTTP(r, req)
 			if r.Code != http.StatusOK {
