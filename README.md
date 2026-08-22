@@ -76,7 +76,7 @@ make build
 sudo make deploy   # 装 bin/miniagent 为 systemd WebUI 服务并 enable --now
 ```
 
-`deploy/deploy.sh` 完成：创建系统用户 `miniagent`、装 `/usr/local/bin/miniagent`、播种 `/etc/miniagent/miniagent.json`（首次从 `config.example.json` 复制，**启动前需编辑填入 provider key**）、`/var/lib/miniagent` 数据目录、安装并启动 `miniagent.service`。服务以 `-serve` 运行（WebUI），unit 见 `deploy/miniagent.service`（非 root 运行 + `NoNewPrivileges`/`ProtectSystem` 等基础硬化；agent 层 shell 仍无约束）。
+`deploy/deploy.sh` 完成：创建系统用户/组、装 `/usr/local/bin/miniagent`、播种 `/etc/miniagent/miniagent.json`（首次从 `config.example.json` 复制，**启动前需编辑填入 provider key**）、创建数据目录、渲染并安装 `miniagent.service`。**部署变量（workdir/config/user/group/session-dir）从 `deploy/.env.example` 读取，局域覆盖放 `deploy/.env`（git-ignored）。** 服务以 `-serve` 运行（WebUI），unit 含 `NoNewPrivileges`/`ProtectSystem`/`PrivateTmp` 硬化；agent 层 shell 仍无约束。
 
 > `-version` 取 `git describe`（仅命中 annotated tag）。发版须用 `git tag -a v3.0.0 -m "..."`（annotated）且工作树干净；轻量 tag（`git tag v3.0.0`）或未提交改动会令 version 回落为短 sha。
 

@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-08-22
+
+### Added
+- **部署模板化**：`deploy/.env.example`（tracked 默认值）+ 可选 `deploy/.env`（git-ignored，局域覆盖）注入 `MINIAGENT_WORKDIR`/`MINIAGENT_CONFIG`/`MINIAGENT_USER`/`MINIAGENT_GROUP`/`MINIAGENT_SESSION_DIR`；`deploy.sh` 经 `envsubst` 渲染 `miniagent.service.tpl` 生成 unit。`make deploy` 自动创建系统用户/组、播种配置、安装并重启服务。
+- **systemd 部署单元**：`deploy/miniagent.service`（后改为 `.tpl` 模板）含 `NoNewPrivileges`/`ProtectSystem`/`PrivateTmp` 硬化，`ReadWritePaths` 声明 workdir 与 session 目录；`deploy/deploy.sh` 安装脚本。
+- **`config.web.allowed_hosts`**：Host 头白名单额外条目（反代域名/外部 IP 手动豁免，`hostVariants` 自动推导之外的场景）。
+- **统一 User-Agent**：全部出站请求（chat/models/stream + web 工具）携带 `User-Agent: miniagent/{Version}`，`miniagent/version.go` 单源，`-X` ldflags 注入。
+
+### Fixed
+- **WebUI 安全加固**（WEBUI-REVIEW 高优先级项）：新增 `web_guard.go` guard 中间件——Host 白名单防 DNS rebinding + Sec-Fetch-Site/Origin 跨站拒绝 + CSP/XFO/nosniff 头；`POST /api/turn` 强制 `Content-Type: application/json`（CSRF 简单请求阻断，415）；resume 不存在 session 返回 404（`errSessionNotFound` sentinel）；sessions 列表目录不可读返回 500（替代静默 200+[]）；NDJSON 流式响应加 `X-Accel-Buffering: no`；`IdleTimeout=2m`。
+- **通配监听 Host 白名单**：`0.0.0.0`/`[::]` 时自动添加 `os.Hostname()` + 全部网卡地址（跳过 link-local）到白名单，IPv6 去 `[]` 比较，解决 LAN IP 访问 403。
+- **部署故障修复**：`ProtectHome=true` 导致 `/home` 下 workdir 不可写（`CHDIR Permission denied`）；`deploy.sh` 末尾追加 `systemctl restart` 确保新二进制生效。
+- **前端修复**：折叠 CSS 类名匹配（`.ev.collapsed .md`）；工具错误输出红色边框（`.err`）；model-badge 从下拉/result 回填；overlay 点关；sending 时切会话/新建先 abort 再切换；tool_result 按 `call_id` 精确挂载；输入 >=16px（iOS 缩放）；safe-area-inset-bottom 内边距；宽表格 `overflow-x:auto`；等待指示（非流式配置）；模型选择持久化；alert->行内提示；登录页初始隐藏防闪现；aria-label；移动端抽屉 z-index 避免 overlay 吞点击。
+- **summary 垃圾 fence 检查收紧**：估算常数锁定。
+
+### Changed
+- **部署单元模板化**：`deploy/miniagent.service` 重命名为 `miniagent.service.tpl`，硬编码值替换为 `${MINIAGENT_*}` 环境变量，`deploy.sh` 经 `envsubst` 渲染后写入 `/etc/systemd/system/`。
+
 ## [6.1.0] - 2026-08-21
 
 ### Fixed
