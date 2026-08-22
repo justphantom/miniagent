@@ -79,6 +79,7 @@
   "web": {
     "listen": "127.0.0.1:8787",
     "key": "",
-    "allowed_hosts": []
+    "allowed_hosts": [],
+    "max_concurrent_turns": 0
   }
 }

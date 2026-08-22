@@ -3,10 +3,10 @@
 ## 状态
 - superseeds: none
 - superseded_by: none
-- updated: 2026-08-21
+- updated: 2026-08-23
 
 ## 背景
-v5.0.0 起 `miniagent -serve` 提供 WebUI，v6.1.0 全面优化体验。需记录前端架构选型理由。
+v5.0.0 起 `miniagent -serve` 提供 WebUI，v6.1.0 全面优化体验。需记录前端架构选型理由。v7（2026-08-23，WEBUI_SYNC_PLAN.md 落地）补多会话并发/跨浏览器同步/流式 markdown 三项决策（§7-§10）。
 
 ## 决策
 
@@ -39,3 +39,23 @@ v5.0.0 起 `miniagent -serve` 提供 WebUI，v6.1.0 全面优化体验。需记�
 
 ### 6. 主题系统
 - CSS 变量双主题（`:root` 暗色 / `[data-theme="light"]` 亮色），localStorage 记忆，页面加载时 `document.documentElement.dataset.theme` 恢复。无 JS 切换→CSS 变量继承，O(1) 切换开销。
+
+### 7. turn 事件总线与断连解耦（D1）
+- turnRegistry（web_bus.go）是同会话互斥、事件缓冲与扇出的唯一载体；引擎的 NDJSON 写进 turnEntry（io.Writer），HTTP 请求方只是订阅者之一。
+- **turn ctx 派生自服务器 baseCtx 而非 r.Context()**：断连/关标签/切视图不杀轮次；停止走 `POST /api/sessions/{id}/stop`（entry.cancel → 取消路径保存已执行部分）。breaking：曾依赖「关页面=停」的用法需迁移。
+- **总线 Write 恒返回 nil error**：OnToolUse 的 emit 错误会终止轮次（tool_handler.go 直接上抛），死订阅者不得反杀引擎；慢订阅者（chan 64 满）被关闭淘汰，客户端按 D3 重建。
+- 新会话 id 预生成（turnSpec.sessionID→resolveSession presetID）：注册键恒为真实 id，两个并发新会话真并行（原 `__new__` 全局锁已删）。
+- `web.max_concurrent_turns`（默认 0 不限）：信号量非阻塞获取，溢出 429。
+
+### 8. 传输选 fetch NDJSON 而非 EventSource
+- EventSource 无法带 `x-api-key` 头（标准限制），query 传 key 会泄漏进日志；前端已有成熟 fetch reader 循环可复用；CSP `connect-src 'self'` 已放行。
+- 生命周期流 15s `ping` 防代理空闲断连；断开后 2s 退避重连（状态经列表重同步）。
+
+### 9. live 流「事件 0 全量重放」而非游标增量
+- 进行中轮次只存在于总线缓冲（session jsonl 轮末才落盘），磁盘 replay 与 live 天然无重叠，客户端零去重。
+- 缓冲上限 20000 行，超限丢最旧并在重放首行置 `live_truncated {dropped:N}` 诚实截断。
+- 断开重连（D3）按「重建视图」处理：replay（已落盘轮）+ live（当前轮缓冲）重新拼时间线，不做轮次代去重（YAGNI）。
+
+### 10. 前端多视图 + 流式 markdown
+- #events 是视口，每会话一个 .view（views.js）：切换换 display 不 abort；M8 generation 降为 per-view gen；idle 视图 >8 逐出（running 永不逐出）。
+- 流式渲染从「纯文本累积、finish 一次性 mdRender」改为「300ms 节流 mdRender 增量重绘」：thinking 流式可达分钟级，原始 md 语法直出不可接受；节流把重解析成本从 O(delta) 降到 ~3次/s，>64KB 停止重绘等 finish，隐藏视图跳过重绘，复制按钮/折叠仍在 finish 一次性绑定。

@@ -5,6 +5,17 @@
 
 ## [Unreleased]
 
+### Added
+- **WebUI 多会话并发 + 跨浏览器同步**：turn 事件总线（`web_bus.go` turnRegistry）解耦轮次与请求连接；新端点 `GET /api/events`（全局生命周期流：`turn_started`/`turn_finished`/`session_deleted`/15s `ping`）、`GET /api/sessions/{id}/live`（旁观进行中轮次：事件 0 起重放 + live 续流，结束以 `live_end` 收尾）、`POST /api/sessions/{id}/stop`（显式停止，取消服务端 turn 并保存已执行部分）；`GET /api/sessions` 行新增 `running` 布尔；前端多视图（`views.js`，#events 变视口、每会话独立 .view，切换不中断流）、旁观模式（发送 409 自动升级为 live 旁观）、会话列表 running 呼吸点；`web.max_concurrent_turns`（默认 0=不限，溢出 429）。
+- **thinking 流式 markdown 渲染**：流式阶段（`text_delta`/`reasoning_delta`）从纯文本直出改为 300ms 节流 `mdRender` 增量重绘（首块立即绘制、>64KB 停止重绘等 finish、隐藏视图跳过重绘、复制按钮/折叠仍在 finish 一次性绑定）。此前推理模型数分钟的 thinking 流式期间原始 md 语法（`**bold**`、围栏）直出。
+
+### Changed
+- **新建会话 id 预生成**：`resolveSession` 新增 `presetID` 形参（CLI 恒传 ""），web 层在注册 turn 槽位前预生成 id——两个并发「新会话」轮次不再被全局 `__new__` 锁串行，真正并行。
+- **turn 同会话互斥实现迁移**：per-session `sync.Map` 锁删除，互斥/删除互斥统一由 turnRegistry 承载（语义不变：同会话 409、删除中拒绝新 turn、成功删除释放槽位）。
+
+### Breaking
+- **WebUI 断连不再取消轮次**：`POST /api/turn` 的轮次上下文改为派生自服务器生命周期（`s.baseCtx`）而非 `r.Context()`——关闭标签页/断网/切换视图后轮次继续执行并落盘。此前依赖「关页面=停轮次」的用法改用界面「停止」按钮或 `POST /api/sessions/{id}/stop`。轮次仍受 web 默认 10min 超时与 `run.max_duration` 约束；服务器关闭（SIGTERM）时在途轮次取消并保存已执行部分。
+
 ## [6.3.0] - 2026-08-22
 
 ### Added

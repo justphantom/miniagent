@@ -1,43 +1,25 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 # 当前会话
 
 ## 状态
-- 用户要求「根据ASSESSMENT.md进行全面落地」。实施 P0(N1/N2)+P1(N3/N4/N7)+P2(N5/N6/N8/N9/N10/N13/N14/N15)=15 项，P3(N11/N12) 需产品决策未实施，呈交用户定夺。
-- 全部实施完成，verify-gate 全绿（gofmt 空/build/vet/test -race 14 包全绿/golangci-lint 0 issues/≤300 行）。
-- 全部已提交（HEAD bbaefd6），工作树干净。
+- 用户要求：深入评估并输出实现方案文档——①WebUI 多会话同时进行 ②多浏览器消息/状态同步 ③thinking 文本渲染 markdown。
+- 已产出 `WEBUI_SYNC_PLAN.md`（评估+方案，分 P0-P4 五阶段），**未写实现代码**，待用户确认决策点 D1-D4。
 
-### 后端改动
-- N1: `index.html` 移入 CSS 隐藏，`app.css` 默认 `display:none`，CSP 无 unsafe-inline 不再丢 style 属性。
-- N2: `confirmInline` Enter 仅 btnOk 聚焦时确认 + `role="dialog"` + 焦点圈闭（Tab 不逃出）。
-- N3: `turnEngine.transportCache` 按 provider 名缓存 `*http.Transport`，`newHTTPTransport` 加 `IdleConnTimeout=90s`。`buildClients` 签名新增 `*transportCache`。
-- N7: `handleTurn` TryLock 替代 Lock，失败→409 `"turn in progress"`。`SameSessionSerialized` 测试改写为 TryLock 语义（hold 锁→409）。
-- N10: `webstatic.Names()` 遍历 embed.FS 导出文件列表，`web.go: mux()` 迭代注册，新增静态文件只需改 go:embed。
-- N8: 删除 `.agent/L1/assessment.md`（违反 L1 单文件约定）。
-
-### 前端改动
-- N1: index.html 移除 `style="display:none"`；app.css `#login,#app { display:none }` 默认隐藏，JS 设 CSSOM 显示。
-- N2: 焦点圈闭 + Enter 安全确认。
-- N4: md.js 补 `^\s*\d+\.\s+` → `<ol>`；app.css 补 `.md ol` 样式。
-- N5: loadSessions 加载中/空态/失败三态占位。
-- N9: applyTheme() 统一设置 theme + 按钮字符（◐/◑）+ title。
-- N13: events.js result 后重置 `turnStartTs`。
-- N14: openSession replay 流 session 事件回填 workdir。
-- N15: app.css media query 格式化。
-
-### 文档
-- N6: README 主题字符修正为 ◐/◑，折叠阈值 20→24。
-- CHANGELOG Unreleased 段补充。
+## 关键评估结论（证据已核）
+- ①服务端不同 session 已可并发（per-session TryLock；共享状态核查全线程安全）；blocker：`__new__` 全局锁串行新建会话（web_turn.go:69）+ 前端切视图 abort fetch → r.Context() 取消 → 杀在途轮次（app.js:88/399）。
+- ②无推送通道；NDJSON 只发发起者；进行中轮次磁盘无落盘（saveSession 在 Run 后）→ 跨浏览器观战必须服务端缓冲。
+- ③node DOM shim 实测：finishText 已对 reasoning mdRender（与 CHANGELOG 自述一致）；差距在**流式阶段**纯文本直出原始 md 语法——thinking 恰是流式最长的可见内容。
+- 方案核心：turnRegistry 事件总线（引擎写总线、扇出订阅者、Write 恒 nil——OnToolUse emit 错误会终止轮次 tool_handler.go:35）+ turn ctx 脱离 r.Context() + 预生成 id 去 `__new__` + stop/live/events 三端点 + 前端多视图 detached DOM + thinking 300ms 节流重绘。
+- 传输选 fetch NDJSON 不选 EventSource（无法带 x-api-key 头）。
 
 ## 待办
-- 第三轮评估完成（ASSESSMENT.md 重写）：0 高 2 中 4 低新发现，60 项前轮整改零回退，综合 8.8→9.0。
-- §4 四项打磨（O3 文档对齐/O4 冗余监听/O5 grep glob 校验/O6 deploy fail-fast）已全部落地并提交（03fcca9/3913fad/32d9943/248b53c），0 项待办。
-- P3 N11/N12 维持待产品决策。
-- 工作树干净（HEAD 248b53c），无待提交。
+- 用户确认 D1 断连语义（推荐继续执行+stop 接管）/ D2 并发上限默认（推荐 0）/ D3 live 重连（推荐重建视图）/ D4 前端不引入测试框架。
+- 确认后按 P0(thinking)→P1(registry+解耦+stop)→P2(live/events)→P3(多视图)→P4(文档) 实施。
 
 ## 备注
-- verify-gate 全绿：gofmt 空/build/vet/test -race/golangci-lint 0 issues/≤300 行。
+- 工作树：新增 WEBUI_SYNC_PLAN.md 未提交（CLAUDE.md 禁止提交）；HEAD 0699c2e。

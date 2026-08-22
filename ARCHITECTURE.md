@@ -30,11 +30,13 @@ cmd/miniagent/        CLI 入口层（库的装配消费者）
   replay.go           -replay：离线重放会话（不调 LLM、不用 key、不落盘）
   stdin.go            读 prompt（空 stdin 交互引导）
    emit.go            buildHooks / assembleHooks（NDJSON 事件钩子装配）
-   web.go             -serve HTTP 服务入口
-   web_turn.go        /api/turn 处理
-   web_sessions.go    /api/sessions 列表/删除
+   web.go             -serve HTTP 服务入口（webServer 装配/路由/鉴权/NDJSON writer）
+   web_turn.go        /api/turn 处理：turn 与请求连接解耦（D1），请求方为总线订阅者之一
+   web_bus.go         turnRegistry：turn 事件总线（重放缓冲+多订阅扇出+同会话互斥+生命周期广播）
+   web_live.go        /api/events（全局生命周期流）+ /api/sessions/{id}/live（旁观进行中轮次）
+   web_sessions.go    /api/sessions 列表（含 running）/删除/停止
    web_guard.go       Host 白名单 / CSRF / CSP 防护中间件
-   webstatic/         前端静态资源（app.js/events.js/md.js/app.css/index.html）
+   webstatic/         前端静态资源（app.js/views.js/events.js/live.js/store.js/md.js/app.css/index.html）
 
 miniagent/   核心库（零外部依赖，纯标准库）
   loop.go             Run：ReAct 主循环（defer 统一写命名返回，captureDowngrade 固化降级）
