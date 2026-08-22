@@ -3,6 +3,7 @@
 - 日期：2026-08-22 · 审查对象：HEAD 895b782（前两轮 45+15 项整改已全部提交，工作树干净）
 - 方法：verify-gate 实测 + 全域深读（核心 loop/compaction/session/tools/provider/web 前后端/deploy/config）+ 边界推演
 - 实测：`gofmt -s -l` 空 / `go build` / `go vet` / `go test -race -count=1 ./...` 14 包 558 测试全绿 / `golangci-lint` 0 issues / 非测试文件 ≤300 行 / 4 个 JS `node --check` 通过
+- **核验时间**：2026-08-22 · 复审 HEAD 248b53c（审查后 4 项修复均已提交，verify-gate 全绿，工作树干净）
 
 ## 0. 总体结论
 
@@ -43,32 +44,32 @@ WebUI 四目标复核：
 
 ### 中（2 项）
 
-**O1：Web 会话列表 meta 缺失时 preview 兜底不一致。**
+**O1（⏸ 观察维持）**：Web 会话列表 meta 缺失时 preview 兜底不一致。
 `web_sessions.go:75-78`：`LoadSessionMeta` 失败（meta.Type==""）时 summary 仍进入列表，但 Provider/Model/Workdir/Created 全空——前端 `s.model || s.id` 兜底了标题，但 `s.workdir` 空导致打开该会话时 workdir 输入框不回填（N14 的 replay 回填仅在 input 为空时生效，此处 meta 为空恰好走 replay 回填，可恢复；但 sessionMeta[id] 已缓存空 workdir，`workdirFilled` 初值 false，路径正确）。**实际影响低**：仅发生在 meta 行损坏但消息体完好的极端场景。建议：列表项 meta 缺失时以 mtime 兜底 Modified 排序（当前 Size/Modified 来自 e.Info() 已兜底），无需改动——**记录为观察，非缺陷**。
 
-**O2：`web_turn.go` 会话锁 `__new__` 全局串行化的注释与实测有出入。**
+**O2（⏸ 观察维持）**：`web_turn.go` 会话锁 `__new__` 全局串行化的注释与实测有出入。
 `web_turn.go:68-72`：注释称空 session 键全局串行化「acceptable (interactive, not high-throughput)」。实测成立，但 `__new__` 锁条目在进程生命周期内常驻 `s.locks` sync.Map，与按 session id 的条目（删除时清）不同——无害但注释未提。**非缺陷**，注释扩展即可，不改。
 
 ### 低（4 项）
 
-**O3：replay 多轮会话 token 累计显示为「打开后新增」，header 无历史用量。**
+**O3（✅ 已修复，248b53c 文档对齐）**：replay 多轮会话 token 累计显示为「打开后新增」，header 无历史用量。
 `events.js:162-163` + `store.js:48`：result 事件累加 sessionInTokens/sessionOutTokens，replay 时每条历史 result 也会触发累加——即打开旧会话后 header 显示的是**该次 replay 流中所有历史轮的累计**，而非"打开后新增"。CHANGELOG 自述「历史会话只累计打开后的轮次」与实现不符（实现是累计 replay 中的全部历史轮）。**影响**：数字含义偏宽，非错误（replay 确实重放了这些 result）；但语义与文档有出入。建议：replay 流的 result 事件不累加（events.js 无法区分 live/replay 流——需要在 openSession 中设标志位），或修正 CHANGELOG/README 措辞。**择一即可，倾向修文档**。
 
-**O4：confirmInline 的 onKey 挂了三处（overlay + btnCancel + btnOk）。**
+**O4（✅ 已修复，3913fad）**：confirmInline 的 onKey 挂了三处（overlay + btnCancel + btnOk）。
 `app.js:259-261`：keydown 事件从按钮冒泡到 overlay，同一事件触发 onKey 两次。当前 close 幂等（resolve 已 settle + remove 幂等）故无害，但属于冗余监听——按钮自身 keydown 冒泡到 overlay 已足够。**清理项**：删 btnCancel/btnOk 两行监听，行为不变。
 
-**O5：`tool_grep.go` globFn 的 filepath.Match 错误被吞。**
+**O5（✅ 已修复，03fcca9+测试）**：`tool_grep.go` globFn 的 filepath.Match 错误被吞。
 `tool_grep.go:82-84`：`ok, _ := filepath.Match(a.Glob, name)`——无效 glob（如 `[a-`）对所有文件返回 false+err，err 被丢弃，最终表现为"no matches"而非"invalid glob"。runGlob（glob 工具）有 globPatternMalformed 结构扫描前置校验，grep 的 glob 参数没有。**影响**：LLM 传错 glob 时得到误导性"no matches"。建议：runGrep 中对 a.Glob 做一次 `filepath.Match(a.Glob, "x")` 探针校验（对齐 runGlob 的两探针模式，成本一行）。
 
-**O6：`deploy.sh` envsubst 渲染后仅 WARNING 不 fail。**
+**O6（✅ 已修复，32d9943）**：`deploy.sh` envsubst 渲染后仅 WARNING 不 fail。
 `deploy.sh:55-58`：检测到残留 `${VAR}` 占位符时 echo WARNING 继续——渲染残缺的 unit 会被 enable+restart，systemd 可能起不来或静默用错路径。**建议**：改 exit 1（渲染失败即部署失败，比带病启动更易排查）。属部署健壮性加固，非运行时缺陷。
 
 ### 观察（非缺陷，已核实）
 
-- **O7（N11 遗留）**：动态 Host（DHCP 换 IP 后白名单不含新 IP）仍待产品决策，维持 P3。轻量路径：guard 对 loopback 恒放行 + 文档建议反代场景配 `web.allowed_hosts`。
-- **O8（N12 遗留）**：turn 并发无上限（仅同 session 互斥），维持 P3。轻量路径：`handleTurn` 入口信号量（如 8 并发），溢出 429。
-- **O9**：`tool_read.go:27-33` 明示的 FIFO/NFS 不可中断 read goroutine 泄漏——已声明 trade-off，隔离依赖调用侧，符合"有话直说"原则，不动。
-- **O10**：`scrubEnv` 的已知缺口（DATABASE_URL/*_COOKIE/*_DSN）注释如实声明非隔离边界，fallback 靠 OS 隔离——与 README「Run Isolation」指引一致，不动。
+- **O7（⏸ P3 维持待决策）**：动态 Host（DHCP 换 IP 后白名单不含新 IP）仍待产品决策，维持 P3。轻量路径：guard 对 loopback 恒放行 + 文档建议反代场景配 `web.allowed_hosts`。
+- **O8（⏸ P3 维持待决策）**：turn 并发无上限（仅同 session 互斥），维持 P3。轻量路径：`handleTurn` 入口信号量（如 8 并发），溢出 429。
+- **O9（⏸ 已声明 trade-off 不动）**：`tool_read.go:27-33` 明示的 FIFO/NFS 不可中断 read goroutine 泄漏——已声明 trade-off，隔离依赖调用侧，符合"有话直说"原则，不动。
+- **O10（⏸ 已声明缺口不动）**：`scrubEnv` 的已知缺口（DATABASE_URL/*_COOKIE/*_DSN）注释如实声明非隔离边界，fallback 靠 OS 隔离——与 README「Run Isolation」指引一致，不动。
 
 ## 3. 深度复核抽验记录（本轮新读区域）
 
@@ -91,18 +92,18 @@ WebUI 四目标复核：
 
 ## 4. 处置建议（按优先级）
 
-| # | 项 | 建议 | 工作量 |
-|---|----|------|--------|
-| 1 | O4 冗余监听 | 删 app.js:260-261 两行 | 1 分钟 |
-| 2 | O5 grep glob 校验 | runGrep 加两探针（对齐 runGlob） | 5 分钟+测试 |
-| 3 | O6 deploy fail-fast | WARNING→exit 1 | 1 分钟 |
-| 4 | O3 文档对齐 | CHANGELOG/README 措辞改为「replay 流中累计」或代码加 replay 标志 | 5 分钟 |
-| 5 | O7/O8 | 维持 P3 待决策，不建议本轮动 | — |
+| # | 项 | 建议 | 工作量 | 状态 |
+|---|----|------|--------|------|
+| 1 | O4 冗余监听 | 删 app.js:260-261 两行 | 1 分钟 | ✅ 已修复（3913fad） |
+| 2 | O5 grep glob 校验 | runGrep 加两探针（对齐 runGlob） | 5 分钟+测试 | ✅ 已修复（03fcca9） |
+| 3 | O6 deploy fail-fast | WARNING→exit 1 | 1 分钟 | ✅ 已修复（32d9943） |
+| 4 | O3 文档对齐 | CHANGELOG/README 措辞改为「replay 流中累计」 | 5 分钟 | ✅ 已修复（248b53c） |
+| 5 | O7/O8 | 维持 P3 待决策，不建议本轮动 | — | ⏸ P3 待决策 |
 
 ## 5. 结论
 
 第三轮评估**新发现 0 高 2 中 4 低**，全部为中低 severity 的打磨项，无架构性缺陷、无安全性回退、无正确性破绽。60 项前轮整改零回退，verify-gate 全绿，558 测试覆盖真实并发与崩溃路径。
 
-**综合评分 8.8 → 9.0**：两轮整改的复利效应显现（工具层 TOCTOU 防护、压缩锚点防陈旧、前端三态齐备均属"看不见但关键时刻救命"的健壮性），扣分项仅剩 4 个低 severity 打磨项与 P3 两项待决策。项目已达「正确、轻量、健壮、规范、灵活」五目标的可交付水位；WebUI 自适应/美观/交互/正确四目标中仅美观有主观提升空间（无设计系统），其余三项客观达标。
+**综合评分 8.8 → 9.0（四项打磨落地后维持 9.0）**：两轮整改的复利效应显现（工具层 TOCTOU 防护、压缩锚点防陈旧、前端三态齐备均属"看不见但关键时刻救命"的健壮性），四项低 severity 打磨项全部落实，剩余扣分项仅 P3 两项待决策。项目已达「正确、轻量、健壮、规范、灵活」五目标的可交付水位；WebUI 自适应/美观/交互/正确四目标中仅美观有主观提升空间（无设计系统），其余三项客观达标。
 
-剩余动作：§4 四项打磨（可选，均 <15 分钟）；P3 N11/N12 维持待产品决策。
+§4 四项打磨全部落地，0 项待办。P3 N11/N12 维持待产品决策。
