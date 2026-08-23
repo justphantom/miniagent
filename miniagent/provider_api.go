@@ -29,6 +29,11 @@ type Response struct {
 	ToolCalls      []ToolCall
 	Usage          Usage
 	FinishReason   string // stop|length|tool_calls|content_filter|null; non-stop means the answer was truncated/filtered
+	// TruncatedStream marks a mid-data stream abort degraded to a truncated success (provider/openai
+	// accepts the partial as FinishReason=length so streamed content still lands). Domain-layer flag:
+	// never serialized into any provider wire format (L0 #8). FinishReason==length alone cannot
+	// distinguish "model hit max_tokens" from "upstream cut the stream" — this flag does.
+	TruncatedStream bool
 }
 
 type Usage struct {

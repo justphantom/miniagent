@@ -212,6 +212,12 @@ WebUI（`-serve`）另有两个 HTTP 流专属标记（不出现在 CLI stdout�
 {"type":"result","text":"goroutine 是 Go 运行时管理的轻量级线程。","model":"gpt-4o","input_tokens":24,"output_tokens":18,"steps":1,"finish":"stop"}
 ```
 
+上游中途断流（已流出的 partial 作为截断答案落地，`truncated:true` 标记非模型自然结束，omit-if-zero）：
+
+```jsonl
+{"type":"result","text":"goroutine 是 Go 运行时管理","model":"gpt-4o","input_tokens":24,"output_tokens":18,"steps":1,"finish":"length","truncated":true}
+```
+
 达到 maxIterations 上限（无最终文本，仍输出累计 usage）：
 
 ```jsonl

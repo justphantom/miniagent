@@ -41,7 +41,11 @@ type resultEvent struct {
 	Finish             string `json:"finish"`
 	Compacted          bool   `json:"compacted"`
 	ThinkingDowngraded bool   `json:"thinking_downgraded"`
-	Ts                 int64  `json:"ts,omitempty"`
+	// Truncated is the stream-abort signal (R4): the text was cut by an upstream mid-stream abort,
+	// not by the model finishing. Omit-if-zero — unlike the always-present keys above it is a new
+	// field, so old consumers never see it unless the cut actually happened.
+	Truncated bool  `json:"truncated,omitempty"`
+	Ts        int64 `json:"ts,omitempty"`
 }
 
 // stamp resolves the optional Unix-ms timestamp argument: an explicit ts is preserved (replay
@@ -88,6 +92,7 @@ func EmitResult(w io.Writer, result miniagent.Result, model string, ts ...int64)
 		Finish:             result.Finish,
 		Compacted:          result.Compacted,
 		ThinkingDowngraded: result.ThinkingDowngraded,
+		Truncated:          result.Truncated,
 		Ts:                 stamp(ts),
 	})
 }

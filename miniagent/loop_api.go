@@ -196,6 +196,9 @@ type Result struct {
 	// Finish is the termination reason: FinishStop (the model produced final text) or
 	// FinishMaxIterations (hit the iteration limit, Text is empty). Empty string when returning on error.
 	Finish string
+	// Truncated mirrors Response.TruncatedStream of the final answer step: the text above was cut
+	// by an upstream mid-stream abort (degraded to a truncated success), not by the model finishing.
+	Truncated bool
 	// Messages is the full transcript as of return (History + new additions this round);
 	// all return paths (including error, hit maxIterations) bring it back for session persistence.
 	Messages []Message

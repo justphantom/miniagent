@@ -250,6 +250,14 @@ export function renderEvent(view, ev) {
       if (view.turnStartTs && ev.ts) view.metrics.llmMs += ev.ts - view.turnStartTs;
       refreshMetrics(view);
       const d = evDiv("result", "result", ev.ts, "", STEP_ICONS.result);
+      // R4: an upstream mid-stream abort degrades to a truncated success — badge it so the
+      // half answer is visibly incomplete (retry/resume via the existing prompt re-send).
+      if (ev.truncated) {
+        const badge = document.createElement("span");
+        badge.className = "trunc-badge";
+        badge.textContent = "⚠ 上游截断";
+        d.querySelector(".ev-head").appendChild(badge);
+      }
       const body = d.querySelector(".ev-body");
       const md = document.createElement("div");
       md.className = "md";
@@ -260,7 +268,7 @@ export function renderEvent(view, ev) {
       const u = document.createElement("div");
       u.className = "usage";
       const elapsed = view.turnStartTs && ev.ts ? ` · ${((ev.ts - view.turnStartTs) / 1000).toFixed(1)}s` : "";
-      u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}${elapsed}`;
+      u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}${ev.truncated ? " · 上游截断" : ""}${elapsed}`;
       body.appendChild(u);
       // usage bar + step details
       const budget = view.usage.budget || getBudget();

@@ -6,8 +6,16 @@
 ## [Unreleased]
 
 ### Added
+- **mid-data 截断透明化（R4）**：上游中途断流被降级为截断成功（v6.4.0 行为）时用户此前无任何感知——答案静默半截。现 `miniagent.Response.TruncatedStream` / `miniagent.Result.Truncated` 领域标记透传，result 事件新增 `"truncated":true`（omit-if-zero，仅实际发生时出现，旧消费方不受影响），WebUI result 卡片 usage 行显示「上游截断」。与 `finish:length`（模型 max_tokens 截断）区分：两者都非自然结束，但成因不同。
 - **NDJSON `stop` 终态事件**：轮次被取消（显式停止 / 上下文取消）时输出 `{"type":"stop","reason":"canceled"}` 后再以退出码 130 结束。此前取消路径静默返回、无任何终态事件，web 前端以 result/error 判完成（sawTerminal）只见干净 EOF，误报「连接中断：流意外结束」——点停止按钮也落此文案。前端现渲染「已停止」卡片（保留重试续跑按钮）。消费方需将 `stop` 计入终态（与 result/error 并列）。
 - **WebUI 配置管理页面**：新增 `GET/PUT /api/config` 端点（`web_config.go`），读取当前配置（secret 掩码回显）、`SaveConfig` 校验后原子写回（`config_save.go`，0600 + O_NOFOLLOW + 临时文件重命名）；前端 `config.js` 配置页——**表单模式**（6 个可折叠分组 + 60+ 字段，支持 text/number/bool/duration/array/secret 类型）、**providers 卡片编辑**（增删 provider，每 provider 的 URL/key/限额/headers 键值对/thinking 映射/增删 model 及模型级参数）、**JSON 高级编辑器模式**（textarea 直接编辑完整配置）、**客户端预校验**（提交前本地拦截空 providers/重复名/必填缺失等常见错误，减少无效往返）、**保存后回填表单**（后端返回权威 saved config 前端重渲染）；保存后提示「需重启服务生效」；配置侧栏按钮 `⚙ 配置`。`config.ValidateConfig` 导出供 web 层调用的校验入口。
+- **WebUI 目录选择器 / Token 用量 / 工具轨迹 + UI 全面重设计**（`9096515` 起至 `1211853` 共 12 个提交的最终态）：
+  - 后端：新端点 `GET /api/tree`（目录树浏览，`web_tree.go`）；NDJSON 新增 `step_usage` 事件类型（逐步 `input_tokens/output_tokens/tool_calls`，仅 web 路径启用，CLI 默认关）；`tool_use` / `tool_result` 事件新增 `step` 字段（增量，非破坏）。
+  - 前端：目录选择器（`dirpicker.js`，含最近目录记忆）、Token 用量条与逐步明细（`usage.js`）、工具轨迹面板（`trajectory.js`，按步骤分组卡片）；设计令牌双主题（明/暗）、CSS Grid 响应式布局（800px/640px 两档断点、移动端抽屉侧栏）；后续迭代为 IDE 风格骨架（图标栏 / 标签页 / 滑入式会话面板）、消息卡片步骤图标与时间线、状态栏逐步指标、会话按项目树分组、滚动条样式统一、会话列表横向溢出修复。
+- **部署配置目录迁移**：`deploy.sh` 安装配置从 `/etc/miniagent` 迁至 `/opt/miniagent/config`（目录归服务用户所有）——原路径在 systemd `ProtectSystem=full` 下 `/etc` 只读且无目录写权限，WebUI 配置页保存（temp+rename 需目录写权限）必失败。已部署环境需手动迁移配置文件。
+
+### Breaking
+- **`LoopHooks` 钩子签名变化（自定义钩子需改代码）**：`OnToolUse` / `OnToolResult` 签名首参新增 `step int`（当前步骤号，1 起）；`LoopHooks` 新增 `OnStepUsage func(step, inTokens, outTokens, toolCalls int)` 字段（每步 usage 记录后触发，nil 安全）。核心库 `miniagent` 的钩子实现方（含 `policy` 包的 confirm 钩子）需同步适配签名，否则编译失败。
 
 ### Fixed
 - **WebUI 订阅者落后掐线伪装成正常结束（「连接中断」第三根因）**：turn 事件总线对落后超过缓冲的订阅者 `close(ch)`（D3 慢消费者策略），而发起端 handler 无法区分「轮次结束」与「lag 掐线」，一律按正常结束写干净 EOF——服务端 turn 完整跑完、journal 全绿，浏览器却报「连接中断：流意外结束」。现 handler 在通道关闭时检查 `entry.done`：lag 掐线写显式 `stream_cut` 非终态标记（/live 不再误写 live_end）；前端收到 stream_cut 或 EOF 无终态时自愈重建视图（runningKnown 判定走 /live 旁观重放或会话 jsonl 全量回放，失败才兜底「连接中断」卡）；缓冲 64→256 吸收终局 delta 突发；掐线记 `subscriber lag-closed` WARN（session/buf），此前该故障在日志中零痕迹。

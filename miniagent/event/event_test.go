@@ -49,7 +49,7 @@ func TestEmitStop(t *testing.T) {
 
 func TestEmitResult(t *testing.T) {
 	var buf bytes.Buffer
-	if err := EmitResult(&buf, miniagent.Result{Text: "hi", Usage: miniagent.Usage{InputTokens: 1, OutputTokens: 2}, Steps: 3, Finish: "stop", Compacted: true, ThinkingDowngraded: true}, "m"); err != nil {
+	if err := EmitResult(&buf, miniagent.Result{Text: "hi", Usage: miniagent.Usage{InputTokens: 1, OutputTokens: 2}, Steps: 3, Finish: "stop", Compacted: true, ThinkingDowngraded: true, Truncated: true}, "m"); err != nil {
 		t.Fatalf("EmitResult: %v", err)
 	}
 	var ev map[string]any
@@ -61,6 +61,9 @@ func TestEmitResult(t *testing.T) {
 	}
 	if ev["compacted"] != true || ev["thinking_downgraded"] != true {
 		t.Errorf("compaction/downgrade flags not surfaced: %+v", ev)
+	}
+	if ev["truncated"] != true {
+		t.Errorf("truncated flag not surfaced (R4 stream-cut transparency): %+v", ev)
 	}
 }
 
@@ -78,6 +81,10 @@ func TestEmitResult_ZeroFieldsPresent(t *testing.T) {
 		if _, ok := ev[key]; !ok {
 			t.Errorf("missing key %q in %s", key, buf.String())
 		}
+	}
+	// R4: truncated is omit-if-zero — a new field, so old consumers never see it unless the cut actually happened.
+	if _, ok := ev["truncated"]; ok {
+		t.Errorf("truncated key must be absent when false: %s", buf.String())
 	}
 }
 

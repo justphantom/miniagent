@@ -384,6 +384,9 @@ func TestDoStream_TruncatedChunkPostDelta_ReturnsPartial(t *testing.T) {
 	if resp.FinishReason != "length" {
 		t.Errorf("FinishReason = %q, want length (truncation marker for the core warning path)", resp.FinishReason)
 	}
+	if !resp.TruncatedStream {
+		t.Error("TruncatedStream = false, want true (R4: the result event must flag the upstream cut so consumers can tell it from a natural finish)")
+	}
 }
 
 // parseSSE surfaces the aggregated partial Response alongside the chunk-parse error (not an empty Response),

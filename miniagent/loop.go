@@ -193,7 +193,7 @@ func Run(ctx context.Context, llm LLM, cfg LoopConfig, userPrompt string, hooks 
 		if len(resp.ToolCalls) == 0 {
 			// Final text enters history: subsequent turns need to see the previous answer. Attach real usage for external strategies to prevent stale estimation.
 			appendMsg(&msgs, &newMsgs, Message{Role: RoleAssistant, Content: resp.Text, Reasoning: resp.Reasoning, ReasoningState: resp.ReasoningState, Usage: &resp.Usage})
-			return Result{Text: resp.Text, Steps: step, Finish: FinishStop}, nil
+			return Result{Text: resp.Text, Steps: step, Finish: FinishStop, Truncated: resp.TruncatedStream}, nil
 		}
 
 		msgs, err = handleToolCalls(ctx, cfg, step, resp, toolByName, msgs, &newMsgs, hooks, logger)

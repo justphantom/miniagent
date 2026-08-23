@@ -215,6 +215,7 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 				c.Logger.Warn("llm stream truncated mid-data after partial content; returning truncated response", "error", perr, "failed_attempt", attempt+1)
 			}
 			res.FinishReason = "length"
+			res.TruncatedStream = true
 			return res, nil
 		}
 		return miniagent.Response{}, perr
