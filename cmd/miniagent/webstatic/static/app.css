@@ -161,3 +161,19 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
 .cfg-save { padding: 8px 24px; font-size: 14px; background: var(--accent); color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .cfg-save:disabled { opacity: .5; cursor: default; }
 .nav-config { font-size: 13px; text-align: left; width: 100%; padding: 6px 8px; }
+.cfg-modebar { display: flex; gap: 8px; margin: 12px 0; }
+.cfg-mode { padding: 5px 14px; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); cursor: pointer; }
+.cfg-mode.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.cfg-provider { border: 1px solid var(--border); border-radius: 6px; margin: 8px 0; overflow: hidden; }
+.cfg-provider-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.cfg-provider-title { font-weight: 600; font-size: 13px; }
+.cfg-provider-body { padding: 8px 12px; }
+.cfg-provider-body > .cfg-field { margin: 5px 0; }
+.cfg-provider-body .cfg-label { flex-basis: 150px; }
+.cfg-models { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.cfg-models-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.cfg-model { border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 6px 0; position: relative; background: var(--panel); }
+.cfg-model .cfg-field { margin: 4px 0; }
+.cfg-model .cfg-label { flex-basis: 90px; font-size: 12px; }
+.cfg-model > .cfg-array-del { position: absolute; top: 4px; right: 6px; }
+.cfg-json textarea { width: 100%; min-height: 50vh; font-family: ui-monospace, monospace; font-size: 13px; line-height: 1.5; box-sizing: border-box; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); white-space: pre; overflow: auto; }
