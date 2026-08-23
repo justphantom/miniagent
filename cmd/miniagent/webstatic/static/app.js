@@ -157,7 +157,7 @@ $("prompt").addEventListener("keydown", (e) => {
 $("prompt").addEventListener("input", () => {
   const el = $("prompt");
   el.style.height = "auto";
-  el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  el.style.height = Math.min(el.scrollHeight, 120) + "px";
 });
 
 // Send doubles as stop while the active view runs a turn. Stopping calls the stop API — the
@@ -474,8 +474,23 @@ async function loadSessions() {
       box.appendChild(hint);
       return;
     }
+    for (const s of list) sessionMeta[s.id] = s;
+    // Group sessions by workdir (project tree): one .tree-group per directory.
+    const groups = new Map();
     for (const s of list) {
-      sessionMeta[s.id] = s;
+      const k = s.workdir || "";
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    }
+    for (const [wd, sessions] of groups) {
+      const g = document.createElement("div");
+      g.className = "tree-group";
+      const gt = document.createElement("div");
+      gt.className = "tree-group-title";
+      gt.textContent = wd || "（无工作目录）";
+      gt.title = wd;
+      g.appendChild(gt);
+      for (const s of sessions) {
       const b = document.createElement("button");
       b.className = "sess-item" + (s.id === activeView()?.id ? " active" : "") + (s.running ? " running" : "");
       b.type = "button";
@@ -506,7 +521,9 @@ async function loadSessions() {
       del.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); deleteSession(s.id); } });
       b.appendChild(del);
       b.addEventListener("click", () => openSession(s.id));
-      box.appendChild(b);
+      g.appendChild(b);
+      }
+      box.appendChild(g);
     }
   } catch (e) {
     hint.textContent = `加载失败：${e.message}（点击重试）`;
