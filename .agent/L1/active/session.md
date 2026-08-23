@@ -25,6 +25,7 @@ updated: 2026-08-23
 - 899c64f 文档：`WEBUI_NEXT.md` —— 对比 DSH WebUI 功能集，产出迭代路线图（P0 文件附件/轨迹视图/目录选择器/会话重命名 → P1 搜索/反馈/命令/模型切换/用量 → P2 导出/工作区/作业/目标/计划/引用 → P3 子代理/技能/交付物/国际化/插件），附 Step 1 详细设计
 - 4339a5f 文档：`WEBUI_IMPLEMENTATION.md` —— 三项特性（目录选择器 GET /api/tree、Token 用量 step_usage 事件+条形图、工具轨迹 step 字段+轨迹面板）详细实现方案。核心共享支点：OnToolUse/OnToolResult 钩子签名加 step int（handleToolCalls 已透传 step，事实已验证）、LoopHooks 新增 OnStepUsage（recordStepUsage 末尾增量直得，避免 OnStep 累计值差值误差）。新文件：web_tree.go、usage.js、trajectory.js、dirpicker.js
 - 30ab5d5 文档：`WEBUI_IMPLEMENTATION.md` 定稿 —— 决策清单 9 项全部定案（钩子加 step/OnStepUsage 新钩子/目录树放开只读+加固/轨迹抽屉镜像/预算取 config/最近目录 localStorage/用量双入口/禁内联样式/CSS 变量美化）；新增 §四 UI 美化设计（Token 变量扩展、header 毛玻璃、消息卡片左右对齐、用量条/轨迹抽屉/模态组件规范、动效、无障碍、CSP 合规）与 §4.10 美化实施范围表
+- 0fa8ecf 文档：`WEBUI_IMPLEMENTATION.md` 补 §五 响应式布局 —— 参考 DSH（CSS Grid 三栏骨架 + position:fixed 抽屉 + 设计令牌，仅 2 档断点）；三态布局（≥800 三栏侧栏+轨迹/640-799 双栏/<640 单栏 drawer）；侧栏重构 position:fixed 修复遮挡 header、消息区居中+用户消息右对齐、composer 对齐、header 元素逐档隐藏表、轨迹抽屉/模态窄屏全屏、断点注释约定（NARROW/TABLET/DESKTOP）；决策清单扩至 12 项（#10-12 响应式策略/窄屏侧栏/消息对齐）；§八 实施步骤第 2 步扩入响应式骨架
 
 ## 待办
 - 无（功能主体完成；遗留为后续迭代项）。
