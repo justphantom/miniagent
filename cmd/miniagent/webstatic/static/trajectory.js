@@ -4,6 +4,40 @@
 
 import { fmtTime } from "./store.js";
 
+// Same preview caps as events.js tool cards — duplicated (not imported) to avoid an
+// events ↔ trajectory import cycle; events.js already imports refreshPanel from here.
+const TOOL_PREVIEW_CHARS = 90;
+const TOOL_PREVIEW_LINES = 2;
+
+function clipToolText(s) {
+  let t = s;
+  let clipped = false;
+  if (t.length > TOOL_PREVIEW_CHARS) { t = t.slice(0, TOOL_PREVIEW_CHARS); clipped = true; }
+  const lines = t.split("\n");
+  if (lines.length > TOOL_PREVIEW_LINES) { t = lines.slice(0, TOOL_PREVIEW_LINES).join("\n"); clipped = true; }
+  return clipped ? t + " …" : t;
+}
+
+function toolPre(full, cls) {
+  const pre = document.createElement("pre");
+  if (cls) pre.className = cls;
+  const preview = clipToolText(full);
+  pre.textContent = preview;
+  if (preview === full) return pre;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "expand-btn";
+  btn.textContent = "展开完整内容";
+  btn.addEventListener("click", () => {
+    const expanded = btn.textContent === "收起";
+    pre.textContent = expanded ? preview : full;
+    btn.textContent = expanded ? "展开完整内容" : "收起";
+    pre.appendChild(btn);
+  });
+  pre.appendChild(btn);
+  return pre;
+}
+
 let panelEl = null;
 let bodyEl = null;
 
@@ -75,7 +109,7 @@ function renderBody(view) {
   }
 }
 
-// renderStepCard builds a <details> card for one step.
+// renderStepCard builds a card for one step.
 function renderStepCard(view, entry) {
   const det = document.createElement("details");
   det.className = "trajectory-step";
@@ -95,25 +129,19 @@ function renderStepCard(view, entry) {
   const toolsDiv = document.createElement("div");
   toolsDiv.className = "trajectory-tools";
   for (const t of entry.tools) {
-    const toolDet = document.createElement("details");
-    toolDet.className = "trajectory-tool";
-    const toolSum = document.createElement("summary");
-    toolSum.textContent = t.name;
+    const toolDiv = document.createElement("div");
+    toolDiv.className = "trajectory-tool";
+    const toolHead = document.createElement("div");
+    toolHead.className = "trajectory-tool-head";
+    toolHead.textContent = t.name;
     const time = document.createElement("span");
     time.className = "time";
     time.textContent = fmtTime(t.ts);
-    toolSum.appendChild(time);
-    const preIn = document.createElement("pre");
-    preIn.className = "tj-input";
-    preIn.textContent = t.input || "";
-    toolDet.append(toolSum, preIn);
-    if (t.output) {
-      const preOut = document.createElement("pre");
-      preOut.className = "out" + (t.isError ? " err" : "");
-      preOut.textContent = t.output;
-      toolDet.appendChild(preOut);
-    }
-    toolsDiv.appendChild(toolDet);
+    toolHead.appendChild(time);
+    const preIn = toolPre(t.input || "", "tj-input");
+    toolDiv.append(toolHead, preIn);
+    if (t.output) toolDiv.appendChild(toolPre(t.output, "out" + (t.isError ? " err" : "")));
+    toolsDiv.appendChild(toolDiv);
   }
   det.appendChild(toolsDiv);
   return det;

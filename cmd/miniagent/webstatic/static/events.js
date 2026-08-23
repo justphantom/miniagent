@@ -11,8 +11,8 @@ import { renderUsageBar, renderStepUsageList } from "./usage.js";
 import { refreshPanel } from "./trajectory.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
-const TOOL_PREVIEW_CHARS = 150; // tool card input/output preview caps (details expansion shows full)
-const TOOL_PREVIEW_LINES = 3;
+const TOOL_PREVIEW_CHARS = 90; // tool card input/output preview caps (expand button shows full)
+const TOOL_PREVIEW_LINES = 2;
 
 // Step timeline icons (V3): each event card gets a leading icon by type/tool name.
 const STEP_ICONS = {
@@ -157,7 +157,7 @@ function toolArg(name, input) {
 }
 
 // clipToolText caps tool input/output previews: first TOOL_PREVIEW_LINES lines and first
-// TOOL_PREVIEW_CHARS characters, ellipsis when clipped. Details expansion shows the full text.
+// TOOL_PREVIEW_CHARS characters, ellipsis when clipped. Expand buttons show the full text.
 function clipToolText(s) {
   let t = s;
   let clipped = false;
@@ -167,8 +167,31 @@ function clipToolText(s) {
   return clipped ? t + " …" : t;
 }
 
+// toolPre builds a tool-card <pre> showing the clipped preview; an expand button toggles
+// to the full text when clipping occurred. Button nests inside the <pre> so the card keeps
+// a single content node per input/output (matches .ev.tool pre styling scope).
+function toolPre(full, cls) {
+  const pre = document.createElement("pre");
+  if (cls) pre.className = cls;
+  const preview = clipToolText(full);
+  pre.textContent = preview;
+  if (preview === full) return pre;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "expand-btn";
+  btn.textContent = "展开完整内容";
+  btn.addEventListener("click", () => {
+    const expanded = btn.textContent === "收起";
+    pre.textContent = expanded ? preview : full;
+    btn.textContent = expanded ? "展开完整内容" : "收起";
+    pre.appendChild(btn);
+  });
+  pre.appendChild(btn);
+  return pre;
+}
+
 export function appendToolUse(view, ev) {
-  const d = document.createElement("details");
+  const d = document.createElement("div");
   d.className = "ev tool";
   if (ev.step) d.dataset.step = ev.step;
   const ic = document.createElement("div");
@@ -176,7 +199,8 @@ export function appendToolUse(view, ev) {
   ic.textContent = getIcon(ev.name);
   const wrap = document.createElement("div");
   wrap.className = "ev-body";
-  const s = document.createElement("summary");
+  const head = document.createElement("div");
+  head.className = "ev-tool-head";
   const name = document.createElement("span");
   name.className = "ev-tool-name";
   name.textContent = ev.name;
@@ -187,12 +211,9 @@ export function appendToolUse(view, ev) {
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = fmtTime(ev.ts);
-  s.append(name, argEl, time);
-  wrap.appendChild(s);
-  const pre = document.createElement("pre");
-  pre.textContent = clipToolText(ev.input || "");
-  pre.title = "展开查看完整输入";
-  wrap.appendChild(pre);
+  head.append(name, argEl, time);
+  wrap.appendChild(head);
+  wrap.appendChild(toolPre(ev.input || ""));
   d.append(ic, wrap);
   view.dom.appendChild(d);
   if (ev.call_id) view.toolNodes.set(ev.call_id, d);
@@ -207,13 +228,10 @@ export function appendToolUse(view, ev) {
 // tool_result carries call_id: pair it with the exact tool_use node. Fallback to the last
 // tool block only when the id is unknown (replay of old sessions predating call_id).
 export function appendToolResult(view, ev) {
-  const target = (ev.call_id && view.toolNodes.get(ev.call_id)) || view.dom.querySelector("details.ev.tool:last-of-type");
+  const target = (ev.call_id && view.toolNodes.get(ev.call_id)) || view.dom.querySelector(".ev.tool:last-of-type");
   if (!target) return;
-  const pre = document.createElement("pre");
-  pre.className = "out" + (ev.is_error ? " err" : "");
-  pre.textContent = clipToolText(ev.output || "");
-  pre.title = "展开查看完整输出";
-  (target.querySelector(".ev-body") || target).appendChild(pre);
+  (target.querySelector(".ev-body") || target)
+    .appendChild(toolPre(ev.output || "", "out" + (ev.is_error ? " err" : "")));
 }
 
 export function finishText(view) {

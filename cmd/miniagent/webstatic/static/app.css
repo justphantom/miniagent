@@ -157,7 +157,7 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
 .ev .ghost.retry-btn:hover { color: var(--fg); border-color: var(--accent); }
 .time { color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .ev.tool { font-family: var(--font-mono); font-size: 12.5px; }
-.ev.tool summary { cursor: pointer; color: var(--accent); font-size: 12.5px; display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.ev-tool-head { cursor: default; color: var(--accent); font-size: 12.5px; display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
 .ev-tool-name { flex-shrink: 0; }
 .ev-tool-arg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ev.tool pre { margin-top: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); overscroll-behavior: contain; }
@@ -234,7 +234,8 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
 .copy-btn:hover { color: var(--fg); border-color: var(--accent); }
 .ev.collapsed .md { max-height: 240px; overflow: hidden; position: relative; }
 .ev.collapsed .md::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: linear-gradient(transparent, var(--panel)); }
-.ev .expand-btn { font-size: 12px; padding: 2px 10px; margin-top: 4px; color: var(--accent); background: transparent; }
+.ev .expand-btn, .trajectory-tool .expand-btn { font-size: 12px; padding: 2px 10px; margin-top: 4px; color: var(--accent); background: transparent; }
+.trajectory-tool pre .expand-btn { display: block; }
 
 /* ---- usage bar ---- */
 .usage-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-elev-1); margin-top: 6px; position: relative; }
@@ -261,6 +262,10 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
 @keyframes pulseGlow { 0%, 100% { outline-color: transparent; } 50% { outline-color: var(--accent); } }
 .tj-step-no { font-weight: 600; }
 .tj-step-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trajectory-tools { padding: 0 10px 8px; display: flex; flex-direction: column; gap: 8px; }
+.trajectory-tool { font-family: var(--font-mono); font-size: 12.5px; }
+.trajectory-tool-head { color: var(--accent); font-size: 12.5px; display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.trajectory-tool pre { margin: 4px 0 0; overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); overscroll-behavior: contain; }
 
 /* ---- modal ---- */
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; display: flex; align-items: center; justify-content: center; }
