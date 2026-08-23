@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 
@@ -72,7 +73,10 @@ func (s *webServer) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Preserve stored secrets when the client sent back the masked placeholder.
-	applyMaskedSecrets(s.cfg, &incoming)
+	if err := applyMaskedSecrets(s.cfg, &incoming); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	// Validate before writing: a bad edit must not leave the file in an invalid state.
 	if err := config.ValidateConfig(&incoming); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -82,8 +86,12 @@ func (s *webServer) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "save config: " + err.Error()})
 		return
 	}
+	// The running config is NOT swapped: other handlers read s.cfg concurrently without a lock
+	// (a swap would be a data race), and selectively hot-reloading some fields while others need
+	// a restart is incoherent. The file is the source of truth; every runtime-affecting change
+	// takes effect after restart. needRestart therefore means "the saved file differs from the
+	// running config".
 	needRestart := !configEqual(s.cfg, &incoming)
-	s.cfg = &incoming
 	msg := "配置已保存"
 	if needRestart {
 		msg += "；服务运行参数已变更，需重启 miniagent 后生效"
@@ -127,23 +135,33 @@ func maskIfSet(v string) string {
 
 // applyMaskedSecrets copies stored secrets into dst where dst carried the placeholder.
 // Provider.key and web.key are the only secrets; other fields pass through verbatim.
-func applyMaskedSecrets(cur, dst *config.Config) {
+// Renaming a provider breaks the name-keyed lookup — an error (instead of silently persisting
+// the literal mask as the key, which would break that provider's auth) makes the client
+// re-edit: rename and key change cannot ride the same save.
+func applyMaskedSecrets(cur, dst *config.Config) error {
 	if cur == nil || dst == nil {
-		return
+		return nil
 	}
 	if dst.Web.Key == maskedSecret {
 		dst.Web.Key = cur.Web.Key
 	}
 	for i := range dst.Providers {
-		if dst.Providers[i].Key == maskedSecret {
-			for _, c := range cur.Providers {
-				if c.Name == dst.Providers[i].Name {
-					dst.Providers[i].Key = c.Key
-					break
-				}
+		if dst.Providers[i].Key != maskedSecret {
+			continue
+		}
+		var found bool
+		for _, c := range cur.Providers {
+			if c.Name == dst.Providers[i].Name {
+				dst.Providers[i].Key = c.Key
+				found = true
+				break
 			}
 		}
+		if !found {
+			return fmt.Errorf("provider %q 带着掩码 key 但当前配置无同名 provider：重命名与换 key 不能同一次保存完成，请先重命名并填入新 key", dst.Providers[i].Name)
+		}
 	}
+	return nil
 }
 
 // configEqual reports whether two configs marshal to the same JSON — the restart-need

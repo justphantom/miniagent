@@ -112,6 +112,7 @@ func TestConfigPut_NotWritableReturns404(t *testing.T) {
 
 func TestConfigPut_NeedRestartDetection(t *testing.T) {
 	s, _ := cfgTestServer(t)
+	before := *s.cfg
 	body, _ := json.Marshal(s.cfg)
 	rec := httptest.NewRecorder()
 	s.mux().ServeHTTP(rec, configReq(http.MethodPut, string(body)))
@@ -122,6 +123,11 @@ func TestConfigPut_NeedRestartDetection(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.NeedRestart {
 		t.Error("identical config should not require restart")
+	}
+	// C1: the running config must NOT be swapped — s.cfg stays the pointer other handlers read
+	// without a lock; the file is the source of truth and changes take effect on restart.
+	if !configEqual(&before, s.cfg) {
+		t.Error("s.cfg was mutated by PUT — runtime swap must not happen")
 	}
 	// The saved config is echoed back masked, so the UI can refill the form.
 	if resp.Config == nil {
@@ -140,6 +146,30 @@ func TestConfigPut_NeedRestartDetection(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if !resp.NeedRestart {
 		t.Error("changed config should require restart")
+	}
+	if s.cfg.Run.MaxTokens != nil {
+		t.Error("s.cfg.Run.MaxTokens must stay nil after PUT — no runtime swap")
+	}
+}
+
+// C2: renaming a provider while its key shows the mask must fail the save — the name-keyed
+// lookup cannot resolve the old key, and silently persisting the literal mask would break
+// that provider's auth with no error anywhere.
+func TestConfigPut_RenamedProviderWithMaskedKeyRejected(t *testing.T) {
+	s, _ := cfgTestServer(t)
+	edited := *s.cfg
+	edited.Providers = make([]config.ProviderConfig, len(s.cfg.Providers))
+	copy(edited.Providers, s.cfg.Providers)
+	edited.Providers[0].Name = "renamed"
+	edited.Providers[0].Key = maskedSecret // client kept the masked display value
+	body, _ := json.Marshal(edited)
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, configReq(http.MethodPut, string(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 (masked key + rename cannot ride one save)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "renamed") {
+		t.Errorf("error should name the offending provider: %s", rec.Body.String())
 	}
 }
 
