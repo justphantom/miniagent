@@ -5,6 +5,8 @@
 // swaps visibility instead of aborting anything — turns keep running server-side (D1) and
 // their streams keep rendering into their (possibly hidden) view.
 
+import { updateMetrics } from "./store.js";
+
 const MAX_VIEWS = 8; // detached-DOM residency bound; idle views beyond this are dropped
 
 const views = new Map(); // key → view (key = session id, or "__new_N" for drafts)
@@ -41,6 +43,7 @@ export function createView(id = "") {
     usage: { budget: 0, steps: [] },
     trajectory: { order: [], steps: new Map() },
     curStep: 0,
+    metrics: { rounds: 0, steps: 0, llmMs: 0, toolMs: 0 }, // status-bar counters, rebuilt on replay
   };
   dom.dataset.viewKey = key;
   views.set(key, view);
@@ -72,6 +75,12 @@ export function activate(view) {
 }
 
 export function activeView() { return active; }
+
+// refreshMetrics pushes a view's counters into the status bar (empty for drafts).
+export function refreshMetrics(view) {
+  const m = view?.metrics;
+  updateMetrics(m ? { rounds: m.rounds, steps: m.steps, llmMs: m.llmMs, toolMs: m.toolMs, inputTotal: view.tokens.in } : {});
+}
 
 export function dropView(view) {
   if (!view) return;

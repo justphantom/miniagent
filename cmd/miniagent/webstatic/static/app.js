@@ -12,7 +12,7 @@
 import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, setStatusModel } from "./store.js";
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 import { startEvents, attachLive } from "./live.js";
-import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom } from "./views.js";
+import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom, refreshMetrics } from "./views.js";
 import { openConfigModal, closeConfigModal } from "./config.js";
 import { attachDirPicker } from "./dirpicker.js";
 import { showTrajectory, hideTrajectory, setOnTrajectoryClose, setActiveViewGetter, refreshPanel } from "./trajectory.js";
@@ -344,6 +344,7 @@ function updateHeader() {
   const v = activeView();
   document.title = v?.id ? `miniagent · ${v.id}` : "miniagent";
   showSessionID(v);
+  refreshMetrics(v);
   updateComposer();
 }
 
@@ -567,6 +568,7 @@ async function loadReplay(v) {
   v.trajectory.order.length = 0;
   v.trajectory.steps.clear();
   v.curStep = 0;
+  v.metrics = { rounds: 0, steps: 0, llmMs: 0, toolMs: 0 };
   v.workdir = sessionMeta[v.id]?.workdir || "";
   if (v.workdir && !$("workdir").value.trim()) { $("workdir").value = v.workdir; saveWorkdir(v.workdir); }
   let workdirFilled = !!v.workdir;

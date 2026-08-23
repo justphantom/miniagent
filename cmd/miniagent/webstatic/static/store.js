@@ -71,6 +71,36 @@ export function setStatusModel(m) {
   if (el) el.textContent = m || "";
 }
 
+// ---- status bar metrics ----
+
+export function fmtDuration(ms) {
+  if (!ms || ms <= 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+}
+
+export function fmtTokens(n) {
+  if (!n) return "";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return String(n);
+}
+
+// updateMetrics renders the per-session counters into the status bar. All fields optional;
+// an empty stats object clears the metrics span (version/model remain as the idle display).
+export function updateMetrics(stats) {
+  const el = document.getElementById("status-metrics");
+  if (!el) return;
+  const parts = [];
+  if (stats.rounds) parts.push(`${stats.rounds}轮`);
+  if (stats.steps) parts.push(`${stats.steps}步`);
+  if (stats.llmMs) parts.push(`LLM ${fmtDuration(stats.llmMs)}`);
+  if (stats.toolMs) parts.push(`工具 ${fmtDuration(stats.toolMs)}`);
+  if (stats.inputTotal) parts.push(`输入 ${fmtTokens(stats.inputTotal)} tok`);
+  el.textContent = parts.join("  ·  ");
+}
+
 let budgetCache = 0;
 export function getBudget() { return budgetCache; }
 export async function refreshBudget() {

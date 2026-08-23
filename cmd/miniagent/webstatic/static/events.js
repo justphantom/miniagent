@@ -6,7 +6,7 @@
 
 import { mdRender } from "./md.js";
 import { fmtTime, getBudget } from "./store.js";
-import { activeView } from "./views.js";
+import { activeView, refreshMetrics } from "./views.js";
 import { renderUsageBar, renderStepUsageList } from "./usage.js";
 import { refreshPanel } from "./trajectory.js";
 
@@ -223,6 +223,7 @@ function captureToolResult(view, ev) {
       if (t.callID === ev.call_id) {
         t.output = ev.output || "";
         t.isError = !!ev.is_error;
+        if (t.ts && ev.ts && ev.ts > t.ts) view.metrics.toolMs += ev.ts - t.ts;
         return;
       }
     }
@@ -244,6 +245,10 @@ export function renderEvent(view, ev) {
       finishText(view);
       view.tokens.in += ev.input_tokens || 0;
       view.tokens.out += ev.output_tokens || 0;
+      view.metrics.rounds++;
+      view.metrics.steps += ev.steps || 0;
+      if (view.turnStartTs && ev.ts) view.metrics.llmMs += ev.ts - view.turnStartTs;
+      refreshMetrics(view);
       const d = evDiv("result", "result", ev.ts, "", STEP_ICONS.result);
       const body = d.querySelector(".ev-body");
       const md = document.createElement("div");
