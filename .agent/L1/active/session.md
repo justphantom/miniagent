@@ -7,7 +7,7 @@ updated: 2026-08-24
 # 当前会话
 
 ## 状态
-- 发版前完善：①CHANGELOG ✅ ②部署复测 ✅ ③R4 ✅（cd4b371）④第四轮复审 ✅——C1（PUT 无锁换 s.cfg 数据竞争）+C2（重命名掩码 key 静默坏配置）已修（576989f：no-swap + configEqual 比对 + applyMaskedSecrets 拒绝重命名携掩码 key）；C3（handleTree 全盘目录枚举，web 服务层非 agent 层）待用户决策：README 披露 vs workdir 根约束。未打 tag。待办：⑤README WebUI 章节补新特性 ⑥规格文档过期清理（RESPONSIVE_UX 基线作废、13 个过程文档）。
+- 发版前完善全部完成（未打 tag）：①CHANGELOG 补漏 ②部署复测（lag-closed WARN 生产实证+浏览器自愈闭环确认）③R4 截断透明化（cd4b371）④第四轮复审 C1/C2 修复（576989f）、C3 披露（SECURITY.md「设计已知」+/api/tree）⑤README 界面/API 条目重写（IDE 骨架/轨迹/step_usage/目录选择器）⑥14 个过程文档删除归档（docs/ 在 .gitignore，历史即归档），审计基线重写沉淀 L2 `patterns/webui-ux-audit-baseline`（未修观察项 F2 平板汉堡/F6 窄屏 header/F15 滚动穿透；archive/ 磁盘目录未跟踪）。待发版：合并 CHANGELOG Unreleased、定版本号。
 
 ## 本会话产出（发版前完善）
 - **①CHANGELOG 补漏**：v6.4.0..HEAD 44 提交原仅 6 条，补 4 条——9096515（三特性+UI 重设计+Breaking：OnToolUse/OnToolResult 加 step 首参、新钩子 OnStepUsage、`GET /api/tree`、`step_usage` 事件 web-only）、651711e（IDE 骨架）、1211853（hscroll 修复）、19c76ee（配置目录迁移）。

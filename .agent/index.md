@@ -28,6 +28,7 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `optional-proxy-rtk-integration` — 可选外部代理（rtk）探测+回退模式（**superseded**，v5.0.0 已删）
 - `release-checklist` — 发版检查单：版本定级先例/新工具五处文档同步/动作序列
 - `opt-in-tool-gating` — 工具注册门选型（mode/config/无门；web 撤门教训：防护内置则门控多余）
+- `webui-ux-audit-baseline` — WebUI UX 审计基线（IDE 骨架 576989f 起）：布局体系大重构后旧 file:line 审计整体作废须重写；未修观察项与归档位置
 
 ## L2/incidents（事故复盘）
 
