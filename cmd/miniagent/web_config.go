@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"net/http"
 
 	"github.com/justphantom/miniagent/config"
@@ -37,27 +38,19 @@ func (s *webServer) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Mask secrets for the client: the UI must not render the plaintext key back.
-	masked := *cfg
-	masked.Providers = make([]config.ProviderConfig, len(cfg.Providers))
-	copy(masked.Providers, cfg.Providers)
-	for i := range masked.Providers {
-		if masked.Providers[i].Key != "" {
-			masked.Providers[i].Key = maskedSecret
-		}
-	}
-	masked.Web.Key = maskIfSet(cfg.Web.Key)
 	writeJSON(w, http.StatusOK, configGetResponse{
 		Writable: s.cfgPath != "",
 		Path:     s.cfgPath,
-		Config:   &masked,
+		Config:   maskedConfig(cfg),
 	})
 }
 
 // configPutResponse is the PUT /api/config body.
 type configPutResponse struct {
-	OK          bool   `json:"ok"`
-	NeedRestart bool   `json:"need_restart"` // true = the saved config differs from the running one → restart required
-	Message     string `json:"message"`
+	OK          bool           `json:"ok"`
+	NeedRestart bool           `json:"need_restart"` // true = the saved config differs from the running one → restart required
+	Message     string         `json:"message"`
+	Config      *config.Config `json:"config,omitempty"` // saved config (secrets masked), for the UI to refill the form
 }
 
 // handleConfigPut validates and persists an edited config. Secrets that came back as
@@ -97,7 +90,31 @@ func (s *webServer) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 	} else {
 		msg += "；当前运行配置无需重启"
 	}
-	writeJSON(w, http.StatusOK, configPutResponse{OK: true, NeedRestart: needRestart, Message: msg})
+	writeJSON(w, http.StatusOK, configPutResponse{
+		OK:          true,
+		NeedRestart: needRestart,
+		Message:     msg,
+		Config:      maskedConfig(&incoming), // refill the form with the authoritative saved value
+	})
+}
+
+// maskedConfig returns a shallow copy of cfg with all secret fields masked, safe for the
+// client to render back. The provider slice and headers maps are deep-copied so mutating
+// the returned value cannot alias the server's in-memory config.
+func maskedConfig(cfg *config.Config) *config.Config {
+	m := *cfg
+	m.Providers = make([]config.ProviderConfig, len(cfg.Providers))
+	copy(m.Providers, cfg.Providers)
+	for i := range m.Providers {
+		if m.Providers[i].Key != "" {
+			m.Providers[i].Key = maskedSecret
+		}
+		if m.Providers[i].Headers != nil {
+			m.Providers[i].Headers = maps.Clone(m.Providers[i].Headers)
+		}
+	}
+	m.Web.Key = maskIfSet(cfg.Web.Key)
+	return &m
 }
 
 // maskIfSet returns the masked placeholder for a non-empty secret, else "".

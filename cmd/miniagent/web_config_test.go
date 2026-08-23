@@ -123,6 +123,15 @@ func TestConfigPut_NeedRestartDetection(t *testing.T) {
 	if resp.NeedRestart {
 		t.Error("identical config should not require restart")
 	}
+	// The saved config is echoed back masked, so the UI can refill the form.
+	if resp.Config == nil {
+		t.Error("expected saved config echoed back for form refill")
+	}
+	for _, p := range resp.Config.Providers {
+		if p.Key == "sk-plain" {
+			t.Error("saved config must mask provider.key")
+		}
+	}
 	edited := *s.cfg
 	edited.Run.MaxTokens = intPtr(12345)
 	body, _ = json.Marshal(edited)

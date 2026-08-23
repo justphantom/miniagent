@@ -14,6 +14,7 @@ let configData = {};   // 当前编辑中的 config 对象
 let dirty = false;
 let writable = false;
 let mode = "form";     // "form" | "json"
+let cfgFilePath = "";  // 配置文件路径（用于渲染/保存后回填）
 
 const MASK = "********"; // 后端掩码占位符（GET 时 secret 被替换为该值，PUT 原样保留→不覆盖）
 
@@ -466,6 +467,7 @@ async function loadConfig() {
     configData = resp.config;
     dirty = false;
     writable = resp.writable;
+    cfgFilePath = resp.path || "";
     renderAll(resp.path);
     loadEl?.remove();
   } catch (e) {
@@ -592,6 +594,39 @@ function updateSaveBtn() {
   if (btn) btn.textContent = dirty ? "保存配置（有未保存更改）" : "保存配置";
 }
 
+// clientValidate 轻量预校验：在提交前捕获最常见错误，减少一次无效往返。
+// 服务端仍是权威（validateConfig），此函数只覆盖高频必错项，不重复实现完整校验器。
+function clientValidate(cfg) {
+  const errs = [];
+  const providers = Array.isArray(cfg.providers) ? cfg.providers : [];
+  if (providers.length === 0) errs.push("providers 为空，至少需要一个提供商");
+  const seen = new Set();
+  for (let i = 0; i < providers.length; i++) {
+    const p = providers[i];
+    if (!p.name) errs.push(`providers[${i}].name 为空`);
+    else if (seen.has(p.name)) errs.push(`provider 名称 "${p.name}" 重复`);
+    else seen.add(p.name);
+    if (!p.chat_url) errs.push(`providers[${i}].name 缺少 chat_url`);
+    if (p.models && p.models.length > 0) {
+      const mseen = new Set();
+      for (let j = 0; j < p.models.length; j++) {
+        if (!p.models[j].name) errs.push(`providers[${i}] 模型[${j}] 名称空`);
+        else if (mseen.has(p.models[j].name)) errs.push(`providers[${i}] 模型名 "${p.models[j].name}" 重复`);
+        else mseen.add(p.models[j].name);
+      }
+    }
+  }
+  if (providers.length > 0) {
+    const def = cfg.defaults || {};
+    if (!def.provider) errs.push("defaults.provider 为空");
+    if (!def.model) errs.push("defaults.model 为空");
+    if (def.provider && !providers.some((p) => p.name === def.provider)) {
+      errs.push(`defaults.provider "${def.provider}" 未在 providers 中声明`);
+    }
+  }
+  return errs;
+}
+
 async function saveConfig() {
   const msgEl = $("cfg-msg");
   const saveBtn = $("cfg-save");
@@ -605,6 +640,16 @@ async function saveConfig() {
       if (ta) configData = JSON.parse(ta.value);
     }
     if (!configData || typeof configData !== "object") throw new Error("配置内容无效");
+    // 客户端预校验：常见错误直接提示，不发无谓的请求
+    const preErrs = clientValidate(configData);
+    if (preErrs.length > 0) {
+      msgEl.hidden = false;
+      msgEl.className = "cfg-msg err";
+      msgEl.textContent = "配置校验未通过：" + preErrs.join("；");
+      saveBtn.disabled = false;
+      saveBtn.textContent = "保存配置";
+      return;
+    }
     const r = await fetch("/api/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -615,6 +660,12 @@ async function saveConfig() {
     if (r.ok) {
       msgEl.className = "cfg-msg ok";
       msgEl.textContent = resp.message || "配置已保存";
+      // Refill the form with the authoritative saved config (secrets re-masked) so the UI
+      // reflects reality after the server normalized/validated the edit.
+      if (resp.config) {
+        configData = resp.config;
+        renderAll(cfgFilePath);
+      }
       dirty = false;
       updateSaveBtn();
     } else {
