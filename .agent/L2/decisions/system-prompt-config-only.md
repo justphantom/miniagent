@@ -1,8 +1,10 @@
 ---
 layer: L2
 type: decision
-updated: 2026-08-11
 tags: [system-prompt, project-rules, config, breaking, migration]
+created: 2026-08-11
+updated: 2026-08-11
+confidence: high
 ---
 
 # system prompt 来源统一为 config-only（.miniagent/ 层收口）

@@ -6,7 +6,7 @@ updated: 2026-08-13
 
 # 流程策略
 
-1. **verify-gate**：编码标准见根目录 `AGENTS.md`（gofmt 空 / build / vet / test -race / lint / 非 `_test.go` 文件 ≤300 行，缺一不可、`-race` 必跑），本层不重复。
+1. **verify-gate**：编码标准见根目录 `AGENTS.md`（gofmt 空 / build / vet / test -race / lint / 非 `_test.go` 文件 ≤300 行，缺一不可、`-race` 必跑），本层不重复。**外加 `make verify` 末步 memory-integrity**（`scripts/verify-memory.sh`）：L2 条目 frontmatter 完整性、index 覆盖度、非 superseded 条目的代码路径引用有效性。
 2. **config-first**：config 必须存在（v4.2.0 删裸模式）；裁决优先级 `cli > config > builtin`。新能力默认 config 化，CLI flag 仅便捷覆盖；参数膨胀优先扩 config 而非加 flag。
 3. **钩子红线**：`LoopHooks` / `CompactingHook` 调用点无核心 recover——自定义 / 第三方钩子须自行 `defer recover()` 或恒不 panic；钩子经返回值（`StepOutput` / `CompactingOutput`）表达意图，禁直接改入参 `msgs` 元素（直接改不生效）。
 4. **CHANGELOG 纪律**：改 API / 配置 / CLI 行为后同步更新 `CHANGELOG.md`（Keep a Changelog + SemVer）；breaking 单列并附迁移说明。

@@ -31,6 +31,6 @@ confidence: high
 - 中间结构是纯数据投影，非抽象（节制抽象对齐）；config→provider 方向本来就存在（cmd 装配层），不新增环。
 
 ## 参考
-- `miniagent/config/url.go`（ValidateURL 原址）
+- `text/text.go`（ValidateURL 现址）
 - `provider/openai/models.go`（ListAllModels 签名）
 - 关联 `core-zero-policy-loophooks-decoupling`（库化槽位 5.0.0 出处）

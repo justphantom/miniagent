@@ -1,3 +1,12 @@
+---
+layer: L2
+type: decision
+tags: [webui, frontend, architecture, es-modules, sync, streaming, markdown, vanilla-js]
+created: 2026-08-11
+updated: 2026-08-24
+confidence: high
+---
+
 # WebUI 架构决策
 
 ## 状态

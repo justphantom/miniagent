@@ -18,7 +18,9 @@
 - 会话启动：读 `.agent/L0/`（永久约束：角色/架构不变量/流程策略，每次加载）
 - 架构/钩子契约/不变量时序：读 `ARCHITECTURE.md` §4–§5 与 `HOOKS.md`
 - 历史决策/陌生报错/选型：先查 `.agent/L2/` 再猜
-- 当前会话上下文/任务进展：`.agent/L1/active/session.md`（L1 唯一文件）
+- 当前会话上下文/任务进展：`.agent/L1/active/session.md`（L1 单会话文件）；跨会话任务先读 `.agent/L1/active/carryover.md`
+- **检索反馈闭环**：读取 L2 条目后，在 L1 session.md 记录 `retrieved: <path> confidence: <high/medium/low>`。低置信度（`medium` 或 `low`）须向用户呈现候选列表 + 请求确认，不得自行猜测。多次检索同一主题无稳定命中 → 创建新 L2 条目并标记 `confidence: evolving`
+- **检索失败结构化兜底**：L2 无匹配或匹配置信度低 → 向用户呈现「检索结果 + 候选方向 + 请求确认」，不得自行假设
 
 ## .agent 记忆体系
 
@@ -28,8 +30,8 @@
 | 层 | 路径 | 性质 | 加载时机 |
 |---|------|------|---------|
 | **L0** | `.agent/L0/` | 永久约束（角色/架构不变量/流程策略） | 每次会话必加载 |
-| **L1** | `.agent/L1/active/session.md` | 单会话过程上下文（唯一文件） | 当前任务追踪 |
-| **L2** | `.agent/L2/` | 经验教训与可复用知识 | 按需检索 |
+| **L1** | `.agent/L1/active/session.md` + `.agent/L1/active/carryover.md` | 单会话过程上下文 + 跨会话交接单 | 当前任务追踪；新会话从 carryover 恢复上下文 |
+| **L2** | `.agent/L2/` | 经验教训与可复用知识 | 按需检索 + 检索反馈闭环 |
 
 #### L0 — 永久约束（`.agent/L0/`）
 - `constraints.md` — 交互红线、架构不变量（核心零策略/工具配对/session 标记/thinking 钉死/NDJSON 契约等）、记忆系统元规则
@@ -54,6 +56,9 @@
 5. 引用只用已纳入版本跟踪的路径（`internal/*`、`cmd/*`、commit 等）；未跟踪路径（如 `docs/`）内联说明，不作为依赖。
 6. 检索优先用精确关键词与标签，必要时辅以语义搜索。
 7. L1 session.md 是单会话工作内存：任务完成后删历史流水账条目，只留当前任务 + 极简摘要。已完成且无复用价值的不保留；有沉淀价值的提炼进 L2 后从 session.md 删除。
+8. **跨会话交接**：若任务预计跨多会话（多天），在当前会话结束前写入 `.agent/L1/active/carryover.md`，格式：`## 任务名` → `### 已完成`（自由文本）→ `### 待办`（列表）→ `### 关键上下文`（引用 L2 条目 + 关键决策）。新会话启动时若 carryover.md 存在，先读后清零。
+9. **检索反馈记录**：每次 L2 检索后在 session.md 追加 `retrieved: path/to/entry.md confidence: <high/medium/low>`。低置信度条目触发用户确认流程（见路由节）。
+10. **L2 生命周期**：`confidence` 字段（`high`/`medium`/`low`/`evolving`）标记条目可信度。`evolving` 表示新条目待验证。`status: superseded` 条目自动从索引优先级降级。verify-gate 中检查 superseded 条目引用的代码路径有效性（grep 确认仍存在）。
 
 ### 索引说明
 - **L0**：每次会话启动时自动加载；路由见本章「路由」节。

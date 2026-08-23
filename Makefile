@@ -15,7 +15,7 @@ fmt:
 lint:
 	golangci-lint run ./...
 
-# verify runs the full AGENTS.md verify-gate: gofmt clean / build ./... / vet / test -race / lint / line-limit.
+# verify runs the full AGENTS.md verify-gate: gofmt clean / build ./... / vet / test -race / lint / line-limit / memory-integrity.
 verify:
 	@out=$$(gofmt -s -l .); if [ -n "$$out" ]; then echo "gofmt -s -l . (must be empty):"; echo "$$out"; exit 1; fi
 	go build ./...
@@ -23,6 +23,7 @@ verify:
 	go test -race ./...
 	golangci-lint run ./...
 	@over=$$(find . -name '*.go' ! -name '*_test.go' -not -path './.git/*' | xargs wc -l | awk '$$1>300 && $$2!="total"{print}'); if [ -n "$$over" ]; then echo "non-test .go files exceeding 300 lines:"; echo "$$over"; exit 1; fi
+	@sh scripts/verify-memory.sh
 
 clean:
 	rm -rf bin/

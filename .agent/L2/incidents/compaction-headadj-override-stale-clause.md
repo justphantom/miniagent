@@ -27,4 +27,4 @@ confidence: high
 
 ## 参考
 - `miniagent/compaction/budget.go:262-279`、`split.go:157-228`
-- `miniagent/compaction/compaction_test.go` TestJointTailBudget
+- `miniagent/compaction/compaction_budget_test.go` TestJointTailBudget

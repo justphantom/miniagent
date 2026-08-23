@@ -5,7 +5,10 @@ updated: 2026-08-17
 
 # .agent 记忆索引
 
-L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/session.md`；L2（经验教训）按需查 `L2/README.md`。检索优先精确关键词。
+L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/session.md` + `active/carryover.md`（跨会话交接）；L2（经验教训）按需查 `L2/README.md` + `L2/schema.md`（字段约束）。检索优先精确关键词，执行检索反馈闭环（见 AGENTS.md 路由节）。
+
+## L2 Schema
+- `schema.md` — L2 条目 YAML frontmatter 必填/可选字段定义、tags 约定、confidence 语义、生命周期
 
 ## L2/decisions（架构决策 ADR）
 
@@ -16,6 +19,7 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `default-mode-dev-tools-allowlist` — git/go/npm/lint 白名单子命令决策 + rtk 代理（**superseded**，v5.0.0 已删）
 - `library-defer-provider-config-decouple` — 库化暂缓；provider 包与 config 解耦（P1/P2 已做）
 - `compaction-review-fence-and-constants` — 压缩审查结论：代码围栏判定收紧（P2-1）+ 估算常量单源守护（P3-2），附带边界记录
+- `webui-architecture` — WebUI 前端架构（ES Module 零构建 / 多会话同步 / 流式 Markdown 渲染）
 
 ## L2/patterns（可复用模式）
 
