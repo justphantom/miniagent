@@ -9,7 +9,7 @@
 // stop while the active view has a running turn; stopping goes through the stop API, and the
 // local stream stays open to receive the partial result.
 
-import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, setStatusModel } from "./store.js";
+import { state, setKey, api, authHeaders, showSessionHeader, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, setStatusModel } from "./store.js";
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 import { startEvents, attachLive } from "./live.js";
 import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom, refreshMetrics } from "./views.js";
@@ -383,7 +383,7 @@ function onLifeEvent(ev) {
 function updateHeader() {
   const v = activeView();
   document.title = v?.id ? `miniagent · ${v.id}` : "miniagent";
-  showSessionID(v);
+  showSessionHeader(v);
   refreshMetrics(v);
   updateComposer();
 }

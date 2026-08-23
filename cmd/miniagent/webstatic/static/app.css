@@ -58,8 +58,7 @@ header { grid-area: header; display: flex; align-items: center; gap: 12px; paddi
 header h1 { font-size: 15px; flex-shrink: 0; }
 #menu-btn { display: none; }
 .session-id { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.session-id:empty { display: none; }
-#session-tokens { font-variant-numeric: tabular-nums; }
+#session-workdir { max-width: 40vw; }
 
 #tabs { grid-area: tabs; display: flex; align-items: center; padding: 0 var(--space-md);
   background: var(--bg); border-bottom: 1px solid var(--border);
@@ -70,7 +69,6 @@ header h1 { font-size: 15px; flex-shrink: 0; }
   transition: color var(--transition-fast), border-color var(--transition-fast); }
 .tab:hover { color: var(--fg); border-bottom-color: transparent; }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-.tab-meta { font-size: 11px; }
 
 main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
 #events { flex: 1; overflow-y: auto; padding: var(--space-lg) calc(var(--space-lg) + 8px); overscroll-behavior: contain; }
@@ -364,10 +362,9 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
   #menu-btn { display: block; }
   header { padding: var(--space-sm) var(--space-md); gap: var(--space-sm); }
   header h1 { font-size: 14px; }
-  #session-id { display: none; }          /* F6: drop long id on small screens */
+  #session-workdir { display: none; }     /* F6: drop long workdir on small screens */
   #session-workdir { display: none; }     /* F6: workdir likewise dropped on small screens */
   #logout { font-size: 0; } #logout::after { content: "⏻"; font-size: 18px; }
-  #session-tokens { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* events */
   #events { padding: var(--space-sm); }
   .ev { max-width: 100%; }

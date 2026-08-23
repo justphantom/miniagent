@@ -39,23 +39,12 @@ export function fmtTime(ms) {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-// showSessionID renders the header for a view: session id plus the view's accumulated tokens.
-export function showSessionID(view) {
-  const el = document.getElementById("session-id");
-  const id = view?.id || "";
-  el.textContent = id ? `会话 ${id}` : "";
-  el.title = id || "当前会话 ID";
+// showSessionHeader renders the header for a view: the session workdir only. The id lives in
+// the browser tab title and the session panel; tokens live in the status bar and usage panel.
+export function showSessionHeader(view) {
   const wd = document.getElementById("session-workdir");
   wd.textContent = view?.workdir || "";
   wd.title = view?.workdir || "当前会话工作目录";
-  const tok = document.getElementById("session-tokens");
-  const t = view?.tokens || { in: 0, out: 0 };
-  const total = t.in + t.out;
-  const budget = view?.usage?.budget || budgetCache;
-  let txt = total ? `in=${t.in} out=${t.out}` : "";
-  if (budget > 0 && total > 0) txt += ` / ${budget}`;
-  tok.textContent = txt;
-  tok.title = "当前会话累计 token（来自 result 事件）";
 }
 
 // setVersion renders the server version into the login page and the footer status bar.

@@ -28,9 +28,7 @@
     <header>
       <button id="menu-btn" class="ghost" type="button" aria-label="打开导航">☰</button>
       <h1>miniagent</h1>
-      <span id="session-id" class="session-id muted" title="当前会话 ID"></span>
       <span id="session-workdir" class="session-id muted" title="当前会话工作目录"></span>
-      <span id="session-tokens" class="session-id muted" title="当前会话累计 token"></span>
       <span class="flex-1"></span>
       <button id="theme-btn" class="ghost" type="button" title="切换到亮色" aria-label="切换主题">◐</button>
       <button id="logout" class="ghost">退出</button>
@@ -39,7 +37,6 @@
       <button class="tab active" type="button" data-tab="chat">对话</button>
       <button class="tab" type="button" data-tab="trajectory">轨迹</button>
       <span class="flex-1"></span>
-      <span id="tab-meta" class="muted tab-meta"></span>
     </div>
     <main>
       <div id="events" aria-live="polite" aria-label="对话内容"></div>
