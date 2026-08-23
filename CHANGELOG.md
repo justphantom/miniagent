@@ -6,7 +6,7 @@
 ## [Unreleased]
 
 ### Added
-- **WebUI 配置管理页面**：新增 `GET/PUT /api/config` 端点（`web_config.go`），读取当前配置（secret 掩码回显）、`SaveConfig` 校验后原子写回（`config_save.go`，0600 + O_NOFOLLOW + 临时文件重命名）；前端 `config.js` 配置页——**表单模式**（6 个可折叠分组 + 60+ 字段，支持 text/number/bool/duration/array/secret）、**providers 卡片编辑**（增删 provider，每 provider 的 URL/key/限额/headers 键值对/thinking 映射/增删 model 及模型级参数）、**JSON 高级编辑器模式**（textarea 直接编辑完整配置）；保存后提示「需重启服务生效」；配置侧栏按钮 `⚙ 配置`。`config.ValidateConfig` 导出供 web 层调用的校验入口。
+- **WebUI 配置管理页面**：新增 `GET/PUT /api/config` 端点（`web_config.go`），读取当前配置（secret 掩码回显）、`SaveConfig` 校验后原子写回（`config_save.go`，0600 + O_NOFOLLOW + 临时文件重命名）；前端 `config.js` 配置页——**表单模式**（6 个可折叠分组 + 60+ 字段，支持 text/number/bool/duration/array/secret 类型）、**providers 卡片编辑**（增删 provider，每 provider 的 URL/key/限额/headers 键值对/thinking 映射/增删 model 及模型级参数）、**JSON 高级编辑器模式**（textarea 直接编辑完整配置）、**客户端预校验**（提交前本地拦截空 providers/重复名/必填缺失等常见错误，减少无效往返）、**保存后回填表单**（后端返回权威 saved config 前端重渲染）；保存后提示「需重启服务生效」；配置侧栏按钮 `⚙ 配置`。`config.ValidateConfig` 导出供 web 层调用的校验入口。
 
 ## [6.4.0] - 2026-08-23
 

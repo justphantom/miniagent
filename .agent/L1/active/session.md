@@ -20,7 +20,8 @@ updated: 2026-08-23
 - 前端：`config.js` **双模式**——表单模式（6 分组 60+ 字段）+ **providers 卡片编辑**（增删 provider/model/header/thinking-map）+ **JSON 高级编辑器**（textarea 编辑完整配置）；`index.html` ⚙ 配置按钮 + `app.js`/`app.css` 集成；`assets.go` 新增 config.js embed
 - 5 commits（ca26d61 / a4aa3e0 / f34f999 / f73e1ce / c33d824），CHANGELOG `[Unreleased]` Added 已更新；verify-gate 全绿
 - 59977c4 修复：`renderKv`/`renderKvMap` 渲染时不再 setNested 创建空对象，空条目删字段（omitempty）——打开配置页不改即保存不再污染配置
-- 遗留：配置页不含「运行中热重载」（用户选「写文件+提示重启」）
+- e4e78d0 后端：PUT 返回 `config` 字段（掩码后 saved config），前端保存后回填表单；前端：`clientValidate` 预校验（空 providers/重复名/必填缺失），减少无效往返
+- 遗留：配置页不含「运行中热重载」（用户当前选择「写文件+提示重启」；热重载需阻断在途轮次后重建 engine+registry，大改动高风险，建议保留当前模式）
 
 ## 待办
 - 无（功能主体完成；遗留为后续迭代项）。
