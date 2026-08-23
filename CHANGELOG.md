@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-08-24
+
 ### Added
 - **mid-data 截断透明化（R4）**：上游中途断流被降级为截断成功（v6.4.0 行为）时用户此前无任何感知——答案静默半截。现 `miniagent.Response.TruncatedStream` / `miniagent.Result.Truncated` 领域标记透传，result 事件新增 `"truncated":true`（omit-if-zero，仅实际发生时出现，旧消费方不受影响），WebUI result 卡片 usage 行显示「上游截断」。与 `finish:length`（模型 max_tokens 截断）区分：两者都非自然结束，但成因不同。
 - **NDJSON `stop` 终态事件**：轮次被取消（显式停止 / 上下文取消）时输出 `{"type":"stop","reason":"canceled"}` 后再以退出码 130 结束。此前取消路径静默返回、无任何终态事件，web 前端以 result/error 判完成（sawTerminal）只见干净 EOF，误报「连接中断：流意外结束」——点停止按钮也落此文案。前端现渲染「已停止」卡片（保留重试续跑按钮）。消费方需将 `stop` 计入终态（与 result/error 并列）。
