@@ -2,13 +2,14 @@ package tools
 
 import (
 	"context"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 func writeTemp(t *testing.T, name, content string) string {

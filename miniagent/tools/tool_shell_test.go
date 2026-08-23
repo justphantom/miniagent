@@ -2,12 +2,13 @@ package tools
 
 import (
 	"context"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 func TestShell_RunsCommand(t *testing.T) {

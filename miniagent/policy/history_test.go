@@ -1,9 +1,10 @@
 package policy
 
 import (
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"strings"
 	"testing"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 // trimHistoryForContext: clears reasoning + compresses tool content, without deleting messages or mutating caller input.

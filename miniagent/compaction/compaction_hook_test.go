@@ -1,12 +1,12 @@
 package compaction
 
-import "github.com/justphantom/miniagent/miniagent"
-
 import (
 	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/miniagent"
 )
 
 // §P2 applyCompactingHook table-driven: nil noop / prompt override / context append / hook error abort.

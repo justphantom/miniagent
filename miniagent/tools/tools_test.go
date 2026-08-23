@@ -2,9 +2,10 @@ package tools
 
 import (
 	"context"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"testing"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 // The inner goroutine of runWithTimeout must recover fn's panic, turning it into an IsError result instead of crashing the process.

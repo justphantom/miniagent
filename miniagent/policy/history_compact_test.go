@@ -1,9 +1,10 @@
 package policy
 
 import (
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"strings"
 	"testing"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 func TestEstimateTokens(t *testing.T) {

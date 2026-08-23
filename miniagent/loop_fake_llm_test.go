@@ -15,95 +15,42 @@ import (
 	"github.com/justphantom/miniagent/text"
 )
 
-// This file centrally holds the LLM stubs and helpers for the core white-box tests
-// of the loop (fakeTransport/recordingTransport/fakeLLM + wire replicas + response
-// builders + lastToolMessage). These symbols are reused across multiple core _test
-// files (package miniagent).
-//
-// Note: exported versions of the same mocks live in the internal/miniagent/looptest
-// subpackage for reuse by external test packages (e.g. policy_test) — but core
-// white-box tests cannot import looptest (looptest depends on miniagent, which would
-// form a cycle), so the core keeps its own copy.
+// ---- Below are test-only replicas of the openai package wire / retry logic (_test.go
+// only, to avoid the core -> openai test cycle) ----
 
-// fakeTransport replays preset non-streaming JSON bodies in call order. lastBody
-// records the most recent request body, bodies records all of them for multi-step
-// assertions, and calls accumulates the number of invocations.
-type fakeTransport struct {
-	responses []string
-	statuses  []int
-	calls     int
-	lastBody  string
-	bodies    []string
+const (
+	testMaxRetries       = 2
+	testRetryBaseDelay   = 500 * time.Millisecond
+	testRetryMaxDelay    = 8 * time.Second
+	testMaxChatBodyBytes = 4 << 20
+)
+
+type testChatMessage struct {
+	Role             string             `json:"role"`
+	Content          string             `json:"content"`
+	ReasoningContent string             `json:"reasoning_content,omitempty"`
+	ToolCalls        []testChatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string             `json:"tool_call_id,omitempty"`
 }
 
-func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		b, _ := io.ReadAll(req.Body)
-		f.lastBody = string(b)
-		f.bodies = append(f.bodies, string(b))
-		_ = req.Body.Close()
-	}
-	idx := f.calls
-	f.calls++
-	status := http.StatusOK
-	if idx < len(f.statuses) {
-		status = f.statuses[idx]
-	}
-	body := ""
-	if idx < len(f.responses) {
-		body = f.responses[idx]
-	}
-	return &http.Response{
-		StatusCode: status,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-		Request:    req,
-	}, nil
-}
-
-// recordingTransport replays preset (status, body) pairs in order and records each request body.
-type recordingTransport struct {
-	plan   []transportResp
-	bodies []string
-	calls  int
-}
-
-type transportResp struct {
-	status int
-	body   string
-}
-
-func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		b, _ := io.ReadAll(req.Body)
-		r.bodies = append(r.bodies, string(b))
-		_ = req.Body.Close()
-	}
-	idx := r.calls
-	r.calls++
-	resp := transportResp{status: http.StatusOK, body: ""}
-	if idx < len(r.plan) {
-		resp = r.plan[idx]
-	}
-	return &http.Response{
-		StatusCode: resp.status,
-		Body:       io.NopCloser(strings.NewReader(resp.body)),
-		Header:     make(http.Header),
-		Request:    req,
-	}, nil
+type testChatToolCall struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Fn   struct {
+		Name string `json:"name"`
+		Args string `json:"arguments"`
+	} `json:"function"`
 }
 
 // fakeLLM is a miniagent.LLM stub for core tests: it goes over HTTP via
 // fakeTransport and carries its own OpenAI-compatible wire construction / parsing /
 // retry (a test subset copied from the openai package logic), so core loop tests do
-// not depend on the openai package (avoiding the core_test -> openai -> core test
-// cycle). Used only by _test.go; never enters the production binary.
+// not depend on the openai package (avoiding the core_test -> openai -> test cycle).
+// Used only by _test.go; never enters the production binary.
 type fakeLLM struct {
 	tr http.RoundTripper
 }
 
-// testClients builds a fakeLLM (name kept for historical reasons). Callers pass the
-// returned LLM directly to Run.
 func testClients(tr http.RoundTripper) *fakeLLM {
 	return &fakeLLM{tr: tr}
 }
@@ -173,34 +120,6 @@ func (f *fakeLLM) doOnce(ctx context.Context, body []byte) (Response, bool, time
 	return out, false, 0, perr
 }
 
-// ---- Below are test-only replicas of the openai package wire / retry logic (_test.go
-// only, to avoid the core -> openai test cycle) ----
-
-const (
-	testMaxRetries       = 2
-	testRetryBaseDelay   = 500 * time.Millisecond
-	testRetryMaxDelay    = 8 * time.Second
-	testMaxChatBodyBytes = 4 << 20
-)
-
-type testChatMessage struct {
-	Role             string             `json:"role"`
-	Content          string             `json:"content"`
-	ReasoningContent string             `json:"reasoning_content,omitempty"`
-	ToolCalls        []testChatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string             `json:"tool_call_id,omitempty"`
-}
-
-type testChatToolCall struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Fn   struct {
-		Name string `json:"name"`
-		Args string `json:"arguments"`
-	} `json:"function"`
-}
-
-// testBuildChatBody replicates openai.testBuildChatBody: builds an OpenAI-compatible wire body.
 func testBuildChatBody(req Request) ([]byte, error) {
 	msgs := make([]testChatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -300,7 +219,6 @@ func testShouldRetryStatus(code int) bool {
 	return false
 }
 
-// testIsThinkingError replicates openai.isThinkingError (tightened version: strong-signal field names + weak-signal thinking&unknown combination).
 func testIsThinkingError(raw []byte) bool {
 	lower := strings.ToLower(string(raw))
 	if strings.Contains(lower, "reasoning_effort") || strings.Contains(lower, "reasoning_effort_level") {
@@ -345,18 +263,4 @@ func testSleepCtx(ctx context.Context, delay time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-// textResponse builds non-streaming chat completions JSON: a single choice, plain-text reply, fixed usage {1,1}.
-func textResponse(text string) string {
-	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, text)
-}
-
-// toolResponse builds non-streaming chat completions JSON: a single choice with tool_calls (content always empty).
-func toolResponse(calls ...ToolCall) string {
-	tcs := make([]string, 0, len(calls))
-	for _, c := range calls {
-		tcs = append(tcs, fmt.Sprintf(`{"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}`, c.ID, c.Name, c.Args))
-	}
-	return fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[%s]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, strings.Join(tcs, ","))
 }

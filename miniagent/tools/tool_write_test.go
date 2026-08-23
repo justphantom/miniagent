@@ -2,13 +2,14 @@ package tools
 
 import (
 	"context"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 // A field-name typo (contents vs content) or an omitted content must be a loud error, not a silent

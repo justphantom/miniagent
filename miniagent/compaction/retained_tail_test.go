@@ -2,10 +2,11 @@ package compaction
 
 import (
 	"context"
-	"github.com/justphantom/miniagent/miniagent/policy"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/justphantom/miniagent/miniagent/policy"
 
 	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/provider/openai"
