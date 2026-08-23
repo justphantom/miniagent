@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0d1117">
   <title>miniagent</title>
   <link rel="stylesheet" href="/app.css">
 </head>
@@ -46,7 +47,7 @@
           <button id="workdir-browse" type="button" class="ghost" aria-label="浏览目录">📁</button>
           <select id="model" aria-label="模型"><option>默认模型</option></select>
         </div>
-        <div class="composer-row">
+        <div class="composer-row main-row">
           <textarea id="prompt" placeholder="输入任务（桌面 Enter 发送 / Shift+Enter 换行；触屏 Enter 换行，点发送）" aria-label="输入"></textarea>
           <span id="wait" class="muted" hidden></span>
           <button id="send" type="button">发送</button>

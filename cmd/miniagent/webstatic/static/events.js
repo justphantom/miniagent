@@ -8,6 +8,7 @@ import { mdRender } from "./md.js";
 import { fmtTime, getBudget } from "./store.js";
 import { activeView } from "./views.js";
 import { renderUsageBar, renderStepUsageList } from "./usage.js";
+import { refreshPanel } from "./trajectory.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
 
@@ -245,6 +246,8 @@ export function renderEvent(view, ev) {
       // sync trajectory step usage
       const entry = view.trajectory.steps.get(ev.step);
       if (entry) { entry.in = ev.input_tokens || 0; entry.out = ev.output_tokens || 0; }
+      // F5: live-refresh the trajectory panel when it's open (per-step, not per-tool, to avoid flicker)
+      if (!document.getElementById("trajectory-panel")?.hidden) refreshPanel();
       break;
     }
     case "error": {

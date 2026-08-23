@@ -9,6 +9,7 @@ const MAX_RECENT = 10;
 let curPath = "";
 let onPickCb = null;
 let pickerEl = null;
+let fetchSeq = 0; // F11: guards against out-of-order responses when clicking dirs fast
 
 function loadRecent() {
   try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); }
@@ -24,9 +25,14 @@ function saveRecent(p) {
 
 function buildDOM() {
   if (pickerEl) return;
-  pickerEl = document.createElement("div");
-  pickerEl.id = "dirpicker";
-  pickerEl.className = "modal";
+  // F3: reuse the static empty shell in index.html instead of creating a duplicate id
+  pickerEl = document.getElementById("dirpicker");
+  if (!pickerEl) {
+    pickerEl = document.createElement("div");
+    pickerEl.id = "dirpicker";
+    pickerEl.className = "modal";
+    document.body.appendChild(pickerEl);
+  }
   pickerEl.hidden = true;
   pickerEl.innerHTML = `
     <div class="modal-panel" role="dialog" aria-label="选择工作目录">
@@ -57,16 +63,19 @@ function buildDOM() {
 }
 
 async function fetchDirs(path) {
+  const seq = ++fetchSeq;
   const treeEl = document.getElementById("dp-tree");
   treeEl.textContent = "加载中…";
   try {
     const r = await fetch(`/api/tree?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
+      if (seq !== fetchSeq) return;
       treeEl.textContent = j.error || `加载失败 (${r.status})`;
       return;
     }
     const data = await r.json();
+    if (seq !== fetchSeq) return;
     curPath = data.path;
     document.getElementById("dp-path").textContent = curPath;
     treeEl.textContent = "";
@@ -82,6 +91,7 @@ async function fetchDirs(path) {
       treeEl.appendChild(item);
     }
   } catch (e) {
+    if (seq !== fetchSeq) return;
     treeEl.textContent = "网络错误: " + e.message;
   }
 }

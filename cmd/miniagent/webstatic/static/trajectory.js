@@ -42,12 +42,19 @@ export function toggleTrajectory() {
   if (wasHidden) refreshPanel();
 }
 
-// refreshPanel rebuilds the panel body from the active view's trajectory data.
+// refreshPanel rebuilds the panel body from the active view's trajectory data,
+// preserving which step cards were expanded.
 export function refreshPanel() {
   ensurePanel();
-  const { activeView } = getAllViews();
-  if (!activeView || !activeView.trajectory) { bodyEl.textContent = ""; return; }
-  renderBody(activeView);
+  const view = _activeViewGetter ? _activeViewGetter() : null;
+  if (!view || !view.trajectory) { bodyEl.textContent = ""; return; }
+  const openSteps = new Set(
+    [...bodyEl.querySelectorAll("details.trajectory-step[open]")].map(d => d.dataset.step)
+  );
+  renderBody(view);
+  for (const d of bodyEl.querySelectorAll("details.trajectory-step")) {
+    if (openSteps.has(d.dataset.step)) d.open = true;
+  }
 }
 
 // renderBody fills the trajectory panel with step cards.
@@ -115,16 +122,6 @@ function scrollToStep(view, step) {
   }
 }
 
-// getAllViews is a lazy import workaround — views.js exports activeView.
-// We re-export a getter to avoid circular deps.
+// _activeViewGetter is set by app.js to inject the activeView function (avoids circular deps).
 let _activeViewGetter = null;
-function getAllViews() {
-  if (!_activeViewGetter) {
-    // dynamic import resolved at call time
-    return { activeView: typeof window !== "undefined" ? window.__activeView : null };
-  }
-  return { activeView: _activeViewGetter() };
-}
-
-// setActiveViewGetter is called by app.js to inject the activeView function.
 export function setActiveViewGetter(fn) { _activeViewGetter = fn; }

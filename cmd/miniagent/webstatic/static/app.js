@@ -73,6 +73,8 @@ function applyTheme(t) {
   const light = t === "light";
   themeBtn.textContent = light ? "◑" : "◐";
   themeBtn.title = light ? "切换到暗色" : "切换到亮色";
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
 }
 themeBtn.addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "light" ? "" : "light"));
 
@@ -340,20 +342,19 @@ function confirmInline(msg, okText) {
   const overlay = document.createElement("div");
   overlay.setAttribute("role", "dialog");
   overlay.setAttribute("aria-modal", "true");
-  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;";
+  overlay.className = "confirm-overlay";
   const box = document.createElement("div");
-  box.style.cssText = "background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:320px;width:90%;";
+  box.className = "confirm-box";
   const p = document.createElement("p");
   p.textContent = msg;
-  p.style.cssText = "margin:0 0 16px;";
   const btnOk = document.createElement("button");
   btnOk.textContent = okText;
-  btnOk.style.cssText = "padding:6px 16px;background:var(--err);color:#fff;border:none;border-radius:4px;cursor:pointer;";
+  btnOk.className = "confirm-ok";
   const btnCancel = document.createElement("button");
   btnCancel.textContent = "取消";
-  btnCancel.style.cssText = "padding:6px 16px;background:transparent;color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer;margin-left:8px;";
+  btnCancel.className = "confirm-cancel";
   const row = document.createElement("div");
-  row.style.cssText = "text-align:right;";
+  row.className = "confirm-row";
   row.append(btnCancel, btnOk);
   box.append(p, row);
   overlay.append(box);
@@ -509,6 +510,7 @@ async function openSession(id) {
   if (!isTouch) { $("prompt").focus(); }
   if (fresh) await loadReplay(v);
   ensureEmptyState(v);
+  refreshPanel(); // F5: refresh trajectory panel after switching views (it may be open)
   if ((sessionMeta[id]?.running || runningKnown.has(id)) && !v.sending && !v.liveDetach) {
     attachSpectator(v, true);
   }
