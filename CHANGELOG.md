@@ -6,7 +6,7 @@
 ## [Unreleased]
 
 ### Added
-- **WebUI 配置管理页面**：新增 `GET/PUT /api/config` 端点（`web_config.go`），读取当前配置（secret 掩码回显）、`SaveConfig` 校验后原子写回（`config_save.go`，0600 + O_NOFOLLOW + 临时文件重命名）；前端 `config.js` 全字段表单（6 个可折叠分组、60+ 字段，支持 text/number/bool/array/duration 类型）、保存后提示「需重启服务生效」；配置侧栏按钮 `⚙ 配置`。`config.ValidateConfig` 导出供 web 层调用的校验入口。
+- **WebUI 配置管理页面**：新增 `GET/PUT /api/config` 端点（`web_config.go`），读取当前配置（secret 掩码回显）、`SaveConfig` 校验后原子写回（`config_save.go`，0600 + O_NOFOLLOW + 临时文件重命名）；前端 `config.js` 配置页——**表单模式**（6 个可折叠分组 + 60+ 字段，支持 text/number/bool/duration/array/secret）、**providers 卡片编辑**（增删 provider，每 provider 的 URL/key/限额/headers 键值对/thinking 映射/增删 model 及模型级参数）、**JSON 高级编辑器模式**（textarea 直接编辑完整配置）；保存后提示「需重启服务生效」；配置侧栏按钮 `⚙ 配置`。`config.ValidateConfig` 导出供 web 层调用的校验入口。
 
 ## [6.4.0] - 2026-08-23
 
