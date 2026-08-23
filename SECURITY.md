@@ -21,3 +21,4 @@ miniagent 执行 LLM 产出的命令与代码，**默认不构成安全边界**�
 - LLM 经 shell 工具执行任意命令——工具的本质；已有超时 + 进程组清理，真正隔离依赖调用方。
 - 环境变量 `MINIAGENT_API_KEY` 经 config 注入后被 shell 工具读取——机密应通过隔离环境而非进程内剥离保护（`scrubEnv` 仅 best-effort 降低概率，非边界）。
 - 文件工具（write/edit/read）可访问运行用户有权限的任何路径——单模式零约束，隔离靠 OS 层（同上）。
+- WebUI `GET /api/tree` 可枚举运行用户可读的任意绝对路径下的一级子目录名（目录名存在性可作信息探针）——与 agent 层 shell 同属「可信环境自用」边界，`web.key` 鉴权 + loopback 默认即为其防线；不在服务层另设路径沙箱。
