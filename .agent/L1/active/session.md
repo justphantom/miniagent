@@ -23,6 +23,7 @@ updated: 2026-08-23
 - e4e78d0 后端：PUT 返回 `config` 字段（掩码后 saved config），前端保存后回填表单；前端：`clientValidate` 预校验（空 providers/重复名/必填缺失），减少无效往返
 - 19c76ee 部署：配置目录 `/etc/miniagent` → `/opt/miniagent/config`（服务用户可写）。根因：`ProtectSystem=full` 把 `/etc` 挂只读 + config 目录 root 属主 0755 无目录写权限，SaveConfig 的 temp+rename 需目录写权限故失败。`deploy.sh` 改为 install 目录归服务用户 0750、README 同步
 - 899c64f 文档：`WEBUI_NEXT.md` —— 对比 DSH WebUI 功能集，产出迭代路线图（P0 文件附件/轨迹视图/目录选择器/会话重命名 → P1 搜索/反馈/命令/模型切换/用量 → P2 导出/工作区/作业/目标/计划/引用 → P3 子代理/技能/交付物/国际化/插件），附 Step 1 详细设计
+- 4339a5f 文档：`WEBUI_IMPLEMENTATION.md` —— 三项特性（目录选择器 GET /api/tree、Token 用量 step_usage 事件+条形图、工具轨迹 step 字段+轨迹面板）详细实现方案。核心共享支点：OnToolUse/OnToolResult 钩子签名加 step int（handleToolCalls 已透传 step，事实已验证）、LoopHooks 新增 OnStepUsage（recordStepUsage 末尾增量直得，避免 OnStep 累计值差值误差）。新文件：web_tree.go、usage.js、trajectory.js、dirpicker.js
 
 ## 待办
 - 无（功能主体完成；遗留为后续迭代项）。
