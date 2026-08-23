@@ -1,12 +1,12 @@
 package compaction
 
-import "github.com/justphantom/miniagent/miniagent"
-
 import (
 	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/justphantom/miniagent/miniagent"
 )
 
 // ─── P6 / P8' / P9b: cross-message dedup/folding of tool results and tool_call args ───

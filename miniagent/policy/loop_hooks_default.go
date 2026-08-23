@@ -3,10 +3,11 @@ package policy
 import (
 	"context"
 	"errors"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"log/slog"
 	"time"
 	"unicode/utf8"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 // This file carries the default hook implementations of the three policies originally built into Run core,

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 
 	"github.com/justphantom/miniagent/text"
 )

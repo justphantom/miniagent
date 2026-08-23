@@ -3,11 +3,11 @@ package compaction
 import (
 	"slices"
 
+	"log/slog"
+
 	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/text"
 )
-
-import "log/slog"
 
 // CompactionOptions holds the parameters for NewCompaction — it consolidates the context-compaction strategy
 // originally scattered across LoopConfig into one place, making compaction a pluggable "add-on" rather than core

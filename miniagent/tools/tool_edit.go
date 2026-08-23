@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 const maxEditFileBytes = 10 << 20

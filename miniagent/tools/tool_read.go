@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 
 	"github.com/justphantom/miniagent/text"
 )

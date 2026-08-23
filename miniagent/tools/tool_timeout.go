@@ -3,8 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 // runWithTimeout wraps "ctx cancellation check + WithTimeout + goroutine + select fallback" into a single helper,

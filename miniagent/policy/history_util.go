@@ -1,8 +1,9 @@
 package policy
 
 import (
-	miniagent "github.com/justphantom/miniagent/miniagent" // Explicit alias: many types clash with package-level names.
 	"strings"
+
+	miniagent "github.com/justphantom/miniagent/miniagent" // Explicit alias: many types clash with package-level names.
 
 	"github.com/justphantom/miniagent/text"
 )

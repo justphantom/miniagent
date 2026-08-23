@@ -1,12 +1,10 @@
 package compaction
 
 import (
+	"slices"
+
 	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/text"
-)
-
-import (
-	"slices"
 )
 
 // stripStaleReasoning proactively clears the Reasoning/ReasoningState of assistant messages older than keepN (P1).

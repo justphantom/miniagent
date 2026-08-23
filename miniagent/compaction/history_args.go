@@ -1,13 +1,11 @@
 package compaction
 
 import (
-	"github.com/justphantom/miniagent/miniagent"
-	"github.com/justphantom/miniagent/text"
-)
-
-import (
 	"encoding/json"
 	"slices"
+
+	"github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/text"
 )
 
 // stripStaleToolArgs (P4) compresses the oversized Args (content/old_string/new_string) of write/edit tool_calls

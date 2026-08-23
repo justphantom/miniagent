@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 // maxShellOutputChars is the shared tool output character cap for shell/glob/grep: 100KB covers typical command output.

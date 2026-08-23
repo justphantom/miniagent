@@ -10,11 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"io"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 // denyResult builds a pre-execution rejection: no command ran, so ExitCode must be ExitCodeNotSet —

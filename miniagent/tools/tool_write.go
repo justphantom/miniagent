@@ -3,10 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
-	miniagent "github.com/justphantom/miniagent/miniagent"
 	"os"
 	"path/filepath"
 	"time"
+
+	miniagent "github.com/justphantom/miniagent/miniagent"
 )
 
 const maxWriteFileBytes = 10 << 20

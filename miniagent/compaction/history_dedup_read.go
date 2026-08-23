@@ -1,8 +1,10 @@
 package compaction
 
-import "github.com/justphantom/miniagent/miniagent"
+import (
+	"strconv"
 
-import "strconv"
+	"github.com/justphantom/miniagent/miniagent"
+)
 
 // dedupReadResults (P6) deduplicates read results outside the retention window by (path,offset):
 // each group keeps the last occurrence in time order verbatim; earlier ones are compressed to a
