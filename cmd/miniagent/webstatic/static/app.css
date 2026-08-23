@@ -201,23 +201,23 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 
 /* ---- config page ---- */
 #config-page { padding: 16px; max-width: 720px; margin: 0 auto; }
-.cfg-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.cfg-header { display: flex; align-items: baseline; gap: var(--space-md); margin-bottom: var(--space-md); }
 .cfg-header h2 { margin: 0; font-size: 18px; }
 .cfg-status { font-size: 12px; }
-.cfg-msg { padding: 8px 12px; border-radius: var(--radius-sm); margin-bottom: 12px; font-size: 13px; }
+.cfg-msg { padding: var(--space-sm) var(--space-md); border-radius: var(--radius-sm); margin-bottom: var(--space-md); font-size: 13px; }
 .cfg-msg.ok { background: var(--accent); color: #fff; }
 .cfg-msg.err { background: var(--err); color: #fff; }
 .cfg-note { font-size: 12px; margin-bottom: 8px; }
 .cfg-loading { font-size: 14px; color: var(--muted); padding: 20px 0; text-align: center; }
-.cfg-section { border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 12px; padding: 8px 12px; }
+.cfg-section { border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: var(--space-md); padding: var(--space-sm) var(--space-md); }
 .cfg-section > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
 .cfg-section > summary > h3 { margin: 0; font-size: 14px; display: inline; }
 .cfg-section > summary > h3::before { content: "▸ "; font-size: 11px; color: var(--accent); }
 .cfg-section[open] > summary > h3::before { content: "▾ "; }
-.cfg-field { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 6px 0; }
+.cfg-field { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs) var(--space-sm); margin: 6px 0; }
 .cfg-label { flex: 0 0 180px; font-size: 13px; color: var(--fg); }
 .cfg-label:hover { color: var(--accent); }
-.cfg-help { font-size: 11px; flex: 0 0 100%; margin: -2px 0 2px; }
+.cfg-help { font-size: 11px; flex: 0 0 100%; margin: calc(-1 * var(--space-xs)) 0 var(--space-xs); }
 .cfg-input { flex: 1; min-width: 140px; }
 .cfg-input input[type="text"],
 .cfg-input input[type="number"] { width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-elev-1); color: var(--fg); }
@@ -226,25 +226,25 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 .cfg-array-row { display: flex; gap: 4px; }
 .cfg-array-row input { flex: 1; }
 .cfg-array-del { font-size: 12px; padding: 0 6px; }
-.cfg-actions { margin-top: 16px; text-align: center; }
+.cfg-actions { margin-top: var(--space-lg); text-align: center; }
 .cfg-save { padding: 8px 24px; font-size: 14px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm); cursor: pointer; }
 .cfg-save:disabled { opacity: .5; cursor: default; }
-.cfg-modebar { display: flex; gap: 8px; margin: 12px 0; }
+.cfg-modebar { display: flex; gap: var(--space-sm); margin: var(--space-md) 0; }
 .cfg-mode { padding: 5px 14px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--fg); cursor: pointer; }
 .cfg-mode.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .cfg-provider { border: 1px solid var(--border); border-radius: var(--radius-md); margin: 8px 0; overflow: hidden; }
-.cfg-provider-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-elev-1); border-bottom: 1px solid var(--border); }
+.cfg-provider-head { display: flex; justify-content: space-between; align-items: center; padding: var(--space-sm) var(--space-md); background: var(--bg-elev-1); border-bottom: 1px solid var(--border); }
 .cfg-provider-title { font-weight: 600; font-size: 13px; }
-.cfg-provider-body { padding: 8px 12px; }
+.cfg-provider-body { padding: var(--space-sm) var(--space-md); }
 .cfg-provider-body > .cfg-field { margin: 5px 0; }
 .cfg-provider-body .cfg-label { flex-basis: 150px; }
-.cfg-models { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.cfg-models { margin-top: 10px; border-top: 1px solid var(--border); padding-top: var(--space-sm); }
 .cfg-models-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-.cfg-model { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px; margin: 6px 0; position: relative; background: var(--panel); }
+.cfg-model { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-sm); margin: 6px 0; position: relative; background: var(--panel); }
 .cfg-model .cfg-field { margin: 4px 0; }
 .cfg-model .cfg-label { flex-basis: 90px; font-size: 12px; }
 .cfg-model > .cfg-array-del { position: absolute; top: 4px; right: 6px; }
-.cfg-json textarea { width: 100%; min-height: 50vh; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; box-sizing: border-box; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); color: var(--fg); white-space: pre; overflow: auto; }
+.cfg-json textarea { width: 100%; min-height: 50vh; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; box-sizing: border-box; padding: var(--space-sm); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); color: var(--fg); white-space: pre; overflow: auto; }
 
 /* ==== RESPONSIVE ==== */
 
@@ -262,6 +262,7 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 
 /* Narrow <640px */
 @media (max-width: 639px) {
+  #layout { display: flex; }
   /* drawer sidebar */
   #nav { position: fixed; left: 0; top: 52px; bottom: 0; width: var(--sidebar-width); z-index: 20; display: none; background: var(--bg); }
   body.nav-open #nav { display: grid; }
@@ -282,4 +283,6 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
   .composer-row input, .composer-row select { width: 100%; flex: none; }
   /* modal full-screen */
   .modal-panel { width: 100vw; max-height: 100dvh; border-radius: 0; }
+  /* trajectory panel: fixed overlay on narrow (Grid area only works in desktop) */
+  .trajectory-panel { position: fixed; right: 0; top: 52px; bottom: 0; width: 100vw; grid-area: unset; }
 }

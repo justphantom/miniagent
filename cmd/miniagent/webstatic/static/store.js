@@ -44,7 +44,11 @@ export function showSessionID(view) {
   el.title = id || "当前会话 ID";
   const tok = document.getElementById("session-tokens");
   const t = view?.tokens || { in: 0, out: 0 };
-  tok.textContent = t.in || t.out ? `in=${t.in} out=${t.out}` : "";
+  const total = t.in + t.out;
+  const budget = view?.usage?.budget || budgetCache;
+  let txt = total ? `in=${t.in} out=${t.out}` : "";
+  if (budget > 0 && total > 0) txt += ` / ${budget}`;
+  tok.textContent = txt;
   tok.title = "当前会话累计 token（来自 result 事件）";
 }
 
