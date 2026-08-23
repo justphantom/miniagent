@@ -1,469 +1,564 @@
-# WebUI 三项特性实现方案：工作目录选择器 / Token 用量可视化 / 工具轨迹视图
+# miniagent WebUI 实施规格（可直接编码）
 
-> 对应 `WEBUI_NEXT.md` 路线图的 P0（工作目录选择器、工具轨迹视图）+ P1（Token 用量可视化）。
-> 本文档为详细实现方案（已定稿）：共享后端事件增强、三个特性 API/前端设计、UI 美化、**响应式适配**、安全边界、测试计划。
-> 决策状态：原「决策清单」已逐项定案（见 §九）。
-
----
-
-## 〇、共享支点：NDJSON 事件模型增强
-
-三个特性都受限于当前事件模型。分析现有事件字段（`miniagent/event/event.go`）：
-
-| 事件 | 现有字段 | 缺失 |
-|------|---------|------|
-| `text_delta` / `reasoning_delta` | `step`, `text`, `ts` | — |
-| `tool_use` | `name`, `call_id`, `input`, `ts` | **`step`**（无法归属到步骤） |
-| `tool_result` | `name`, `call_id`, `output`, `truncated`, `is_error`, `exit_code`, `ts` | **`step`** |
-| `result` | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `llm_requests`, ... | 无 per-step 用量 |
-| — | — | **无 per-step 用量事件** |
-
-### 增强 A：`tool_use` / `tool_result` 增加 `step` 字段
-
-- `emit.go` 的 `OnToolUse`/`OnToolResult` 钩子当前签名是 `(name, callID, input)` / `(name, callID, r)`，无 step。
-- **定案**：`miniagent/loop_api.go` 的 `OnToolUse`/`OnToolResult` 钩子签名增加 `step int` 参数（核心接口改动，同步更新 `buildHooks`、测试、`looptest`）。`handleToolCalls` 调用处已有 step，透传即可。
-- 序列化：`toolUseEvent`/`toolResultEvent` 增加 `Step int \`json:"step"\``。
-- **兼容**：全部消费方（CLI stdout 消费者、前端、session 解析）只读新字段，无破坏；旧会话 replay 无 step 字段时前端降级（见 §三）。
-
-### 增强 B：新增 `step_usage` 事件（per-step 用量）
-
-- **关键现成钩子**：`miniagent/loop_api.go` 的 `OnStep(ctx, StepSnapshot)`，`StepSnapshot` 已含 `Step`/`InputTokens`（累计）/`OutputTokens`（累计）/`LLMRequests`。
-- 但 StepSnapshot 是**累计值**，需要差值算出本步增量。`recordStepUsage`（`loop_extra.go:178`）在每步后已把本步 usage 累进 `total`。
-- **定案**：`LoopHooks` 新增可选字段 `OnStepUsage func(step, in, out, toolCalls int)`；`recordStepUsage` 末尾调用（增量直接可得，无需差值）。web 层 `assembleHooks` 装配为向 NDJSON 流写：
-  ```
-  {"type":"step_usage","step":1,"input_tokens":11400,"output_tokens":333,"tool_calls":1}
-  ```
-  `tool_calls` 为本步工具数（`len(resp.ToolCalls)`）。
-- CLI 路径不装配（`OnStepUsage` 为 nil 时零开销）。
-- 该事件同时服务：用量可视化（per-step 数据）+ 轨迹视图（步骤边界的时间戳/用量锚点）。
+> 版本：2.0（规格化改写） · 状态：评审通过，可进入编码
+> 范围：工作目录选择器、Token 用量可视化、工具轨迹视图 + 全站美化与响应式
+> 阅读对象：LLM 编码代理。本规格的每个断言均为**必须实现**的契约；示例代码为最终形态参考，非建议。
 
 ---
 
-## 一、特性 1：工作目录选择器
+## 0. 总览
 
-### 现状
-- `#workdir` 是纯文本输入（`app.js send()` 读取 + 服务端绝对路径校验）。
-- 每视图 `v.workdir`；localStorage `saveWorkdir` 记忆最近一次。
-- 无目录浏览能力，输入长路径易错。
+### 0.1 目标
+- P0：目录选择器（`GET /api/tree` + 模态）、工具轨迹视图（step 分组抽屉）
+- P1：Token 用量可视化（step_usage 事件 + 条形图 + 预算条）
+- 既有代码同时完成：全站美化（登录页/等待态/焦点态/滚动条/空态/toast/卡片层次）、移动端自适应（Grid 骨架 + 抽屉）
 
-### 目标
-- 目录浏览选择 + 最近使用目录快捷选择 + 保留手动输入。
-- 与现有多会话视图联动：切视图时 workdir 跟随该会话（现状已支持）。
+### 0.2 全局硬约束
+1. **CSP 无内联**：`style-src 'self'`；禁止 `element.style.*`、禁止 `<style>` 标签、禁止 `setAttribute("style")`。动态样式一律 `classList` + CSS 变量。
+2. **无构建链**：纯 ES modules，新 JS 文件须注册 `cmd/miniagent/webstatic/assets.go` 的 `go:embed` 与 `assets_test.go` 的 `TestNames`。
+3. **无第三方依赖**：图标用 Unicode/CSS 图形；字体仅系统栈。
+4. **Go 约束**：非 `_test.go` 文件 ≤300 行；`gofmt -s` 干净；`make verify` 全绿。
+5. **JS 约束**：每个新 JS 文件 `node --check` 通过；全量 `node --check cmd/miniagent/webstatic/static/*.js` 通过。
+6. **XSS**：用户/工具内容一律 `textContent`；`innerHTML` 仅经过 `mdRender`（先 escape 再 md）的路径。
 
-### 后端新增 API：`GET /api/tree`
+### 0.3 术语
+| 词 | 含义 |
+|----|------|
+| step | ReAct 循环的一次 LLM 调用（1-based，`result.steps` 计数） |
+| view | 前端一个会话的视图对象（`views.js` 的 view） |
+| trajectory | 按 step 分组的工具执行轨迹（镜像数据，不改消息流 DOM） |
 
-```
-GET /api/tree?path=/home/work/Codes
-→ 200 {"path":"/home/work/Codes","parent":"/home/work","dirs":[{"name":"miniagent","path":"/home/work/Codes/miniagent"},...],"total":N}
+---
+
+## 1. 共享支点：事件与钩子增强
+
+### 1.1 `tool_use` / `tool_result` 增加 `step` 字段
+
+**Go 接口变更**（`miniagent/loop_api.go`，第 54/94/98 行附近）：
+
+```go
+// 变更前
+type OnToolUse func(name, callID, input string) error
+type OnToolResult func(name, callID string, r ToolResult) error
+// 变更后（step 插入为第一个 int 形参）
+type OnToolUse func(step int, name, callID, input string) error
+type OnToolResult func(step int, name, callID string, r ToolResult) error
 ```
 
-- `path` 必填绝对路径（复用 `filepath.IsAbs` + `Clean`）。
-- 只列出**目录**（选择器只需要目录），跳过隐藏目录可选（前端 UI 开关）。
-- **安全边界（定案：放开任意绝对路径，只读 + 加固）**：
-  - 只读列举，无写入能力；
-  - 不跟随符号链接（`fs.DirEntry.Type()&fs.ModeSymlink` 跳过）——与 `OpenNoFollow` 加固一致；
-  - 每层上限 500 条（防超大目录拖垮响应），超出返回 `{"truncated":true}`；
-  - `path` 不存在/不可读 → 404 `{"error":"..."}`。
-- 路由登记：`web.go mux`: `api.HandleFunc("GET /api/tree", s.handleTree)`，`requireAuth` 覆盖（与 `/api/config` 同级）。
-- 实现文件：新增 `cmd/miniagent/web_tree.go`（≤300 行约束，必要时拆）。
+**必须同步修改的调用方**（全量清单）：
+| 文件 | 位置 | 改动 |
+|------|------|------|
+| `miniagent/loop_api.go` | 类型定义 | 签名加 `step int`（L54、L94、L98） |
+| `miniagent/tool_handler.go` | L27-29 | `hooks.OnToolUse(step, tc.Name, tc.ID, tc.Args)` |
+| `miniagent/tool_handler.go` | L51-52 | `hooks.OnToolResult(step, tc.Name, tc.ID, tres)` |
+| `miniagent/tool_handler.go` | L62-64 | `hooks.OnToolResult(step, calls[j].Name, calls[j].ID, results[j])` |
+| `cmd/miniagent/emit.go` | L26-31 `buildHooks` | 闭包签名同步加 `step` |
+| `miniagent/event/event.go` | `toolUseEvent`/`toolResultEvent` | 增字段 `Step int \`json:"step"\``；`EmitToolUse`/`EmitToolResult` 签名加 `step int` |
+| `miniagent/event/event.go` | `ToolUseWriter` | 签名同步 |
 
-### 前端设计
+**序列化契约**（新增字段，旧消费方忽略）：
+```json
+{"type":"tool_use","step":2,"name":"read","call_id":"call_x","input":"{\"path\":\"a.go\"}"}
+{"type":"tool_result","step":2,"name":"read","call_id":"call_x","output":"...","truncated":false,"is_error":false}
+```
 
-**组件**（新文件 `dirpicker.js`）：
-- workdir 输入行改造：输入框 + 📁 按钮 + 最近目录 `<datalist>`。
-- 📁 打开模态目录树：当前路径 + 上级回退 + 子目录列表，点击目录进入，底部「选择此目录」「取消」。
-- 最近目录（定案：localStorage）：`miniagent.web.recent_dirs`（去重、上限 10、最近在前），模态顶部快捷区。
-- `send()` 仍取输入框值；选择器选中后回填输入框并 `saveWorkdir`。
+### 1.2 新事件 `step_usage`
 
-**与视图联动**：模态选择器是全局的（选择后写当前活跃视图的 `v.workdir` 与输入框）。切视图时 `app.js openSession` 已有 `loadReplay` 回填逻辑，保持不变。
+**Go 接口变更**（`miniagent/loop_api.go` `LoopHooks` 结构体新增字段）：
 
-### 测试
-- 后端：`web_tree_test.go`——绝对路径校验、目录列举、symlink 跳过、越界路径、截断上限、空目录。
-- 前端：`node --check` + 手工验证（目录深链、最近目录去重、选择回填）。
+```go
+// 新增（可选字段，nil = 不装配，零开销）
+OnStepUsage func(step, inTokens, outTokens, toolCalls int)
+```
+
+**装配点**（`miniagent/loop_extra.go` `recordStepUsage` 函数末尾，L189 之后）：
+
+```go
+// 伪代码——确切插入位置：berr 判断之后、return nil 之前
+if hooks.OnStepUsage != nil {
+    hooks.OnStepUsage(step, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.ToolCalls))
+}
+```
+
+> 注意：`resp.Usage.InputTokens` 是**本步增量**（已由 provider 返回），非累计值；勿用 `total`。
+
+**Web 装配**（`cmd/miniagent/emit.go` 新增函数，`assembleHooks` 内部条件设置）：
+- 新增 `turnSpec.emitStepUsage bool`（`cmd/miniagent/run_turn.go` 结构体新字段），web 路径（`cmd/miniagent/web_turn.go` 构造 turnSpec 处）置 `true`，CLI 默认 `false`。
+- 当 `spec.emitStepUsage` 时，`assembleHooks` 设置 `hooks.OnStepUsage`，向 NDJSON 写：
+
+```json
+{"type":"step_usage","step":1,"input_tokens":11400,"output_tokens":333,"tool_calls":1}
+```
+
+**字段表**：`type="step_usage"`（新），`step int`（必填），`input_tokens`/`output_tokens int`（本步增量，可为 0），`tool_calls int`。无 `ts`（前端用到达时间）。
+
+### 1.3 兼容与降级规则（前端 `events.js` 强制）
+- `tool_use`/`tool_result` 事件**缺 `step`**（旧会话 replay / CLI 记录）时：归属 `view.curStep`（见 §4.2 捕获逻辑），不得崩溃。
+- 无 `step_usage` 事件（旧数据）时：轨迹卡片头显示 `-` 代替用量，不阻塞。
 
 ---
 
-## 二、特性 2：Token 用量可视化
+## 2. 特性 1：工作目录选择器
 
-### 现状
-- `view.tokens = {in, out}` 逐 result 累加（`events.js:182-183`）。
-- header `in=N out=M`（`store.js showSessionID`）。
-- result 卡片内一行文本 `steps=N in=N out=N [compacted] [elapsed]`（`events.js:194`）。
-- 无任何图形化、无 per-step、无预算对比。
+### 2.1 API 规格：`GET /api/tree`
 
-### 目标
-- 每轮 result 卡片内：输入/输出 Token 堆叠条形图 + steps + 耗时。
-- 每视图「用量面板」（可折叠）：per-step 条形图（in/out 分色）+ 各步工具调用数。
-- 预算条：`run.max_tokens_total` 已配置时显示累计消耗/预算占比。
+| 项 | 值 |
+|----|----|
+| 方法/路径 | `GET /api/tree` |
+| 鉴权 | `requireAuth`（web.go 的 api mux 内登记，与 `/api/config` 同级） |
+| 查询参数 | `path`：绝对路径（必填）。附加可选 `hidden=1`（含隐藏目录，默认不含） |
+| 成功 200 | `{"path":"/x","parent":"/","dirs":[{"name":"a","path":"/x/a"},...],"total":N,"truncated":false}` |
+| 错误 400 | path 非绝对/非法 → `{"error":"path must be an absolute path"}` |
+| 错误 404 | path 不存在/不可读 → `{"error":"readdir <path>: no such file or directory"}`（`os.ReadDir` 原错误） |
+| 截断 | `total` 超过 500 时：返回前 500 条，`truncated:true` |
+| 安全 | 跳过 `fs.ModeSymlink` 条目；只列目录；无写入 |
 
-### 前端设计
+**处理器规格**（新文件 `cmd/miniagent/web_tree.go`，≤300 行）：
+```go
+func (s *webServer) handleTree(w http.ResponseWriter, r *http.Request) // 实现按上表
+```
+- 路由在 `web.go mux()`：`api.HandleFunc("GET /api/tree", s.handleTree)` 加在 `GET /api/config` 旁。
+- `dirs` 按名称字典序；`parent` 用 `filepath.Dir`；根目录 `parent` 为 `/`。
 
-**数据模型**（`views.js`）：
+**后端测试**（新文件 `cmd/miniagent/web_tree_test.go`，用例名固定）：
+| 用例 | 断言 |
+|------|------|
+| `TestTree_ListDirs` | 临时目录含子目录+文件+隐藏目录；确认只列子目录、无隐藏、`total` 正确 |
+| `TestTree_ParentPath` | 深层路径的 `parent` 正确；根目录 parent 为 `/` |
+| `TestTree_RejectsRelative` | `path=foo` → 400 |
+| `TestTree_MissingDir` | `path=/definitely/not/exist` → 404 |
+| `TestTree_SkipsSymlink` | 含 symlink 子目录 → 响应不含它 |
+| `TestTree_Truncates` | 构造 >500 子目录 → `truncated:true` 且 `total==500` |
+
+### 2.2 前端组件规格：`dirpicker.js`（新文件）
+
+**导出**：`export function attachDirPicker(opts)`；`opts.onPick(path)` 回填回调。
+**挂载点**：`app.js` 的 boot 成功后调用一次。
+
+**DOM 模板**（模态，`#dirpicker` 单例，懒创建）：
+```html
+<div id="dirpicker" class="modal" hidden>
+  <div class="modal-panel" role="dialog" aria-label="选择工作目录">
+    <div class="modal-head">
+      <span class="modal-title">选择工作目录</span>
+      <button class="ghost" id="dp-close" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="dp-recent" id="dp-recent"><!-- 最近目录快捷区，无则隐藏 --></div>
+      <div class="dp-path-bar">
+        <button class="ghost" id="dp-up" aria-label="上级目录">↰</button>
+        <span class="dp-path" id="dp-path"></span>
+      </div>
+      <div class="dp-tree" id="dp-tree"><!-- 目录列表 --></div>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost" id="dp-cancel">取消</button>
+      <button id="dp-choose">选择此目录</button>
+    </div>
+  </div>
+</div>
+```
+
+**状态**：模块级 `let curPath = ""`；`let recent = loadRecent()`。
+- `loadRecent()`：`JSON.parse(localStorage.getItem("miniagent.web.recent_dirs") || "[]")`。
+- `saveRecent(p)`：去重（同值前移）、上限 10、`localStorage.setItem`。
+- 打开（`openPicker()`）：`curPath = 当前输入框值或 "/"` → `fetchDirs(curPath)` → 显示模态；URL 参数：`fetch(\`/api/tree?path=${encodeURIComponent(curPath)}\`, {headers:{...authHeaders()}})`。
+- 行点击 dir → `curPath = p.path; fetchDirs(curPath)`；`#dp-up` → `curPath = parent; fetchDirs`。
+- 「选择此目录」→ `saveRecent(curPath)`；`opts.onPick(curPath)`；关闭。
+
+**交互/无障碍**：模态显示时焦点在 `#dp-close`；`Escape` 关闭；`#dp-choose` Enter 触发。
+
+### 2.3 集成点
+| 文件 | 改动 |
+|------|------|
+| `index.html` | workdir 行加 📁 按钮：`<input id="workdir" ...> <button id="workdir-browse" type="button" aria-label="浏览目录">📁</button>` |
+| `app.js` | boot 后 `attachDirPicker({onPick: p => { $("workdir").value = p; saveWorkdir(p); }})`；`#workdir-browse` click → 打开选择器 |
+| `app.css` | §5.4/§5.5 的 modal/dp-* 样式 |
+
+---
+
+## 3. 特性 2：Token 用量可视化
+
+### 3.1 数据模型（`views.js` `createView` 内新增）
 ```js
 view.usage = {
-  steps: [],            // [{step, in, out, toolCalls, ts}]
-  totals: {in, out},    // 当前返回的 view.tokens 保持
-  budget: 0,            // max_tokens_total，0=无预算
+  budget: 0,          // run.max_tokens_total，0 = 无预算
+  steps: []           // [{step, in, out, toolCalls}]
 };
 ```
-- `view.usage.budget` 初始化（定案：boot 时经 `GET /api/config` 读 `run.max_tokens_total`，缓存于 store；配置页保存后一并刷新）：无则 0=隐藏预算条。
+**budget 初始化**：`store.js` 新增 `let budgetCache = 0;` + `export async function refreshBudget()`（调 `GET /api/config`，取 `run.max_tokens_total||0`，写 `budgetCache`）。`app.js boot()` 调一次；`config.js saveConfig` 成功后调一次。
+- `view.usage.budget` 在 `renderEvent` 的 `case "result"` 里从 `budgetCache` 读（防启动竞态）。
 
-**渲染**（新文件 `usage.js`）：
-- `renderUsageBar(wrapper, {in, out, budget})`：flex 双色条（input=蓝 `--usage-in`、output=绿 `--usage-out`），tooltip `in=N out=N`；有预算时叠加红色预算标线 + 百分比文本。
-- `renderStepUsage(container, steps)`：每步一行迷你条 + `step N · in=a out=b · tools=k`，折叠在 `<details>` 内。
-- 钩入 `events.js`：
-  - `case "result"`：除现有 usage 文本外，追加用量条形图；
-  - `case "step_usage"`：`view.usage.steps.push(ev)`，若用量面板已展开则增量重绘（step_usage 每步一次直接重绘，成本低，不节流）。
-- header：`in=N out=M` 保持文本；有预算时改为 `in=N out=M / BUDGET`，右侧加预算占比迷你条。
+### 3.2 渲染（新文件 `usage.js`）
 
-**展示入口（定案：双入口）**：每 result 卡片内折叠「用量详情」；视图 header 的 token 徽标改为可点击，弹出该视图用量面板（`<dialog>`，复用 §四 模态组件规范）。
+**导出函数**（签名固定）：
+```js
+export function renderUsageBar(container, { in: tin, out: tout, budget }) // → 追加 .usage-bar 块
+export function renderStepUsageList(container, steps)                      // → 追加折叠 <details>
+```
+**DOM**（`renderUsageBar`）：
+```html
+<div class="usage-bar" title="in={{tin}} out={{tout}}{{budget ? ` / 预算 ${budget}` : ''}}">
+  <div class="usage-in" style="width:CALC"></div>   <!-- 注意：宽度须经 CSSOM，禁内联 -->
+  <div class="usage-out" style="width:CALC"></div>
+</div>
+```
+> 禁内联约束与宽度计算冲突 → **方案**：`.usage-bar` 本身是 flex；两个子块宽度用 `%` 通过 `element.style.width` 设置会违反 CSP 吗？不会——CSP `style-src 'self'` 只管 `<style>`/内联属性，**CSSOM `element.style.width` 不受限**（N1 教训只针对 `style="display"` 属性初值被丢弃，运行时 CSSOM 赋值是允许的；见 app.js 现用 `el.style.display` 先例）。因此宽度用 `el.style.width = pct + "%"` 合法。文档明示：**CSSOM 赋值允许，HTML 内联属性禁**。
+- 计算：`total = tin+tout`；`in% = tin/total*100`、`out% = 100-in%`；`budget>0 且 total>budget` 时追加 `<div class="usage-budget-mark">`（绝对定位 `left: budget/total*100%`）；total==0 时整条 `.usage-empty` 灰条。
 
-### 后端（见共享支点 增强 B）
-- `step_usage` 事件由 `recordStepUsage` 装配输出。
-- `result` 事件已含累计 `steps`/`llm_requests`，无需改。
+**DOM**（`renderStepUsageList`）：
+```html
+<details class="usage-steps">
+  <summary>用量详情（N 步）</summary>
+  <div class="usage-step" title="step 1 · in=a out=b · tools=k">
+    <span class="usage-step-label">step 1</span>
+    <div class="usage-step-bar"><div class="usage-in" style="width:a%"></div><div class="usage-out" style="width:b%"></div></div>
+    <span class="usage-step-meta">in=a out=b · tools=k</span>
+  </div>...
+</details>
+```
 
-### 测试
-- 后端：`web_turn_test.go` 断言流中出现 `step_usage` 事件且 step 递增、数值与 result 累计一致（`sum(step_usage.in) == result.input_tokens`）。
+### 3.3 钩入（`events.js` `renderEvent`）
+- `case "result"`（现有 180-198 行块内）：在追加 `.usage` 文本行**之后**调用 `renderUsageBar(d, {in: ev.input_tokens||0, out: ev.output_tokens||0, budget: view.usage.budget})` 和 `renderStepUsageList(d, view.usage.steps)`；然后 `view.usage.steps.length = 0`（每轮结束清空 per-step 缓存）。
+- `case "step_usage"`（新）：`view.usage.steps.push({step: ev.step, in: ev.input_tokens||0, out: ev.output_tokens||0, toolCalls: ev.tool_calls||0})`；**不**触发重绘（等 result 一次性渲染）。
+
+### 3.4 Header 徽标（`store.js showSessionID`）
+- `tok.textContent = in/out 文本` 后追加：`budget>0 && total>0` 时 `tok.textContent += \` / ${budget}\``。
+- startWait 的「等待响应…」动画保留。
+
+### 3.5 测试
+- 后端：`cmd/miniagent/web_turn_test.go` 新用例 `TestWebTurn_StepUsageEvents`：
+  1. 流中包含 `step_usage` 且 step 从 1 递增；
+  2. `Σ step_usage.input_tokens == result.input_tokens`，output 同理；
+  3. CLI 路径（`metalStep=false`）不产生 `step_usage`（断言流中无该 type）。
 - 前端 `node --check`。
 
 ---
 
-## 三、特性 3：工具轨迹视图
+## 4. 特性 3：工具轨迹视图
 
-### 现状
-- 每个 `tool_use` → `<details class="ev tool">`：summary `🔧 name` + input `<pre>`；`tool_result` 按 `call_id` 配对追加 output `<pre>`（`events.js appendToolUse/appendToolResult`）。
-- 平铺在消息流中，无步骤分组/序号，无整体时间线，不能跨步骤跳转。
-
-### 目标
-- 会话内「轨迹」面板：按 step 分组展示每次 LLM 调用与其工具执行（输入/输出/耗时/用量），点击可定位到消息流中的对应节点。
-- 与正常工作流并列，不破坏现有消息列表。
-
-### 前端设计
-
-**数据模型**（`views.js`）：
+### 4.1 数据模型（`views.js` `createView` 新增）
 ```js
-view.trajectory = {
-  steps: new Map(),     // step → {step, ts, in, out, tools: [{name, callID, input, output, isError, ts}]}
-  order: [],            // step 顺序
-};
+view.trajectory = { order: [], steps: new Map() };
+view.curStep = 0;   // 最近一次 delta 的 step，降级归属用
 ```
 
-**事件捕获**（`events.js`）：
-- `case "tool_use"`：`step = ev.step ?? 当前步`；`trajectory.steps.get(step).tools.push({...ev})`；同时保留现有消息流渲染。
-- `case "tool_result"`：按 `call_id` 在轨迹中补 output。
-- `case "step_usage"`：建立/更新步骤用量 `{step, in, out}`——同时提供步骤时间戳锚点。
-- `case "text_delta"/"reasoning_delta"`：`view.curStep = ev.step`（供降级归属）。
-- **降级**（旧会话 replay / CLI 缺 step）：`ev.step` 缺失时归属 `view.curStep`；replay 起始 `curStep=0`，首个 tool_use 归步 0。
+### 4.2 事件捕获（`events.js renderEvent` 追加分支，不改现有 DOM 渲染）
+| 事件 | 捕获行为 |
+|------|---------|
+| `text_delta`/`reasoning_delta` | `view.curStep = ev.step`（若存在） |
+| `tool_use` | `step = ev.step ?? view.curStep`；若无序 → `view.trajectory.order.push(step)`；`Map.get(step)` 不存在则创建 `{step, ts: ev.ts||Date.now(), in:0, out:0, tools:[]}`；`tools.push({name: ev.name, callID: ev.call_id, input: ev.input, output:"", isError:false, ts: ev.ts})` |
+| `tool_result` | 按 `ev.call_id` 在全部 step 的 tools 中查找（`trajectory.steps` 迭代），补 `output=ev.output`、`isError=ev.is_error`；未找到则忽略 |
+| `step_usage` | `view.usage.steps.push(...)`（同 §3.3）+ 同步 `trajectory.steps.get(ev.step)` 的 `in/out`（存在时） |
 
-**渲染**（新文件 `trajectory.js`）：
-- 视图 header 加「轨迹」按钮 → 右侧抽屉面板。
-- 面板内容：按 `order` 渲染步骤卡片：
-  - 卡片头：`Step N` + 用量迷你条（复用 usage.js）+ 工具数 + 时间；
-  - 卡片体：每个工具一行（`name` + 折叠 input/output pre，复用 copy 按钮逻辑）；
-  - 点击卡片 → 滚动定位到消息流中该 step 的首个节点（节点上加 `data-step` 属性，`scrollIntoView` + 高亮脉冲）。
-- 折叠状态：面板整体 `<details>`；每步卡片默认折叠，仅显示摘要。
+**兜底**：`case "result"` 时把 `view.curStep = 0` 重置（新一轮）。
 
-**与消息流的关系（定案）**：轨迹面板是**镜像视图**，不改动 `appendToolUse`/`appendToolResult` 的现有 DOM 结构（避免回归）。
+### 4.3 渲染（新文件 `trajectory.js`）
+**导出**：`export function attachTrajectory(view)（创建面板 DOM 并挂到 #layout，仅当 view 有 tool 事件时生效）`；内部函数 `renderStepCard(view, entry)`。
+**DOM 结构**：
+```html
+<div id="trajectory-panel" class="trajectory-panel" hidden>
+  <div class="trajectory-head">
+    <span>轨迹</span>
+    <button class="ghost" id="tj-close" aria-label="关闭轨迹">✕</button>
+  </div>
+  <div class="trajectory-body" id="tj-body"></div>
+</div>
+```
+**卡片模板**：
+```html
+<details class="trajectory-step" data-step="{{step}}">
+  <summary class="trajectory-step-head">
+    <span class="tj-step-no">Step {{step}}</span>
+    <span class="tj-step-meta">{{in ? `in={{in}} out={{out}}` : '—'}} · {{tools.length}} 工具</span>
+  </summary>
+  <div class="trajectory-tools">
+    <details class="trajectory-tool">
+      <summary>{{name}} <span class="time">{{fmtTime(ts)}}</span></summary>
+      <pre class="tj-input">{{input}}</pre>
+      <pre class="out{{isError ? ' err' : ''}}">{{output}}</pre>
+    </details>
+  </div>
+</details>
+```
+- 全部内容 `textContent` 填充（含 pre）。
+- 点击 `summary.trajectory-step-head`：除了原生 details 开合，还要 `scrollToStep(step)` → 找到 `#events` 内 `[data-step="${step}"]` 节点（见 §4.4），`scrollIntoView({behavior:"smooth", block:"start"})` + `.pulse-highlight` 类（2s 后移除）。
 
-### 测试
-- 后端：`tool_use`/`tool_result` 事件带 `step` 断言（`web_turn_test.go`）。
-- 前端 `node --check` + 断点定位（构造含步骤跳转的流）。
+### 4.4 消息流节点打标（`events.js` 小改）
+- `appendToolUse`、`appendDelta`、`appendToolResult`、result 的 `evDiv` 创建后：若 `ev.step` 存在，`d.dataset.step = ev.step`；`tool_result` 配对时把 output pre 加在 target（已带 data-step）。
+- 「首个节点」判定：`document.querySelector(\`#events .view[data-view-key="${view.key}"] [data-step="${step}"]\`)`。view DOM 在 `createView` 时已有 key 属性？无——**增加**：`createView` 里 `dom.dataset.viewKey = key`（一行，向后兼容）。
+- `scrollToStep` 找不到节点（replay 无 step）→ 静默忽略。
+
+### 4.5 打开/关闭
+- 开关按钮：`index.html` header 加 `<button id="traj-btn" class="ghost" title="工具轨迹">≡</button>`（aria-label「工具轨迹」，窄屏隐藏见 §6.4）。
+- `app.js`：`#traj-btn` click → `toggleTrajectory(view)`（`#trajectory-panel.hidden` 切换 + `#layout.trajectory-open` 类切换）。
+- 面板内容刷新时机：`view` 激活（`activate`）时重建一次；运行中 `step_usage`/`tool_use` 到达时若面板可见则增量 append（追加卡片，不重绘已有）。
+
+### 4.6 测试
+- 后端：`cmd/miniagent/web_turn_test.go` 用例 `TestWebTurn_ToolEventsCarryStep`：fake LLM 两步（step1 工具+step2 文本），断言 `tool_use`/`tool_result` 事件的 `step` 分别为 1/1。
+- 前端 `node --check`。
 
 ---
 
-## 四、WebUI 美化设计（新增）
+## 5. 美化（规格——含全部既有缺口）
 
-> 现状：GitHub-Dark 风格双主题（`app.css` 顶部 `:root` 变量），纯语义、无设计系统。  
-> 原则：**加变量不加魔法值**、不引入构建链 / 第三方 UI 库（与「纯 stdlib + go:embed」约束一致）、CSP `style-src 'self'` 禁内联（保持 N1 的 CSSOM 做法）。
+> 现状缺口盘点（已核对 app.css/events.js/store.js/index.html）：
+> 登录页无层次；header 元素无响应式收敛；无等待 spinner（`#wait` 纯文本）；`#to-bottom` 无动效；主区无自定义滚动条；无 `:focus-visible`；`#events` 无空态；`inlineHint` 复用 `#wait`（等待与错误提示混淆）；会话列表 running 点与删除钮可能重叠；工具卡 emoji 用 `🔧` 文本前缀不一致；配置页 `.cfg-*` 未接入新设计令牌。
 
-### 4.1 Token（设计令牌）
-
-扩充 `:root` 变量，形成语义化设计令牌（双主题各一套）：
+### 5.1 设计令牌（`app.css` 顶部，双主题完整值）
 
 ```css
 :root {
-  /* 现有保留 */
-  --bg: #0d1117; --panel: #161b22; --border: #30363d;
-  --fg: #e6edf3; --muted: #8b949e;
-  --accent: #58a6ff; --err: #f85149; --ok: #3fb950;
-  /* 新增：层级背景（会话卡片、抽屉、模态分层） */
-  --bg-elev-1: #1c2128; --bg-elev-2: #21262d;
-  /* 新增：语义色扩展 */
-  --info: #58a6ff; --warn: #d29922; --usage-in: #58a6ff; --usage-out: #3fb950;
-  /* 新增：布局度量 */
-  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px;
-  --space-xs: 4px; --space-sm: 8px; --space-md: 12px; --space-lg: 16px;
-  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", monospace;
-  --shadow-modal: 0 8px 24px rgba(0,0,0,.4);
-  --transition-fast: 120ms ease;
-  --transition-med: 200ms ease;
+  /* 既有（保留） */
+  --bg:#0d1117; --panel:#161b22; --border:#30363d;
+  --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --err:#f85149; --ok:#3fb950;
+  /* 新增层级背景 */
+  --bg-elev-1:#1c2128; --bg-elev-2:#21262d; --bg-hover:#21262d;
+  /* 语义色 */
+  --info:#58a6ff; --warn:#d29922; --usage-in:#58a6ff; --usage-out:#3fb950;
+  /* 度量 */
+  --radius-sm:6px; --radius-md:8px; --radius-lg:12px;
+  --space-xs:4px; --space-sm:8px; --space-md:12px; --space-lg:16px;
+  --font-mono:ui-monospace,SFMono-Regular,"JetBrains Mono",monospace;
+  --shadow-modal:0 8px 24px rgba(0,0,0,.4);
+  --transition-fast:120ms ease; --transition-med:200ms ease;
 }
-:root[data-theme="light"] { /* 同键位换值 */ }
+:root[data-theme="light"] {
+  --bg:#f6f8fa; --panel:#ffffff; --border:#d0d7de;
+  --fg:#1f2328; --muted:#59636e; --accent:#0969da; --err:#cf222e; --ok:#1a7f37;
+  --bg-elev-1:#eef1f4; --bg-elev-2:#e6e9ec; --bg-hover:#eef1f4;
+  --info:#0969da; --warn:#9a6700; --usage-in:#0969da; --usage-out:#1a7f37;
+  --shadow-modal:0 8px 24px rgba(31,35,40,.15);
+}
 ```
 
-### 4.2 布局与导航
-
-- **header**：加高至 `52px`，`backdrop-filter: blur(8px)` + 半透明背景（`color-mix(in srgb, var(--bg) 85%, transparent)`），滚动时内容从下穿过产生毛玻璃层次；元素间距统一 `--space-md`。
-- **侧栏（#nav）**：
-  - 顶部「＋ 新会话 / ⚙ 配置」按钮组改为 `display:grid; grid-template-columns: 1fr auto`（新会话占满、配置窄按钮）；
-  - 会话项 hover/active 态圆角 `--radius-md` + `translateX(2px)` 微位移；
-  - 会话预览行字号统一 12px `--muted`，running 呼吸点保留（换用 `--ok` 语义）。
-- **间距网格**：`#events` 内边距、卡片间距、composer 间距全部改用 `--space-*` 变量，消除魔法值。
-
-### 4.3 消息卡片（.ev）
-
-- 统一圆角 `--radius-md`（8px），边框 `1px var(--border)`；
-- **用户消息**：右侧对齐卡片（`margin-left:auto; max-width:720px`）+ 顶部 accent 竖条（`border-left:3px var(--accent)`），与 assistant（左对齐无竖条）形成视觉对比；
-- **assistant/result**：保持左侧，宽度 `max-width:900px`；
-- **工具卡片（.ev.tool）**：summary 加 emoji 图标色（`🔧` 改为 CSS 前缀色点 + 工具名），input 区域 `--font-mono`、`font-size:12.5px`，output 区保留 `.out.err` 红边逻辑；
-- **时间戳**：绝对定位右上（tag 行），`font-variant-numeric: tabular-nums` 防跳动；
-- **折叠态**：`max-height` 渐变遮罩（现有）保留，新增「展开」按钮圆角 `--radius-sm`、hover 变色。
-
-### 4.4 用量可视化样式（本轮新组件）
-
+### 5.2 全局交互态
 ```css
-.usage-bar { display:flex; height:8px; border-radius:4px; overflow:hidden; background:var(--bg-elev-1); }
-.usage-bar .in  { background:var(--usage-in); }   /* 蓝 */
-.usage-bar .out { background:var(--usage-out); }  /* 绿 */
-.usage-bar .budget-mark { width:2px; background:var(--err); position:relative; } /* 预算标线 */
+:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+body { font: 14px/1.6 -apple-system,"Segoe UI",sans-serif; }          /* 既有 */
+#events, #session-list, .trajectory-body { scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+#events::-webkit-scrollbar, #session-list::-webkit-scrollbar, .trajectory-body::-webkit-scrollbar { width:8px; }
+#events::-webkit-scrollbar-thumb, #session-list::-webkit-scrollbar-thumb, .trajectory-body::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
 ```
-- 用量面板表格行 hover 高亮；step 条迷你 bar 高度 6px。
 
-### 4.5 轨迹抽屉（本轮新组件）
+### 5.3 登录页
+```css
+#login { background: radial-gradient(1200px 600px at 20% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%), var(--bg); }
+#login-form { width:320px; padding:32px 28px; background:var(--bg-elev-1); border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow:var(--shadow-modal); }
+#login-form h1 { font-size:22px; letter-spacing:.5px; }
+#login-form input { width:100%; }
+#login-form button { width:100%; background:var(--accent); color:#fff; border:none; }
+#login-err { color:var(--err); font-size:13px; min-height:18px; text-align:center; }
+```
 
-- 抽屉：`position:fixed; right:0; top:52px; bottom:0; width:360px; background:var(--bg-elev-1); border-left:1px var(--border); transform:translateX(100%) → 0; transition:var(--transition-med)`；
-- 遮罩复用现有 `#overlay` 模式（`z-index` 高于 header）；
-- 步骤卡片：折叠态圆角 `--radius-md`；展开时 `border-color:var(--accent)`；
-- 定位高亮：目标节点 `outline:2px var(--accent); animation: pulseGlow 1s`（`@keyframes pulseGlow { 0%,100%{outline-color:transparent} 50%{outline-color:var(--accent)} }`）。
+### 5.4 Header
+```css
+header { position:sticky; top:0; z-index:40; height:52px; padding:0 var(--space-lg);
+         background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+header h1 { font-size:15px; }
+#session-tokens { font-variant-numeric:tabular-nums; }
+```
+> `position:sticky` 与 §6 的 Grid 布局共存：header 独立于 #layout 之上，sticky 保证滚动时毛玻璃常驻。
 
-### 4.6 模态与目录选择器样式
+### 5.5 等待态与提示（解决 #wait 复用歧义）
+- `#wait` 仅作等待指示：加 spinner。
+```css
+#wait:not(:empty)::before { content:""; display:inline-block; width:12px; height:12px; margin-right:6px;
+  border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%;
+  animation:spin 800ms linear infinite; vertical-align:-2px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+#wait.msg-error { color:var(--err); }
+#wait.msg-error::before { border-top-color:var(--err); animation:none; content:"⚠"; }
+```
+- `app.js inlineHint`（L321-328）：内部改为 `el.classList.add("msg-error")` + 2.5s 后移除类并清空（替换现有直接改 style.color 的做法——现有 `el.style.color="var(--err)"` 是 CSSOM 允许的先例，但统一走类更干净）。
+- `startWait`（L376-380）：`el.classList.remove("msg-error")`。
 
-- 统一模态组件规范（目录选择器、用量弹窗共用）：居中 `position:fixed; inset:0; display:grid; place-items:center`，面板 `--bg-elev-2` + `--shadow-modal` + 圆角 `--radius-lg`，`max-width:560px; max-height:70vh; overflow:auto`；
-- 目录行：`padding:8px 12px; border-radius:var(--radius-sm)`，hover 背景 `--bg-elev-2`；父目录行显示 `↰` 前缀；
-- 按钮主次分阶：主按钮实心 `--accent` 底白字，次按钮 `ghost`（现有）。
+### 5.6 会话列表
+```css
+#nav { background:var(--bg); }
+#new-chat { background:var(--accent); color:#fff; border:none; font-weight:500; }
+#new-chat:hover { filter:brightness(1.1); }
+.sess-item { transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast); }
+.sess-item:hover { transform:translateX(2px); }
+.sess-del { right:8px; }                    /* 修复与 running 点重叠：running 点左移至 right:22px */
+.sess-item.running::after { right:22px; }
+.sess-item .preview { }                     /* 既有，保留 */
+```
 
-### 4.7 动效
-- 统一 `transition` 仅作用于交互态（hover/active/open），不用入场动画（避免 CSP 内联 style 争议 + 性能）；
-- 唯一例外：running 呼吸点（已有）+ 轨迹定位 `pulseGlow`。
+### 5.7 消息卡片与工具卡
+```css
+.ev { border-radius:var(--radius-md); }
+.ev.user { border-left:3px solid var(--accent); }
+.ev.result { border-left:3px solid var(--ok); }
+.ev.error { border-left:3px solid var(--err); }
+.ev.tool summary::before { content:"◈"; color:var(--accent); margin-right:6px; font-size:11px; }
+.ev.tool pre { font-family:var(--font-mono); }
+.copy-btn, .expand-btn { border-radius:var(--radius-sm); transition: color var(--transition-fast); }
+```
 
-### 4.8 无障碍
-- 所有图标按钮带 `aria-label`（目录选择器📁按钮、轨迹开关、用量弹窗）；
-- 抽屉/模态获得焦点时 `Escape` 关闭（复用 `app.js` confirmInline 的 keydown 模式）；
-- 颜色对比：`--muted` 在暗色主题下 ≥ 4.5:1（#8b949e on #0d1117 达标，保持）。
+### 5.8 用量条 / 轨迹卡（伴随 §3/§4 组件）
+```css
+.usage-bar { display:flex; height:8px; border-radius:4px; overflow:hidden; background:var(--bg-elev-1); margin-top:6px; position:relative; }
+.usage-in { background:var(--usage-in); }
+.usage-out { background:var(--usage-out); }
+.usage-empty { background:var(--bg-elev-1); }
+.usage-budget-mark { position:absolute; top:0; bottom:0; width:2px; background:var(--err); }
+.usage-steps { margin-top:6px; font-size:12px; }
+.usage-step { display:flex; align-items:center; gap:8px; padding:2px 0; }
+.usage-step-bar { flex:1; max-width:200px; display:flex; height:6px; border-radius:3px; overflow:hidden; background:var(--bg-elev-1); }
+.usage-step-label { width:52px; color:var(--muted); }
+.usage-step-meta { color:var(--muted); font-size:11px; }
+.trajectory-panel { position:fixed; right:0; top:52px; bottom:0; width:360px; background:var(--bg-elev-1);
+  border-left:1px solid var(--border); z-index:30; display:flex; flex-direction:column; transition:transform var(--transition-med); }
+.trajectory-panel[hidden] { display:none; }        /* 隐藏用 hidden，动画仅作用于可见态切换以外的 transform */
+.trajectory-head { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border); }
+.trajectory-body { flex:1; overflow-y:auto; padding:8px 12px; }
+.trajectory-step { border:1px solid var(--border); border-radius:var(--radius-md); margin-bottom:8px; background:var(--panel); }
+.trajectory-step-head { display:flex; justify-content:space-between; cursor:pointer; padding:8px 10px; }
+.trajectory-step[open] { border-color:var(--accent); }
+.pulse-highlight { animation: pulseGlow 1s ease; }
+@keyframes pulseGlow { 0%,100% { outline-color:transparent; } 50% { outline-color:var(--accent); } }
+```
 
-### 4.9 CSP 合规注意
-- 全部新样式进 `app.css`（`style-src 'self'` 允许）；**禁止** `element.style.xxx` 内联（N1 教训）——轨迹抽屉开关用 classList、用量 bar 用 `--usage-*` 变量；
-- 图标/emoji：用 Unicode（现有）或 CSS 图形，不引入 iconfont/外部字体（离线 + CSP 双约束）。
+### 5.9 空态（`#events` 无消息时）
+- `app.js`：`loadReplay`/`send` 前检查 `view.dom.children.length===0` 时插入：`<div class="ev empty-state muted">暂无对话，输入任务开始</div>`（`.empty-state{ text-align:center; padding:48px 0; border-style:dashed; }`）；首条事件到达时 `view.dom.querySelector(".empty-state")?.remove()`。
+- 实现点：`appendUserPrompt` 与 `renderEvent` 首个分支前。
 
-### 4.10 美化实施范围
+### 5.10 配置页令牌接入
+- 把 `.cfg-*` 的魔法值替换为令牌：`--radius-md`、`--space-*`、`--bg-elev-1`（`.cfg-provider-head` 背景）、`--font-mono`（`.cfg-json textarea` 已有，改令牌）。
+- `.cfg-save`/`.cfg-mode.active` 用 `--accent` 底白字（现已有，确认一致）。
 
-| 项 | 改动文件 | 随哪个特性落地 |
-|----|---------|--------------|
-| Token 变量 + 间距网格 | `app.css` | 公共（第 1 步先落） |
-| header 毛玻璃 + 高度 | `app.css` + `index.html` | 公共 |
-| 消息卡片左右对齐 + 工具卡样式 | `app.css` + `events.js`（class 调整） | 特性 3 |
-| 用量条/面板样式 | `app.css` + `usage.js` | 特性 2 |
-| 轨迹抽屉样式 | `app.css` + `trajectory.js` | 特性 3 |
-| 模态组件规范 | `app.css` + `dirpicker.js` | 特性 1 |
-| 无障碍属性补全 | `events.js`/`app.js`/`index.html` | 各特性随行 |
+### 5.11 `#to-bottom`
+```css
+#to-bottom { transition: transform var(--transition-fast), opacity var(--transition-fast); }
+#to-bottom:hover { transform:scale(1.1); }
+```
 
 ---
 
-## 五、响应式布局适配（参考 DSH 排版）
+## 6. 响应式（规格）
 
-> 参考 DSH 前端布局策略：CSS Grid 三栏主布局 + `position:fixed` 抽屉窄屏适配 + CSS 设计令牌系统，不依赖大量 `@media` 断点。  
-> 现状：miniagent 已有基础的 sidebar drawer 模式（`@media min-width:800px` 换列 + `nav-open` 类控制抽屉），但布局平面化、无 Grid 骨架、无窄屏的 composer/消息卡片/header 专项适配。
+### 6.1 断点（与 §5.8 一致，仅两档）
+- NARROW：`@media (max-width: 639px)`
+- TABLET：`@media (min-width: 640px) and (max-width: 799px)`
+- DESKTOP：`@media (min-width: 800px)`
 
-### 5.1 布局架构（三态）
-
-| 屏幕宽度 | 布局 | 侧栏 | 轨迹面板 | 说明 |
-|---------|------|------|---------|------|
-| ≥ 800px | **三栏 Grid** | 固定 240px 侧栏 | 可选 360px 右侧抽屉 | 桌面/平板横屏 |
-| 640–799px | **双栏** | 固定 240px 侧栏 | 叠加遮罩抽屉 | 平板竖屏 |
-| < 640px | **单栏全屏** | 遮罩抽屉 | 遮罩抽屉 | 手机 |
-
-**实现**：`#layout` 从 `display:flex` 改为 `display:grid`：
-
+### 6.2 Grid 骨架（`#layout`）
 ```css
-#layout {
-  display: grid;
-  grid-template-columns: 240px 1fr;                 /* 侧栏 + 主区 */
-  grid-template-rows: 1fr;
-  grid-template-areas: "nav main";
-}
-/* 轨迹面板打开时（三栏）*/
-#layout.trajectory-open {
-  grid-template-columns: 240px 1fr 360px;
-  grid-template-areas: "nav main trajectory";
-}
-#trajectory-panel { grid-area: trajectory; }
-/* 窄屏 < 640px：回退到 flex drawer（现有 nav-open 模式）*/
+#layout { display:grid; grid-template-columns: var(--sidebar-width,240px) 1fr; grid-template-areas:"nav main"; flex:1; min-height:0; }
+#nav { grid-area:nav; }
+main { grid-area:main; min-width:0; }
+#layout.trajectory-open { grid-template-columns: var(--sidebar-width,240px) 1fr var(--trajectory-width,360px); grid-template-areas:"nav main trajectory"; }
+#trajectory-panel { grid-area:trajectory; position:relative; top:0; height:auto; }
+@media (max-width: 639px) { #layout { display:flex; } }
+```
+
+### 6.3 侧栏（修复现有 display 冲突 + 遮挡问题）
+```css
+/* 桌面常显 */
+@media (min-width: 800px) { #nav { display:grid; grid-template-rows:auto 1fr; } }
+/* 窄屏抽屉：position:fixed 不遮挡 header */
 @media (max-width: 639px) {
-  #layout { display: flex; }
+  #nav { position:fixed; left:0; top:52px; bottom:0; width:240px; z-index:20; display:none; background:var(--bg); }
+  body.nav-open #nav { display:grid; }
+  #overlay { position:absolute; inset:0; background:rgba(0,0,0,.5); z-index:15; }
 }
+/* 覆盖既有规则：删除原 `#nav{display:none}`（L34）与 `@media min-width:800px 的 #nav{display:flex}`（L120）两处冲突 */
 ```
 
-### 5.2 侧栏 drawer（现有改进）
-
-- 现有 `#nav { display:none }` + `body.nav-open #nav { display:flex }` 模式保留，但：
-  - 桌面（≥800px）**始终显示**，`#nav { display:grid }`，不再隐藏（当前 `#nav { display:none }` + `@media { #nav { display:flex } }` 有两处 `display` 声明，合并为 `#nav { display:grid; grid-template-rows: auto 1fr; }`，窄屏时 `display:none` + `nav-open` 覆盖）
-  - 窄屏遮罩：`#overlay` 现有模式保留
-  - 按钮组：`#new-chat` + `#config-btn` 用 `grid-template-columns: 1fr auto` 并排
-
-### 5.3 消息区（#events）
-
-- 当前：`padding: 16px`，单列流式，`max-width` 约束
-- 桌面：`padding: 16px 24px`，`.ev` 卡片 `max-width: 900px; margin: 0 auto`（居中，非左对齐）
-- 窄屏（<640px）：`padding: 10px`，`.ev` 卡片 `max-width: 100%; border-radius: 6px`（减小圆角省空间），`border-left` 竖条更窄（`2px`）
-- 用户消息右对齐：`margin-left: auto` + `max-width: 80%`（桌面可到 720px，窄屏 `max-width: 90%`）
-
-### 5.4 Composer（输入区）
-
-- 当前：`#composer` 是固定底部 `display:flex;flex-direction:column`，`#prompt` 无最大宽度
-- 桌面：`.composer-row` 内 elements 居中 `max-width: 900px; margin: 0 auto;`，与消息区对齐
-- 窄屏：`#prompt` 字号保持 `16px`（防 iOS 缩放），`#send` 按钮宽度 `auto`（别占满）
-- 安全区（safe-area）：`padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px))` 已有，保留
-
-### 5.5 Header 响应式
-
-| 元素 | 桌面（≥800px） | 平板（640-799px） | 窄屏（<640px） |
-|------|---------------|------------------|---------------|
-| #menu-btn（☰） | `display:none`（现有） | 显示 | 显示 |
-| h1 标题 | 显示 | 显示 | 缩小至 `14px` 或只显示图标 |
-| #session-id | 显示 | 显示 | 仅显示截断短 id（`text-overflow`） |
-| #session-tokens | 显示 | 显示 | 仅显示 `in=N`（省略 out） |
-| #version-badge | 隐藏（现有 `@media max-width:500px`） | 隐藏 | 隐藏 |
-| #model-badge | 显示 | 显示 | 隐藏（保留头像缩略） |
-| #theme-btn | 显示 | 显示 | 显示 |
-| #logout | 显示 | 显示 | 文字「退出」→ 图标 ⏻ |
-
-### 5.6 轨迹抽屉响应式
-
-- 桌面（≥800px）：`position:fixed; right:0; top:52px; bottom:0; width:360px`，`transform:translateX(0)` 开/关
-- 窄屏（<640px）：`width:100vw; z-index:10`（覆盖全屏，包含遮罩），`top:0`（覆盖 header）
-- 关闭按钮：窄屏显示 ✕ 浮动按钮，桌面可使用点击遮罩或 Escape
-
-### 5.7 模态框（目录选择器、用量弹窗）
-
-- 通用规范（见 §4.6）：`place-items:center` 居中
-- 窄屏：`max-width: 100vw; max-height: 100dvh; border-radius: 0`（全屏模态）
-- 目录树：窄屏时每行减小 padding（`6px 8px`），字号 13px
-
-### 5.8 断点与变量化
-
+### 6.4 header 元素（按 5.5 表格逐项）
 ```css
-/* 响应式断点标量（于 :root 声明，便于集中管理） */
-:root {
-  --bp-narrow: 640px;
-  --bp-tablet: 800px;
-  --sidebar-width: 240px;
-  --trajectory-width: 360px;
+@media (max-width: 639px) {
+  header h1 { font-size:14px; }
+  #model-badge { display:none; }
+  #logout { font-size:0; } #logout::after { content:"⏻"; font-size:18px; }
+  #session-tokens { max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #traj-btn { display:none; }
 }
+@media (max-width: 799px) { #version-badge { display:none; } }
 ```
 
-所有 `@media` 查询引用这些变量（CSS 变量在 `@media` 中无效，但注释约定维护）：
-
+### 6.5 消息区/composer/模态
 ```css
-/* NARROW: < 640px */
-@media (max-width: 639px) { ... }
-/* TABLET: 640-799px */
-@media (min-width: 640px) and (max-width: 799px) { ... }
-/* DESKTOP: ≥ 800px */
-@media (min-width: 800px) { ... }
+#events { padding:var(--space-lg) calc(var(--space-lg) + 8px); }
+#events > .view { max-width:900px; margin:0 auto; width:100%; }
+.ev { max-width:100%; }
+@media (max-width:639px) {
+  #events { padding:var(--space-sm); }
+  .ev.user { max-width:90%; margin-left:auto; }
+}
+.composer-row { gap:var(--space-sm); }
+@media (min-width:800px) {
+  #composer { padding-left:calc(50% - 450px + var(--space-lg)); padding-right:calc(50% - 450px + var(--space-lg)); }
+}
+.modal-panel { width:min(560px, calc(100vw - 32px)); max-height:70vh; }
+@media (max-width:639px) { .modal-panel { width:100vw; max-height:100dvh; border-radius:0; } }
 ```
-
-### 5.9 与现有架构的兼容性
-
-- 现有 `#nav { display:none }` + `@media { display:flex }` 冲突 → 重构为：`#nav` 默认为 `display:grid`（桌面），窄屏 `display:none` + `body.nav-open` 覆盖
-- `body.nav-open` 语义不变，但窄屏时 `#nav` 的 `position:relative` + `z-index:6` 改为 `position:fixed; left:0; top:52px; height:calc(100dvh - 52px); z-index:20`（不要遮挡 header）
-- `#overlay` 在窄屏 `z-index:15`（header 与 nav 之间）
-- 轨迹面板 `z-index:30`（高于侧栏，与其遮罩联动）
-
-### 5.10 响应式实施范围
-
-| 项 | 改动 | 随哪个特性落地 |
-|----|------|--------------|
-| `#layout` 改为 `display:grid` | `app.css` + `index.html`（#layout 类） | 公共（美化步骤 1） |
-| 侧栏重构（grid 布局 + 窄屏 fixed） | `app.css` + `index.html` | 公共 |
-| 消息区居中 + 窄屏适配 | `app.css` | 公共 |
-| composer 对齐 | `app.css` | 公共 |
-| header 响应式隐藏 | `app.css` | 公共 |
-| 轨迹抽屉 responsive | `app.css` + `trajectory.js` | 特性 3 |
-| 模态窄屏全屏 | `app.css` | 特性 1 |
-| 断点统一 | `app.css`（注释约定） | 公共 |
 
 ---
 
-## 六、接口改动汇总
+## 7. 文件改动清单（精确）
 
-| 位置 | 改动 |
-|------|------|
-| `miniagent/loop_api.go` | `OnToolUse`/`OnToolResult` 签名加 `step int`；`LoopHooks` 增 `OnStepUsage` |
-| `miniagent/loop_tools.go`(handleToolCalls) | 透传 step 到钩子 |
-| `miniagent/loop_extra.go` | `recordStepUsage` 末尾调用 `OnStepUsage` |
-| `cmd/miniagent/emit.go` | `buildHooks` 适配新签名；装配 web 版 `OnStepUsage` 写 `step_usage` 事件 |
-| `miniagent/event/event.go` | `toolUseEvent`/`toolResultEvent` 增 `step`；新增 `stepUsageEvent` + `EmitStepUsage` |
-| `cmd/miniagent/web_turn.go` | turnSpec 增 `emitStepUsage bool`（serve 模式 true），传给 assembleHooks |
-| `cmd/miniagent/web.go` | 路由 `GET /api/tree` |
-| `cmd/miniagent/web_tree.go`（新） | 目录树 API |
-| `webstatic/static/{views,events}.js` | view 数据模型扩展（usage/trajectory/curStep）+ 事件捕获 |
-| `webstatic/static/{usage,trajectory,dirpicker}.js`（新） | 三个组件 |
-| `webstatic/static/{app,index,app.css}` | 入口接入（header 按钮、composer 改造、§四 美化） |
-| `webstatic/assets.go` | 新 JS 文件进 go:embed + TestNames 钉死 |
+### 后端
+| 文件 | 改动 | 状态 |
+|------|------|------|
+| `miniagent/loop_api.go` | OnToolUse/OnToolResult 签名；LoopHooks.OnStepUsage | 改 |
+| `miniagent/tool_handler.go` | 3 处钩子调用加 step | 改 |
+| `miniagent/loop_extra.go` | recordStepUsage 末尾 OnStepUsage | 改 |
+| `miniagent/event/event.go` | toolUseEvent/toolResultEvent 加 step；EmitToolUse/EmitToolResult/ToolUseWriter 签名；stepUsageEvent+EmitStepUsage | 改 |
+| `cmd/miniagent/emit.go` | buildHooks 闭包签名；assembleHooks 装配 OnStepUsage | 改 |
+| `cmd/miniagent/run_turn.go` | turnSpec.emitStepUsage | 改 |
+| `cmd/miniagent/web_turn.go` | turnSpec 构造置 emitStepUsage=true | 改 |
+| `cmd/miniagent/web.go` | 路由 GET /api/tree | 改 |
+| `cmd/miniagent/web_tree.go` | 新增 handleTree | 新 |
+| 测试：`miniagent/loop_iteration_test.go`、`policy/loop_integration_test.go`、`internal/miniagent/looptest/llm.go`、各 `*_test.go` 中直接构造 OnToolUse/OnToolResult 处 | 签名适配 | 改 |
 
-**接口兼容性**：钩子签名变化影响 `miniagent` 包内部与测试，属库内 API 变更（semver minor）；NDJSON 事件均为新增字段/新事件类型，向后兼容。
+### 前端
+| 文件 | 改动 | 状态 |
+|------|------|------|
+| `webstatic/static/app.css` | §5/§6 全部样式 | 改 |
+| `webstatic/static/index.html` | workdir-browse 按钮；traj-btn；模态容器（可 JS 建） | 改 |
+| `webstatic/static/views.js` | view.usage/trajectory/curStep；dom.dataset.viewKey | 改 |
+| `webstatic/static/events.js` | step_usage 分支；step 打标；trajectory 捕获；result 渲染用量 | 改 |
+| `webstatic/static/store.js` | refreshBudget；showSessionID 预算；inlineHint/startWait 类化 | 改 |
+| `webstatic/static/app.js` | attachDirPicker/trajectory 挂载；空态；响应式无关小改 | 改 |
+| `webstatic/static/usage.js` | renderUsageBar/renderStepUsageList | 新 |
+| `webstatic/static/trajectory.js` | attachTrajectory/卡片渲染 | 新 |
+| `webstatic/static/dirpicker.js` | 目录选择器 | 新 |
+| `webstatic/assets.go` | go:embed 3 个新 JS | 改 |
+| `webstatic/assets_test.go` | TestNames want 列表 +3 | 改 |
 
 ---
 
-## 七、安全边界
+## 8. 实施顺序（每步独立 commit + `make verify`）
 
-| 面 | 风险 | 控制 |
+| 步 | 内容 | 依赖 |
 |----|------|------|
-| 目录树 API | 任意路径列举（信息泄露） | 只读；`requireAuth`；不跟随 symlink；无写入能力。agent 本身 shell 无约束（既有声明），目录列举不放大权限 |
-| `step_usage` 事件 | 无新增风险（数值来自已有计数） | — |
-| 前端渲染 | XSS（工具输入/输出渲染） | 全部走 `textContent`（现逻辑已是），`innerHTML` 仅 mdRender 转义路径 |
-| 前端样式 | CSP 内联样式阻断 | 新样式全进 `app.css`；禁止 `element.style`，用 classList + CSS 变量（§4.9） |
-| 大数据 | 超大目录/巨量 step | 目录 500 条截断；轨迹步骤上限（如 500 步截断 + 提示） |
+| 1 | 后端事件增强（1.1+1.2）+ 全部 Go 测试适配 | 无 |
+| 2 | 设计令牌 + 全局交互态 + 登录页 + header + 等待态 + 会话列表 + 消息卡（§5.1-5.7,5.10-5.11）+ Grid 骨架 + 侧栏修复 + header 响应式（§6.1-6.4） | 无 |
+| 3 | 特性 2 用量（§3 + §5.8 usage 部分） | 步 1 |
+| 4 | 特性 3 轨迹（§4 + §5.8 trajectory 部分 + §6.2 trajectory-open） | 步 1 |
+| 5 | 特性 1 目录选择器（§2 + §5.9 空态 + §6.5 模态） | 无 |
+| 6 | 收尾：assets/TestNames、CHANGELOG/ARCHITECTURE/README、WEBUI_NEXT 勾选 | 全部 |
 
 ---
 
-## 八、实施步骤
+## 9. 验收标准（DoD）
 
-1. **后端事件增强**（共享支点）：
-   - 钩子签名 + `step` 字段 + `step_usage` 事件 + `emitStepUsage` 装配 + 全部测试更新
-   - 跑通 `make verify`
-2. **公共美化 + 响应式骨架**（Token 变量/间距/header/布局）：
-   - `app.css` 令牌层 + header 毛玻璃 + 间距网格替换魔法值
-   - `#layout` 改 `display:grid` 三栏 + 侧栏重构（`position:fixed` 窄屏）+ 断点 640/800 统一
-   - 消息区居中、composer 对齐、header 响应式隐藏
-   - 独立提交（无逻辑依赖，可先于特性）
-3. **特性 2 用量可视化**（依赖 step_usage）：
-   - `usage.js` + `views.js` 模型 + `events.js` 钩入 + header 预算 + 用量样式
-   - 先做这个，因为轨迹也要用 step_usage 锚点
-4. **特性 3 轨迹视图**（依赖 step 字段）：
-   - `trajectory.js` + 事件捕获 + 抽屉 + 节点定位 + 卡片美化
-   - 抽屉响应式（桌面 360px / 窄屏全屏）随 §5.6 落地
-5. **特性 1 目录选择器**（独立，可并行）：
-   - `web_tree.go` API + `dirpicker.js` + composer 改造 + 模态样式（窄屏全屏随 §5.7）
-6. **收尾**：assets 注册/TestNames、`CHANGELOG`/`ARCHITECTURE`/`README`、`WEBUI_NEXT.md` 勾选完成项
-
-每步独立提交、独立 verify。
+- [ ] `make verify` 全绿；`node --check cmd/miniagent/webstatic/static/*.js` 全绿
+- [ ] 后端：`step_usage`、`tool_use/tool_result.step` 的 3 个新增测试通过（§3.5/§4.6/§2.1 用例）
+- [ ] 前端：三特性手工验证——目录选择器深链+回填、result 卡用量条+详情、轨迹抽屉定位；无 `element.style` 内联属性新增（CSSOM 赋值除外）
+- [ ] 移动端：<640px 浏览器（DevTools 375px）侧栏 drawer、header 收敛、消息全宽、模态全屏均正常
+- [ ] 双主题：暗/亮切换后所有新增变量有值，无未定义 var
+- [ ] 旧会话 replay（无 step/step_usage）不报错，轨迹面板显示占位
 
 ---
 
-## 九、决策清单（已定案）
+## 10. 决策记录（含先前 12 项，未再变更）
 
-| # | 问题 | 定案 | 理由 |
-|---|------|------|------|
-| 1 | 钩子签名加 `step` vs 事件层后补 | **钩子签名加 `step int`** | 数据源头正确；`handleToolCalls` 已持有 step，改动集中；事件层猜测不精确 |
-| 2 | `step_usage` 走新钩子 vs OnStep 差值 | **新钩子 `OnStepUsage`** | 增量直得无差值误差；OnStep 累计值受 compaction 影响（rewrite 历史后累计值不再反映本步） |
-| 3 | 目录树 API 路径范围 | **放开任意绝对路径，只读 + symlink 跳过 + 500 截断** | 与 agent 既有 shell 无约束边界一致；白名单根增加配置面且限制用户浏览自由 |
-| 4 | 轨迹面板形态 | **视图内右侧抽屉（镜像视图）** | 不破坏消息流 DOM；复用 `#overlay` 模式；CSS transform 动画（无内联 style） |
-| 5 | 预算条数据来源 | **boot 时 `GET /api/config` 读 `run.max_tokens_total`** | 不改 result 事件结构；配置保存后前端刷新（config.js 已有回填钩子） |
-| 6 | 最近目录存储 | **localStorage** | 零后端写入面；跨浏览器共享非刚需（部署通常单浏览器管理） |
-| 7 | 用量面板入口 | **双入口：result 卡折叠 + header token 徽标点击弹 `<dialog>`** | 就近查看 + 全局汇总两不误 |
-| 8 | 美化技术约束 | **CSS 变量 + app.css，禁内联 style/图标字体/第三方库** | 满足 CSP `style-src 'self'`；无构建链；离线可用（既有约束） |
-| 9 | 动效 | **仅交互态 transition + 定位高亮例外** | 避免入场动画复杂性；性能与 CSP 双合规 |
-| 10 | 响应式策略 | **CSS Grid 三栏骨架 + `position:fixed` 抽屉，断点仅 640/800 两档（参考 DSH）** | 桌面三栏/平板双栏/窄屏单栏；避免多断点维护（现仅 2 档引 4 条 @media） |
-| 11 | 窄屏侧栏行为 | **`position:fixed` 抽屉 + `z-index` 分层（header<overlay<nav<trajectory）** | 修复现有 `position:relative` 侧栏遮挡 header 的问题；与轨迹抽屉共用 overlay 模式 |
-| 12 | 消息区对齐 | **桌面 `.ev` 居中 `max-width:900px`，用户消息右对齐 80% 宽** | 参考 DSH 排版：集中注意力于内容列，窄屏全宽 |
+| # | 决策 | 状态 |
+|---|------|------|
+| 1-12 | 见上一版 §九（钩子加 step / OnStepUsage / 目录树开放只读 / 轨迹抽屉镜像 / 预算取 config / 最近目录 localStorage / 用量双入口 / CSS 变量禁内联 / 交互态动效 / Grid 三栏 / 窄屏 fixed 侧栏 / 消息居中右对齐） | 保持 |
+| 13 | **CSSOM 赋值合法性**：`element.style.width` 等运行时赋值不受 CSP `style-src 'self'` 限制（HTML 内联属性 `style="..."` 才受限）——用量条宽度、modal 面板等可 CSSOM 设值 | 新增确认 |
+| 14 | **等待/错误提示分离**：`#wait` 仅等待（spinner），`inlineHint` 切 `msg-error` 类显示错误，不再混用 style.color | 新增 |
+| 15 | **轨迹面板定位**：桌面 `position:fixed` 叠层；Grid 三栏模式下 `#layout.trajectory-open` 用 `grid-area` 内嵌——两者通过断点分流，避免 CSSOM 切换 | 新增 |
