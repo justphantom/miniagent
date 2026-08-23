@@ -22,16 +22,25 @@ import (
 // truncation instead of unbounded memory on pathological turns.
 const maxTurnBufferEvents = 20000
 
-// turnSubChanBuffer is the per-subscriber channel capacity. A subscriber that falls this far
-// behind (slow client) is closed by the fan-out; its handler sees the close and the client
-// rebuilds its view on reconnect (D3).
-const turnSubchanBuffer = 64
+// turnSubchanBuffer is the per-subscriber channel capacity. A subscriber that falls this far
+// behind (slow client) is closed by the fan-out; its handler writes the stream_cut marker and
+// the client rebuilds its view via /live or session replay (D3). Sized to absorb delta bursts
+// (the terminal result batch in particular) so a momentarily slow client self-drains instead
+// of tripping the cut on every turn.
+const turnSubchanBuffer = 256
+
+// streamCutLine is the non-terminal cut marker written to a lag-closed subscriber: the turn
+// keeps running (or has finished) server-side; the client must rebuild via /live or replay.
+// NOT a terminal event — consumers must not treat it as result/error/stop.
+const streamCutLine = "{\"type\":\"stream_cut\"}\n"
 
 // turnEntry is one reserved session slot: a running turn (kind "running") or a delete in
 // progress (kind "deleting" — blocks new turns while the file is removed).
 type turnEntry struct {
 	kind   string
+	id     string // session id (logging/observability)
 	cancel context.CancelFunc
+	warn   func(msg string, args ...any) // nil-safe lag-cut logger (engine's slog)
 
 	mu      sync.Mutex
 	buf     []string // every NDJSON line of this turn, in order
@@ -56,13 +65,14 @@ func newTurnRegistry() *turnRegistry {
 
 // register reserves the session for a running turn. busy=true when any entry (running or
 // deleting) exists — the caller answers 409, preserving the N7 same-session semantics.
-func (r *turnRegistry) register(id string, cancel context.CancelFunc) (*turnEntry, bool) {
+// warn is the engine logger's Warn (nil-safe in tests).
+func (r *turnRegistry) register(id string, cancel context.CancelFunc, warn func(string, ...any)) (*turnEntry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.m[id]; ok {
 		return nil, true
 	}
-	e := &turnEntry{kind: "running", cancel: cancel, subs: map[chan string]struct{}{}, done: make(chan struct{})}
+	e := &turnEntry{kind: "running", id: id, cancel: cancel, warn: warn, subs: map[chan string]struct{}{}, done: make(chan struct{})}
 	r.m[id] = e
 	return e, false
 }
@@ -137,7 +147,13 @@ func (e *turnEntry) Write(p []byte) (int, error) {
 		for ch := range e.subs {
 			select {
 			case ch <- line:
-			default: // lagging subscriber: close it, client reconnects and replays
+			default:
+				// lagging subscriber: close it — the handler writes stream_cut and the client
+				// rebuilds via /live or replay (D3). Observable via warn: this was the
+				// invisible cause of "连接中断" reports (server fine, stream silently cut).
+				if e.warn != nil {
+					e.warn("subscriber lag-closed", "session", e.id, "buf", len(e.buf))
+				}
 				close(ch)
 				delete(e.subs, ch)
 			}

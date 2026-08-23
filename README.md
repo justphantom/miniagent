@@ -177,6 +177,8 @@ sudo make deploy   # 装 bin/miniagent 为 systemd WebUI 服务并 enable --now
 | `error` | 主流程失败，**终态** | `message` |
 | `stop` | 轮次被取消（显式停止 / 上下文取消），已执行部分已存入会话，**终态** | `reason`（当前恒为 `canceled`） |
 
+WebUI（`-serve`）另有两个 HTTP 流专属标记（不出现在 CLI stdout）：`live_end`（`/api/sessions/{id}/live` 流的正常收尾）与 `stream_cut`（服务端因订阅者消费落后掐断该连接，**非终态**——轮次仍在服务端运行或已结束，客户端应经 `/live` 或会话回放重建视图，不得当作 result/error/stop 处理）。
+
 工具完整结果经 `trimForHistory` 裁剪后写入历史回灌 LLM；概要（截断到 `maxToolResultEventChars`）经 `tool_result` 事件输出到 stdout 供消费方观察。
 
 ### 字段说明

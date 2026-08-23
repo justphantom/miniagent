@@ -15,7 +15,7 @@ import (
 
 func newTestBus() (*turnRegistry, *turnEntry) {
 	r := newTurnRegistry()
-	e, busy := r.register("sess-1", func() {})
+	e, busy := r.register("sess-1", func() {}, nil)
 	if busy {
 		panic("fresh registry busy")
 	}
@@ -205,11 +205,11 @@ func TestTurnBus_DeleteReservation(t *testing.T) {
 	if r.beginDelete("sess-1") {
 		t.Fatal("beginDelete busy after finish")
 	}
-	if _, busy := r.register("sess-1", func() {}); !busy {
+	if _, busy := r.register("sess-1", func() {}, nil); !busy {
 		t.Fatal("register should be busy during delete")
 	}
 	r.finish("sess-1", nil)
-	if _, busy := r.register("sess-1", func() {}); busy {
+	if _, busy := r.register("sess-1", func() {}, nil); busy {
 		t.Fatal("register busy after delete finished")
 	}
 }

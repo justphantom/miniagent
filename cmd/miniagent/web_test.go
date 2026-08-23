@@ -161,7 +161,7 @@ func TestWebSessionDelete_InFlight_Conflict(t *testing.T) {
 	}
 	// Hold the registry slot as handleTurn would during a running turn (kind=running blocks
 	// both new turns and deletes, mirroring the old held mutex).
-	if _, busy := s.turns.register("busy-1", func() {}); busy {
+	if _, busy := s.turns.register("busy-1", func() {}, nil); busy {
 		t.Fatal("register unexpectedly busy on a fresh registry")
 	}
 	defer s.turns.finish("busy-1", nil)

@@ -384,6 +384,102 @@ func TestWebTurn_DisconnectDoesNotKillTurn(t *testing.T) {
 // F2: an explicit stop must surface a terminal stop event — a silent EOF made the UI's
 // sawTerminal check report "连接中断：流意外结束". The originator's stream (kept open by
 // the turn-scoped cancel) carries it.
+// F1/F3: a lagging subscriber's channel is closed by the fan-out once it exceeds the buffer,
+// and the closure is distinguishable from turn completion via entry.done. This pins the D3
+// slow-consumer semantics the stream_cut signaling depends on.
+func TestTurnEntry_LagClose(t *testing.T) {
+	e := &turnEntry{kind: "running", id: "s-lag", subs: map[chan string]struct{}{}, done: make(chan struct{})}
+	_, ch, ok := e.subscribe()
+	if !ok {
+		t.Fatal("subscribe failed")
+	}
+	line := strings.Repeat("x", 32) + "\n"
+	for range turnSubchanBuffer + 5 {
+		if _, err := e.Write([]byte(line)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	// close(ch) does not discard buffered values — drain until the close surfaces.
+drained:
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				break drained
+			}
+		default:
+			t.Fatal("channel drained without a close — lag close did not fire")
+		}
+	}
+	select {
+	case <-e.done:
+		t.Fatal("done must NOT be closed — the turn is still running")
+	default:
+	}
+	// The full replay buffer still holds every line (late rebuild via /live or replay).
+	if len(e.buf) != turnSubchanBuffer+5 {
+		t.Errorf("buf = %d lines, want %d (replay material must survive the cut)", len(e.buf), turnSubchanBuffer+5)
+	}
+}
+
+// stalledWriter blocks every Write until release — the network-shaped stand-in for a slow
+// subscriber (httptest's in-memory recorder never blocks, which is exactly why the lag-cut
+// path was invisible to the existing suite).
+type stalledWriter struct {
+	release chan struct{}
+}
+
+func (s *stalledWriter) Header() http.Header { return http.Header{} }
+func (s *stalledWriter) Write(p []byte) (int, error) {
+	<-s.release
+	return len(p), nil
+}
+func (s *stalledWriter) WriteHeader(int) {}
+
+// F1: with a stalled subscriber the response must end with the explicit stream_cut marker
+// (not a clean EOF masquerading as completion), while the turn itself finishes server-side
+// and a follow-up /live delivers the terminal result — the exact self-heal material.
+func TestWebTurn_LagCutSignalsStreamCut(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+	stalled := &stalledWriter{release: make(chan struct{})}
+	go func() {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(fmt.Sprintf(`{"prompt":"hi","workdir":%q}`, workdir)))
+		req.Header.Set("Content-Type", "application/json")
+		s.mux().ServeHTTP(stalled, req)
+	}()
+	awaitLLM(t, blocked)
+
+	// Overrun the subscriber buffer while its handler is stalled on the first write.
+	sessionLine := `{"type":"session"}` + "\n"
+	for range turnSubchanBuffer + 10 {
+		s.turns.mu.Lock()
+		for _, e := range s.turns.m {
+			_, _ = e.Write([]byte(sessionLine))
+		}
+		s.turns.mu.Unlock()
+	}
+	close(stalled.release) // unstick the writer — the closed channel surfaces as stream_cut
+
+	id := onlyRunningSession(t, s)
+	liveRec := newSyncRecorder()
+	go func() {
+		s.mux().ServeHTTP(liveRec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions/"+id+"/live", nil))
+	}()
+	waitForBody(t, liveRec, `"type":"session"`)
+
+	close(blocked.release) // finish the turn
+	waitForBody(t, liveRec, `"type":"result"`)
+	waitForBody(t, liveRec, `"type":"live_end"`)
+	if body := liveRec.String(); strings.Contains(body, `"type":"stream_cut"`) {
+		t.Errorf("healthy live subscriber must not be cut: %s", body)
+	}
+}
+
 func TestWebTurn_StopEmitsStopEvent(t *testing.T) {
 	s, _ := newTurnTestServer(t)
 	workdir := t.TempDir()

@@ -231,6 +231,7 @@ async function send() {
           if (v.gen !== gen) return; // superseded stream — stop painting
           if (ev.type === "session" && ev.id) rekey(v, ev.id);
           if (ev.type === "result" || ev.type === "error" || ev.type === "stop") sawTerminal = true;
+          if (ev.type === "stream_cut") { sawTerminal = true; healAfterCut(v, "流被服务端中断，正在重建…"); return; }
           stopWait();
           renderEvent(v, ev);
           updateHeader();
@@ -238,7 +239,7 @@ async function send() {
       }
     }
     if (!sawTerminal) {
-      renderEvent(v, { type: "error", error: "连接中断：流意外结束（会话已保存已执行部分，可点击重试续跑）", ts: Date.now() });
+      healAfterCut(v, "流被中断，正在重建…");
     }
   } catch (e) {
     if (e.name === "AbortError") {
@@ -264,6 +265,44 @@ async function stopTurn(v) {
   if (!v.id) { v.abort?.abort(); return; } // pre-session-event window: abort locally, turn id unknown yet
   try { await api(`/api/sessions/${encodeURIComponent(v.id)}/stop`, { method: "POST" }); }
   catch (e) { inlineHint("停止失败：" + e.message); }
+}
+
+// healAfterCut rebuilds the view after the server cut the NDJSON stream (subscriber lag —
+// the bus closes slow subscribers and signals stream_cut; an EOF without a terminal event
+// means the same). The turn keeps running server-side (D1): /live replays from event zero
+// when still running, the persisted jsonl replays when it has finished. Falls back to the
+// honest "连接中断" card only when both rebuild paths fail.
+async function healAfterCut(v, hint) {
+  if (!v.id) { // session event never arrived — nothing to rebuild from
+    renderEvent(v, { type: "error", error: "连接中断：流意外结束（会话已保存已执行部分，可点击重试续跑）", ts: Date.now() });
+    return;
+  }
+  v.gen++;            // supersede any in-flight stream/stale renderers
+  v.dom.innerHTML = "";
+  v.curText = null; v.curReasoning = null; v.toolNodes.clear();
+  v.tokens = { in: 0, out: 0 };
+  v.usage = { budget: 0, steps: [] };
+  v.trajectory = { order: [], steps: new Map() };
+  v.metrics = { rounds: 0, steps: 0, llmMs: 0, toolMs: 0 };
+  v.curStep = 0;
+  finishText(v);
+  const note = document.createElement("div");
+  note.className = "ev spectator muted";
+  note.textContent = hint || "流被中断，正在重建…";
+  v.dom.appendChild(note);
+  try {
+    if (runningKnown.has(v.id)) {
+      attachSpectator(v, false); // /live replays from event zero and follows to live_end
+      note.remove();
+      return;
+    }
+    await loadReplay(v); // turn already finished: the jsonl has the full history
+    if (!v.dom.querySelector(".ev.result, .ev.error, .ev.stopped")) throw new Error("empty replay");
+    note.remove();
+  } catch {
+    note.remove();
+    renderEvent(v, { type: "error", error: "连接中断：流意外结束（会话已保存已执行部分，可点击重试续跑）", ts: Date.now() });
+  }
 }
 
 // attachSpectator follows a running turn of ANOTHER window into this view (409 upgrade or

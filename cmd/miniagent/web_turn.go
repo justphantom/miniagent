@@ -95,7 +95,7 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	const defaultWebMaxDuration = 10 * time.Minute
 	turnCtx, cancel := context.WithTimeout(s.baseCtx, defaultWebMaxDuration)
 
-	entry, busy := s.turns.register(id, cancel)
+	entry, busy := s.turns.register(id, cancel, s.engine.logger.Warn)
 	if busy {
 		cancel()
 		// Same-session turn already running (N7 semantics kept): the UI can attach to the
@@ -157,7 +157,16 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 		select {
 		case line, ok := <-ch:
 			if !ok {
-				return // turn finished: every buffered line has been drained
+				select {
+				case <-entry.done:
+					return // turn finished: every buffered line has been drained
+				default:
+					// lag-cut: the bus closed this lagging subscriber. Signaling stream_cut
+					// lets the client rebuild via /live or replay instead of reading a clean
+					// EOF as a dropped connection ("连接中断").
+					_ = nw.WriteLine(streamCutLine)
+					return
+				}
 			}
 			if nw.WriteLine(line) != nil {
 				return

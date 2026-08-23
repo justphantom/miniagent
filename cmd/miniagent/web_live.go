@@ -94,8 +94,16 @@ func (s *webServer) handleSessionLive(w http.ResponseWriter, r *http.Request) {
 		select {
 		case line, ok := <-ch:
 			if !ok {
-				_ = nw.WriteLine("{\"type\":\"live_end\"}\n") // clean end-of-turn marker
-				return
+				select {
+				case <-entry.done:
+					_ = nw.WriteLine("{\"type\":\"live_end\"}\n") // clean end-of-turn marker
+					return
+				default:
+					// lag-cut (turn still running or just finished elsewhere): signal the cut
+					// so the client re-attaches; live_end would claim the turn is over.
+					_ = nw.WriteLine(streamCutLine)
+					return
+				}
 			}
 			if nw.WriteLine(line) != nil {
 				return
