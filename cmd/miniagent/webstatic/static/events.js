@@ -12,6 +12,17 @@ import { refreshPanel } from "./trajectory.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
 
+// Step timeline icons (V3): each event card gets a leading icon by type/tool name.
+const STEP_ICONS = {
+  think: "💭", bash: ">_", read: "📄", write: "✏️", edit: "📝",
+  search: "🔍", web: "🌐", result: "✅", error: "❌", user: "👤",
+  assistant: "🤖", default: "◈",
+};
+function getIcon(name) {
+  const key = (name || "").toLowerCase().split(/[_\s]/)[0];
+  return STEP_ICONS[key] || STEP_ICONS.default;
+}
+
 // Streaming markdown: reasoning deltas stream for minutes and the plain-text phase showed raw
 // md syntax (`**bold**`, fences) the whole time. Reparse at a fixed cadence instead of per
 // delta (O(deltas) reparses caused the original one-shot-render decision), and cap the live
@@ -23,10 +34,16 @@ const MAX_STREAM_MD_CHARS = 64 * 1024;
 const dirtyViews = new Set(); // views with unrendered streaming buffers
 let streamTimer = 0;
 
-// evDiv: body "" = streaming container (caller appends), string = final markdown body.
-function evDiv(cls, tag, ts, body = "") {
+// evDiv: body "" = streaming container (caller appends into .ev-body), string = final markdown body.
+function evDiv(cls, tag, ts, body = "", icon = "") {
   const d = document.createElement("div");
   d.className = "ev " + cls;
+  const ic = document.createElement("div");
+  ic.className = "ev-step-icon";
+  ic.textContent = icon || STEP_ICONS.default;
+  d.appendChild(ic);
+  const wrap = document.createElement("div");
+  wrap.className = "ev-body";
   if (tag) {
     const t = document.createElement("div");
     t.className = "tag";
@@ -37,23 +54,24 @@ function evDiv(cls, tag, ts, body = "") {
     time.className = "time";
     time.textContent = fmtTime(ts);
     t.appendChild(time);
-    d.appendChild(t);
+    wrap.appendChild(t);
   }
   if (body) {
     const md = document.createElement("div");
     md.className = "md";
     md.innerHTML = mdRender(body);
-    d.appendChild(md);
+    wrap.appendChild(md);
     addCopyButtons(md);
   }
+  d.appendChild(wrap);
   return d;
 }
 
 export function appendUserPrompt(view, text) {
   // remove empty state if present
   view.dom.querySelector(".empty-state")?.remove();
-  const d = evDiv("user", "user", Date.now());
-  d.appendChild(document.createTextNode(text)); // user input stays plain text (no markdown)
+  const d = evDiv("user", "user", Date.now(), "", STEP_ICONS.user);
+  d.querySelector(".ev-body").appendChild(document.createTextNode(text)); // user input stays plain text (no markdown)
   view.dom.appendChild(d);
 }
 
@@ -61,12 +79,13 @@ export function appendDelta(view, kind, text, ts, step) {
   if (step) view.curStep = step;
   let d = kind === "text" ? view.curText : view.curReasoning;
   if (!d) {
-    d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking", ts);
+    d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking", ts, "",
+      kind === "text" ? STEP_ICONS.assistant : STEP_ICONS.think);
     if (kind === "reasoning") d.style.opacity = "0.75";
     d._md = ""; // raw markdown buffer, kept live by paintStreaming, finalized at finishText
     const md = document.createElement("div");
     md.className = "md";
-    d.appendChild(md);
+    d.querySelector(".ev-body").appendChild(md);
     d._mdEl = md;
     view.dom.appendChild(d);
     if (kind === "text") view.curText = d; else view.curReasoning = d;
@@ -120,13 +139,18 @@ function makeCollapsible(d, text) {
     const nowCollapsed = d.classList.toggle("collapsed");
     btn.textContent = nowCollapsed ? `展开全部（${lines} 行）` : "收起";
   });
-  d.appendChild(btn);
+  (d.querySelector(".ev-body") || d).appendChild(btn);
 }
 
 export function appendToolUse(view, ev) {
   const d = document.createElement("details");
   d.className = "ev tool";
   if (ev.step) d.dataset.step = ev.step;
+  const ic = document.createElement("div");
+  ic.className = "ev-step-icon";
+  ic.textContent = getIcon(ev.name);
+  const wrap = document.createElement("div");
+  wrap.className = "ev-body";
   const s = document.createElement("summary");
   const name = document.createElement("span");
   name.textContent = ev.name;
@@ -134,10 +158,11 @@ export function appendToolUse(view, ev) {
   time.className = "time";
   time.textContent = fmtTime(ev.ts);
   s.appendChild(name); s.appendChild(time);
-  d.appendChild(s);
+  wrap.appendChild(s);
   const pre = document.createElement("pre");
   pre.textContent = ev.input || "";
-  d.appendChild(pre);
+  wrap.appendChild(pre);
+  d.append(ic, wrap);
   view.dom.appendChild(d);
   if (ev.call_id) view.toolNodes.set(ev.call_id, d);
   // trajectory capture
@@ -156,7 +181,7 @@ export function appendToolResult(view, ev) {
   const pre = document.createElement("pre");
   pre.className = "out" + (ev.is_error ? " err" : "");
   pre.textContent = ev.output || "";
-  target.appendChild(pre);
+  (target.querySelector(".ev-body") || target).appendChild(pre);
 }
 
 export function finishText(view) {
@@ -219,22 +244,23 @@ export function renderEvent(view, ev) {
       finishText(view);
       view.tokens.in += ev.input_tokens || 0;
       view.tokens.out += ev.output_tokens || 0;
-      const d = evDiv("result", "result", ev.ts);
+      const d = evDiv("result", "result", ev.ts, "", STEP_ICONS.result);
+      const body = d.querySelector(".ev-body");
       const md = document.createElement("div");
       md.className = "md";
       md.innerHTML = mdRender(ev.text || "(no text)");
-      d.appendChild(md);
+      body.appendChild(md);
       addCopyButtons(md);
       makeCollapsible(d, ev.text || "");
       const u = document.createElement("div");
       u.className = "usage";
       const elapsed = view.turnStartTs && ev.ts ? ` · ${((ev.ts - view.turnStartTs) / 1000).toFixed(1)}s` : "";
       u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}${elapsed}`;
-      d.appendChild(u);
+      body.appendChild(u);
       // usage bar + step details
       const budget = view.usage.budget || getBudget();
-      renderUsageBar(d, { in: ev.input_tokens || 0, out: ev.output_tokens || 0, budget });
-      renderStepUsageList(d, view.usage.steps);
+      renderUsageBar(body, { in: ev.input_tokens || 0, out: ev.output_tokens || 0, budget });
+      renderStepUsageList(body, view.usage.steps);
       view.usage.steps.length = 0;
       view.dom.appendChild(d);
       view.turnStartTs = 0; // N13: replay streams several results — reset so the next turn's elapsed starts fresh
@@ -252,8 +278,9 @@ export function renderEvent(view, ev) {
     }
     case "error": {
       finishText(view);
-      const d = evDiv("error", "error", ev.ts || Date.now());
-      d.appendChild(document.createTextNode(ev.error || ev.message || "unknown error"));
+      const d = evDiv("error", "error", ev.ts || Date.now(), "", STEP_ICONS.error);
+      const body = d.querySelector(".ev-body");
+      body.appendChild(document.createTextNode(ev.error || ev.message || "unknown error"));
       if (view.lastPrompt) {
         const retry = document.createElement("button");
         retry.type = "button";
@@ -263,7 +290,7 @@ export function renderEvent(view, ev) {
           document.getElementById("prompt").value = view.lastPrompt;
           if (activeView() === view) document.getElementById("send").click(); // auto-send only when still on this view
         });
-        d.appendChild(retry);
+        body.appendChild(retry);
       }
       view.dom.appendChild(d);
       break;
