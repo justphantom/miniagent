@@ -35,8 +35,9 @@ cmd/miniagent/        CLI 入口层（库的装配消费者）
    web_bus.go         turnRegistry：turn 事件总线（重放缓冲+多订阅扇出+同会话互斥+生命周期广播）
    web_live.go        /api/events（全局生命周期流）+ /api/sessions/{id}/live（旁观进行中轮次）
    web_sessions.go    /api/sessions 列表（含 running）/删除/停止
+   web_config.go      GET/PUT /api/config 配置管理（读取+校验+写回，secret 掩码）
    web_guard.go       Host 白名单 / CSRF / CSP 防护中间件
-   webstatic/         前端静态资源（app.js/views.js/events.js/live.js/store.js/md.js/app.css/index.html）
+   webstatic/         前端静态资源（app.js/views.js/events.js/live.js/store.js/md.js/config.js/app.css/index.html）
 
 miniagent/   核心库（零外部依赖，纯标准库）
   loop.go             Run：ReAct 主循环（defer 统一写命名返回，captureDowngrade 固化降级）
@@ -90,6 +91,7 @@ miniagent/metrics/     OnStep 默认消费者：NewStepEmitter（per-step NDJSON
 config/      配置解析子包（库化后独立顶层）
   config.go           Config / Defaults / Run / Provider / CompactionProvider 类型（含 v5.0.0 废弃键 Mode/Cache/Confine*）
   config_load.go      LoadConfig / decodeConfigStrict（DisallowUnknownFields + 废弃键容忍）
+  config_save.go      SaveConfig / ValidateConfig（校验 + 原子写回 0600 + O_NOFOLLOW 加固）
   validate.go         validateConfig / validateThinking / thinkingFieldBlacklist
   resolve.go          Resolve：cli>config>builtin 三态裁决产出 Resolved
   resolve_helpers.go  三态裁决辅助：pickInt / findModelConfig / ParseDuration

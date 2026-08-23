@@ -3,6 +3,11 @@
 所有显著变更进入此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/)，
 版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Added
+- **WebUI 配置管理页面**：新增 `GET/PUT /api/config` 端点（`web_config.go`），读取当前配置（secret 掩码回显）、`SaveConfig` 校验后原子写回（`config_save.go`，0600 + O_NOFOLLOW + 临时文件重命名）；前端 `config.js` 全字段表单（6 个可折叠分组、60+ 字段，支持 text/number/bool/array/duration 类型）、保存后提示「需重启服务生效」；配置侧栏按钮 `⚙ 配置`。`config.ValidateConfig` 导出供 web 层调用的校验入口。
+
 ## [6.4.0] - 2026-08-23
 
 ### Added
