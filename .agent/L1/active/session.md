@@ -1,35 +1,25 @@
 ---
 layer: L1
 type: session
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # 当前会话
 
 ## 状态
-- 已发布 v6.4.0（WebUI 多会话同步 + 上游 SSE 截断重试加固），tag 已 push，工作树干净，verify-gate 全绿。
+- 发版前完善按建议顺序执行中：①CHANGELOG 补漏 ✅ ②部署复测 ✅ ③R4 截断透明化 ✅（cd4b371，未打 tag）。工作树干净。待办：④第四轮复审（stream.go 降级路径+web 前端重构）⑤README WebUI 章节补新特性 ⑥规格文档过期清理。
 
-## 本会话产出
-- **事故根因**（用户报告"连接中断"）：上游 `autoapi` 429 TPM 限流失效前掐断 SSE 数据行 → miniagent 解析到截断 chunk `unexpected end of JSON input`（`stream_parse.go:108`）→ `OnLLMError` 只对 `ErrContextLength` 重试，此错误透传 → 整轮中止；同时客户端请求 ctx 断开使 handler 提前返回（`web_turn.go` `<-r.Context().Done()`），缓冲中的 error 行未 flush，前端只见干净 EOF → 落入"连接中断"兜底。
-- **修复**：`isTransientStreamError`（`provider/openai/stream.go`）纳入 `unexpected end of JSON input`，预-delta（`deltaSent==0`）透明重试一次；新增 `TestDoStream_TruncatedChunkPreDeltaRetried`。
-- **发版**：CHANGELOG `[Unreleased]` → `[6.4.0]`（Added 合并 + Fixed 补本次修复），commit `7c2d895`，tag `v6.4.0` push 后 `make build` 二进制报 `v6.4.0`。`cmd/miniagent/web_live_test.go` 双窗口 result 完整性测试一并提交。
-- 事故关联日志：`/opt/llm-proxy/logs/llm-proxy.log`（429/abort）、miniagent journal（`llm call failed step=6`）、会话 `20260823-104331-467079dcd1e88fd9.jsonl`（尾部停在 step5 tool 输出，无最终 assistant/result）。
+## 本会话产出（发版前完善）
+- **①CHANGELOG 补漏**：v6.4.0..HEAD 44 提交原仅 6 条，补 4 条——9096515（三特性+UI 重设计+Breaking：OnToolUse/OnToolResult 加 step 首参、新钩子 OnStepUsage、`GET /api/tree`、`step_usage` 事件 web-only）、651711e（IDE 骨架）、1211853（hscroll 修复）、19c76ee（配置目录迁移）。
+- **②部署复测（ROOTCAUSE3 DoD）**：服务已运行 HEAD（v6.4.0-44-g4703e7b）；turn NDJSON + `step_usage` 实测正常；**lag-closed WARN 生产实证**（01:15:19 用户浏览器旁观本会话被掐，buf=8565）且**浏览器自动恢复**（用户确认）→ stream_cut 自愈闭环端到端验证通过。环回直接复现失败（tcp_wmem autotune 4MB 吸收全部单轮流量的 ~1MB，单事件 tool_result≤2000 字符凑不够；无 sudo 不能 netns 收缩窗口）——已知限制，`TestWebTurn_LagCutSignalsStreamCut` 单测钉死语义。
+- **③R4 mid-data 截断透明化**（cd4b371）：`Response.TruncatedStream`/`Result.Truncated` 领域标记（L0 #8 不进 wire）→ result 事件 `"truncated":true`（omit-if-zero，旧消费方零影响）→ WebUI「· 上游截断」徽标。区分 finish:length（max_tokens 截断）与上游断流。测试：TruncatedChunkPostDelta 断言 TruncatedStream=true；ZeroFieldsPresent 断言 truncated 键 absent。README 契约示例 + CHANGELOG。verify-gate 全绿。
 
-## 配置管理页面（新增 vNext）
-- 后端：`config.SaveConfig`（校验+原子写 0600+O_NOFOLLOW）+ `ValidateConfig` 导出；`web_config.go` GET/PUT /api/config（secret 掩码、占位符保留、校验、need_restart 检测）
-- 前端：`config.js` **双模式**——表单模式（6 分组 60+ 字段）+ **providers 卡片编辑**（增删 provider/model/header/thinking-map）+ **JSON 高级编辑器**（textarea 编辑完整配置）；`index.html` ⚙ 配置按钮 + `app.js`/`app.css` 集成；`assets.go` 新增 config.js embed
-- 5 commits（ca26d61 / a4aa3e0 / f34f999 / f73e1ce / c33d824），CHANGELOG `[Unreleased]` Added 已更新；verify-gate 全绿
-- 59977c4 修复：`renderKv`/`renderKvMap` 渲染时不再 setNested 创建空对象，空条目删字段（omitempty）——打开配置页不改即保存不再污染配置
-- e4e78d0 后端：PUT 返回 `config` 字段（掩码后 saved config），前端保存后回填表单；前端：`clientValidate` 预校验（空 providers/重复名/必填缺失），减少无效往返
-- 19c76ee 部署：配置目录 `/etc/miniagent` → `/opt/miniagent/config`（服务用户可写）。根因：`ProtectSystem=full` 把 `/etc` 挂只读 + config 目录 root 属主 0755 无目录写权限，SaveConfig 的 temp+rename 需目录写权限故失败。`deploy.sh` 改为 install 目录归服务用户 0750、README 同步
-- 899c64f 文档：`WEBUI_NEXT.md` —— 对比 DSH WebUI 功能集，产出迭代路线图（P0 文件附件/轨迹视图/目录选择器/会话重命名 → P1 搜索/反馈/命令/模型切换/用量 → P2 导出/工作区/作业/目标/计划/引用 → P3 子代理/技能/交付物/国际化/插件），附 Step 1 详细设计
-- 4339a5f 文档：`WEBUI_IMPLEMENTATION.md` —— 三项特性（目录选择器 GET /api/tree、Token 用量 step_usage 事件+条形图、工具轨迹 step 字段+轨迹面板）详细实现方案。核心共享支点：OnToolUse/OnToolResult 钩子签名加 step int（handleToolCalls 已透传 step，事实已验证）、LoopHooks 新增 OnStepUsage（recordStepUsage 末尾增量直得，避免 OnStep 累计值差值误差）。新文件：web_tree.go、usage.js、trajectory.js、dirpicker.js
-- 30ab5d5 文档：`WEBUI_IMPLEMENTATION.md` 定稿 —— 决策清单 9 项全部定案（钩子加 step/OnStepUsage 新钩子/目录树放开只读+加固/轨迹抽屉镜像/预算取 config/最近目录 localStorage/用量双入口/禁内联样式/CSS 变量美化）；新增 §四 UI 美化设计（Token 变量扩展、header 毛玻璃、消息卡片左右对齐、用量条/轨迹抽屉/模态组件规范、动效、无障碍、CSP 合规）与 §4.10 美化实施范围表
-- 0fa8ecf 文档：`WEBUI_IMPLEMENTATION.md` 补 §五 响应式布局 —— 参考 DSH（CSS Grid 三栏骨架 + position:fixed 抽屉 + 设计令牌，仅 2 档断点）；三态布局（≥800 三栏侧栏+轨迹/640-799 双栏/<640 单栏 drawer）；侧栏重构 position:fixed 修复遮挡 header、消息区居中+用户消息右对齐、composer 对齐、header 元素逐档隐藏表、轨迹抽屉/模态窄屏全屏、断点注释约定（NARROW/TABLET/DESKTOP）；决策清单扩至 12 项（#10-12 响应式策略/窄屏侧栏/消息对齐）；§八 实施步骤第 2 步扩入响应式骨架
-- df028b5 文档：`WEBUI_IMPLEMENTATION.md` 规格化改写 v2.0（可直接编码给 LLM）——逐节规格化：①共享支点给出精确 Go 签名/调用方全量清单/事件 JSON；②特性 1/2/3 每个 API 给出方法/路径/参数/错误码/用例名表，前端给 DOM 模板+函数签名+状态机；③美化从"方向"升级为完整 CSS 规则块（令牌双主题全值、登录页、spinner 分离 #wait/inlineHint、会话列表 running 点位移修复、消息卡 border-left、空态、to-bottom）；④响应式给具体 @media 块与侧栏 display 冲突修复；⑤新增 §0 总览（硬约束/术语）、§7 文件改动清单（精确到函数）、§9 验收 DoD、§10 决策记录（原 12 项+新增 #13 CSSOM 赋值合法/#14 提示分离/#15 轨迹定位）
+## 方法论沉淀（候选 L2）
+- 环回 lag-close 实测方法论：socket SO_RCVBUF 收缩无效（服务端 wmem autotune 独立扩大）；curl --limit-rate 仅节流自身读、内核双端缓冲吸收突发；真正触发需「服务端写阻塞 + 新事件持续到达 >256 channel 容量」。生产实证优于人造复现。
+- 事件契约新增字段必须 omit-if-zero（区别于既有 always-present 机器契约键）。
 
-## 待办
-- ✅ `SSE_STREAM_ROOTCAUSE3.md` 已实施（3c7025d）：F1 web_turn/web_live `!ok` 分支查 entry.done，lag-close 写 `stream_cut` 非终态标记（/live 不写 live_end）；F2 前端 healAfterCut（视图重建 + runningKnown 分流 attachSpectator/loadReplay，失败兜底原错误卡；stream_cut 事件与 EOF 无终态双触发）；F3 turnEntry.id/warn + `subscriber lag-closed` WARN + buffer 64→256。测试：TestTurnEntry_LagClose（钉死 close 后缓冲仍可排干语义）/TestWebTurn_LagCutSignalsStreamCut（stalledWriter 阻塞写复现掐线→stream_cut，/live 自愈材料完整）。**待部署复测**（make build + systemd 重启 + 浏览器实测；验证 DoD：慢客户端 curl --limit-rate 复现 stream_cut、journal 可见 lag-closed WARN）。
-- ✅ `SSE_STREAM_ROOTCAUSE2.md` P0 已实施（a3b825f）：F1 `web_turn.go` cancel 移入 turn goroutine defer（D1 修复：断开不杀 turn）；F2 `event.EmitStop` + run_turn Canceled 分支 emit `{"type":"stop","reason":"canceled"}` + 前端 sawTerminal 认 stop 渲染「已停止」卡片；README/CHANGELOG 契约同步；`TestWebTurn_DisconnectDoesNotKillTurn` 强化（live 旁观断 result，旧代码必挂）+ `TestWebTurn_StopEmitsStopEvent`。已部署生效（v6.4.0-42-g08b981e，00:28 重启）。P1 残留：R4 mid-data 截断 TruncatedStream 标记未做；R1 zhipu 掐流为外部因素。
-- `WEBUI_SESSION_HSCROLL.md`（对话列表横向滚动条消除方案，基线 0548ae7，headless chromium 实证）待确认后实施：F1 `.tree-group` 变 flex column（根因：4d35283 分组后 `.sess-item` inline-block shrink-to-fit 被 nowrap `.sid` 撑到 559px）+ F2 首行 `top` div 加 `sess-title` 类省略号 + F3 `.panel-body overflow-x:clip` 兜底。改 app.css/app.js 各一处，1 commit。
-- `WEBUI_RESPONSIVE_UX.md`（响应式/UX 修复规格，基线 8e517fd）待实施：3×P0（抽屉无遮罩 app.css:54、平板 ☰ 失效 :268、#dirpicker 双节点）+ 9×P1（composer 行布局、轨迹面板流式刷新/保展开态、刘海 safe-area、to-bottom 避让、平板轨迹空洞、触摸目标、dirpicker 竞态、用户消息桌面右对齐）+ 7×P2（confirmInline 类化、theme-color、overscroll、tap-highlight、登录窄屏）。3 个 commit 顺序在文档 §4。
+## 待办（发版前）
+- ④第四轮复审（ASSESSMENT.md 停在 248b53c 早于 v6.4.0）：重点 stream.go 降级路径、web 前端 IDE 重构、钩子签名变更面。
+- ⑤README WebUI 章节：目录选择器/Token 用量/工具轨迹/IDE 布局未入文档。
+- ⑥过期文档清理：WEBUI_RESPONSIVE_UX.md 基线 8e517fd 已作废（app.css IDE 体系无 #nav/#overlay，F1-F18 结论失效需重审计）；WEBUI_SESSION_HSCROLL.md 待办陈旧（1211853 已修）；13 个 WEBUI_*/SSE_* 过程文档堆积待归档（需用户决定）。
+- 发版时：CHANGELOG [Unreleased] → 版本号定档（含 Breaking，主版本建议 7.0.0），不打 tag 由用户手动执行。
