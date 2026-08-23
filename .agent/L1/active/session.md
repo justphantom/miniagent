@@ -7,7 +7,7 @@ updated: 2026-08-24
 # 当前会话
 
 ## 状态
-- **v6.6.0 已发版**（2026-08-24）：三特性——①配置模态框漂移可见化（编辑基准改为文件内容、diverged/diff 仅字段路径、文件损坏降级运行值+警告横幅）；②设置内重载服务（runServe 重构为重启循环，POST /api/reload，坏文件 400/有 turn 409/重复 503，前端按钮轮询 whoami 穿断连窗口）；③版本号双 v 前缀修复（setVersion 不再拼接）。另：测试文件 300 行约束纳入（3 超限文件拆分）、goimports 统一 import 分组。CHANGELOG 回填 [6.6.0]、version.go v6.6.0。verify-gate 全绿。
+- **v6.6.2 已发版**（2026-08-24）：header 显示会话 workdir（新会话 session 事件/历史回放填充）。发版后追加 `b4e2b07`：header 精简为仅 workdir（删会话 ID 与 in/out token 显示——ID 在标签页标题与会话面板、token 在 status-bar 与 usage 面板；连带删死代码 `#tab-meta`），**未发版、未推送**，待下个版本一并带上。
 - v6.5.0 发版记录见 git 历史（tag `v6.5.0` @ 8c03cb6）。
 
 ## 本会话任务

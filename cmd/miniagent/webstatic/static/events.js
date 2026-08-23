@@ -142,6 +142,18 @@ function makeCollapsible(d, text) {
   (d.querySelector(".ev-body") || d).appendChild(btn);
 }
 
+// toolArg picks the headline argument for a tool summary (e.g. "edit:main.go"). File tools
+// show the basename (full path goes into title); shell shows the command, web the url,
+// search tools the pattern. Unknown tools fall back to the first string field.
+function toolArg(name, input) {
+  let v = {};
+  try { v = JSON.parse(input || "{}"); } catch { return ""; }
+  const key = ["path", "command", "url", "pattern", "query"].find((k) => typeof v[k] === "string" && v[k]) || Object.keys(v).find((k) => typeof v[k] === "string" && v[k]);
+  if (!key) return "";
+  const val = v[key];
+  return key === "path" ? val.split("/").pop() : val;
+}
+
 export function appendToolUse(view, ev) {
   const d = document.createElement("details");
   d.className = "ev tool";
@@ -153,11 +165,16 @@ export function appendToolUse(view, ev) {
   wrap.className = "ev-body";
   const s = document.createElement("summary");
   const name = document.createElement("span");
+  name.className = "ev-tool-name";
   name.textContent = ev.name;
+  const arg = toolArg(ev.name, ev.input);
+  const argEl = document.createElement("span");
+  argEl.className = "ev-tool-arg";
+  argEl.textContent = arg ? ":" + arg : "";
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = fmtTime(ev.ts);
-  s.appendChild(name); s.appendChild(time);
+  s.append(name, argEl, time);
   wrap.appendChild(s);
   const pre = document.createElement("pre");
   pre.textContent = ev.input || "";
