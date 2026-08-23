@@ -7,11 +7,11 @@ updated: 2026-08-24
 # 当前会话
 
 ## 状态
-- **v6.6.2 已发版**（2026-08-24）：header 显示会话 workdir（新会话 session 事件/历史回放填充）。发版后追加 `b4e2b07`：header 精简为仅 workdir（删会话 ID 与 in/out token 显示——ID 在标签页标题与会话面板、token 在 status-bar 与 usage 面板；连带删死代码 `#tab-meta`），**未发版、未推送**，待下个版本一并带上。
+- **v6.6.4 已发版**（2026-08-24，`ec2b548`）：工具卡预览+展开统一（2 行/90 字符）、发送按钮垂直居中（`67019c6`）。**未打 tag、未推送**，用户手动执行。
 - v6.5.0 发版记录见 git 历史（tag `v6.5.0` @ 8c03cb6）。
 
 ## 本会话任务
-- **工具卡片弃用 details 折叠**（已提交 `910a4c7`，未发版推送）：统一为预览（前 2 行且 ≤90 字符，用户指定）+「展开完整内容」按钮切换全文。events.js `toolPre()`（pre 内嵌按钮，复用 .expand-btn）；trajectory.js 同逻辑（clip 常量复制不导入，防 events↔trajectory 环）；CSS `.ev.tool summary`→`.ev-tool-head`、补 `.trajectory-tool*` 基础样式；外层 trajectory-step 仍是 details（步骤卡非工具卡）。verify-gate 全绿。
+- **工具卡片弃用 details 折叠**（`910a4c7`，已随 v6.6.4 发版）：统一为预览（前 2 行且 ≤90 字符，用户指定）+「展开完整内容」按钮切换全文。events.js `toolPre()`（pre 内嵌按钮，复用 .expand-btn）；trajectory.js 同逻辑（clip 常量复制不导入，防 events↔trajectory 环）；CSS `.ev.tool summary`→`.ev-tool-head`、补 `.trajectory-tool*` 基础样式；外层 trajectory-step 仍是 details（步骤卡非工具卡）。沉淀 → L2 webui-architecture §11。
 
 ## 本会话产出（发版前完善）
 - **①CHANGELOG 补漏**：v6.4.0..HEAD 44 提交原仅 6 条，补 4 条——9096515（三特性+UI 重设计+Breaking：OnToolUse/OnToolResult 加 step 首参、新钩子 OnStepUsage、`GET /api/tree`、`step_usage` 事件 web-only）、651711e（IDE 骨架）、1211853（hscroll 修复）、19c76ee（配置目录迁移）。
