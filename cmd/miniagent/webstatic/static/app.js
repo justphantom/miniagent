@@ -9,13 +9,14 @@
 // stop while the active view has a running turn; stopping goes through the stop API, and the
 // local stream stays open to receive the partial result.
 
-import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, saveNavCollapsed, loadNavCollapsed, setStatusModel } from "./store.js";
+import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, setStatusModel } from "./store.js";
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 import { startEvents, attachLive } from "./live.js";
 import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom } from "./views.js";
 import { openConfigModal, closeConfigModal } from "./config.js";
 import { attachDirPicker } from "./dirpicker.js";
-import { toggleTrajectory, setActiveViewGetter, refreshPanel } from "./trajectory.js";
+import { showTrajectory, hideTrajectory, setOnTrajectoryClose, setActiveViewGetter, refreshPanel } from "./trajectory.js";
+import { initPanel, togglePanel, closePanel, filterSessions } from "./panel.js";
 
 const $ = (id) => document.getElementById(id);
 const runningKnown = new Set(); // session ids with a turn in flight (lifecycle feed)
@@ -42,7 +43,6 @@ function showLogin() { $("login").classList.add("on"); $("app").classList.remove
   $("login").classList.remove("on");
   $("app").classList.add("on");
   $("composer-adv").open = loadComposerAdv();
-  document.body.classList.toggle("nav-collapsed", loadNavCollapsed());
   const savedWd = loadWorkdir();
   if (savedWd) $("workdir").value = savedWd;
   activate(createView("")); // the initial draft view
@@ -81,7 +81,21 @@ function applyTheme(t) {
 themeBtn.addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "light" ? "" : "light"));
 
 // ---- trajectory toggle ----
-$("traj-btn").addEventListener("click", () => toggleTrajectory());
+
+// switchTab swaps the chat view and the trajectory overlay inside main.
+function switchTab(name) {
+  for (const t of document.querySelectorAll("#tabs .tab")) t.classList.toggle("active", t.dataset.tab === name);
+  if (name === "trajectory") {
+    showTrajectory();
+    $("to-bottom").style.display = "none";
+  } else {
+    hideTrajectory();
+  }
+}
+for (const t of document.querySelectorAll("#tabs .tab")) {
+  t.addEventListener("click", () => switchTab(t.dataset.tab));
+}
+setOnTrajectoryClose(() => switchTab("chat"));
 
 // ---- auto-scroll: follow only when near bottom, otherwise show a jump button ----
 
@@ -102,34 +116,33 @@ const scrollMo = new MutationObserver(() => {
   if (v?.stickBottom) jumpToBottom();
 });
 
-// ---- composer & views ----
+// ---- icon bar / slide panel / tabs ----
 
-$("menu-btn").addEventListener("click", () => {
-  if (matchMedia("(min-width: 800px)").matches) {
-    const c = document.body.classList.toggle("nav-collapsed");
-    saveNavCollapsed(c);
-  } else {
-    document.body.classList.toggle("nav-open");
-  }
-});
+$("menu-btn").addEventListener("click", () => document.body.classList.toggle("iconbar-open"));
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") document.body.classList.remove("nav-open");
+  if (e.key === "Escape") document.body.classList.remove("iconbar-open");
 });
-$("overlay").addEventListener("click", () => document.body.classList.remove("nav-open"));
 
-$("composer-adv").addEventListener("toggle", (e) => saveComposerAdv(e.target.open));
-
-$("new-chat").addEventListener("click", () => {
+$("icon-sessions").addEventListener("click", () => {
+  togglePanel();
+  document.body.classList.remove("iconbar-open");
+});
+$("icon-new").addEventListener("click", () => {
   activate(createView(""));
   updateHeader();
-  document.body.classList.remove("nav-open");
+  closePanel();
+  document.body.classList.remove("iconbar-open");
+  switchTab("chat");
   if (!isTouch) { $("prompt").focus(); }
 });
-
-$("config-btn").addEventListener("click", () => {
+$("icon-settings").addEventListener("click", () => {
   openConfigModal();
-  document.body.classList.remove("nav-open");
+  document.body.classList.remove("iconbar-open");
 });
+initPanel();
+$("session-search").addEventListener("input", (e) => filterSessions(e.target.value));
+
+$("composer-adv").addEventListener("toggle", (e) => saveComposerAdv(e.target.open));
 $("cfg-close").addEventListener("click", closeConfigModal);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("config-modal").hidden) closeConfigModal();
@@ -525,7 +538,8 @@ async function openSession(id) {
   if (fresh) v = createView(id);
   activate(v);
   updateHeader();
-  document.body.classList.remove("nav-open");
+  closePanel();
+  document.body.classList.remove("iconbar-open");
   if (!isTouch) { $("prompt").focus(); }
   if (fresh) await loadReplay(v);
   ensureEmptyState(v);

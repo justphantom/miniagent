@@ -7,7 +7,7 @@ import { fmtTime } from "./store.js";
 let panelEl = null;
 let bodyEl = null;
 
-// ensurePanel lazily creates the trajectory panel DOM inside #layout.
+// ensurePanel lazily creates the trajectory panel DOM inside <main> (tab-embedded overlay).
 function ensurePanel() {
   if (panelEl) return;
   panelEl = document.createElement("div");
@@ -23,24 +23,31 @@ function ensurePanel() {
   close.id = "tj-close";
   close.setAttribute("aria-label", "关闭轨迹");
   close.textContent = "✕";
-  close.addEventListener("click", () => toggleTrajectory());
+  close.addEventListener("click", () => { hideTrajectory(); _onClose?.(); });
   head.append(title, close);
   bodyEl = document.createElement("div");
   bodyEl.id = "tj-body";
   bodyEl.className = "trajectory-body";
   panelEl.append(head, bodyEl);
-  const layout = document.getElementById("layout");
-  if (layout) layout.appendChild(panelEl);
+  const main = document.querySelector("main");
+  if (main) main.appendChild(panelEl);
 }
 
-// toggleTrajectory shows/hides the trajectory panel and toggles the layout class.
-export function toggleTrajectory() {
+// Tab-driven visibility: showing the trajectory overlays #events inside main.
+export function showTrajectory() {
   ensurePanel();
-  const wasHidden = panelEl.hidden;
-  panelEl.hidden = !wasHidden;
-  document.getElementById("layout")?.classList.toggle("trajectory-open", wasHidden);
-  if (wasHidden) refreshPanel();
+  panelEl.hidden = false;
+  document.getElementById("events").style.display = "none";
+  refreshPanel();
 }
+export function hideTrajectory() {
+  if (panelEl) panelEl.hidden = true;
+  document.getElementById("events").style.display = "";
+}
+export function isTrajectoryVisible() { return !!panelEl && !panelEl.hidden; }
+
+let _onClose = null; // app.js injects switchTab("chat") so ✕ and step-click return to the chat tab
+export function setOnTrajectoryClose(fn) { _onClose = fn; }
 
 // refreshPanel rebuilds the panel body from the active view's trajectory data,
 // preserving which step cards were expanded.
@@ -116,6 +123,7 @@ function renderStepCard(view, entry) {
 function scrollToStep(view, step) {
   const node = view.dom.querySelector(`[data-step="${step}"]`);
   if (node) {
+    _onClose?.(); // jump back to the chat tab so the target is visible
     node.scrollIntoView({ behavior: "smooth", block: "start" });
     node.classList.add("pulse-highlight");
     setTimeout(() => node.classList.remove("pulse-highlight"), 2000);

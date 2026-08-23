@@ -19,32 +19,49 @@
   </div>
 
   <div id="app">
-  <header>
-    <button id="menu-btn" class="ghost" type="button" aria-label="切换会话列表">☰</button>
-    <h1>miniagent</h1>
-    <span id="session-id" class="session-id muted" title="当前会话 ID"></span>
-    <span id="session-tokens" class="session-id muted" title="当前会话累计 token"></span>
-    <span class="flex-1"></span>
-    <button id="traj-btn" class="ghost" type="button" title="工具轨迹" aria-label="工具轨迹">≡</button>
-    <button id="theme-btn" class="ghost" type="button" title="切换到亮色" aria-label="切换主题">◐</button>
-    <button id="logout" class="ghost">退出</button>
-  </header>
-  <div id="layout">
-    <nav id="nav">
-      <button id="new-chat" type="button">＋ 新会话</button>
-      <div id="session-list"></div>
-      <button id="config-btn" type="button" class="ghost nav-config">⚙ 配置</button>
+    <nav id="iconbar">
+      <button id="icon-sessions" class="icon-btn" type="button" aria-label="对话" title="对话">💬</button>
+      <button id="icon-new" class="icon-btn" type="button" aria-label="新建会话" title="新建会话">＋</button>
+      <span class="flex-1"></span>
+      <button id="icon-settings" class="icon-btn" type="button" aria-label="设置" title="设置">⚙</button>
     </nav>
-    <div id="overlay"></div>
+    <header>
+      <button id="menu-btn" class="ghost" type="button" aria-label="打开导航">☰</button>
+      <h1>miniagent</h1>
+      <span id="session-id" class="session-id muted" title="当前会话 ID"></span>
+      <span id="session-tokens" class="session-id muted" title="当前会话累计 token"></span>
+      <span class="flex-1"></span>
+      <button id="theme-btn" class="ghost" type="button" title="切换到亮色" aria-label="切换主题">◐</button>
+      <button id="logout" class="ghost">退出</button>
+    </header>
+    <div id="tabs">
+      <button class="tab active" type="button" data-tab="chat">对话</button>
+      <button class="tab" type="button" data-tab="trajectory">轨迹</button>
+      <span class="flex-1"></span>
+      <span id="tab-meta" class="muted tab-meta"></span>
+    </div>
     <main>
       <div id="events" aria-live="polite" aria-label="对话内容"></div>
       <button id="to-bottom" type="button" title="回到底部" aria-label="回到底部">↓</button>
+      <div id="session-panel" class="slide-panel" hidden>
+        <div class="panel-head">
+          <span class="panel-title">对话</span>
+          <button id="panel-close" class="panel-close ghost" type="button" aria-label="关闭">✕</button>
+        </div>
+        <div class="panel-body">
+          <div class="panel-search"><input id="session-search" type="search" placeholder="搜索会话…" aria-label="搜索会话"></div>
+          <div id="session-list"></div>
+        </div>
+      </div>
     </main>
-  </div>
-  <footer>
+    <div id="status-bar" class="muted">
+      <span id="status-metrics"></span>
+      <span id="status-version" title="服务端版本"></span>
+      <span id="status-model" title="当前模型"></span>
+    </div>
     <div id="composer">
       <div class="composer-row main-row">
-        <textarea id="prompt" placeholder="输入任务（桌面 Enter 发送 / Shift+Enter 换行；触屏 Enter 换行，点发送）" aria-label="输入"></textarea>
+        <textarea id="prompt" placeholder="给智能体发消息（桌面 Enter 发送 / Shift+Enter 换行；触屏 Enter 换行，点发送）" aria-label="输入"></textarea>
         <span id="wait" class="muted" hidden></span>
         <button id="send" type="button">发送</button>
       </div>
@@ -57,11 +74,6 @@
         </div>
       </details>
     </div>
-    <div id="status-bar" class="muted">
-      <span id="status-version" title="服务端版本"></span>
-      <span id="status-model" title="当前模型"></span>
-    </div>
-  </footer>
   </div>
   <div id="config-modal" class="modal" hidden>
     <div class="modal-panel cfg-modal-panel">

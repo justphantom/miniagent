@@ -9,7 +9,6 @@ const WD_KEY = "miniagent.web.workdir";
 const MODEL_KEY = "miniagent.web.model";
 const THEME_KEY = "miniagent.web.theme";
 const COMPOSER_ADV_KEY = "miniagent.web.composerAdv";
-const NAV_KEY = "miniagent.web.navCollapsed";
 
 export const state = {
   key: localStorage.getItem(KEY) || "",
@@ -24,8 +23,6 @@ export function saveTheme(t) { localStorage.setItem(THEME_KEY, t); }
 export function loadTheme() { return localStorage.getItem(THEME_KEY) || ""; }
 export function saveComposerAdv(open) { localStorage.setItem(COMPOSER_ADV_KEY, open ? "1" : ""); }
 export function loadComposerAdv() { return localStorage.getItem(COMPOSER_ADV_KEY) === "1"; }
-export function saveNavCollapsed(c) { localStorage.setItem(NAV_KEY, c ? "1" : ""); }
-export function loadNavCollapsed() { return localStorage.getItem(NAV_KEY) === "1"; }
 
 export function authHeaders() { return { "x-api-key": state.key }; }
 
