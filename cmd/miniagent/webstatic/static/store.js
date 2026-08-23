@@ -56,9 +56,11 @@ export function showSessionID(view) {
 }
 
 // setVersion renders the server version into the login page and the footer status bar.
+// The raw string is displayed as-is: it comes from miniagent.Version (git tag or hash),
+// already carrying its own prefix when one is intended.
 // Idempotent: safe to call on boot and on every login retry.
 export function setVersion(v) {
-  const text = v ? `v${v}` : "";
+  const text = v || "";
   for (const id of ["version-login", "status-version"]) {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
