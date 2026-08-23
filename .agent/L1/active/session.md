@@ -7,7 +7,8 @@ updated: 2026-08-24
 # 当前会话
 
 ## 状态
-- **v6.5.0 已发版**（tag `v6.5.0` @ 8c03cb6，2026-08-24）：发版前完善①-⑥全部完成，CHANGELOG 回填 [6.5.0] 段、version.go 默认值同步 v6.5.0、`git describe`/`-version` 实测 v6.5.0。工作树干净、verify-gate 全绿。
+- **v6.6.0 已发版**（2026-08-24）：三特性——①配置模态框漂移可见化（编辑基准改为文件内容、diverged/diff 仅字段路径、文件损坏降级运行值+警告横幅）；②设置内重载服务（runServe 重构为重启循环，POST /api/reload，坏文件 400/有 turn 409/重复 503，前端按钮轮询 whoami 穿断连窗口）；③版本号双 v 前缀修复（setVersion 不再拼接）。另：测试文件 300 行约束纳入（3 超限文件拆分）、goimports 统一 import 分组。CHANGELOG 回填 [6.6.0]、version.go v6.6.0。verify-gate 全绿。
+- v6.5.0 发版记录见 git 历史（tag `v6.5.0` @ 8c03cb6）。
 
 ## 本会话产出（发版前完善）
 - **①CHANGELOG 补漏**：v6.4.0..HEAD 44 提交原仅 6 条，补 4 条——9096515（三特性+UI 重设计+Breaking：OnToolUse/OnToolResult 加 step 首参、新钩子 OnStepUsage、`GET /api/tree`、`step_usage` 事件 web-only）、651711e（IDE 骨架）、1211853（hscroll 修复）、19c76ee（配置目录迁移）。
