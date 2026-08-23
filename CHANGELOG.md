@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+## [6.6.1] - 2026-08-24
+
+### Fixed
+- **WebUI 横向滚动条防御（桌面 + 移动端）**：三层防御——①局部滚动保留（代码块/表格/tab 条/status bar 各自滚动，tab 条隐藏滚动条）；②元素级钳制补齐：`.md img` 加 `max-width:100%`（贴宽图不再撑破卡片）、窄屏配置表单 label 列 180→110px、usage 步骤条窄屏换行、dirpicker 路径 chip 折行、trajectory 步元数据截断省略、配置错误串/路径 `overflow-wrap:anywhere` 折行；③`body { overflow-x: clip }` 全局兜底（`clip` 不创建滚动容器、不劫持 sticky），任何未预见溢出不可能升级为页面级横向滚动。窄屏全屏模态 `100vw`→`100%`——`100vw` 含经典滚动条宽度，Windows 桌面下自身就是溢出源。
+
 ## [6.6.0] - 2026-08-24
 
 ### Added
