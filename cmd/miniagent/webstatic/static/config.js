@@ -101,6 +101,17 @@ function setNested(obj, path, val) {
   cur[parts[parts.length - 1]] = val;
 }
 
+// deleteNested 删除路径指向的键（omitempty 字段删掉后保存时不再序列化）。
+function deleteNested(obj, path) {
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur[parts[i]] == null) return;
+    cur = cur[parts[i]];
+  }
+  delete cur[parts[parts.length - 1]];
+}
+
 function markDirty() {
   dirty = true;
   updateSaveBtn();
@@ -348,8 +359,7 @@ function renderKv(path, labelText) {
   label.className = "cfg-label";
   label.textContent = labelText;
   wrap.appendChild(label);
-  const obj = getNested(configData, path) || {};
-  setNested(configData, path, obj);
+  const obj = getNested(configData, path) || {}; // 渲染读，不写回——避免保存时空字段污染
   const list = document.createElement("div");
   list.className = "cfg-array";
   const sync = () => {
@@ -358,6 +368,7 @@ function renderKv(path, labelText) {
       const [k, v] = r.querySelectorAll("input");
       return [k.value.trim(), v.value];
     }).filter(([k]) => k);
+    if (entries.length === 0) { deleteNested(configData, path); markDirty(); return; } // 空则删字段，omitempty 不序列化
     const o = {};
     for (const [k, v] of entries) o[k] = v;
     setNested(configData, path, o);
@@ -393,9 +404,7 @@ function renderKvMap(path, labelText) {
   label.className = "cfg-label";
   label.textContent = labelText;
   wrap.appendChild(label);
-  const obj = getNested(configData, path);
-  if (!obj) { setNested(configData, path, {}); }
-  const cur = getNested(configData, path);
+  const cur = getNested(configData, path) || {}; // 渲染读，不写回——避免保存时空字段污染
   const list = document.createElement("div");
   list.className = "cfg-array";
   const sync = () => {
@@ -403,6 +412,7 @@ function renderKvMap(path, labelText) {
       const [k, v] = r.querySelectorAll("input");
       return [k.value.trim(), v.value];
     }).filter(([k]) => k);
+    if (entries.length === 0) { deleteNested(configData, path); markDirty(); return; } // 空则删字段
     const o = {};
     for (const [k, v] of entries) o[k] = v;
     setNested(configData, path, o);
