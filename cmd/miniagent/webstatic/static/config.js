@@ -14,6 +14,8 @@ let dirty = false;
 let writable = false;
 let mode = "form";     // "form" | "json"
 let cfgFilePath = "";  // 配置文件路径（用于渲染/保存后回填）
+let divergedPaths = new Set(); // 文件值与运行值不一致的字段路径（重启才生效）
+let cfgFileError = "";         // 配置文件不可解析时的后端错误信息
 
 const MASK = "********"; // 后端掩码占位符（GET 时 secret 被替换为该值，PUT 原样保留→不覆盖）
 
@@ -469,6 +471,8 @@ async function loadConfig() {
     dirty = false;
     writable = resp.writable;
     cfgFilePath = resp.path || "";
+    divergedPaths = new Set(resp.diff || []);
+    cfgFileError = resp.file_error || "";
     renderAll(resp.path);
     loadEl?.remove();
   } catch (e) {
@@ -492,6 +496,16 @@ function renderAll(filePath) {
     const note = document.createElement("div");
     note.className = "cfg-note muted";
     note.textContent = "当前配置无法写回文件（无配置文件路径），以下为只读视图。";
+    form.appendChild(note);
+  } else if (cfgFileError) {
+    const note = document.createElement("div");
+    note.className = "cfg-note warn";
+    note.textContent = `配置文件读取失败，以下显示运行中的配置；保存将覆盖损坏的文件。(${cfgFileError})`;
+    form.appendChild(note);
+  } else if (divergedPaths.size > 0) {
+    const note = document.createElement("div");
+    note.className = "cfg-note warn";
+    note.textContent = `文件配置与运行中配置有 ${divergedPaths.size} 处差异，重启服务后文件值才生效。标记 ● 的字段不一致。`;
     form.appendChild(note);
   } else {
     const note = document.createElement("div");
@@ -561,6 +575,7 @@ function renderFormInto(container) {
           setNested(configData, f.key, v);
           markDirty();
         }, f.help, f.default);
+        if (divergedPaths.has(f.key)) fe.classList.add("cfg-diff");
         details.appendChild(fe);
       }
     }

@@ -299,6 +299,8 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
 .cfg-msg.ok { background: var(--accent); color: #fff; }
 .cfg-msg.err { background: var(--err); color: #fff; }
 .cfg-note { font-size: 12px; margin-bottom: 8px; }
+.cfg-note.warn { color: var(--warn, #b8860b); }
+.cfg-field.cfg-diff > .cfg-label::after { content: " ●"; color: var(--warn, #b8860b); font-size: 11px; }
 .cfg-loading { font-size: 14px; color: var(--muted); padding: 20px 0; text-align: center; }
 .cfg-section { border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: var(--space-md); padding: var(--space-sm) var(--space-md); }
 .cfg-section > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }

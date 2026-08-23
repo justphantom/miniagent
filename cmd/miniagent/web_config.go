@@ -14,6 +14,9 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"reflect"
+	"slices"
+	"strconv"
 
 	"github.com/justphantom/miniagent/config"
 )
@@ -23,13 +26,18 @@ import (
 // anything else replaces the stored secret.
 const maskedSecret = "********"
 
-// configGetResponse is the GET /api/config body. Config carries the full config with
-// secrets masked; writable is false when the server has no config file to write back
-// to (e.g. tests); path is the config file path when writable.
+// configGetResponse is the GET /api/config body. Config is the edit basis: the FILE
+// config when readable (the file is what PUT writes, so edits must start from it),
+// falling back to the running config. Diverged/Diff describe file-vs-running drift so
+// the UI can show that a restart is needed for the saved values to take effect;
+// FileError is set when the file exists but cannot be parsed (external corruption).
 type configGetResponse struct {
-	Writable bool           `json:"writable"`
-	Path     string         `json:"path,omitempty"`
-	Config   *config.Config `json:"config"`
+	Writable  bool           `json:"writable"`
+	Path      string         `json:"path,omitempty"`
+	Diverged  bool           `json:"diverged"`
+	Diff      []string       `json:"diff,omitempty"` // dotted field paths only; values are never sent
+	FileError string         `json:"file_error,omitempty"`
+	Config    *config.Config `json:"config"`
 }
 
 func (s *webServer) handleConfigGet(w http.ResponseWriter, r *http.Request) {
@@ -38,12 +46,86 @@ func (s *webServer) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config not loaded"})
 		return
 	}
+	resp := configGetResponse{Writable: s.cfgPath != "", Path: s.cfgPath, Config: maskedConfig(cfg)}
+	if s.cfgPath != "" {
+		if file, err := config.LoadConfig(s.cfgPath); err != nil {
+			resp.FileError = err.Error() // fall back to the running config as edit basis; saving overwrites the bad file
+		} else {
+			resp.Config = maskedConfig(file)
+			resp.Diff = configDiffPaths(cfg, file)
+			resp.Diverged = len(resp.Diff) > 0
+		}
+	}
 	// Mask secrets for the client: the UI must not render the plaintext key back.
-	writeJSON(w, http.StatusOK, configGetResponse{
-		Writable: s.cfgPath != "",
-		Path:     s.cfgPath,
-		Config:   maskedConfig(cfg),
-	})
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// configDiffPaths walks two configs marshalled to generic JSON and returns the dotted
+// paths where they differ (e.g. "run.max_tokens", "providers.0.key"). Paths only —
+// values are deliberately excluded so a diverged secret never leaves the server.
+// Both sides go through the same marshal, so secret fields compare mask-to-mask.
+func configDiffPaths(running, file *config.Config) []string {
+	var a, b any
+	if ab, err := json.Marshal(running); err == nil {
+		_ = json.Unmarshal(ab, &a)
+	}
+	if bb, err := json.Marshal(file); err == nil {
+		_ = json.Unmarshal(bb, &b)
+	}
+	if a == nil || b == nil {
+		return nil // marshal failure: report no diff rather than a misleading list
+	}
+	var out []string
+	var walk func(x, y any, path string)
+	walk = func(x, y any, path string) {
+		mx, okX := x.(map[string]any)
+		my, okY := y.(map[string]any)
+		if okX && okY {
+			keys := make([]string, 0, len(mx)+len(my))
+			for k := range mx {
+				keys = append(keys, k)
+			}
+			for k := range my {
+				if _, dup := mx[k]; !dup {
+					keys = append(keys, k)
+				}
+			}
+			slices.Sort(keys)
+			for _, k := range keys {
+				p := k
+				if path != "" {
+					p = path + "." + k
+				}
+				walk(mx[k], my[k], p)
+			}
+			return
+		}
+		if sx, ok := x.([]any); ok {
+			if sy, ok2 := y.([]any); ok2 {
+				n := max(len(sx), len(sy))
+				for i := range n {
+					p := strconv.Itoa(i)
+					if path != "" {
+						p = path + "." + p
+					}
+					var xi, yi any
+					if i < len(sx) {
+						xi = sx[i]
+					}
+					if i < len(sy) {
+						yi = sy[i]
+					}
+					walk(xi, yi, p)
+				}
+				return
+			}
+		}
+		if !reflect.DeepEqual(x, y) {
+			out = append(out, path)
+		}
+	}
+	walk(a, b, "")
+	return out
 }
 
 // configPutResponse is the PUT /api/config body.

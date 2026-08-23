@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -174,3 +175,64 @@ func TestConfigPut_RenamedProviderWithMaskedKeyRejected(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+func TestConfigGet_DivergenceDetection(t *testing.T) {
+	s, path := cfgTestServer(t)
+
+	// Identical file and running config → no divergence.
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, configReq(http.MethodGet, ""))
+	var resp configGetResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Diverged || len(resp.Diff) != 0 {
+		t.Errorf("identical configs: diverged=%v diff=%v, want none", resp.Diverged, resp.Diff)
+	}
+
+	// External edit of the file → GET must report drift with the field path only.
+	edited, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	edited.Run.MaxTokens = intPtr(4242)
+	if err := config.SaveConfig(path, edited); err != nil {
+		t.Fatalf("save edited: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, configReq(http.MethodGet, ""))
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.Diverged {
+		t.Error("external file edit must set diverged=true")
+	}
+	if len(resp.Diff) != 1 || resp.Diff[0] != "run.max_tokens" {
+		t.Errorf("diff = %v, want [run.max_tokens]", resp.Diff)
+	}
+	// The edit basis is the FILE config (4242), not the running value.
+	if resp.Config == nil || resp.Config.Run.MaxTokens == nil || *resp.Config.Run.MaxTokens != 4242 {
+		t.Errorf("edit basis must be the file config")
+	}
+}
+
+func TestConfigGet_CorruptFileFallsBackToRunning(t *testing.T) {
+	s, path := cfgTestServer(t)
+	if err := os.WriteFile(path, []byte("{oops"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, configReq(http.MethodGet, ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET must not 500 on a corrupt file: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp configGetResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.FileError == "" {
+		t.Error("file_error must be set for a corrupt config file")
+	}
+	if resp.Diverged {
+		t.Error("unreadable file must not report divergence")
+	}
+	if resp.Config == nil || resp.Config.Defaults.Provider != "p" {
+		t.Error("fallback edit basis must be the running config")
+	}
+}
