@@ -34,11 +34,10 @@ button.danger { border-color: var(--err); color: var(--err); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---- layout skeleton ---- */
-#app { display: none; flex-direction: column; height: 100dvh; }
+#app { display: none; grid-template-rows: var(--header-top) minmax(0, 1fr) auto; height: 100dvh; }
 header { display: flex; align-items: center; gap: 12px; padding: 0 var(--space-lg);
   padding-top: env(safe-area-inset-top, 0px); height: var(--header-top); border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 40;
-  background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  z-index: 40; background: var(--bg); }
 header h1 { font-size: 15px; flex-shrink: 0; }
 .session-id { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .session-id:empty { display: none; }
@@ -53,6 +52,11 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 #events::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 #events > .view { display: flex; flex-direction: column; gap: 10px; max-width: 780px; margin: 0 auto; width: 100%; }
 #overlay { display: none; }
+footer { border-top: 1px solid var(--border); background: var(--bg); z-index: 40; }
+#status-bar { display: flex; gap: var(--space-lg); padding: 2px var(--space-lg);
+  padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px));
+  font-size: 11px; border-top: 1px solid var(--border); }
+#status-bar span:empty { display: none; }
 
 /* ---- nav / sidebar ---- */
 #nav { width: var(--sidebar-width); border-right: 1px solid var(--border); padding: var(--space-md); display: none; flex-direction: column; gap: 8px; overflow-y: auto; }
@@ -99,12 +103,11 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 .ev.empty-state { text-align: center; padding: 48px 0; border-style: dashed; color: var(--muted); }
 
 /* ---- to-bottom button ---- */
-#to-bottom { display: none; position: fixed; right: 16px; bottom: 100px; border-radius: 50%; width: 44px; height: 44px; padding: 0; background: var(--accent); z-index: 2; color: white; font-size: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: transform var(--transition-fast), opacity var(--transition-fast); }
+#to-bottom { display: none; position: absolute; right: 16px; bottom: var(--space-lg); border-radius: 50%; width: 44px; height: 44px; padding: 0; background: var(--accent); z-index: 2; color: white; font-size: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: transform var(--transition-fast), opacity var(--transition-fast); }
 #to-bottom:hover { transform: scale(1.1); }
-#layout.trajectory-open #to-bottom { right: calc(16px + var(--trajectory-width) + 8px); }
 
 /* ---- composer ---- */
-#composer { border-top: 1px solid var(--border); padding: var(--space-md) var(--space-lg); padding-bottom: calc(var(--space-md) + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: var(--space-sm); }
+#composer { padding: var(--space-md) var(--space-lg); padding-bottom: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
 #composer input, #composer textarea, #composer select { font-size: 16px; }
 .composer-row.main-row { justify-content: flex-end; align-items: flex-end; }
 #prompt { flex: 1 1 100%; resize: none; min-height: 60px; max-height: 200px; }
@@ -196,6 +199,8 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 .modal-title { font-weight: 600; font-size: 15px; }
 .modal-body { flex: 1; overflow-y: auto; padding: var(--space-md) var(--space-lg); overscroll-behavior: contain; }
 .modal-foot { display: flex; justify-content: flex-end; gap: var(--space-sm); padding: var(--space-md) var(--space-lg); border-top: 1px solid var(--border); }
+.cfg-modal-panel { width: min(90vw, 960px); max-height: 85vh; }
+#config-page { padding: 0; max-width: none; margin: 0; }
 
 /* ---- inline confirm dialog ---- */
 .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000;
@@ -318,5 +323,4 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
   /* trajectory panel: fixed full-width overlay on narrow (Grid area only works in desktop) */
   .trajectory-panel { position: fixed; right: 0; top: var(--header-top); bottom: 0;
          width: 100vw; grid-area: unset; }
-  #layout.trajectory-open #to-bottom { display: none; }  /* F8: full-width panel covers button */
 }

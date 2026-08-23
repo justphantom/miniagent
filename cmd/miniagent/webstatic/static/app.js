@@ -9,11 +9,11 @@
 // stop while the active view has a running turn; stopping goes through the stop API, and the
 // local stream stays open to receive the partial result.
 
-import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, saveNavCollapsed, loadNavCollapsed } from "./store.js";
+import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, saveNavCollapsed, loadNavCollapsed, setStatusModel } from "./store.js";
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 import { startEvents, attachLive } from "./live.js";
 import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom } from "./views.js";
-import { renderConfigPage } from "./config.js";
+import { openConfigModal, closeConfigModal } from "./config.js";
 import { attachDirPicker } from "./dirpicker.js";
 import { toggleTrajectory, setActiveViewGetter, refreshPanel } from "./trajectory.js";
 
@@ -127,9 +127,14 @@ $("new-chat").addEventListener("click", () => {
 });
 
 $("config-btn").addEventListener("click", () => {
-  renderConfigPage();
+  openConfigModal();
   document.body.classList.remove("nav-open");
 });
+$("cfg-close").addEventListener("click", closeConfigModal);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("config-modal").hidden) closeConfigModal();
+});
+$("config-modal").addEventListener("click", (e) => { if (e.target === $("config-modal")) closeConfigModal(); });
 
 // Enter sends on desktop (Shift+Enter = newline); mobile keeps Enter = newline.
 const isTouch = matchMedia("(hover: none)").matches;
@@ -429,7 +434,9 @@ async function loadModels() {
       const opt = sel.selectedOptions[0];
       const v = opt?.dataset.model ? `${opt.dataset.provider}/${opt.dataset.model}` : "";
       saveModel(v);
+      setStatusModel(v);
     });
+    if (saved) setStatusModel(saved);
   } catch { /* dropdown stays default */ }
 }
 

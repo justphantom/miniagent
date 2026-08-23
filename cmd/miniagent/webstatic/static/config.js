@@ -6,7 +6,6 @@
 // 保存统一走 PUT /api/config，后端校验 + 原子写回。
 
 import { api, authHeaders } from "./store.js";
-import { eventsViewport } from "./views.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -442,19 +441,21 @@ function renderKvMap(path, labelText) {
 
 // ── 主渲染函数 ──────────────────────────────────────────
 
-export function renderConfigPage() {
-  const vp = eventsViewport();
-  vp.innerHTML = "";
+export function openConfigModal() {
+  $("config-modal").hidden = false;
+  const body = $("config-body");
+  body.innerHTML = "";
   const page = document.createElement("div");
   page.id = "config-page";
-  page.innerHTML = `<div class="cfg-header">
-    <h2>配置管理</h2>
-    <span id="cfg-status" class="cfg-status"></span>
-  </div>
-  <div id="cfg-msg" class="cfg-msg" hidden></div>
+  page.innerHTML = `<div id="cfg-msg" class="cfg-msg" hidden></div>
   <div class="cfg-loading">加载中…</div>`;
-  vp.appendChild(page);
+  body.appendChild(page);
   loadConfig();
+}
+
+export function closeConfigModal() {
+  $("config-modal").hidden = true;
+  $("config-body").innerHTML = "";
 }
 
 async function loadConfig() {

@@ -58,12 +58,20 @@ export function showSessionID(view) {
   tok.title = "当前会话累计 token（来自 result 事件）";
 }
 
-// setVersion renders the server version (from /api/whoami) into the login page.
+// setVersion renders the server version into the login page and the footer status bar.
 // Idempotent: safe to call on boot and on every login retry.
 export function setVersion(v) {
   const text = v ? `v${v}` : "";
-  const el = document.getElementById("version-login");
-  if (el) el.textContent = text;
+  for (const id of ["version-login", "status-version"]) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+}
+
+// setStatusModel fills the footer status bar with the current model.
+export function setStatusModel(m) {
+  const el = document.getElementById("status-model");
+  if (el) el.textContent = m || "";
 }
 
 let budgetCache = 0;
