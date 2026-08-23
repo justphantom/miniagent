@@ -230,7 +230,7 @@ async function send() {
           const ev = JSON.parse(line);
           if (v.gen !== gen) return; // superseded stream — stop painting
           if (ev.type === "session" && ev.id) rekey(v, ev.id);
-          if (ev.type === "result" || ev.type === "error") sawTerminal = true;
+          if (ev.type === "result" || ev.type === "error" || ev.type === "stop") sawTerminal = true;
           stopWait();
           renderEvent(v, ev);
           updateHeader();

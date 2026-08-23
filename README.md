@@ -163,7 +163,7 @@ sudo make deploy   # 装 bin/miniagent 为 systemd WebUI 服务并 enable --now
 
 ## NDJSON 输出结构
 
-每个事件占一行，JSON 对象，`type` 字段区分种类。所有事件按时间顺序写入 stdout，最后以一个 `result` 或 `error` 事件结束（**终态**）。`text_delta`/`tool_use`/`tool_result` 为中间事件，不标志流程结束。`-save-session` 新建会话时，`session` 事件作为 stdout **首条**输出（在 Run 之前、所有 tool/delta/result 之前），供消费方程序化捕获会话 id。
+每个事件占一行，JSON 对象，`type` 字段区分种类。所有事件按时间顺序写入 stdout，最后以一个 `result`、`error` 或 `stop` 事件结束（**终态**）。`text_delta`/`tool_use`/`tool_result` 为中间事件，不标志流程结束。`-save-session` 新建会话时，`session` 事件作为 stdout **首条**输出（在 Run 之前、所有 tool/delta/result 之前），供消费方程序化捕获会话 id。
 
 ### 事件类型
 
@@ -175,6 +175,7 @@ sudo make deploy   # 装 bin/miniagent 为 systemd WebUI 服务并 enable --now
 | `tool_result` | 每次工具执行后 | `name`, `call_id`, `output`(截断), `truncated`, `is_error`, `exit_code`(仅 shell) |
 | `result` | 主流程成功结束，**终态** | `text`, `model`, `input_tokens`, `output_tokens`, `steps`, `llm_requests`, `finish`, `compacted`, `thinking_downgraded` |
 | `error` | 主流程失败，**终态** | `message` |
+| `stop` | 轮次被取消（显式停止 / 上下文取消），已执行部分已存入会话，**终态** | `reason`（当前恒为 `canceled`） |
 
 工具完整结果经 `trimForHistory` 裁剪后写入历史回灌 LLM；概要（截断到 `maxToolResultEventChars`）经 `tool_result` 事件输出到 stdout 供消费方观察。
 

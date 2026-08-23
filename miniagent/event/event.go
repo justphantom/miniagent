@@ -97,6 +97,20 @@ func EmitError(w io.Writer, msg string) error {
 	return json.NewEncoder(w).Encode(errorEvent{Type: "error", Message: msg})
 }
 
+// stopEvent is the terminal stop event: the turn was canceled (explicit stop / context
+// cancellation) after partial execution; the session jsonl still holds the executed part.
+type stopEvent struct {
+	Type   string `json:"type"`
+	Reason string `json:"reason"`
+}
+
+// EmitStop writes the terminal stop event. Cancellation used to return silently with no
+// terminal event — NDJSON consumers keying on result/error to detect completion saw a clean
+// EOF and misreported it as a dropped connection.
+func EmitStop(w io.Writer, reason string) error {
+	return json.NewEncoder(w).Encode(stopEvent{Type: "stop", Reason: reason})
+}
+
 // EmitSession writes a session event (the first NDJSON stream entry, type=session). When -save-session creates a new session
 // it is emitted before Run, with the same structure as the session jsonl first-line metadata (id/model/workdir/provider/created),
 // so consumers can programmatically capture session metadata from the first stdout line and continue to the next round.

@@ -90,9 +90,10 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 
 	// The turn context derives from the server lifetime, not the request: a disconnect must
 	// not kill the agent (D1). runTurn layers the config max_duration on top of this bound.
+	// cancel is owned by the turn goroutine (deferred there): a handler-scoped defer would
+	// fire when the subscriber loop returns on client disconnect and kill the live turn.
 	const defaultWebMaxDuration = 10 * time.Minute
 	turnCtx, cancel := context.WithTimeout(s.baseCtx, defaultWebMaxDuration)
-	defer cancel()
 
 	entry, busy := s.turns.register(id, cancel)
 	if busy {
@@ -116,6 +117,7 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
+		defer cancel() // turn-scoped: releases the timeout context when the turn ends
 		err := s.engine.runTurn(turnCtx, spec, entry)
 		s.turns.finish(id, err)
 		s.turns.broadcastLife(turnFinishedEvent(id, err))

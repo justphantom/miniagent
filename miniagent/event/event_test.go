@@ -33,6 +33,20 @@ func TestToolUseWriter(t *testing.T) {
 	}
 }
 
+func TestEmitStop(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EmitStop(&buf, "canceled"); err != nil {
+		t.Fatalf("EmitStop: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev["type"] != "stop" || ev["reason"] != "canceled" {
+		t.Errorf("event = %+v, want type=stop reason=canceled", ev)
+	}
+}
+
 func TestEmitResult(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EmitResult(&buf, miniagent.Result{Text: "hi", Usage: miniagent.Usage{InputTokens: 1, OutputTokens: 2}, Steps: 3, Finish: "stop", Compacted: true, ThinkingDowngraded: true}, "m"); err != nil {

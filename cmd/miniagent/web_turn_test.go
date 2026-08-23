@@ -364,17 +364,55 @@ func TestWebTurn_DisconnectDoesNotKillTurn(t *testing.T) {
 	cancel() // client vanishes mid-turn
 	<-handlerDone
 
+	// The turn must still be in flight (D1): the handler's return must not have canceled
+	// it (the bug was a handler-scoped defer cancel). A second window attaches live and
+	// observes the turn run to completion after the block releases.
+	id := onlyRunningSession(t, s)
+	liveRec := newSyncRecorder()
+	go func() {
+		s.mux().ServeHTTP(liveRec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/sessions/"+id+"/live", nil))
+	}()
+	waitForBody(t, liveRec, `"type":"session"`)
+
 	close(blocked.release) // let the agent finish
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		entries, _ := os.ReadDir(s.cfg.Session.Dir)
-		if len(entries) > 0 {
-			break // the turn completed and persisted despite the disconnect
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("session file never persisted after client disconnect")
-		}
-		time.Sleep(5 * time.Millisecond)
+	waitForBody(t, liveRec, `"type":"result"`)
+	if body := liveRec.String(); strings.Contains(body, `"type":"stop"`) || strings.Contains(body, `"type":"error"`) {
+		t.Errorf("turn after client disconnect ended abnormally: %s", body)
+	}
+}
+
+// F2: an explicit stop must surface a terminal stop event — a silent EOF made the UI's
+// sawTerminal check report "连接中断：流意外结束". The originator's stream (kept open by
+// the turn-scoped cancel) carries it.
+func TestWebTurn_StopEmitsStopEvent(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+	rec := newSyncRecorder()
+	go func() {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn", strings.NewReader(fmt.Sprintf(`{"prompt":"hi","workdir":%q}`, workdir)))
+		req.Header.Set("Content-Type", "application/json")
+		s.mux().ServeHTTP(rec, req)
+	}()
+	awaitLLM(t, blocked)
+
+	id := onlyRunningSession(t, s)
+	stopRec := httptest.NewRecorder()
+	s.mux().ServeHTTP(stopRec, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/sessions/"+id+"/stop", nil))
+	if stopRec.Code != http.StatusNoContent {
+		t.Fatalf("stop code = %d: %s", stopRec.Code, stopRec.Body.String())
+	}
+
+	waitForBody(t, rec, `"type":"stop"`)
+	body := rec.String()
+	if strings.Contains(body, `"type":"error"`) {
+		t.Errorf("stopped turn must not emit error: %s", body)
+	}
+	if strings.Contains(body, `"type":"result"`) {
+		t.Errorf("stopped turn must not emit result: %s", body)
 	}
 }
 

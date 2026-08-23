@@ -281,6 +281,25 @@ export function renderEvent(view, ev) {
       if (!document.getElementById("trajectory-panel")?.hidden) refreshPanel();
       break;
     }
+    case "stop": {
+      finishText(view);
+      const d = evDiv("stopped", "stopped", ev.ts || Date.now(), "", "⏹");
+      const body = d.querySelector(".ev-body");
+      body.appendChild(document.createTextNode("已停止（会话已保存已执行部分，可点击重试续跑）"));
+      if (view.lastPrompt) {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "ghost retry-btn";
+        retry.textContent = "重试";
+        retry.addEventListener("click", () => {
+          document.getElementById("prompt").value = view.lastPrompt;
+          if (activeView() === view) document.getElementById("send").click();
+        });
+        body.appendChild(retry);
+      }
+      view.dom.appendChild(d);
+      break;
+    }
     case "error": {
       finishText(view);
       const d = evDiv("error", "error", ev.ts || Date.now(), "", STEP_ICONS.error);

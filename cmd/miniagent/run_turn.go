@@ -167,10 +167,17 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 	saveErr := e.saveSession(sessPath, meta, result, limits.MaxSessionBytes)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
+			// Terminal stop event: without it the stream ends with no result/error, and
+			// consumers keying on those (web UI sawTerminal) report a dropped connection.
+			if !spec.resultOnly {
+				if serr := event.EmitStop(out, "canceled"); serr != nil {
+					e.logger.Warn("emit stop failed", "error", serr)
+				}
+			}
 			if saveErr != nil {
 				fmt.Fprintf(os.Stderr, "miniagent: save session: %v\n", saveErr)
 			}
-			return err // caller maps to 130 / closed stream; no error event
+			return err // caller maps to 130 / closed stream; stop event already emitted
 		}
 		emitRunError(out, err, spec.resultOnly, e.logger)
 		if saveErr != nil {

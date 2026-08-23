@@ -6,9 +6,11 @@
 ## [Unreleased]
 
 ### Added
+- **NDJSON `stop` 终态事件**：轮次被取消（显式停止 / 上下文取消）时输出 `{"type":"stop","reason":"canceled"}` 后再以退出码 130 结束。此前取消路径静默返回、无任何终态事件，web 前端以 result/error 判完成（sawTerminal）只见干净 EOF，误报「连接中断：流意外结束」——点停止按钮也落此文案。前端现渲染「已停止」卡片（保留重试续跑按钮）。消费方需将 `stop` 计入终态（与 result/error 并列）。
 - **WebUI 配置管理页面**：新增 `GET/PUT /api/config` 端点（`web_config.go`），读取当前配置（secret 掩码回显）、`SaveConfig` 校验后原子写回（`config_save.go`，0600 + O_NOFOLLOW + 临时文件重命名）；前端 `config.js` 配置页——**表单模式**（6 个可折叠分组 + 60+ 字段，支持 text/number/bool/duration/array/secret 类型）、**providers 卡片编辑**（增删 provider，每 provider 的 URL/key/限额/headers 键值对/thinking 映射/增删 model 及模型级参数）、**JSON 高级编辑器模式**（textarea 直接编辑完整配置）、**客户端预校验**（提交前本地拦截空 providers/重复名/必填缺失等常见错误，减少无效往返）、**保存后回填表单**（后端返回权威 saved config 前端重渲染）；保存后提示「需重启服务生效」；配置侧栏按钮 `⚙ 配置`。`config.ValidateConfig` 导出供 web 层调用的校验入口。
 
 ### Fixed
+- **WebUI 客户端断开误杀后台轮次（D1 违反）**：`handleTurn` 的 `defer cancel()` 绑定在 handler 作用域——订阅循环因 `r.Context().Done()`（刷新页面/断网/视图切换）返回时立即取消 turnCtx，正在运行的 agent 轮次被杀（journal 表现为 `read sse: context canceled`，llm-proxy 同毫秒 `aborting connection mid-stream`）。`cancel` 改由 turn goroutine `defer` 持有，turn 生命周期与请求连接彻底解耦；busy 路径的显式 cancel 与 stop API 不变。与上游掐流叠加时构成「半截答案→刷新→杀轮次→无终态→连接中断文案」的放大循环，此为「频繁连接中断」主根因之一。
 - **deltaSent>0 的 SSE 截断不再丢弃已流出的 partial answer**：此前 `parseSSE` 在截断 chunk 上报 `parse sse chunk` 时返回空 Response，`DoStream` 在 `deltaSent>0`（流已不可逆，P2-4）时直接抛错导致整轮已流式输出丢失。现 `parseSSE` 返回已聚合的 partial Response，`DoStream` 在 `deltaSent>0` + transient 错误且 partial 含 text/reasoning 时接受为截断成功（`FinishReason=length` 走核心现有 truncation 警告路径）。这样上游 429 限流中途掐断 SSE 时，已推送给用户的内容仍作为本步结果落地，不再整步中止。工具调用-only partial（截断 JSON args 会污染下游 tool parse）仍走报错路径。
 
 ## [6.4.0] - 2026-08-23
