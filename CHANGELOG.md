@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+## [6.6.3] - 2026-08-24
+
+### Changed
+- **WebUI header 精简**：仅显示会话工作目录；会话 ID 移至浏览器标签页标题与会话面板，in/out token 移至状态栏与用量面板（信息无损重分布）。连带删除死代码 `#tab-meta`。
+- **WebUI 工具卡片摘要**：折叠态显示 `工具:关键参数`（如 `edit:readme.md`、`shell:go test ./...`；path 取 basename，`command/url/pattern/query` 优先，未知工具回退首个字符串字段），参数超宽省略号截断自适应桌面/移动端。卡片仍默认折叠。
+
 ## [6.6.2] - 2026-08-24
 
 ### Added
