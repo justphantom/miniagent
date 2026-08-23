@@ -1,8 +1,8 @@
 # WebUI 三项特性实现方案：工作目录选择器 / Token 用量可视化 / 工具轨迹视图
 
 > 对应 `WEBUI_NEXT.md` 路线图的 P0（工作目录选择器、工具轨迹视图）+ P1（Token 用量可视化）。
-> 本文档为详细实现方案（已定稿）：共享后端事件增强、三个特性 API/前端设计、UI 美化、安全边界、测试计划。
-> 决策状态：原「决策清单」已逐项定案（见 §八）。
+> 本文档为详细实现方案（已定稿）：共享后端事件增强、三个特性 API/前端设计、UI 美化、**响应式适配**、安全边界、测试计划。
+> 决策状态：原「决策清单」已逐项定案（见 §九）。
 
 ---
 
@@ -269,7 +269,132 @@ view.trajectory = {
 
 ---
 
-## 五、接口改动汇总
+## 五、响应式布局适配（参考 DSH 排版）
+
+> 参考 DSH 前端布局策略：CSS Grid 三栏主布局 + `position:fixed` 抽屉窄屏适配 + CSS 设计令牌系统，不依赖大量 `@media` 断点。  
+> 现状：miniagent 已有基础的 sidebar drawer 模式（`@media min-width:800px` 换列 + `nav-open` 类控制抽屉），但布局平面化、无 Grid 骨架、无窄屏的 composer/消息卡片/header 专项适配。
+
+### 5.1 布局架构（三态）
+
+| 屏幕宽度 | 布局 | 侧栏 | 轨迹面板 | 说明 |
+|---------|------|------|---------|------|
+| ≥ 800px | **三栏 Grid** | 固定 240px 侧栏 | 可选 360px 右侧抽屉 | 桌面/平板横屏 |
+| 640–799px | **双栏** | 固定 240px 侧栏 | 叠加遮罩抽屉 | 平板竖屏 |
+| < 640px | **单栏全屏** | 遮罩抽屉 | 遮罩抽屉 | 手机 |
+
+**实现**：`#layout` 从 `display:flex` 改为 `display:grid`：
+
+```css
+#layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;                 /* 侧栏 + 主区 */
+  grid-template-rows: 1fr;
+  grid-template-areas: "nav main";
+}
+/* 轨迹面板打开时（三栏）*/
+#layout.trajectory-open {
+  grid-template-columns: 240px 1fr 360px;
+  grid-template-areas: "nav main trajectory";
+}
+#trajectory-panel { grid-area: trajectory; }
+/* 窄屏 < 640px：回退到 flex drawer（现有 nav-open 模式）*/
+@media (max-width: 639px) {
+  #layout { display: flex; }
+}
+```
+
+### 5.2 侧栏 drawer（现有改进）
+
+- 现有 `#nav { display:none }` + `body.nav-open #nav { display:flex }` 模式保留，但：
+  - 桌面（≥800px）**始终显示**，`#nav { display:grid }`，不再隐藏（当前 `#nav { display:none }` + `@media { #nav { display:flex } }` 有两处 `display` 声明，合并为 `#nav { display:grid; grid-template-rows: auto 1fr; }`，窄屏时 `display:none` + `nav-open` 覆盖）
+  - 窄屏遮罩：`#overlay` 现有模式保留
+  - 按钮组：`#new-chat` + `#config-btn` 用 `grid-template-columns: 1fr auto` 并排
+
+### 5.3 消息区（#events）
+
+- 当前：`padding: 16px`，单列流式，`max-width` 约束
+- 桌面：`padding: 16px 24px`，`.ev` 卡片 `max-width: 900px; margin: 0 auto`（居中，非左对齐）
+- 窄屏（<640px）：`padding: 10px`，`.ev` 卡片 `max-width: 100%; border-radius: 6px`（减小圆角省空间），`border-left` 竖条更窄（`2px`）
+- 用户消息右对齐：`margin-left: auto` + `max-width: 80%`（桌面可到 720px，窄屏 `max-width: 90%`）
+
+### 5.4 Composer（输入区）
+
+- 当前：`#composer` 是固定底部 `display:flex;flex-direction:column`，`#prompt` 无最大宽度
+- 桌面：`.composer-row` 内 elements 居中 `max-width: 900px; margin: 0 auto;`，与消息区对齐
+- 窄屏：`#prompt` 字号保持 `16px`（防 iOS 缩放），`#send` 按钮宽度 `auto`（别占满）
+- 安全区（safe-area）：`padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px))` 已有，保留
+
+### 5.5 Header 响应式
+
+| 元素 | 桌面（≥800px） | 平板（640-799px） | 窄屏（<640px） |
+|------|---------------|------------------|---------------|
+| #menu-btn（☰） | `display:none`（现有） | 显示 | 显示 |
+| h1 标题 | 显示 | 显示 | 缩小至 `14px` 或只显示图标 |
+| #session-id | 显示 | 显示 | 仅显示截断短 id（`text-overflow`） |
+| #session-tokens | 显示 | 显示 | 仅显示 `in=N`（省略 out） |
+| #version-badge | 隐藏（现有 `@media max-width:500px`） | 隐藏 | 隐藏 |
+| #model-badge | 显示 | 显示 | 隐藏（保留头像缩略） |
+| #theme-btn | 显示 | 显示 | 显示 |
+| #logout | 显示 | 显示 | 文字「退出」→ 图标 ⏻ |
+
+### 5.6 轨迹抽屉响应式
+
+- 桌面（≥800px）：`position:fixed; right:0; top:52px; bottom:0; width:360px`，`transform:translateX(0)` 开/关
+- 窄屏（<640px）：`width:100vw; z-index:10`（覆盖全屏，包含遮罩），`top:0`（覆盖 header）
+- 关闭按钮：窄屏显示 ✕ 浮动按钮，桌面可使用点击遮罩或 Escape
+
+### 5.7 模态框（目录选择器、用量弹窗）
+
+- 通用规范（见 §4.6）：`place-items:center` 居中
+- 窄屏：`max-width: 100vw; max-height: 100dvh; border-radius: 0`（全屏模态）
+- 目录树：窄屏时每行减小 padding（`6px 8px`），字号 13px
+
+### 5.8 断点与变量化
+
+```css
+/* 响应式断点标量（于 :root 声明，便于集中管理） */
+:root {
+  --bp-narrow: 640px;
+  --bp-tablet: 800px;
+  --sidebar-width: 240px;
+  --trajectory-width: 360px;
+}
+```
+
+所有 `@media` 查询引用这些变量（CSS 变量在 `@media` 中无效，但注释约定维护）：
+
+```css
+/* NARROW: < 640px */
+@media (max-width: 639px) { ... }
+/* TABLET: 640-799px */
+@media (min-width: 640px) and (max-width: 799px) { ... }
+/* DESKTOP: ≥ 800px */
+@media (min-width: 800px) { ... }
+```
+
+### 5.9 与现有架构的兼容性
+
+- 现有 `#nav { display:none }` + `@media { display:flex }` 冲突 → 重构为：`#nav` 默认为 `display:grid`（桌面），窄屏 `display:none` + `body.nav-open` 覆盖
+- `body.nav-open` 语义不变，但窄屏时 `#nav` 的 `position:relative` + `z-index:6` 改为 `position:fixed; left:0; top:52px; height:calc(100dvh - 52px); z-index:20`（不要遮挡 header）
+- `#overlay` 在窄屏 `z-index:15`（header 与 nav 之间）
+- 轨迹面板 `z-index:30`（高于侧栏，与其遮罩联动）
+
+### 5.10 响应式实施范围
+
+| 项 | 改动 | 随哪个特性落地 |
+|----|------|--------------|
+| `#layout` 改为 `display:grid` | `app.css` + `index.html`（#layout 类） | 公共（美化步骤 1） |
+| 侧栏重构（grid 布局 + 窄屏 fixed） | `app.css` + `index.html` | 公共 |
+| 消息区居中 + 窄屏适配 | `app.css` | 公共 |
+| composer 对齐 | `app.css` | 公共 |
+| header 响应式隐藏 | `app.css` | 公共 |
+| 轨迹抽屉 responsive | `app.css` + `trajectory.js` | 特性 3 |
+| 模态窄屏全屏 | `app.css` | 特性 1 |
+| 断点统一 | `app.css`（注释约定） | 公共 |
+
+---
+
+## 六、接口改动汇总
 
 | 位置 | 改动 |
 |------|------|
@@ -290,7 +415,7 @@ view.trajectory = {
 
 ---
 
-## 六、安全边界
+## 七、安全边界
 
 | 面 | 风险 | 控制 |
 |----|------|------|
@@ -302,28 +427,31 @@ view.trajectory = {
 
 ---
 
-## 七、实施步骤
+## 八、实施步骤
 
 1. **后端事件增强**（共享支点）：
    - 钩子签名 + `step` 字段 + `step_usage` 事件 + `emitStepUsage` 装配 + 全部测试更新
    - 跑通 `make verify`
-2. **公共美化**（Token 变量/间距/header）：
+2. **公共美化 + 响应式骨架**（Token 变量/间距/header/布局）：
    - `app.css` 令牌层 + header 毛玻璃 + 间距网格替换魔法值
+   - `#layout` 改 `display:grid` 三栏 + 侧栏重构（`position:fixed` 窄屏）+ 断点 640/800 统一
+   - 消息区居中、composer 对齐、header 响应式隐藏
    - 独立提交（无逻辑依赖，可先于特性）
 3. **特性 2 用量可视化**（依赖 step_usage）：
    - `usage.js` + `views.js` 模型 + `events.js` 钩入 + header 预算 + 用量样式
    - 先做这个，因为轨迹也要用 step_usage 锚点
 4. **特性 3 轨迹视图**（依赖 step 字段）：
    - `trajectory.js` + 事件捕获 + 抽屉 + 节点定位 + 卡片美化
+   - 抽屉响应式（桌面 360px / 窄屏全屏）随 §5.6 落地
 5. **特性 1 目录选择器**（独立，可并行）：
-   - `web_tree.go` API + `dirpicker.js` + composer 改造 + 模态样式
+   - `web_tree.go` API + `dirpicker.js` + composer 改造 + 模态样式（窄屏全屏随 §5.7）
 6. **收尾**：assets 注册/TestNames、`CHANGELOG`/`ARCHITECTURE`/`README`、`WEBUI_NEXT.md` 勾选完成项
 
 每步独立提交、独立 verify。
 
 ---
 
-## 八、决策清单（已定案）
+## 九、决策清单（已定案）
 
 | # | 问题 | 定案 | 理由 |
 |---|------|------|------|
@@ -336,3 +464,6 @@ view.trajectory = {
 | 7 | 用量面板入口 | **双入口：result 卡折叠 + header token 徽标点击弹 `<dialog>`** | 就近查看 + 全局汇总两不误 |
 | 8 | 美化技术约束 | **CSS 变量 + app.css，禁内联 style/图标字体/第三方库** | 满足 CSP `style-src 'self'`；无构建链；离线可用（既有约束） |
 | 9 | 动效 | **仅交互态 transition + 定位高亮例外** | 避免入场动画复杂性；性能与 CSP 双合规 |
+| 10 | 响应式策略 | **CSS Grid 三栏骨架 + `position:fixed` 抽屉，断点仅 640/800 两档（参考 DSH）** | 桌面三栏/平板双栏/窄屏单栏；避免多断点维护（现仅 2 档引 4 条 @media） |
+| 11 | 窄屏侧栏行为 | **`position:fixed` 抽屉 + `z-index` 分层（header<overlay<nav<trajectory）** | 修复现有 `position:relative` 侧栏遮挡 header 的问题；与轨迹抽屉共用 overlay 模式 |
+| 12 | 消息区对齐 | **桌面 `.ev` 居中 `max-width:900px`，用户消息右对齐 80% 宽** | 参考 DSH 排版：集中注意力于内容列，窄屏全宽 |
