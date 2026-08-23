@@ -30,6 +30,7 @@ const webEnvKey = "MINIAGENT_WEB_KEY"
 
 type webServer struct {
 	cfg          *config.Config
+	cfgPath      string // config file path for PUT /api/config write-back; "" = not backed by a file (tests) → save disabled
 	engine       *turnEngine
 	key          string   // effective key; "" = no auth (loopback-only, enforced at startup)
 	allowedHosts []string // listen host variants the Host header may carry (DNS-rebinding defense); nil = skip (tests)
@@ -48,6 +49,11 @@ func newWebServer(baseCtx context.Context, cfg *config.Config, engine *turnEngin
 	}
 	return s
 }
+
+// setCfgPath records the config file path backing this server (runServe calls it with the
+// resolved -config path; tests that construct a server without one leave cfgPath empty and
+// PUT /api/config answers 404 — there is no file to write back to).
+func (s *webServer) setCfgPath(path string) { s.cfgPath = path }
 
 // webKey resolves the effective WebUI key: config web.key > $MINIAGENT_WEB_KEY.
 func webKey(cfg *config.Config) string {
@@ -87,6 +93,7 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 	}
 	engine := &turnEngine{cfg: cfg, cfgPath: cfgPath, logger: logger, buildClients: buildRuntimeClients, protectSignal: false, transports: &transportCache{}}
 	s := newWebServer(ctx, cfg, engine, key, logger)
+	s.setCfgPath(cfgPath)
 	s.allowedHosts = hostVariants(addr, cfg.Web.AllowedHosts)
 
 	srv := &http.Server{Addr: addr, Handler: s.mux(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
@@ -135,6 +142,8 @@ func (s *webServer) mux() http.Handler {
 	mux.HandleFunc("GET /api/whoami", s.whoami)
 
 	api := http.NewServeMux()
+	api.HandleFunc("GET /api/config", s.handleConfigGet)
+	api.HandleFunc("PUT /api/config", s.handleConfigPut)
 	api.HandleFunc("GET /api/models", s.handleModels)
 	api.HandleFunc("POST /api/turn", s.handleTurn)
 	api.HandleFunc("GET /api/events", s.handleEvents)
