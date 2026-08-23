@@ -230,6 +230,7 @@ async function send() {
           const ev = JSON.parse(line);
           if (v.gen !== gen) return; // superseded stream — stop painting
           if (ev.type === "session" && ev.id) rekey(v, ev.id);
+          if (ev.type === "session" && ev.workdir) v.workdir = ev.workdir;
           if (ev.type === "result" || ev.type === "error" || ev.type === "stop") sawTerminal = true;
           if (ev.type === "stream_cut") { sawTerminal = true; healAfterCut(v, "流被服务端中断，正在重建…"); return; }
           stopWait();
@@ -390,7 +391,9 @@ function updateHeader() {
 function updateComposer() {
   const v = activeView();
   const busy = !!v?.running;
-  $("send").textContent = busy ? "停止" : "发送";
+  $("send").textContent = busy ? "■" : "➤";
+  $("send").setAttribute("aria-label", busy ? "停止" : "发送");
+  $("send").setAttribute("title", busy ? "停止当前轮次" : "发送（运行中点击停止）");
   $("send").classList.toggle("danger", busy);
   $("prompt").disabled = false;
   $("workdir").disabled = false;
@@ -464,6 +467,7 @@ function stopWait() {
   waitTimer = 0;
   $("wait").hidden = true;
 }
+
 
 // ---- models / sessions ----
 
@@ -648,6 +652,7 @@ async function loadReplay(v) {
           const ev = JSON.parse(line);
           if (v.gen !== gen) { scrollMo.disconnect(); return; } // superseded: view rebuilt/stream took over
           if (!workdirFilled && ev.type === "session" && ev.workdir && !$("workdir").value.trim()) {
+            v.workdir = ev.workdir;
             $("workdir").value = ev.workdir;
             saveWorkdir(ev.workdir);
             workdirFilled = true;

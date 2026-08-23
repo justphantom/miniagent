@@ -29,6 +29,7 @@
       <button id="menu-btn" class="ghost" type="button" aria-label="打开导航">☰</button>
       <h1>miniagent</h1>
       <span id="session-id" class="session-id muted" title="当前会话 ID"></span>
+      <span id="session-workdir" class="session-id muted" title="当前会话工作目录"></span>
       <span id="session-tokens" class="session-id muted" title="当前会话累计 token"></span>
       <span class="flex-1"></span>
       <button id="theme-btn" class="ghost" type="button" title="切换到亮色" aria-label="切换主题">◐</button>
@@ -61,9 +62,11 @@
     </div>
     <div id="composer">
       <div class="composer-row main-row">
-        <textarea id="prompt" placeholder="给智能体发消息（桌面 Enter 发送 / Shift+Enter 换行；触屏 Enter 换行，点发送）" aria-label="输入"></textarea>
-        <span id="wait" class="muted" hidden></span>
-        <button id="send" type="button">发送</button>
+        <div id="prompt-wrap">
+          <textarea id="prompt" placeholder="给智能体发消息（Enter 发送）" aria-label="输入"></textarea>
+          <span id="wait" class="muted" hidden></span>
+          <button id="send" type="button" aria-label="发送" title="发送（运行中点击停止）">➤</button>
+        </div>
       </div>
       <details id="composer-adv">
         <summary>工作目录 · 模型</summary>

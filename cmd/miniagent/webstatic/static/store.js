@@ -45,6 +45,9 @@ export function showSessionID(view) {
   const id = view?.id || "";
   el.textContent = id ? `会话 ${id}` : "";
   el.title = id || "当前会话 ID";
+  const wd = document.getElementById("session-workdir");
+  wd.textContent = view?.workdir || "";
+  wd.title = view?.workdir || "当前会话工作目录";
   const tok = document.getElementById("session-tokens");
   const t = view?.tokens || { in: 0, out: 0 };
   const total = t.in + t.out;

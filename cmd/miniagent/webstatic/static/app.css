@@ -178,11 +178,13 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
 /* ---- composer ---- */
 #composer { padding: var(--space-md) var(--space-lg); padding-bottom: calc(var(--space-md) + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: var(--space-sm); }
 #composer input, #composer textarea, #composer select { font-size: 16px; }
-.composer-row.main-row { justify-content: flex-end; align-items: flex-end; }
-#prompt { flex: 1 1 100%; resize: none; min-height: 40px; max-height: 120px; border-radius: var(--radius-md); padding: 8px 12px; }
+.composer-row.main-row { align-items: flex-end; }
+#prompt-wrap { position: relative; flex: 1 1 100%; }
+#prompt { flex: none; width: 100%; resize: none; min-height: 40px; max-height: 120px; border-radius: var(--radius-md); padding: 8px 48px 8px 12px; }
+#send { position: absolute; right: 6px; bottom: 6px; width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center; padding: 0; background: var(--accent); color: #fff; border: none;
+  border-radius: 50%; font-size: 15px; line-height: 1; }
 #wait { align-self: center; margin-right: var(--space-sm); }
-#send { flex: none; padding: 8px 20px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius-md); font-weight: 500; }
-#send:hover { filter: brightness(1.1); }
 #send.danger { background: var(--err); color: #fff; border: none; }
 .composer-row { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
 .composer-row input { flex: 1; min-width: 160px; }
@@ -363,6 +365,7 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
   header { padding: var(--space-sm) var(--space-md); gap: var(--space-sm); }
   header h1 { font-size: 14px; }
   #session-id { display: none; }          /* F6: drop long id on small screens */
+  #session-workdir { display: none; }     /* F6: workdir likewise dropped on small screens */
   #logout { font-size: 0; } #logout::after { content: "⏻"; font-size: 18px; }
   #session-tokens { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* events */
