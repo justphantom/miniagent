@@ -495,6 +495,7 @@ async function loadSessions() {
       b.className = "sess-item" + (s.id === activeView()?.id ? " active" : "") + (s.running ? " running" : "");
       b.type = "button";
       const top = document.createElement("div");
+      top.className = "sess-title";
       top.textContent = s.model || s.id;
       top.title = s.model || s.id;
       const sid = document.createElement("div");
