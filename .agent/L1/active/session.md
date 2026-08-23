@@ -29,4 +29,4 @@ updated: 2026-08-23
 - df028b5 文档：`WEBUI_IMPLEMENTATION.md` 规格化改写 v2.0（可直接编码给 LLM）——逐节规格化：①共享支点给出精确 Go 签名/调用方全量清单/事件 JSON；②特性 1/2/3 每个 API 给出方法/路径/参数/错误码/用例名表，前端给 DOM 模板+函数签名+状态机；③美化从"方向"升级为完整 CSS 规则块（令牌双主题全值、登录页、spinner 分离 #wait/inlineHint、会话列表 running 点位移修复、消息卡 border-left、空态、to-bottom）；④响应式给具体 @media 块与侧栏 display 冲突修复；⑤新增 §0 总览（硬约束/术语）、§7 文件改动清单（精确到函数）、§9 验收 DoD、§10 决策记录（原 12 项+新增 #13 CSSOM 赋值合法/#14 提示分离/#15 轨迹定位）
 
 ## 待办
-- 无（功能主体完成；遗留为后续迭代项）。
+- `WEBUI_RESPONSIVE_UX.md`（响应式/UX 修复规格，基线 8e517fd）待实施：3×P0（抽屉无遮罩 app.css:54、平板 ☰ 失效 :268、#dirpicker 双节点）+ 9×P1（composer 行布局、轨迹面板流式刷新/保展开态、刘海 safe-area、to-bottom 避让、平板轨迹空洞、触摸目标、dirpicker 竞态、用户消息桌面右对齐）+ 7×P2（confirmInline 类化、theme-color、overscroll、tap-highlight、登录窄屏）。3 个 commit 顺序在文档 §4。
