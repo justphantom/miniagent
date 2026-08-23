@@ -105,7 +105,10 @@ func parseSSE(r io.Reader, onDelta func(miniagent.Delta) error) (miniagent.Respo
 		}
 		var chunk chatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return miniagent.Response{}, fmt.Errorf("parse sse chunk: %w", err)
+			// Return the aggregated partial Response alongside the error: the caller (DoStream) can
+			// still hand the content streamed before the truncated chunk to the user instead of failing
+			// the whole turn with an empty response (see deltaSent>0 transient branch in DoStream).
+			return acc.response(), fmt.Errorf("parse sse chunk: %w", err)
 		}
 		// provider/gateway reports an error via error chunk (content filtering/upstream failure): propagate it rather than swallowing it as success (P1-3).
 		// Truncate the message: aligned with the non-200 path policy of not echoing the body (prevents malicious proxies from echoing credentials/oversized text in the error message).

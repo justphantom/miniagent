@@ -59,10 +59,12 @@ if grep -q '\${' "$UNIT_DST"; then
 fi
 
 # Install config file (seed from example if absent).
+# The config dir is owned by the service user so SaveConfig's atomic temp+rename write-back
+# (needs directory write permission) succeeds — a root-owned 0755 dir would reject the temp create.
 CONFIG_DIR=$(dirname "$MINIAGENT_CONFIG")
-install -d -m 0755 -o root -g root "$CONFIG_DIR"
+install -d -m 0750 -o "$MINIAGENT_USER" -g "$MINIAGENT_GROUP" "$CONFIG_DIR"
 if [ ! -f "$MINIAGENT_CONFIG" ]; then
-	install -m 0640 -o root -g "$MINIAGENT_GROUP" "$SCRIPT_DIR/../config.example.json" "$MINIAGENT_CONFIG"
+	install -m 0640 -o "$MINIAGENT_USER" -g "$MINIAGENT_GROUP" "$SCRIPT_DIR/../config.example.json" "$MINIAGENT_CONFIG"
 	# L11: point the seeded config's session.dir at the deployed session dir so the
 	# unit's authorized directory (MINIAGENT_SESSION_DIR) is authoritative, not the
 	# example's relative ".sessions".

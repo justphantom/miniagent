@@ -361,3 +361,44 @@ data: [DONE]
 		t.Errorf("attempts = %d, want 2 (first chunk truncated pre-delta, retried)", attempts)
 	}
 }
+
+// Delta-lost incident variant: a complete content chunk already reached the caller (deltaSent>0, stream irrevocable
+// per P2-4) before the upstream reset mid-data-line. The partial answer must NOT be thrown away and the turn must not
+// fail: parseSSE returns the aggregated partial alongside the error, and DoStream accepts it as a truncated success
+// (FinishReason=length → core truncation warning path) instead of replaying a half-stream.
+func TestDoStream_TruncatedChunkPostDelta_ReturnsPartial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"Hello "}}]}`+"\n"+
+			`data: {"choices":[{"delta":{"content":"wor`) // complete chunk, then truncated JSON data line
+	}))
+	defer srv.Close()
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
+	resp, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
+	if err != nil {
+		t.Fatalf("DoStream: %v (expected partial accepted as truncated success)", err)
+	}
+	if resp.Text != "Hello " {
+		t.Errorf("Text = %q, want the streamed partial \"Hello \"", resp.Text)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want length (truncation marker for the core warning path)", resp.FinishReason)
+	}
+}
+
+// parseSSE surfaces the aggregated partial Response alongside the chunk-parse error (not an empty Response),
+// so the caller can distinguish "partial content then abort" from "nothing before abort".
+func TestParseSSE_TruncatedChunkReturnsPartial(t *testing.T) {
+	const sse = `data: {"choices":[{"delta":{"content":"Hello "}}]}` + "\n" +
+		`data: {"choices":[{"delta":{"content":"wor` // truncated JSON
+	res, err := parseSSE(strings.NewReader(sse), nil)
+	if err == nil {
+		t.Fatal("expected parse error for truncated JSON chunk")
+	}
+	if !strings.Contains(err.Error(), "parse sse chunk") {
+		t.Errorf("err = %v, want parse sse chunk wrap", err)
+	}
+	if res.Text != "Hello " {
+		t.Errorf("Text = %q, want the pre-abort partial \"Hello \"", res.Text)
+	}
+}

@@ -203,6 +203,20 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 			backoff *= 2
 			continue
 		}
+		// deltaSent>0 (P2-4): the stream is irrevocable — live UX already received partial content, replaying would
+		// duplicate output. But a mid-data transient abort (e.g. upstream 429 keeps the connection alive for the next
+		// data line, then resets it mid-line) would otherwise throw away the partial answer and fail the whole turn.
+		// Accept the partial as a truncated success: FinishReason=length routes it through the core's existing
+		// truncation warning path (callLLMWithDowngrade), so the content that WAS streamed still lands in the reply
+		// instead of being lost. Scoped to text/reasoning (user-visible content): a tool-call-only partial with
+		// truncated JSON args would only corrupt the downstream tool parse, so it keeps propagating the error.
+		if deltaSent > 0 && isTransientStreamError(perr) && (res.Text != "" || res.Reasoning != "") {
+			if c.Logger != nil {
+				c.Logger.Warn("llm stream truncated mid-data after partial content; returning truncated response", "error", perr, "failed_attempt", attempt+1)
+			}
+			res.FinishReason = "length"
+			return res, nil
+		}
 		return miniagent.Response{}, perr
 	}
 	return miniagent.Response{}, errors.New("llm stream retry loop exited unexpectedly")
