@@ -3,7 +3,7 @@
 ## 状态
 - superseeds: none
 - superseded_by: none
-- updated: 2026-08-23
+- updated: 2026-08-24
 
 ## 背景
 v5.0.0 起 `miniagent -serve` 提供 WebUI，v6.1.0 全面优化体验。需记录前端架构选型理由。v7（2026-08-23，WEBUI_SYNC_PLAN.md 落地）补多会话并发/跨浏览器同步/流式 markdown 三项决策（§7-§10）。
@@ -59,3 +59,8 @@ v5.0.0 起 `miniagent -serve` 提供 WebUI，v6.1.0 全面优化体验。需记�
 ### 10. 前端多视图 + 流式 markdown
 - #events 是视口，每会话一个 .view（views.js）：切换换 display 不 abort；M8 generation 降为 per-view gen；idle 视图 >8 逐出（running 永不逐出）。
 - 流式渲染从「纯文本累积、finish 一次性 mdRender」改为「300ms 节流 mdRender 增量重绘」：thinking 流式可达分钟级，原始 md 语法直出不可接受；节流把重解析成本从 O(delta) 降到 ~3次/s，>64KB 停止重绘等 finish，隐藏视图跳过重绘，复制按钮/折叠仍在 finish 一次性绑定。
+
+### 11. 工具卡片统一「预览 + 展开按钮」（弃 details）
+- 交互形态（910a4c7）：工具卡（聊天流 events.js + 轨迹面板 trajectory.js）不用 `<details>` 折叠，恒显裁剪预览（前 2 行且 ≤90 字符，超出省略号），被裁剪时出「展开完整内容」按钮切换全文/预览。根因：原 details 展开后看到的仍是裁剪文本（title 提示完整内容），两套折叠语义割裂；统一后预览即所得，展开即全文。阈值是用户拍板的 UI 偏好，改值须同步两文件常量（TOOL_PREVIEW_CHARS/LINES）。
+- 镜像常量防环：clip 逻辑在 trajectory.js 复制而非共享——events.js 已 import trajectory.js（refreshPanel），反向抽公共模块成环。与 compaction↔policy 常量镜像同构，但无 JS 测试基建，一致性靠注释指向，改动时须两处同步。
+- 验证门槛：静态 JS 无测试框架（不引入，与零构建链同哲学），门槛 = `node --check` 语法 + Go verify-gate（embed 编译含静态资源）。

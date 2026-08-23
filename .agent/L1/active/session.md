@@ -11,7 +11,7 @@ updated: 2026-08-24
 - v6.5.0 发版记录见 git 历史（tag `v6.5.0` @ 8c03cb6）。
 
 ## 本会话任务
-- **WebUI header 显示 workdir**：header 新增 `#session-workdir` span（复用 .session-id 样式，空时 CSS :empty 自动隐藏）；store.js showSessionID 渲染 view.workdir；app.js 两处采集（发送流 session 事件、loadReplay session 事件）；移动端 CSS 与 #session-id 一同隐藏。纯前端 4 文件，不动事件契约。verify-gate 全绿。
+- **工具卡片弃用 details 折叠**（已提交 `910a4c7`，未发版推送）：统一为预览（前 2 行且 ≤90 字符，用户指定）+「展开完整内容」按钮切换全文。events.js `toolPre()`（pre 内嵌按钮，复用 .expand-btn）；trajectory.js 同逻辑（clip 常量复制不导入，防 events↔trajectory 环）；CSS `.ev.tool summary`→`.ev-tool-head`、补 `.trajectory-tool*` 基础样式；外层 trajectory-step 仍是 details（步骤卡非工具卡）。verify-gate 全绿。
 
 ## 本会话产出（发版前完善）
 - **①CHANGELOG 补漏**：v6.4.0..HEAD 44 提交原仅 6 条，补 4 条——9096515（三特性+UI 重设计+Breaking：OnToolUse/OnToolResult 加 step 首参、新钩子 OnStepUsage、`GET /api/tree`、`step_usage` 事件 web-only）、651711e（IDE 骨架）、1211853（hscroll 修复）、19c76ee（配置目录迁移）。
@@ -19,8 +19,8 @@ updated: 2026-08-24
 - **③R4 mid-data 截断透明化**（cd4b371）：`Response.TruncatedStream`/`Result.Truncated` 领域标记（L0 #8 不进 wire）→ result 事件 `"truncated":true`（omit-if-zero，旧消费方零影响）→ WebUI「· 上游截断」徽标。区分 finish:length（max_tokens 截断）与上游断流。测试：TruncatedChunkPostDelta 断言 TruncatedStream=true；ZeroFieldsPresent 断言 truncated 键 absent。README 契约示例 + CHANGELOG。verify-gate 全绿。
 
 ## 方法论沉淀（候选 L2）
-- 环回 lag-close 实测方法论：socket SO_RCVBUF 收缩无效（服务端 wmem autotune 独立扩大）；curl --limit-rate 仅节流自身读、内核双端缓冲吸收突发；真正触发需「服务端写阻塞 + 新事件持续到达 >256 channel 容量」。生产实证优于人造复现。
-- 事件契约新增字段必须 omit-if-zero（区别于既有 always-present 机器契约键）。
+- ~~环回 lag-close 实测方法论~~ 已沉淀候选，发版后评估。
+- 本会话 3 条已沉淀 → `L2/decisions/webui-architecture.md` §11（工具卡预览+展开统一、镜像常量防环、静态 JS 验证门槛），L1 不再重复。
 
 ## 待办（发版前）
 - ④第四轮复审（ASSESSMENT.md 停在 248b53c 早于 v6.4.0）：重点 stream.go 降级路径、web 前端 IDE 重构、钩子签名变更面。
