@@ -128,3 +128,36 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
   .ev { max-width: 100%; }
   .composer-row input, .composer-row select { width: 100%; flex: none; }
 }
+
+/* ── 配置页 ── */
+#config-page { padding: 16px; max-width: 720px; margin: 0 auto; }
+.cfg-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.cfg-header h2 { margin: 0; font-size: 18px; }
+.cfg-status { font-size: 12px; }
+.cfg-msg { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
+.cfg-msg.ok { background: var(--accent); color: #fff; }
+.cfg-msg.err { background: var(--err); color: #fff; }
+.cfg-note { font-size: 12px; margin-bottom: 8px; }
+.cfg-loading { font-size: 14px; color: var(--muted); padding: 20px 0; text-align: center; }
+.cfg-section { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 12px; padding: 8px 12px; }
+.cfg-section > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
+.cfg-section > summary > h3 { margin: 0; font-size: 14px; display: inline; }
+.cfg-section > summary > h3::before { content: "▾ "; font-size: 11px; color: var(--accent); }
+.cfg-section[open] > summary > h3::before { content: "▾ "; }
+.cfg-section:not([open]) > summary > h3::before { content: "▸ "; }
+.cfg-field { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 6px 0; }
+.cfg-label { flex: 0 0 180px; font-size: 13px; color: var(--fg); }
+.cfg-label:hover { color: var(--accent); }
+.cfg-help { font-size: 11px; flex: 0 0 100%; margin: -2px 0 2px; }
+.cfg-input { flex: 1; min-width: 140px; }
+.cfg-input input[type="text"],
+.cfg-input input[type="number"] { width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 4px; background: var(--input-bg, var(--panel)); color: var(--fg); }
+.cfg-input input[type="checkbox"] { margin: 0; }
+.cfg-array { display: flex; flex-direction: column; gap: 4px; }
+.cfg-array-row { display: flex; gap: 4px; }
+.cfg-array-row input { flex: 1; }
+.cfg-array-del { font-size: 12px; padding: 0 6px; }
+.cfg-actions { margin-top: 16px; text-align: center; }
+.cfg-save { padding: 8px 24px; font-size: 14px; background: var(--accent); color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+.cfg-save:disabled { opacity: .5; cursor: default; }
+.nav-config { font-size: 13px; text-align: left; width: 100%; padding: 6px 8px; }

@@ -11,7 +11,7 @@ import (
 // directory name into the route table.
 func TestNames(t *testing.T) {
 	names := Names()
-	want := []string{"app.css", "app.js", "events.js", "index.html", "live.js", "md.js", "store.js", "views.js"}
+	want := []string{"app.css", "app.js", "config.js", "events.js", "index.html", "live.js", "md.js", "store.js", "views.js"}
 	slices.Sort(names)
 	if !slices.Equal(names, want) {
 		t.Errorf("Names() = %v, want %v", names, want)

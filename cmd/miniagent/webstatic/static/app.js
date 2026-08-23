@@ -13,6 +13,7 @@ import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdi
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 import { startEvents, attachLive } from "./live.js";
 import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom } from "./views.js";
+import { renderConfigPage } from "./config.js";
 
 const $ = (id) => document.getElementById(id);
 const runningKnown = new Set(); // session ids with a turn in flight (lifecycle feed)
@@ -101,6 +102,11 @@ $("new-chat").addEventListener("click", () => {
   updateHeader();
   document.body.classList.remove("nav-open");
   if (!isTouch) { $("prompt").focus(); }
+});
+
+$("config-btn").addEventListener("click", () => {
+  renderConfigPage();
+  document.body.classList.remove("nav-open");
 });
 
 // Enter sends on desktop (Shift+Enter = newline); mobile keeps Enter = newline.
