@@ -11,6 +11,8 @@ import { renderUsageBar, renderStepUsageList } from "./usage.js";
 import { refreshPanel } from "./trajectory.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
+const TOOL_PREVIEW_CHARS = 150; // tool card input/output preview caps (details expansion shows full)
+const TOOL_PREVIEW_LINES = 3;
 
 // Step timeline icons (V3): each event card gets a leading icon by type/tool name.
 const STEP_ICONS = {
@@ -154,6 +156,17 @@ function toolArg(name, input) {
   return key === "path" ? val.split("/").pop() : val;
 }
 
+// clipToolText caps tool input/output previews: first TOOL_PREVIEW_LINES lines and first
+// TOOL_PREVIEW_CHARS characters, ellipsis when clipped. Details expansion shows the full text.
+function clipToolText(s) {
+  let t = s;
+  let clipped = false;
+  if (t.length > TOOL_PREVIEW_CHARS) { t = t.slice(0, TOOL_PREVIEW_CHARS); clipped = true; }
+  const lines = t.split("\n");
+  if (lines.length > TOOL_PREVIEW_LINES) { t = lines.slice(0, TOOL_PREVIEW_LINES).join("\n"); clipped = true; }
+  return clipped ? t + " …" : t;
+}
+
 export function appendToolUse(view, ev) {
   const d = document.createElement("details");
   d.className = "ev tool";
@@ -177,7 +190,8 @@ export function appendToolUse(view, ev) {
   s.append(name, argEl, time);
   wrap.appendChild(s);
   const pre = document.createElement("pre");
-  pre.textContent = ev.input || "";
+  pre.textContent = clipToolText(ev.input || "");
+  pre.title = "展开查看完整输入";
   wrap.appendChild(pre);
   d.append(ic, wrap);
   view.dom.appendChild(d);
@@ -197,7 +211,8 @@ export function appendToolResult(view, ev) {
   if (!target) return;
   const pre = document.createElement("pre");
   pre.className = "out" + (ev.is_error ? " err" : "");
-  pre.textContent = ev.output || "";
+  pre.textContent = clipToolText(ev.output || "");
+  pre.title = "展开查看完整输出";
   (target.querySelector(".ev-body") || target).appendChild(pre);
 }
 
