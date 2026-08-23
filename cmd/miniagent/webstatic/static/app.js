@@ -38,9 +38,9 @@ async function boot() {
   showLogin();
 }
 
-function showLogin() { $("login").style.display = "flex"; $("app").style.display = "none"; $("key-input").focus(); }function showApp() {
-  $("login").style.display = "none";
-  $("app").style.display = "flex";
+function showLogin() { $("login").classList.add("on"); $("app").classList.remove("on"); $("key-input").focus(); }function showApp() {
+  $("login").classList.remove("on");
+  $("app").classList.add("on");
   $("composer-adv").open = loadComposerAdv();
   document.body.classList.toggle("nav-collapsed", loadNavCollapsed());
   const savedWd = loadWorkdir();
@@ -436,7 +436,7 @@ async function loadModels() {
       saveModel(v);
       setStatusModel(v);
     });
-    if (saved) setStatusModel(saved);
+    setStatusModel(saved || "默认模型");
   } catch { /* dropdown stays default */ }
 }
 
@@ -467,14 +467,18 @@ async function loadSessions() {
       b.type = "button";
       const top = document.createElement("div");
       top.textContent = s.model || s.id;
+      top.title = s.model || s.id;
       const sid = document.createElement("div");
       sid.className = "sid";
-      sid.textContent = [s.id, s.workdir || "", s.created ? new Date(s.created).toLocaleString() : ""].filter(Boolean).join(" · ");
+      const sidText = [s.id, s.workdir || "", s.created ? new Date(s.created).toLocaleString() : ""].filter(Boolean).join(" · ");
+      sid.textContent = sidText;
+      sid.title = sidText;
       b.appendChild(top); b.appendChild(sid);
       if (s.preview) {
         const pv = document.createElement("div");
         pv.className = "preview";
         pv.textContent = s.preview;
+        pv.title = s.preview;
         b.appendChild(pv);
       }
       const del = document.createElement("button");

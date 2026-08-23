@@ -34,7 +34,8 @@ button.danger { border-color: var(--err); color: var(--err); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---- layout skeleton ---- */
-#app { display: none; grid-template-rows: var(--header-top) minmax(0, 1fr) auto; height: 100dvh; }
+#app { display: none; }
+#app.on { display: grid; grid-template-rows: var(--header-top) minmax(0, 1fr) auto; height: 100dvh; }
 header { display: flex; align-items: center; gap: 12px; padding: 0 var(--space-lg);
   padding-top: env(safe-area-inset-top, 0px); height: var(--header-top); border-bottom: 1px solid var(--border);
   z-index: 40; background: var(--bg); }
@@ -43,7 +44,7 @@ header h1 { font-size: 15px; flex-shrink: 0; }
 .session-id:empty { display: none; }
 #session-tokens { font-variant-numeric: tabular-nums; }
 
-#layout { display: grid; grid-template-columns: var(--sidebar-width) 1fr; grid-template-areas: "nav main"; flex: 1; min-height: 0; }
+#layout { display: grid; grid-template-columns: var(--sidebar-width) 1fr; grid-template-areas: "nav main"; min-height: 0; }
 #layout.trajectory-open { grid-template-columns: var(--sidebar-width) 1fr var(--trajectory-width); grid-template-areas: "nav main trajectory"; }
 #nav { grid-area: nav; background: var(--bg); }
 main { grid-area: main; min-width: 0; display: flex; flex-direction: column; position: relative; }
@@ -53,7 +54,7 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 #events > .view { display: flex; flex-direction: column; gap: 10px; max-width: 780px; margin: 0 auto; width: 100%; }
 #overlay { display: none; }
 footer { border-top: 1px solid var(--border); background: var(--bg); z-index: 40; }
-#status-bar { display: flex; gap: var(--space-lg); padding: 2px var(--space-lg);
+#status-bar { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--space-lg); padding: 2px var(--space-lg);
   padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px));
   font-size: 11px; border-top: 1px solid var(--border); }
 #status-bar span:empty { display: none; }
@@ -66,7 +67,7 @@ footer { border-top: 1px solid var(--border); background: var(--bg); z-index: 40
 #session-list::-webkit-scrollbar { width: 8px; }
 #session-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .sess-empty { font-size: 12px; padding: 8px 4px; text-align: center; opacity: .8; }
-.sess-item { text-align: left; padding: 8px; border-radius: var(--radius-sm); border: 1px solid transparent; position: relative; transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast); }
+.sess-item { text-align: left; padding: 8px; padding-right: 34px; border-radius: var(--radius-sm); border: 1px solid transparent; position: relative; transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast); }
 .sess-item .sid { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 .sess-item .sess-del { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px;
   display: grid; place-items: center; padding: 0; font-size: 12px; color: var(--muted); cursor: pointer; }
@@ -130,9 +131,9 @@ footer { border-top: 1px solid var(--border); background: var(--bg); z-index: 40
 #wait.msg-error::before { border-top-color: var(--err); animation: none; content: "⚠"; }
 
 /* ---- login page ---- */
-#login { align-items: center; justify-content: center; height: 100dvh;
+#login { display: none; align-items: center; justify-content: center; height: 100dvh;
   background: radial-gradient(1200px 600px at 20% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%), var(--bg); }
-#login, #app { display: none; }
+#login.on { display: flex; }
 #login-form { display: flex; flex-direction: column; gap: 12px; width: min(320px, calc(100vw - 32px)); padding: 32px 28px;
   background: var(--bg-elev-1); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-modal); }
 #login-form h1 { font-size: 22px; text-align: center; letter-spacing: .5px; }
@@ -200,7 +201,6 @@ footer { border-top: 1px solid var(--border); background: var(--bg); z-index: 40
 .modal-body { flex: 1; overflow-y: auto; padding: var(--space-md) var(--space-lg); overscroll-behavior: contain; }
 .modal-foot { display: flex; justify-content: flex-end; gap: var(--space-sm); padding: var(--space-md) var(--space-lg); border-top: 1px solid var(--border); }
 .cfg-modal-panel { width: min(90vw, 960px); max-height: 85vh; }
-#config-page { padding: 0; max-width: none; margin: 0; }
 
 /* ---- inline confirm dialog ---- */
 .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000;
@@ -225,8 +225,8 @@ footer { border-top: 1px solid var(--border); background: var(--bg); z-index: 40
 .dp-tree-item:hover { background: var(--bg-hover); }
 .dp-tree-empty { color: var(--muted); font-size: 13px; padding: 8px; text-align: center; }
 
-/* ---- config page ---- */
-#config-page { padding: 16px; max-width: 720px; margin: 0 auto; }
+/* ---- config page (modal context) ---- */
+#config-page { padding: 0; max-width: none; margin: 0; }
 .cfg-header { display: flex; align-items: baseline; gap: var(--space-md); margin-bottom: var(--space-md); }
 .cfg-header h2 { margin: 0; font-size: 18px; }
 .cfg-status { font-size: 12px; }
@@ -305,6 +305,7 @@ footer { border-top: 1px solid var(--border); background: var(--bg); z-index: 40
 /* Narrow <640px */
 @media (max-width: 639px) {
   #layout { display: flex; }
+  main { flex: 1; min-height: 0; }
   header { padding: var(--space-sm) var(--space-md); gap: var(--space-sm); }
   header h1 { font-size: 14px; }
   #session-id { display: none; }          /* F6: drop long id on small screens */
