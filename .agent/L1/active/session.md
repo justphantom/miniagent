@@ -21,6 +21,7 @@ updated: 2026-08-23
 - 5 commits（ca26d61 / a4aa3e0 / f34f999 / f73e1ce / c33d824），CHANGELOG `[Unreleased]` Added 已更新；verify-gate 全绿
 - 59977c4 修复：`renderKv`/`renderKvMap` 渲染时不再 setNested 创建空对象，空条目删字段（omitempty）——打开配置页不改即保存不再污染配置
 - e4e78d0 后端：PUT 返回 `config` 字段（掩码后 saved config），前端保存后回填表单；前端：`clientValidate` 预校验（空 providers/重复名/必填缺失），减少无效往返
+- 19c76ee 部署：配置目录 `/etc/miniagent` → `/opt/miniagent/config`（服务用户可写）。根因：`ProtectSystem=full` 把 `/etc` 挂只读 + config 目录 root 属主 0755 无目录写权限，SaveConfig 的 temp+rename 需目录写权限故失败。`deploy.sh` 改为 install 目录归服务用户 0750、README 同步；本机已手动迁移文件到 /opt/miniagent/config 并 chown work:work（sudo 改 unit ExecStart + restart 待执行）
 - 遗留：配置页不含「运行中热重载」（用户当前选择「写文件+提示重启」；热重载需阻断在途轮次后重建 engine+registry，大改动高风险，建议保留当前模式）
 
 ## 待办
