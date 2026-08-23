@@ -7,7 +7,7 @@ updated: 2026-08-24
 # 当前会话
 
 ## 状态
-- 发版前完善全部完成（未打 tag）：①CHANGELOG 补漏 ②部署复测（lag-closed WARN 生产实证+浏览器自愈闭环确认）③R4 截断透明化（cd4b371）④第四轮复审 C1/C2 修复（576989f）、C3 披露（SECURITY.md「设计已知」+/api/tree）⑤README 界面/API 条目重写（IDE 骨架/轨迹/step_usage/目录选择器）⑥14 个过程文档删除归档（docs/ 在 .gitignore，历史即归档），审计基线重写沉淀 L2 `patterns/webui-ux-audit-baseline`（未修观察项 F2 平板汉堡/F6 窄屏 header/F15 滚动穿透；archive/ 磁盘目录未跟踪）。待发版：合并 CHANGELOG Unreleased、定版本号。
+- **v6.5.0 已发版**（tag `v6.5.0` @ 8c03cb6，2026-08-24）：发版前完善①-⑥全部完成，CHANGELOG 回填 [6.5.0] 段、version.go 默认值同步 v6.5.0、`git describe`/`-version` 实测 v6.5.0。工作树干净、verify-gate 全绿。
 
 ## 本会话产出（发版前完善）
 - **①CHANGELOG 补漏**：v6.4.0..HEAD 44 提交原仅 6 条，补 4 条——9096515（三特性+UI 重设计+Breaking：OnToolUse/OnToolResult 加 step 首参、新钩子 OnStepUsage、`GET /api/tree`、`step_usage` 事件 web-only）、651711e（IDE 骨架）、1211853（hscroll 修复）、19c76ee（配置目录迁移）。
