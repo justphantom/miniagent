@@ -5,8 +5,9 @@
 // each holding its own in-flight delta nodes, tool-node map and token counters.
 
 import { mdRender } from "./md.js";
-import { fmtTime } from "./store.js";
+import { fmtTime, getBudget } from "./store.js";
 import { activeView } from "./views.js";
+import { renderUsageBar, renderStepUsageList } from "./usage.js";
 
 const LONG_TEXT_LINES = 24; // assistant/result text beyond this collapses with a fade + expand toggle
 
@@ -48,12 +49,15 @@ function evDiv(cls, tag, ts, body = "") {
 }
 
 export function appendUserPrompt(view, text) {
+  // remove empty state if present
+  view.dom.querySelector(".empty-state")?.remove();
   const d = evDiv("user", "user", Date.now());
   d.appendChild(document.createTextNode(text)); // user input stays plain text (no markdown)
   view.dom.appendChild(d);
 }
 
-export function appendDelta(view, kind, text, ts) {
+export function appendDelta(view, kind, text, ts, step) {
+  if (step) view.curStep = step;
   let d = kind === "text" ? view.curText : view.curReasoning;
   if (!d) {
     d = evDiv(kind === "text" ? "text" : "reasoning", kind === "text" ? "assistant" : "assistant · thinking", ts);
@@ -69,6 +73,7 @@ export function appendDelta(view, kind, text, ts) {
   d._md += text;
   dirtyViews.add(view);
   if (!streamTimer) streamTimer = setInterval(paintStreaming, STREAM_RENDER_MS);
+  if (step) d.dataset.step = step;
   if (!d._painted) { d._mdEl.innerHTML = mdRender(d._md); d._painted = true; } // first chunk paints immediately
 }
 
@@ -120,9 +125,10 @@ function makeCollapsible(d, text) {
 export function appendToolUse(view, ev) {
   const d = document.createElement("details");
   d.className = "ev tool";
+  if (ev.step) d.dataset.step = ev.step;
   const s = document.createElement("summary");
   const name = document.createElement("span");
-  name.textContent = `🔧 ${ev.name}`;
+  name.textContent = ev.name;
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = fmtTime(ev.ts);
@@ -133,6 +139,11 @@ export function appendToolUse(view, ev) {
   d.appendChild(pre);
   view.dom.appendChild(d);
   if (ev.call_id) view.toolNodes.set(ev.call_id, d);
+  // trajectory capture
+  const step = ev.step ?? view.curStep;
+  if (step) {
+    captureToolUse(view, step, ev);
+  }
   return d;
 }
 
@@ -168,15 +179,41 @@ export function resetTransient(view) {
   view.toolNodes = new Map();
 }
 
+// ---- trajectory capture (mirrors tool events into view.trajectory without touching the message DOM) ----
+
+function captureToolUse(view, step, ev) {
+  if (!view.trajectory.order.includes(step)) view.trajectory.order.push(step);
+  let entry = view.trajectory.steps.get(step);
+  if (!entry) {
+    entry = { step, ts: ev.ts || Date.now(), in: 0, out: 0, tools: [] };
+    view.trajectory.steps.set(step, entry);
+  }
+  entry.tools.push({ name: ev.name, callID: ev.call_id, input: ev.input, output: "", isError: false, ts: ev.ts });
+}
+
+function captureToolResult(view, ev) {
+  for (const entry of view.trajectory.steps.values()) {
+    for (const t of entry.tools) {
+      if (t.callID === ev.call_id) {
+        t.output = ev.output || "";
+        t.isError = !!ev.is_error;
+        return;
+      }
+    }
+  }
+}
+
 export function renderEvent(view, ev) {
   if (view.turnStartTs === 0 && ev.ts) view.turnStartTs = ev.ts;
+  // remove empty state on first real event
+  if (ev.type !== "session") view.dom.querySelector(".empty-state")?.remove();
   switch (ev.type) {
     case "session":
       break; // id/workdir are consumed by the caller (rekey/header) before render
-    case "text_delta": appendDelta(view, "text", ev.text, ev.ts); break;
-    case "reasoning_delta": appendDelta(view, "reasoning", ev.text, ev.ts); break;
+    case "text_delta": appendDelta(view, "text", ev.text, ev.ts, ev.step); break;
+    case "reasoning_delta": appendDelta(view, "reasoning", ev.text, ev.ts, ev.step); break;
     case "tool_use": finishText(view); appendToolUse(view, ev); break;
-    case "tool_result": finishText(view); appendToolResult(view, ev); break;
+    case "tool_result": finishText(view); appendToolResult(view, ev); captureToolResult(view, ev); break;
     case "result": {
       finishText(view);
       view.tokens.in += ev.input_tokens || 0;
@@ -193,8 +230,21 @@ export function renderEvent(view, ev) {
       const elapsed = view.turnStartTs && ev.ts ? ` · ${((ev.ts - view.turnStartTs) / 1000).toFixed(1)}s` : "";
       u.textContent = `steps=${ev.steps} in=${ev.input_tokens} out=${ev.output_tokens}${ev.compacted ? " compacted" : ""}${elapsed}`;
       d.appendChild(u);
+      // usage bar + step details
+      const budget = view.usage.budget || getBudget();
+      renderUsageBar(d, { in: ev.input_tokens || 0, out: ev.output_tokens || 0, budget });
+      renderStepUsageList(d, view.usage.steps);
+      view.usage.steps.length = 0;
       view.dom.appendChild(d);
       view.turnStartTs = 0; // N13: replay streams several results — reset so the next turn's elapsed starts fresh
+      view.curStep = 0;
+      break;
+    }
+    case "step_usage": {
+      view.usage.steps.push({ step: ev.step, in: ev.input_tokens || 0, out: ev.output_tokens || 0, toolCalls: ev.tool_calls || 0 });
+      // sync trajectory step usage
+      const entry = view.trajectory.steps.get(ev.step);
+      if (entry) { entry.in = ev.input_tokens || 0; entry.out = ev.output_tokens || 0; }
       break;
     }
     case "error": {

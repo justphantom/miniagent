@@ -25,6 +25,7 @@
     <span id="session-tokens" class="session-id muted" title="当前会话累计 token"></span>
     <span class="flex-1"></span>
     <span id="version-badge" class="muted" title="服务端版本"></span>
+    <button id="traj-btn" class="ghost" type="button" title="工具轨迹" aria-label="工具轨迹">≡</button>
     <span id="model-badge" class="muted" title="当前模型"></span>
     <button id="theme-btn" class="ghost" type="button" title="切换到亮色" aria-label="切换主题">◐</button>
     <button id="logout" class="ghost">退出</button>
@@ -42,6 +43,7 @@
       <div id="composer">
         <div class="composer-row">
           <input id="workdir" placeholder="工作目录（绝对路径）" aria-label="工作目录">
+          <button id="workdir-browse" type="button" class="ghost" aria-label="浏览目录">📁</button>
           <select id="model" aria-label="模型"><option>默认模型</option></select>
         </div>
         <div class="composer-row">
@@ -53,6 +55,7 @@
     </main>
   </div>
   </div>
+  <div id="dirpicker" class="modal" hidden></div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -67,7 +67,7 @@ func TestRun_ParallelToolResultsMatchOrder(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	var uses []string
-	onToolUse := func(name, callID, input string) error {
+	onToolUse := func(step int, name, callID, input string) error {
 		uses = append(uses, name)
 		return nil
 	}

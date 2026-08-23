@@ -31,7 +31,7 @@ func TestRun_OnToolResultFired(t *testing.T) {
 	llm := testClients(tr)
 	var got []string
 	hooks := LoopHooks{
-		OnToolResult: func(name, callID string, r ToolResult) error {
+		OnToolResult: func(step int, name, callID string, r ToolResult) error {
 			got = append(got, name+":"+callID+":"+r.Output)
 			return nil
 		},
@@ -54,7 +54,7 @@ func TestRun_OnToolResultErrorStops(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	stop := errors.New("downstream closed")
-	hooks := LoopHooks{OnToolResult: func(string, string, ToolResult) error { return stop }}
+	hooks := LoopHooks{OnToolResult: func(int, string, string, ToolResult) error { return stop }}
 	_, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, stop) {
 		t.Fatalf("err = %v, want %v", err, stop)
@@ -73,7 +73,7 @@ func TestRun_ToolDeniedSkipped(t *testing.T) {
 		textResponse("done"),
 	}}
 	llm := testClients(tr)
-	hooks := LoopHooks{OnToolUse: func(name, callID, input string) error {
+	hooks := LoopHooks{OnToolUse: func(step int, name, callID, input string) error {
 		if name == "a" {
 			return ErrToolDenied
 		}
@@ -117,7 +117,7 @@ func TestRun_OnToolResultErrorKeepsPairing(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	stop := errors.New("downstream closed")
-	hooks := LoopHooks{OnToolResult: func(name, callID string, r ToolResult) error {
+	hooks := LoopHooks{OnToolResult: func(step int, name, callID string, r ToolResult) error {
 		if callID == "c1" {
 			return stop // interrupt downstream at the 2nd tool
 		}
@@ -159,7 +159,7 @@ func TestRun_UnknownToolExitCodeNotSet(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	var got *int
-	hooks := LoopHooks{OnToolResult: func(name, callID string, r ToolResult) error {
+	hooks := LoopHooks{OnToolResult: func(step int, name, callID string, r ToolResult) error {
 		if name == "missing" {
 			ec := r.ExitCode
 			got = &ec
@@ -326,7 +326,7 @@ func TestRun_ShapeToolResultThenOnToolResultErrorKeepsPairing(t *testing.T) {
 			}
 			return "", nil
 		},
-		OnToolResult: func(name, callID string, r ToolResult) error {
+		OnToolResult: func(step int, name, callID string, r ToolResult) error {
 			if callID == "c3" {
 				return onErr
 			}
@@ -373,7 +373,7 @@ func TestRun_OnToolUseErrorKeepsPairing(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	stop := errors.New("downstream closed")
-	hooks := LoopHooks{OnToolUse: func(name, callID, input string) error { return stop }}
+	hooks := LoopHooks{OnToolUse: func(step int, name, callID, input string) error { return stop }}
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", hooks, nil)
 	if !errors.Is(err, stop) {
 		t.Fatalf("err = %v, want %v", err, stop)

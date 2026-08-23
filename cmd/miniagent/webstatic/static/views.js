@@ -38,7 +38,11 @@ export function createView(id = "") {
     stickBottom: true,
     workdir: "",
     lastUsed: Date.now(),
+    usage: { budget: 0, steps: [] },
+    trajectory: { order: [], steps: new Map() },
+    curStep: 0,
   };
+  dom.dataset.viewKey = key;
   views.set(key, view);
   eventsViewport().appendChild(dom);
   if (active) dom.style.display = "none";

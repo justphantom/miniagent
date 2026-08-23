@@ -14,7 +14,7 @@ import (
 func TestToolUseWriter(t *testing.T) {
 	var buf bytes.Buffer
 	emit := ToolUseWriter(&buf)
-	if err := emit("read", "tc1", `{"path":"a"}`); err != nil {
+	if err := emit(1, "read", "tc1", `{"path":"a"}`); err != nil {
 		t.Fatalf("emit: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -109,7 +109,7 @@ func TestEmitSession(t *testing.T) {
 
 func TestEmitToolResult_ShellExitCode(t *testing.T) {
 	var buf bytes.Buffer
-	if err := EmitToolResult(&buf, "shell", "c1", miniagent.ToolResult{Output: "out", ExitCode: 7}); err != nil {
+	if err := EmitToolResult(&buf, 1, "shell", "c1", miniagent.ToolResult{Output: "out", ExitCode: 7}); err != nil {
 		t.Fatalf("EmitToolResult: %v", err)
 	}
 	var ev map[string]any
@@ -124,7 +124,7 @@ func TestEmitToolResult_ShellExitCode(t *testing.T) {
 // Non-shell tools must not emit exit_code, so a zero value of 0 is not misread as "command succeeded".
 func TestEmitToolResult_NonShellOmitsExitCode(t *testing.T) {
 	var buf bytes.Buffer
-	if err := EmitToolResult(&buf, "read", "c2", miniagent.ToolResult{Output: "data"}); err != nil {
+	if err := EmitToolResult(&buf, 1, "read", "c2", miniagent.ToolResult{Output: "data"}); err != nil {
 		t.Fatalf("EmitToolResult: %v", err)
 	}
 	var ev map[string]any
@@ -142,7 +142,7 @@ func TestEmitToolResult_NonShellOmitsExitCode(t *testing.T) {
 func TestEmitToolResult_ExecToolValidationErrorOmitsExitCode(t *testing.T) {
 	for name, code := range map[string]int{"git": 0, "go": 0, "npm": miniagent.ExitCodeNotSet, "golangci-lint": miniagent.ExitCodeNotSet} {
 		var buf bytes.Buffer
-		if err := EmitToolResult(&buf, name, "c4", miniagent.ToolResult{IsError: true, ExitCode: code, Output: "git: option rejected"}); err != nil {
+		if err := EmitToolResult(&buf, 1, name, "c4", miniagent.ToolResult{IsError: true, ExitCode: code, Output: "git: option rejected"}); err != nil {
 			t.Fatalf("EmitToolResult: %v", err)
 		}
 		var ev map[string]any
@@ -161,7 +161,7 @@ func TestEmitToolResult_ExecToolValidationErrorOmitsExitCode(t *testing.T) {
 // A non-zero exit of an exec-backed command stays a normal (is_error:false) result carrying its code.
 func TestEmitToolResult_ExecNonZeroExitKeepsCode(t *testing.T) {
 	var buf bytes.Buffer
-	if err := EmitToolResult(&buf, "shell", "c5", miniagent.ToolResult{Output: "FAIL", ExitCode: 1}); err != nil {
+	if err := EmitToolResult(&buf, 1, "shell", "c5", miniagent.ToolResult{Output: "FAIL", ExitCode: 1}); err != nil {
 		t.Fatalf("EmitToolResult: %v", err)
 	}
 	var ev map[string]any
@@ -179,7 +179,7 @@ func TestEmitToolResult_ExecNonZeroExitKeepsCode(t *testing.T) {
 func TestEmitToolResult_TruncatesLongOutput(t *testing.T) {
 	var buf bytes.Buffer
 	long := strings.Repeat("x", maxToolResultEventChars+50)
-	if err := EmitToolResult(&buf, "read", "c3", miniagent.ToolResult{Output: long}); err != nil {
+	if err := EmitToolResult(&buf, 1, "read", "c3", miniagent.ToolResult{Output: long}); err != nil {
 		t.Fatalf("EmitToolResult: %v", err)
 	}
 	var ev map[string]any
@@ -218,7 +218,7 @@ func TestEmitDelta(t *testing.T) {
 func TestEmitTs(t *testing.T) {
 	// Explicit ts is preserved (replay path); omitted ts is stamped >0 (runtime path).
 	var buf bytes.Buffer
-	if err := EmitToolUse(&buf, "read", "tc1", `{}`, 42); err != nil {
+	if err := EmitToolUse(&buf, 1, "read", "tc1", `{}`, 42); err != nil {
 		t.Fatalf("EmitToolUse: %v", err)
 	}
 	var ev map[string]any
@@ -229,9 +229,9 @@ func TestEmitTs(t *testing.T) {
 		t.Errorf("ts = %v, want 42", ev["ts"])
 	}
 	for _, emit := range []func() error{
-		func() error { return EmitToolUse(&buf, "read", "tc1", `{}`) },
+		func() error { return EmitToolUse(&buf, 1, "read", "tc1", `{}`) },
 		func() error { return EmitDelta(&buf, 1, miniagent.DeltaText, "hi") },
-		func() error { return EmitToolResult(&buf, "read", "c1", miniagent.ToolResult{Output: "o"}) },
+		func() error { return EmitToolResult(&buf, 1, "read", "c1", miniagent.ToolResult{Output: "o"}) },
 		func() error { return EmitResult(&buf, miniagent.Result{Text: "t"}, "m") },
 	} {
 		buf.Reset()

@@ -26,7 +26,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 	denied := make(map[string]bool)
 	if hooks.OnToolUse != nil {
 		for _, tc := range calls {
-			if err := hooks.OnToolUse(tc.Name, tc.ID, tc.Args); err != nil {
+			if err := hooks.OnToolUse(step, tc.Name, tc.ID, tc.Args); err != nil {
 				if errors.Is(err, ErrToolDenied) {
 					denied[tc.ID] = true
 					continue
@@ -49,7 +49,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 			logger.Info("tool executed", "step", step, "tool", tc.Name, "is_error", tres.IsError, "output_len", len(tres.Output))
 		}
 		if hooks.OnToolResult != nil {
-			if err := hooks.OnToolResult(tc.Name, tc.ID, tres); err != nil {
+			if err := hooks.OnToolResult(step, tc.Name, tc.ID, tres); err != nil {
 				fillPlaceholderTail(&msgs, newMsgs, calls, i)
 				return msgs, err
 			}
@@ -61,7 +61,7 @@ func handleToolCalls(ctx context.Context, cfg LoopConfig, step int, resp Respons
 				appendMsg(&msgs, newMsgs, Message{Role: RoleTool, ToolCallID: tc.ID, Content: tres.Output, IsError: tres.IsError})
 				if hooks.OnToolResult != nil {
 					for j := i + 1; j < len(calls); j++ {
-						if err := hooks.OnToolResult(calls[j].Name, calls[j].ID, results[j]); err != nil {
+						if err := hooks.OnToolResult(step, calls[j].Name, calls[j].ID, results[j]); err != nil {
 							fillPlaceholderTail(&msgs, newMsgs, calls, i+1)
 							return msgs, err
 						}

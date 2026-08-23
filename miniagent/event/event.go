@@ -20,6 +20,7 @@ const sessionEventType = "session"
 // and replay passes the persisted message.Ts so historical messages show their original time.
 type toolUseEvent struct {
 	Type   string `json:"type"`
+	Step   int    `json:"step"`
 	Name   string `json:"name"`
 	CallID string `json:"call_id"`
 	Input  string `json:"input"`
@@ -60,15 +61,15 @@ type errorEvent struct {
 // EmitToolUse writes a tool_use event (tool name + call id + raw JSON arguments). To emit events during offline replay just call it directly;
 // at runtime it is wrapped by ToolUseWriter into an OnToolUse hook triggered before tool execution.
 // ts is an optional Unix-millisecond timestamp (0 → stamp now); the WebUI renders per-message time.
-func EmitToolUse(w io.Writer, name, callID, input string, ts ...int64) error {
-	return json.NewEncoder(w).Encode(toolUseEvent{Type: "tool_use", Name: name, CallID: callID, Input: input, Ts: stamp(ts)})
+func EmitToolUse(w io.Writer, step int, name, callID, input string, ts ...int64) error {
+	return json.NewEncoder(w).Encode(toolUseEvent{Type: "tool_use", Step: step, Name: name, CallID: callID, Input: input, Ts: stamp(ts)})
 }
 
 // ToolUseWriter returns an OnToolUse callback: each invocation writes the tool name, call id and arguments as an
 // NDJSON tool_use event to w. Error contract per OnToolUse.
 func ToolUseWriter(w io.Writer) miniagent.OnToolUse {
-	return func(name, callID, input string) error {
-		return EmitToolUse(w, name, callID, input)
+	return func(step int, name, callID, input string) error {
+		return EmitToolUse(w, step, name, callID, input)
 	}
 }
 
@@ -130,6 +131,7 @@ const maxToolResultEventChars = 2000
 // is_error:true + exit_code:0 ("succeeded") simultaneously.
 type toolResultEvent struct {
 	Type      string `json:"type"` // tool_result
+	Step      int    `json:"step"`
 	Name      string `json:"name"`
 	CallID    string `json:"call_id"`
 	Output    string `json:"output"`
@@ -149,10 +151,11 @@ var execBackedTools = map[string]bool{
 // An IsError result is admitted only when ExitCode>0: exitAwareResult et al. set ExitCodeNotSet (-1)
 // on error paths, and validation-time rejections (denied option, decode failure) never execute a
 // command at all — the field is omitted instead of asserting a bogus 0.
-func EmitToolResult(w io.Writer, name, callID string, r miniagent.ToolResult, ts ...int64) error {
+func EmitToolResult(w io.Writer, step int, name, callID string, r miniagent.ToolResult, ts ...int64) error {
 	out := text.Truncate(r.Output, maxToolResultEventChars, "…[tool_result truncated]")
 	ev := toolResultEvent{
 		Type:      "tool_result",
+		Step:      step,
 		Name:      name,
 		CallID:    callID,
 		Output:    out,
@@ -188,4 +191,17 @@ func EmitDelta(w io.Writer, step int, kind miniagent.DeltaKind, text string, ts 
 		return nil
 	}
 	return json.NewEncoder(w).Encode(deltaEvent{Type: t, Step: step, Text: text, Ts: stamp(ts)})
+}
+
+type stepUsageEvent struct {
+	Type         string `json:"type"`
+	Step         int    `json:"step"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	ToolCalls    int    `json:"tool_calls"`
+}
+
+// EmitStepUsage writes a step_usage event carrying per-step incremental token counts.
+func EmitStepUsage(w io.Writer, step, inTokens, outTokens, toolCalls int) error {
+	return json.NewEncoder(w).Encode(stepUsageEvent{Type: "step_usage", Step: step, InputTokens: inTokens, OutputTokens: outTokens, ToolCalls: toolCalls})
 }

@@ -144,6 +144,7 @@ func (s *webServer) mux() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/config", s.handleConfigGet)
 	api.HandleFunc("PUT /api/config", s.handleConfigPut)
+	api.HandleFunc("GET /api/tree", s.handleTree)
 	api.HandleFunc("GET /api/models", s.handleModels)
 	api.HandleFunc("POST /api/turn", s.handleTurn)
 	api.HandleFunc("GET /api/events", s.handleEvents)

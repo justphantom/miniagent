@@ -71,9 +71,9 @@ func ConfirmOnToolUse(emit miniagent.OnToolUse, cfg ConfirmCfg) miniagent.OnTool
 	if destructive == nil {
 		destructive = DefaultDestructiveTools
 	}
-	return func(name, callID, input string) error {
+	return func(step int, name, callID, input string) error {
 		if emit != nil {
-			if err := emit(name, callID, input); err != nil {
+			if err := emit(step, name, callID, input); err != nil {
 				return err // upstream terminate (e.g. pipe closed): propagate before the gate.
 			}
 		}

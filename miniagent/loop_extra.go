@@ -183,5 +183,8 @@ func recordStepUsage(ctx context.Context, hooks LoopHooks, step int, resp Respon
 			return berr
 		}
 	}
+	if hooks.OnStepUsage != nil {
+		hooks.OnStepUsage(step, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.ToolCalls))
+	}
 	return nil
 }

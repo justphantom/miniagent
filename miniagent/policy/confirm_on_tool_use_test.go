@@ -39,7 +39,7 @@ type emitRecorder struct {
 }
 
 func (e *emitRecorder) fn() miniagent.OnToolUse {
-	return func(name, callID, input string) error {
+	return func(step int, name, callID, input string) error {
 		e.called = true
 		return e.err
 	}
@@ -49,7 +49,7 @@ func (e *emitRecorder) fn() miniagent.OnToolUse {
 func TestConfirmOnToolUse_Disabled_IsIdentity(t *testing.T) {
 	emit := &emitRecorder{}
 	hook := ConfirmOnToolUse(emit.fn(), ConfirmCfg{Enabled: false})
-	if err := hook("write", "tc1", `{}`); err != nil {
+	if err := hook(1, "write", "tc1", `{}`); err != nil {
 		t.Errorf("disabled should pass destructive through, got %v", err)
 	}
 	if !emit.called {
@@ -61,7 +61,7 @@ func TestConfirmOnToolUse_Disabled_IsIdentity(t *testing.T) {
 func TestConfirmOnToolUse_AutoApprove_Allows(t *testing.T) {
 	emit := &emitRecorder{}
 	hook := ConfirmOnToolUse(emit.fn(), ConfirmCfg{Enabled: true, AutoApprove: true})
-	if err := hook("write", "tc1", `{}`); err != nil {
+	if err := hook(1, "write", "tc1", `{}`); err != nil {
 		t.Errorf("AutoApprove should allow destructive, got %v", err)
 	}
 	if !emit.called {
@@ -74,7 +74,7 @@ func TestConfirmOnToolUse_AutoApprove_Allows(t *testing.T) {
 func TestConfirmOnToolUse_NonInteractive_Denies(t *testing.T) {
 	emit := &emitRecorder{}
 	hook := ConfirmOnToolUse(emit.fn(), ConfirmCfg{Enabled: true, Stdin: strings.NewReader(""), Stdout: io.Discard})
-	err := hook("write", "tc1", `{}`)
+	err := hook(1, "write", "tc1", `{}`)
 	if !errors.Is(err, miniagent.ErrToolDenied) {
 		t.Errorf("non-interactive destructive should deny with ErrToolDenied, got %v", err)
 	}
@@ -87,7 +87,7 @@ func TestConfirmOnToolUse_NonInteractive_Denies(t *testing.T) {
 // denied. This proves the subagent hole (the most autonomous, riskiest path) is covered, not left uncovered.
 func TestConfirmOnToolUse_NilEmit_SubagentCovered(t *testing.T) {
 	hook := ConfirmOnToolUse(nil, ConfirmCfg{Enabled: true, Stdin: strings.NewReader(""), Stdout: io.Discard})
-	if err := hook("write", "tc1", `{}`); !errors.Is(err, miniagent.ErrToolDenied) {
+	if err := hook(1, "write", "tc1", `{}`); !errors.Is(err, miniagent.ErrToolDenied) {
 		t.Errorf("nil-emit subagent path should still deny destructive in non-interactive mode, got %v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestConfirmOnToolUse_NilEmit_SubagentCovered(t *testing.T) {
 func TestConfirmOnToolUse_NonDestructive_Unaffected(t *testing.T) {
 	emit := &emitRecorder{}
 	hook := ConfirmOnToolUse(emit.fn(), ConfirmCfg{Enabled: true, Stdin: strings.NewReader(""), Stdout: io.Discard})
-	if err := hook("read", "tc1", `{}`); err != nil {
+	if err := hook(1, "read", "tc1", `{}`); err != nil {
 		t.Errorf("non-destructive should be ungated, got %v", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestConfirmOnToolUse_EmitErrorPropagated(t *testing.T) {
 	sentinel := errors.New("pipe closed")
 	emit := &emitRecorder{err: sentinel}
 	hook := ConfirmOnToolUse(emit.fn(), ConfirmCfg{Enabled: true, Stdin: strings.NewReader(""), Stdout: io.Discard})
-	if err := hook("write", "tc1", `{}`); !errors.Is(err, sentinel) {
+	if err := hook(1, "write", "tc1", `{}`); !errors.Is(err, sentinel) {
 		t.Errorf("emit error should propagate before the gate, got %v", err)
 	}
 }

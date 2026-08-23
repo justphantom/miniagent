@@ -105,13 +105,14 @@ func (s *webServer) handleTurn(w http.ResponseWriter, r *http.Request) {
 	s.turns.broadcastLife(lifeEvent("turn_started", id, ""))
 
 	spec := turnSpec{
-		prompt:     req.Prompt,
-		workdir:    req.Workdir,
-		sessionArg: req.Session,
-		sessionID:  presetID, // non-empty only for new sessions; resolveSession uses it verbatim
-		saveNew:    req.Session == "",
-		maxIterDef: 0, // web: rely on config run.max_iterations / builtin default
-		overrides:  webOverrides(req),
+		prompt:        req.Prompt,
+		workdir:       req.Workdir,
+		sessionArg:    req.Session,
+		sessionID:     presetID, // non-empty only for new sessions; resolveSession uses it verbatim
+		saveNew:       req.Session == "",
+		maxIterDef:    0, // web: rely on config run.max_iterations / builtin default
+		emitStepUsage: true,
+		overrides:     webOverrides(req),
 	}
 
 	go func() {

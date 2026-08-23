@@ -9,11 +9,13 @@
 // stop while the active view has a running turn; stopping goes through the stop API, and the
 // local stream stays open to receive the partial result.
 
-import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, setModelBadge } from "./store.js";
+import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, setModelBadge, refreshBudget } from "./store.js";
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 import { startEvents, attachLive } from "./live.js";
 import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom } from "./views.js";
 import { renderConfigPage } from "./config.js";
+import { attachDirPicker } from "./dirpicker.js";
+import { toggleTrajectory, setActiveViewGetter, refreshPanel } from "./trajectory.js";
 
 const $ = (id) => document.getElementById(id);
 const runningKnown = new Set(); // session ids with a turn in flight (lifecycle feed)
@@ -36,15 +38,19 @@ async function boot() {
   showLogin();
 }
 
-function showLogin() { $("login").style.display = "flex"; $("app").style.display = "none"; $("key-input").focus(); }
-function showApp() {
-  $("login").style.display = "none"; $("app").style.display = "flex";
+function showLogin() { $("login").style.display = "flex"; $("app").style.display = "none"; $("key-input").focus(); }function showApp() {
+  $("login").style.display = "none";
+  $("app").style.display = "flex";
   const savedWd = loadWorkdir();
   if (savedWd) $("workdir").value = savedWd;
   activate(createView("")); // the initial draft view
   updateHeader();
   loadModels(); loadSessions();
   startLifecycleSync();
+  refreshBudget();
+  setActiveViewGetter(activeView);
+  attachDirPicker({ onPick: (p) => { $("workdir").value = p; saveWorkdir(p); } });
+  ensureEmptyState(activeView());
   $("prompt").focus();
 }
 
@@ -69,6 +75,9 @@ function applyTheme(t) {
   themeBtn.title = light ? "切换到暗色" : "切换到亮色";
 }
 themeBtn.addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "light" ? "" : "light"));
+
+// ---- trajectory toggle ----
+$("traj-btn").addEventListener("click", () => toggleTrajectory());
 
 // ---- auto-scroll: follow only when near bottom, otherwise show a jump button ----
 
@@ -322,8 +331,8 @@ function inlineHint(msg) {
   const el = $("wait");
   el.hidden = false;
   el.textContent = msg;
-  el.style.color = "var(--err)";
-  setTimeout(() => { el.hidden = true; el.textContent = ""; el.style.color = ""; }, 2500);
+  el.classList.add("msg-error");
+  setTimeout(() => { el.classList.remove("msg-error"); el.hidden = true; el.textContent = ""; }, 2500);
 }
 
 // Inline confirm dialog (replaces native confirm()): resolves true on confirm, false otherwise.
@@ -376,6 +385,7 @@ function startWait() {
   const el = $("wait");
   let dots = 0;
   el.hidden = false;
+  el.classList.remove("msg-error");
   waitTimer = setInterval(() => { dots = (dots + 1) % 4; el.textContent = `等待响应${".".repeat(dots)}`; }, 400);
 }
 function stopWait() {
@@ -498,6 +508,7 @@ async function openSession(id) {
   document.body.classList.remove("nav-open");
   if (!isTouch) { $("prompt").focus(); }
   if (fresh) await loadReplay(v);
+  ensureEmptyState(v);
   if ((sessionMeta[id]?.running || runningKnown.has(id)) && !v.sending && !v.liveDetach) {
     attachSpectator(v, true);
   }
@@ -505,8 +516,22 @@ async function openSession(id) {
 
 // loadReplay streams the persisted history into the view (tail-capped server-side). The
 // session event fills workdir when the input is still empty (N14: explicit input wins).
+function ensureEmptyState(v) {
+  if (v.dom.children.length === 0 && !v.sending) {
+    const hint = document.createElement("div");
+    hint.className = "ev empty-state muted";
+    hint.textContent = "暂无对话，输入任务开始";
+    v.dom.appendChild(hint);
+  }
+}
+
 async function loadReplay(v) {
   const gen = ++v.gen;
+  v.usage.budget = 0;
+  v.usage.steps.length = 0;
+  v.trajectory.order.length = 0;
+  v.trajectory.steps.clear();
+  v.curStep = 0;
   v.workdir = sessionMeta[v.id]?.workdir || "";
   if (v.workdir && !$("workdir").value.trim()) { $("workdir").value = v.workdir; saveWorkdir(v.workdir); }
   let workdirFilled = !!v.workdir;
@@ -537,7 +562,7 @@ async function loadReplay(v) {
         } catch { /* skip bad lines */ }
       }
     }
-    if (v.gen === gen) { finishText(v); updateHeader(); }
+    if (v.gen === gen) { finishText(v); updateHeader(); refreshPanel(); }
   } catch (e) { console.log("replay failed", e); }
   scrollMo.disconnect();
 }

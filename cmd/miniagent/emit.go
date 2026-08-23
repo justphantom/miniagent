@@ -25,9 +25,9 @@ func buildHooks(w io.Writer, resultOnly bool) miniagent.LoopHooks {
 	}
 	emit := event.ToolUseWriter(w)
 	return miniagent.LoopHooks{
-		OnToolUse: func(name, callID, input string) error { return emit(name, callID, input) },
-		OnToolResult: func(name, callID string, r miniagent.ToolResult) error {
-			return event.EmitToolResult(w, name, callID, r)
+		OnToolUse: func(step int, name, callID, input string) error { return emit(step, name, callID, input) },
+		OnToolResult: func(step int, name, callID string, r miniagent.ToolResult) error {
+			return event.EmitToolResult(w, step, name, callID, r)
 		},
 		OnDelta: func(step int, kind miniagent.DeltaKind, text string) error {
 			return event.EmitDelta(w, step, kind, text)

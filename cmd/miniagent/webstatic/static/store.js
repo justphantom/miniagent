@@ -64,3 +64,13 @@ export function setModelBadge(m) {
   const el = document.getElementById("model-badge");
   if (el) el.textContent = m || "";
 }
+
+let budgetCache = 0;
+export function getBudget() { return budgetCache; }
+export async function refreshBudget() {
+  try {
+    const r = await api("/api/config");
+    const cfg = await r.json();
+    budgetCache = cfg?.config?.run?.max_tokens_total || 0;
+  } catch { /* ignore */ }
+}

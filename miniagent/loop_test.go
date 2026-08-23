@@ -67,7 +67,7 @@ func TestRun_ReActToolThenText(t *testing.T) {
 	}}
 	llm := testClients(tr)
 	var uses []string
-	onToolUse := func(name, callID, input string) error { uses = append(uses, name); return nil }
+	onToolUse := func(step int, name, callID, input string) error { uses = append(uses, name); return nil }
 	res, err := Run(context.Background(), llm, LoopConfig{Tools: []Tool{tool}}, "x", LoopHooks{OnToolUse: onToolUse}, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

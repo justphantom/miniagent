@@ -29,15 +29,16 @@ import (
 // turnSpec is one agent-turn request: the CLI fills it from flags, the web layer from the
 // POST /api/turn JSON body. Overrides are arbitrated by config.Resolve (cli>config).
 type turnSpec struct {
-	prompt      string
-	workdir     string // required, absolute (validated here — the web layer must not trust input)
-	sessionArg  string // resume id; mutually exclusive with saveNew
-	sessionID   string // pre-generated new-session id (web layer keys its registry slot before the session exists); "" = generate inside
-	saveNew     bool   // create a new session
-	resultOnly  bool   // CLI -result-only: plain text, no NDJSON events
-	maxIterDef  int    // flag-level max_iterations fallback (web passes 0 = builtin default)
-	metricsStep bool   // per-step metrics NDJSON to stderr (CLI-only knob; web ignores)
-	overrides   config.CLIOverrides
+	prompt        string
+	workdir       string // required, absolute (validated here — the web layer must not trust input)
+	sessionArg    string // resume id; mutually exclusive with saveNew
+	sessionID     string // pre-generated new-session id (web layer keys its registry slot before the session exists); "" = generate inside
+	saveNew       bool   // create a new session
+	resultOnly    bool   // CLI -result-only: plain text, no NDJSON events
+	maxIterDef    int    // flag-level max_iterations fallback (web passes 0 = builtin default)
+	metricsStep   bool   // per-step metrics NDJSON to stderr (CLI-only knob; web ignores)
+	emitStepUsage bool   // emit step_usage events (web path enables; CLI defaults false)
+	overrides     config.CLIOverrides
 }
 
 // turnEngine holds turn-independent state: the loaded config, its absolute path (subagent
@@ -145,6 +146,11 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 	hooks := assembleHooks(compBefore, compAfter, out, spec.resultOnly, intoBool(resolved.Run.ConfirmDestructive, false), baseCfg, tools, limits, e.logger)
 	if spec.metricsStep {
 		hooks.OnStep = metrics.NewStepEmitter(os.Stderr).Emit
+	}
+	if spec.emitStepUsage {
+		hooks.OnStepUsage = func(step, inTokens, outTokens, toolCalls int) {
+			_ = event.EmitStepUsage(out, step, inTokens, outTokens, toolCalls)
+		}
 	}
 
 	runCtx := ctx
