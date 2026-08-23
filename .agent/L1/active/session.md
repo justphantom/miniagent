@@ -19,7 +19,8 @@ updated: 2026-08-23
 - 后端：`config.SaveConfig`（校验+原子写 0600+O_NOFOLLOW）+ `ValidateConfig` 导出；`web_config.go` GET/PUT /api/config（secret 掩码、占位符保留、校验、need_restart 检测）
 - 前端：`config.js` **双模式**——表单模式（6 分组 60+ 字段）+ **providers 卡片编辑**（增删 provider/model/header/thinking-map）+ **JSON 高级编辑器**（textarea 编辑完整配置）；`index.html` ⚙ 配置按钮 + `app.js`/`app.css` 集成；`assets.go` 新增 config.js embed
 - 5 commits（ca26d61 / a4aa3e0 / f34f999 / f73e1ce / c33d824），CHANGELOG `[Unreleased]` Added 已更新；verify-gate 全绿
-- 遗留：配置页不含「运行中热重载」（用户选「写文件+提示重启」）；`stream_allow_unterminated` 等 bool 三态在 providers 卡片内直接走 renderField 的 indeterminate 逻辑
+- 59977c4 修复：`renderKv`/`renderKvMap` 渲染时不再 setNested 创建空对象，空条目删字段（omitempty）——打开配置页不改即保存不再污染配置
+- 遗留：配置页不含「运行中热重载」（用户选「写文件+提示重启」）
 
 ## 待办
 - 无（功能主体完成；遗留为后续迭代项）。
