@@ -8,6 +8,8 @@ const KEY = "miniagent.web.key";
 const WD_KEY = "miniagent.web.workdir";
 const MODEL_KEY = "miniagent.web.model";
 const THEME_KEY = "miniagent.web.theme";
+const COMPOSER_ADV_KEY = "miniagent.web.composerAdv";
+const NAV_KEY = "miniagent.web.navCollapsed";
 
 export const state = {
   key: localStorage.getItem(KEY) || "",
@@ -20,6 +22,10 @@ export function saveModel(m) { localStorage.setItem(MODEL_KEY, m); }
 export function loadModel() { return localStorage.getItem(MODEL_KEY) || ""; }
 export function saveTheme(t) { localStorage.setItem(THEME_KEY, t); }
 export function loadTheme() { return localStorage.getItem(THEME_KEY) || ""; }
+export function saveComposerAdv(open) { localStorage.setItem(COMPOSER_ADV_KEY, open ? "1" : ""); }
+export function loadComposerAdv() { return localStorage.getItem(COMPOSER_ADV_KEY) === "1"; }
+export function saveNavCollapsed(c) { localStorage.setItem(NAV_KEY, c ? "1" : ""); }
+export function loadNavCollapsed() { return localStorage.getItem(NAV_KEY) === "1"; }
 
 export function authHeaders() { return { "x-api-key": state.key }; }
 
@@ -52,21 +58,12 @@ export function showSessionID(view) {
   tok.title = "当前会话累计 token（来自 result 事件）";
 }
 
-// setVersion renders the server version (from /api/whoami) into both the login page and the header badge.
+// setVersion renders the server version (from /api/whoami) into the login page.
 // Idempotent: safe to call on boot and on every login retry.
 export function setVersion(v) {
   const text = v ? `v${v}` : "";
-  for (const id of ["version-login", "version-badge"]) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = text;
-  }
-}
-
-// setModelBadge fills the header's current-model badge: from the model dropdown selection
-// or the result event's model field (covers config-default turns where no dropdown item matched).
-export function setModelBadge(m) {
-  const el = document.getElementById("model-badge");
-  if (el) el.textContent = m || "";
+  const el = document.getElementById("version-login");
+  if (el) el.textContent = text;
 }
 
 let budgetCache = 0;

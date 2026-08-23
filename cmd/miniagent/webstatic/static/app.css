@@ -43,7 +43,6 @@ header h1 { font-size: 15px; flex-shrink: 0; }
 .session-id { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .session-id:empty { display: none; }
 #session-tokens { font-variant-numeric: tabular-nums; }
-#model-badge { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: 12px; color: var(--muted); }
 
 #layout { display: grid; grid-template-columns: var(--sidebar-width) 1fr; grid-template-areas: "nav main"; flex: 1; min-height: 0; }
 #layout.trajectory-open { grid-template-columns: var(--sidebar-width) 1fr var(--trajectory-width); grid-template-areas: "nav main trajectory"; }
@@ -52,7 +51,7 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 #events { flex: 1; overflow-y: auto; padding: var(--space-lg) calc(var(--space-lg) + 8px); scrollbar-width: thin; scrollbar-color: var(--border) transparent; overscroll-behavior: contain; }
 #events::-webkit-scrollbar { width: 8px; }
 #events::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-#events > .view { display: flex; flex-direction: column; gap: 10px; max-width: 900px; margin: 0 auto; width: 100%; }
+#events > .view { display: flex; flex-direction: column; gap: 10px; max-width: 780px; margin: 0 auto; width: 100%; }
 #overlay { display: none; }
 
 /* ---- nav / sidebar ---- */
@@ -73,12 +72,12 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 .sess-item.running::after { content: ""; position: absolute; right: 38px; top: 50%; margin-top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: runningPulse 1.6s ease-in-out infinite; }
 @keyframes runningPulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .sess-item .preview { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
-.nav-config { font-size: 13px; text-align: left; width: 100%; padding: 6px 8px; }
+.nav-config { font-size: 13px; text-align: left; width: 100%; padding: 6px 8px; border-top: 1px solid var(--border); padding-top: var(--space-md); margin-top: var(--space-sm); }
 
 /* ---- message cards ---- */
-.ev { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; background: var(--panel); max-width: 900px; }
+.ev { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; background: var(--panel); max-width: 780px; }
 .ev.spectator { font-size: 12px; color: var(--muted); border-style: dashed; }
-.ev.user { border-left: 3px solid var(--accent); max-width: 720px; margin-left: auto; }
+.ev.user { border-left: 3px solid var(--accent); max-width: 620px; margin-left: auto; }
 .ev.result { border-left: 3px solid var(--ok); }
 .ev.error { border-left: 3px solid var(--err); }
 .ev .tag { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
@@ -113,6 +112,11 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 #send { flex: none; }
 .composer-row { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
 .composer-row input { flex: 1; min-width: 160px; }
+#composer-adv summary { cursor: pointer; font-size: 12px; color: var(--muted); user-select: none; list-style: none; }
+#composer-adv summary::before { content: "▸ "; font-size: 10px; color: var(--accent); }
+#composer-adv[open] summary::before { content: "▾ "; }
+#composer-adv summary:hover { color: var(--fg); }
+#composer-adv .adv-row { margin-top: var(--space-sm); }
 
 /* ---- wait / spinner ---- */
 #wait:not(:empty)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 6px;
@@ -132,7 +136,6 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
 #login-form input { width: 100%; }
 #login-form button { width: 100%; background: var(--accent); color: #fff; border: none; }
 #login-err { color: var(--err); font-size: 13px; min-height: 18px; text-align: center; }
-#version-badge { font-size: 11px; opacity: 0.8; flex-shrink: 0; }
 #version-login { display: block; font-size: 12px; margin-top: -6px; }
 
 /* ---- markdown rendering ---- */
@@ -271,19 +274,20 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
   #nav { position: fixed; left: 0; top: var(--header-top); bottom: 0; width: var(--sidebar-width);
          z-index: 20; display: none; background: var(--bg);
          box-shadow: var(--shadow-modal); }
-  body.nav-open #nav { display: grid; grid-template-rows: auto auto 1fr; }
+  body.nav-open #nav { display: grid; grid-template-rows: auto 1fr auto; }
   body.nav-open #overlay { display: block; position: absolute; inset: 0;
          background: rgba(0,0,0,.5); z-index: 15; }
-  #version-badge { display: none; }
   /* F10: touch targets for directory rows */
   .dp-tree-item { padding: 10px 12px; }
 }
 
-/* Desktop ≥800px: nav always visible */
+/* Desktop ≥800px: nav always visible (collapsible via ☰) */
 @media (min-width: 800px) {
-  #nav { display: grid; grid-template-rows: auto 1fr; }
+  #nav { display: grid; grid-template-rows: auto 1fr auto; }
   #overlay { display: none; }
-  #menu-btn { display: none; }
+  body.nav-collapsed #layout { grid-template-columns: 0 1fr; }
+  body.nav-collapsed #layout.trajectory-open { grid-template-columns: 0 1fr var(--trajectory-width); }
+  body.nav-collapsed #nav { display: none; }
 }
 
 /* Tablet 640-799px */
@@ -299,7 +303,7 @@ main { grid-area: main; min-width: 0; display: flex; flex-direction: column; pos
   header { padding: var(--space-sm) var(--space-md); gap: var(--space-sm); }
   header h1 { font-size: 14px; }
   #session-id { display: none; }          /* F6: drop long id on small screens */
-  #model-badge, #traj-btn { display: none; }
+  #traj-btn { display: none; }
   #logout { font-size: 0; } #logout::after { content: "⏻"; font-size: 18px; }
   #session-tokens { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* events */

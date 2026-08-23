@@ -9,7 +9,7 @@
 // stop while the active view has a running turn; stopping goes through the stop API, and the
 // local stream stays open to receive the partial result.
 
-import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, setModelBadge, refreshBudget } from "./store.js";
+import { state, setKey, api, authHeaders, showSessionID, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, saveNavCollapsed, loadNavCollapsed } from "./store.js";
 import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
 import { startEvents, attachLive } from "./live.js";
 import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom } from "./views.js";
@@ -41,6 +41,8 @@ async function boot() {
 function showLogin() { $("login").style.display = "flex"; $("app").style.display = "none"; $("key-input").focus(); }function showApp() {
   $("login").style.display = "none";
   $("app").style.display = "flex";
+  $("composer-adv").open = loadComposerAdv();
+  document.body.classList.toggle("nav-collapsed", loadNavCollapsed());
   const savedWd = loadWorkdir();
   if (savedWd) $("workdir").value = savedWd;
   activate(createView("")); // the initial draft view
@@ -102,11 +104,20 @@ const scrollMo = new MutationObserver(() => {
 
 // ---- composer & views ----
 
-$("menu-btn").addEventListener("click", () => document.body.classList.toggle("nav-open"));
+$("menu-btn").addEventListener("click", () => {
+  if (matchMedia("(min-width: 800px)").matches) {
+    const c = document.body.classList.toggle("nav-collapsed");
+    saveNavCollapsed(c);
+  } else {
+    document.body.classList.toggle("nav-open");
+  }
+});
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") document.body.classList.remove("nav-open");
 });
 $("overlay").addEventListener("click", () => document.body.classList.remove("nav-open"));
+
+$("composer-adv").addEventListener("toggle", (e) => saveComposerAdv(e.target.open));
 
 $("new-chat").addEventListener("click", () => {
   activate(createView(""));
@@ -405,7 +416,6 @@ async function loadModels() {
     const sel = $("model");
     sel.innerHTML = "";
     const saved = loadModel();
-    let restored = false;
     for (const m of models) {
       const o = document.createElement("option");
       o.textContent = `${m.provider}/${m.model}`;
@@ -413,14 +423,12 @@ async function loadModels() {
       o.dataset.model = m.model;
       o.dataset.thinking = m.thinking || "";
       sel.appendChild(o);
-      if (saved === `${m.provider}/${m.model}`) { o.selected = true; restored = true; }
+      if (saved === `${m.provider}/${m.model}`) o.selected = true;
     }
-    if (restored) setModelBadge(saved);
     sel.addEventListener("change", () => {
       const opt = sel.selectedOptions[0];
       const v = opt?.dataset.model ? `${opt.dataset.provider}/${opt.dataset.model}` : "";
       saveModel(v);
-      setModelBadge(v);
     });
   } catch { /* dropdown stays default */ }
 }
