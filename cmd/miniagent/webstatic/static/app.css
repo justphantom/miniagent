@@ -322,6 +322,8 @@ main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-directi
 .cfg-actions { margin-top: var(--space-lg); text-align: center; }
 .cfg-save { padding: 8px 24px; font-size: 14px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm); cursor: pointer; }
 .cfg-save:disabled { opacity: .5; cursor: default; }
+.cfg-reload { padding: 8px 24px; font-size: 14px; background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-sm); cursor: pointer; }
+.cfg-reload:disabled { opacity: .5; cursor: default; }
 .cfg-modebar { display: flex; gap: var(--space-sm); margin: var(--space-md) 0; }
 .cfg-mode { padding: 5px 14px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--fg); cursor: pointer; }
 .cfg-mode.active { background: var(--accent); color: #fff; border-color: var(--accent); }

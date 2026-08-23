@@ -128,6 +128,30 @@ func configDiffPaths(running, file *config.Config) []string {
 	return out
 }
 
+// handleReload validates that the config file loads and no turn is in flight, then
+// signals runServe's restart loop. The handler answers before the socket drops — the
+// client polls /api/whoami to detect when the new generation is up.
+func (s *webServer) handleReload(w http.ResponseWriter, r *http.Request) {
+	if s.cfgPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no config file backing this server"})
+		return
+	}
+	if n := s.turns.runningCount(); n > 0 {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("%d turn(s) in flight; stop them before reloading", n)})
+		return
+	}
+	if _, err := config.LoadConfig(s.cfgPath); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "config file does not load: " + err.Error()})
+		return
+	}
+	select {
+	case s.reloadCh <- struct{}{}:
+		writeJSON(w, http.StatusOK, map[string]string{"message": "reloading"})
+	default:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "reload already pending"})
+	}
+}
+
 // configPutResponse is the PUT /api/config body.
 type configPutResponse struct {
 	OK          bool           `json:"ok"`

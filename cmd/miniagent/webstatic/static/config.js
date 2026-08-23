@@ -546,6 +546,16 @@ function renderAll(filePath) {
   saveBtn.disabled = !writable;
   saveBtn.addEventListener("click", saveConfig);
   btnRow.appendChild(saveBtn);
+  // Reload appears only when a config file backs the server (the restart loop re-reads it).
+  if (writable) {
+    const reloadBtn = document.createElement("button");
+    reloadBtn.type = "button";
+    reloadBtn.className = "cfg-reload";
+    reloadBtn.textContent = "重载服务";
+    reloadBtn.title = "重读配置文件并重建服务（密钥/监听/并发上限即刻生效）；连接会短暂中断";
+    reloadBtn.addEventListener("click", reloadService);
+    btnRow.appendChild(reloadBtn);
+  }
   form.appendChild(btnRow);
 
   container.appendChild(form);
@@ -641,6 +651,42 @@ function clientValidate(cfg) {
     }
   }
   return errs;
+}
+
+// reloadService POSTs /api/reload and waits out the socket gap by polling /api/whoami
+// (the handler answers, then runServe shuts the listener down and rebinds). Any turn in
+// flight makes the server refuse with 409 — surfaced as-is.
+async function reloadService() {
+  const msgEl = $("cfg-msg");
+  const btn = $("cfg-reload");
+  if (!btn) return;
+  if (!confirm("重载服务将重建 Web 服务（连接短暂中断），未保存的修改将丢失。确定继续？")) return;
+  btn.disabled = true;
+  btn.textContent = "重载中…";
+  try {
+    const r = await fetch("/api/reload", { method: "POST", headers: authHeaders() });
+    const resp = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(resp.error || `HTTP ${r.status}`);
+    const deadline = Date.now() + 15000;
+    for (;;) {
+      try {
+        const w = await (await fetch("/api/whoami")).json();
+        if (w && (w.version !== undefined)) break;
+      } catch { /* socket still rebinding */ }
+      if (Date.now() > deadline) throw new Error("服务未在 15 秒内恢复");
+      await new Promise((res) => setTimeout(res, 300));
+    }
+    msgEl.hidden = false;
+    msgEl.className = "cfg-msg ok";
+    msgEl.textContent = "服务已重载，配置已生效。";
+    loadConfig(); // re-render against the new running config (drift banner should clear)
+  } catch (e) {
+    msgEl.hidden = false;
+    msgEl.className = "cfg-msg err";
+    msgEl.textContent = "重载失败：" + e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = "重载服务";
 }
 
 async function saveConfig() {

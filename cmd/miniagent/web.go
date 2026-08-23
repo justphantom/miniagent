@@ -38,12 +38,15 @@ type webServer struct {
 	turns        *turnRegistry   // in-flight turns/deletes: event bus + same-session serialization
 	baseCtx      context.Context // server lifetime; web turns derive from it, NOT from the request (D1)
 	turnSem      chan struct{}   // web.max_concurrent_turns gate; nil = unlimited
+	reloadCh     chan struct{}   // POST /api/reload signals runServe's restart loop; nil (tests) = reload disabled
 }
 
 // newWebServer assembles the server state shared by runServe and tests. baseCtx owns the web
 // turn contexts so a client disconnect never cancels an agent turn (D1).
 func newWebServer(baseCtx context.Context, cfg *config.Config, engine *turnEngine, key string, logger *slog.Logger) *webServer {
-	s := &webServer{cfg: cfg, engine: engine, key: key, logger: logger, turns: newTurnRegistry(), baseCtx: baseCtx}
+	// reloadCh buffered=1: the handler's send never blocks even if the serve loop is
+	// momentarily between generations; the loop drains it before re-entering select.
+	s := &webServer{cfg: cfg, engine: engine, key: key, logger: logger, turns: newTurnRegistry(), baseCtx: baseCtx, reloadCh: make(chan struct{}, 1)}
 	if n := cfg.Web.MaxConcurrentTurns; n > 0 {
 		s.turnSem = make(chan struct{}, n)
 	}
@@ -81,7 +84,34 @@ func listenHostIsLoopback(addr string) bool {
 
 // runServe starts the WebUI server. Startup-fatal conditions (remote listen without a key,
 // listen failure) print to stderr and exit 1, mirroring the CLI failure style.
+// runServe hosts the WebUI. POST /api/reload re-reads the config file and rebuilds the
+// server in place (serve loop below): auth key, allowed_hosts, listen address and the
+// concurrency gate all restart-effect. In-flight turns (which derive from ctx, not the
+// http.Server) are unaffected; reload is refused while any turn is running so a session
+// never straddles two engine generations.
 func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *slog.Logger) {
+	for {
+		last := serveOnce(ctx, cfg, cfgPath, logger)
+		select {
+		case <-ctx.Done():
+			return
+		case <-last.reloadCh:
+			var err error
+			cfg, err = config.LoadConfig(cfgPath)
+			if err != nil {
+				// The handler already validated the file loads; this is a race (the file
+				// changed again between validation and reload). Keep serving the old config.
+				fmt.Fprintf(os.Stderr, "miniagent: reload: %v (keeping current config)\n", err)
+				continue
+			}
+			fmt.Fprintln(os.Stderr, "miniagent: config reloaded")
+		}
+	}
+}
+
+// serveOnce builds one server generation from cfg and blocks until shutdown, ctx cancel,
+// or a reload request. Returns the server so runServe can read its reload channel.
+func serveOnce(ctx context.Context, cfg *config.Config, cfgPath string, logger *slog.Logger) *webServer {
 	addr := cfg.Web.Listen
 	if addr == "" {
 		addr = defaultWebListen
@@ -118,12 +148,19 @@ func runServe(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		if err := srv.Shutdown(shutCtx); err != nil {
 			srv.Close()
 		}
+	case <-s.reloadCh:
+		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutCtx); err != nil {
+			srv.Close()
+		}
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(os.Stderr, "miniagent: web serve: %v\n", err)
 			os.Exit(1)
 		}
 	}
+	return s
 }
 
 // mux wires routes: static pages are public (no secrets embedded); /api/* is auth-gated
@@ -144,6 +181,7 @@ func (s *webServer) mux() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/config", s.handleConfigGet)
 	api.HandleFunc("PUT /api/config", s.handleConfigPut)
+	api.HandleFunc("POST /api/reload", s.handleReload)
 	api.HandleFunc("GET /api/tree", s.handleTree)
 	api.HandleFunc("GET /api/models", s.handleModels)
 	api.HandleFunc("POST /api/turn", s.handleTurn)

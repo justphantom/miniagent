@@ -111,6 +111,19 @@ func (r *turnRegistry) finish(id string, err error) {
 	e.mu.Unlock()
 }
 
+// runningCount reports how many turns are currently in flight (reload gate).
+func (r *turnRegistry) runningCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, e := range r.m {
+		if e.kind == "running" {
+			n++
+		}
+	}
+	return n
+}
+
 // running returns the entry when a turn is in flight on id.
 func (r *turnRegistry) running(id string) (*turnEntry, bool) {
 	r.mu.Lock()
