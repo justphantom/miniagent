@@ -211,8 +211,11 @@ func (c *StreamClient) DoStream(ctx context.Context, req miniagent.Request, onDe
 // isTransientStreamError reports whether a parseSSE failure (in the zero-delta phase) is worth one transparent retry —
 // mirroring the non-streaming client's network-error retry. Covers connection drops/resets that surface as a wrapped
 // "read sse:" scanner error or io.ErrUnexpectedEOF, plus the 200-then-EOF "stream ended without any choices" case
-// (LB/proxy first-byte reset). ctx cancellation/deadline is excluded (the loop's ctx.Err() check handles it); a JSON
-// parse error of an actually-received chunk is excluded (likely persistent, not a connection blip).
+// (LB/proxy first-byte reset). "unexpected end of JSON input" is a mid-data connection abort (the provider reset the
+// SSE stream before the data line finished, e.g. rate-limit mid-stream) — the same transient class as io.ErrUnexpectedEOF,
+// and only retried when zero deltas reached the caller (deltaSent==0), so no live output is duplicated. ctx cancellation
+// /deadline is excluded (the loop's ctx.Err() check handles it); other JSON parse errors of actually-received (complete)
+// chunks stay excluded (likely persistent, not a connection blip).
 func isTransientStreamError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
@@ -221,5 +224,5 @@ func isTransientStreamError(err error) bool {
 		return true
 	}
 	s := err.Error()
-	return strings.HasPrefix(s, "read sse:") || strings.Contains(s, "stream ended without any choices")
+	return strings.HasPrefix(s, "read sse:") || strings.Contains(s, "stream ended without any choices") || strings.Contains(s, "unexpected end of JSON input")
 }

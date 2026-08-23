@@ -212,3 +212,54 @@ func TestWebSessionsList_RunningFlag(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 }
+
+// 双窗口场景：窗口 A 发起轮次，窗口 B 旁观（live attach），
+// 验证窗口 A 的响应流完整含 result 事件（用户报告"连接中断"的复现检查）。
+func TestWebDualWindow_OriginatingResponseComplete(t *testing.T) {
+	s, _ := newTurnTestServer(t)
+	workdir := t.TempDir()
+	blocked := &blockLLM{entered: make(chan struct{}), release: make(chan struct{})}
+	s.engine.buildClients = func(resolved *config.Resolved, apiKey string, logger *slog.Logger, cache *transportCache) (miniagent.LLM, miniagent.Doer, error) {
+		return blocked, nil, nil
+	}
+
+	// 窗口 A：发起 POST /api/turn（新会话）
+	origRec := newSyncRecorder()
+	go func() {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/turn",
+			strings.NewReader(fmt.Sprintf(`{"prompt":"hi","workdir":%q}`, workdir)))
+		req.Header.Set("Content-Type", "application/json")
+		s.mux().ServeHTTP(origRec, req)
+	}()
+	awaitLLM(t, blocked)
+
+	// 窗口 B：旁观 live
+	id := onlyRunningSession(t, s)
+	liveRec := newSyncRecorder()
+	go func() {
+		s.mux().ServeHTTP(liveRec, httptest.NewRequestWithContext(context.Background(),
+			http.MethodGet, "/api/sessions/"+id+"/live", nil))
+	}()
+
+	waitForBody(t, liveRec, `"type":"session"`)
+
+	// 释放轮次
+	close(blocked.release)
+
+	// 等待双方完成
+	time.Sleep(2 * time.Second)
+
+	origBody := origRec.String()
+	t.Logf("orig body:\n%s", origBody)
+	if !strings.Contains(origBody, `"type":"result"`) {
+		t.Errorf("ORIGINATOR response missing result event — this is the '连接中断' bug")
+	}
+	if strings.Contains(origBody, `"type":"error"`) {
+		t.Errorf("ORIGINATOR response has error event")
+	}
+
+	liveBody := liveRec.String()
+	if !strings.Contains(liveBody, `"type":"result"`) {
+		t.Errorf("LIVE response missing result event")
+	}
+}

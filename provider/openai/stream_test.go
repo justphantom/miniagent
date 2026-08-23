@@ -329,3 +329,35 @@ data: [DONE]
 		t.Errorf("attempts = %d, want 2 (first EOFd pre-delta, retried)", attempts)
 	}
 }
+
+// The 429 tpm-exhausted incident: the upstream reset the SSE stream mid-data-line, so the received chunk is truncated
+// ("unexpected end of JSON input") before any delta reached the caller. isTransientStreamError classifies it as transient,
+// so DoStream transparently retries (deltaSent==0 → zero live output duplicated) and the turn survives instead of aborting.
+func TestDoStream_TruncatedChunkPreDeltaRetried(t *testing.T) {
+	const good = `data: {"choices":[{"delta":{"content":"Hi"}}]}
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if attempts == 1 {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"Hi"`) // truncated JSON chunk, then EOF
+			return
+		}
+		fmt.Fprint(w, good)
+	}))
+	defer srv.Close()
+	llm := &StreamClient{APIKey: "sk", ChatURL: srv.URL}
+	resp, err := llm.DoStream(context.Background(), miniagent.Request{Model: "m"}, nil)
+	if err != nil {
+		t.Fatalf("DoStream: %v (expected transparent retry of a truncated chunk to succeed)", err)
+	}
+	if resp.Text != "Hi" {
+		t.Errorf("Text = %q, want Hi", resp.Text)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2 (first chunk truncated pre-delta, retried)", attempts)
+	}
+}
