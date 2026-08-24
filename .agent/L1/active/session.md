@@ -7,5 +7,5 @@ updated: 2026-08-24
 # 当前会话
 
 ## 本会话任务
-- **LLM 友好度重构**：AGENTS.md 15 条硬规则分「行为红线/编码标准/流程」三组，verify-gate 收敛 `make verify`，「≤1500字符」改「回复精简」（可执行化）；L0/constraints.md 不变量每条加触发场景前缀+拆 bullet（27→42行）；index.md 三类目分「有效/已废弃」两节+条目补检索触发词；README.md §9 补 retrieved 格式示例；AGENTS.md 路由 L0 列具体文件名。verify 全绿。
-- **AGENTS.md 精简**（更早）：72→34行，`8525a19` 已推送；`.agent` 精炼 `393e21f` 已推送。
+- **v6.6.5 发版完成**：CHANGELOG 定版（2 条 Changed：webui 工具参数格式 + .agent 记忆 LLM 友好度重构）→ commit `f4b8d97` → tag `v6.6.5` → push main+tag → `make build` 重编（ldflags 注入 v6.6.5 已验证）。检查单流程全走（回填核验/归属校准/无新工具跳过五处同步）。
+- 前序：`.agent` 体系梳理与三轮精炼优化（`8525a19`/`393e21f`/`02966f1`）。
