@@ -7,5 +7,5 @@ updated: 2026-08-24
 # 当前会话
 
 ## 本会话任务
-- **补全记忆体系缺失 6 机制**：检索反馈闭环、跨会话接力、L2 自动过期检测、检索失败结构化兜底、记忆系统自测试、tag schema 约束
-- 已改：AGENTS.md（路由+内容更新规则+索引说明），scripts/verify-memory.sh（记忆自测试），Makefile（集成），.agent/L1/active/carryover.md（跨会话），.agent/L2/schema.md（tag schema），.agent/L0/policies.md（verify 含 memory-integrity），.agent/index.md（索引更新），修复 2 条过期引用 + 2 条缺失 frontmatter 的 L2 条目
+- **AGENTS.md 精简（注入系统提示词优化）**：72行→33行，「.agent 记忆体系」节 48行→9行，操作性规则下沉指针（`.agent/README.md` 已覆盖10条维护约定，补第11条 L2 生命周期指向 schema.md）。最高约束15条+路由7条不动。verify-gate 全绿 + memory-integrity PASS。
+- 摘要：AGENTS.md 常驻系统提示词 → 只留行为硬规则+路由+三层表，写入/检索操作细节按需读 README/schema/index。

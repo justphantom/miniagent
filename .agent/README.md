@@ -20,3 +20,4 @@
 8. **跨会话接力**：多天任务用 `L1/active/carryover.md` 传递上下文（格式见该文件开头）。
 9. **检索反馈闭环**：L2 检索后在 session.md 记 `retrieved: <path> confidence: <high/medium/low>`，低置信度触发用户确认。
 10. **记忆自测试**：`make verify` 含 `scripts/verify-memory.sh`，检查 L2 frontmatter 完整性、index 覆盖度、引用有效性。
+11. **L2 生命周期**：`confidence` 字段（`high`/`medium`/`low`/`evolving`）语义与流转见 `L2/schema.md`；`status: superseded` 条目索引优先级降级，verify 校验其代码引用有效性。
