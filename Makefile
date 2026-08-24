@@ -22,7 +22,8 @@ verify:
 	go vet ./...
 	go test -race ./...
 	golangci-lint run ./...
-	@over=$$(find . -name '*.go' ! -name '*_test.go' -not -path './.git/*' | xargs wc -l | awk '$$1>300 && $$2!="total"{print}'); if [ -n "$$over" ]; then echo "non-test .go files exceeding 300 lines:"; echo "$$over"; exit 1; fi
+	@over=$$(find . -name '*.go' ! -name '*_test.go' -not -path './.git/*' | xargs wc -l | awk '$$1>300 && $$2!="total"{print}'); if [ -n "$$over" ]; then echo "non-test .go files exceeding 300 lines:"; echo "$$over"; exit 1; fi; \
+	over_js=$$(find cmd/miniagent/webstatic/static -name '*.js' | xargs wc -l | awk '$$1>300 && $$2!="total"{print}'); if [ -n "$$over_js" ]; then echo "static .js files exceeding 300 lines:"; echo "$$over_js"; exit 1; fi
 	@sh scripts/verify-memory.sh
 
 clean:

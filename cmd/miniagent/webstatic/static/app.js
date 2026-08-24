@@ -1,7 +1,10 @@
 "use strict";
 
-// miniagent -serve WebUI: auth gate, multi-session views, NDJSON streaming composer.
+// miniagent -serve WebUI entry: auth gate, composition root, DOM wiring.
 // ES modules, no build step; assets are embedded by webstatic (go:embed).
+// Feature modules: events.js (NDJSON render), send.js (turn stream lifecycle),
+// sessions.js (session list/replay), ui.js (header/composer/hint/dialog),
+// trajectory.js/panel.js/views.js/store.js/config.js/dirpicker.js.
 //
 // Multi-view model (P3): #events is a viewport; each session owns a .view subtree managed by
 // views.js. Switching views NEVER aborts a stream — turns are decoupled from connections
@@ -9,19 +12,17 @@
 // stop while the active view has a running turn; stopping goes through the stop API, and the
 // local stream stays open to receive the partial result.
 
-import { state, setKey, api, authHeaders, showSessionHeader, saveWorkdir, loadWorkdir, saveModel, loadModel, saveTheme, loadTheme, setVersion, refreshBudget, saveComposerAdv, loadComposerAdv, setStatusModel } from "./store.js";
-import { appendUserPrompt, renderEvent, finishText, resetTransient } from "./events.js";
-import { startEvents, attachLive } from "./live.js";
-import { createView, byID, rekey, activate, activeView, dropView, eventsViewport, jumpToBottom, refreshMetrics } from "./views.js";
+import { state, setKey, api, authHeaders, loadWorkdir, saveWorkdir, loadModel, saveModel, loadTheme, saveTheme, setVersion, refreshBudget, loadComposerAdv, saveComposerAdv, setStatusModel } from "./store.js";
+import { finishText } from "./events.js";
+import { startEvents } from "./live.js";
+import { createView, byID, activate, activeView, dropView, jumpToBottom, eventsViewport } from "./views.js";
 import { openConfigModal, closeConfigModal } from "./config.js";
 import { attachDirPicker } from "./dirpicker.js";
 import { showTrajectory, hideTrajectory, setOnTrajectoryClose, setActiveViewGetter, refreshPanel } from "./trajectory.js";
 import { initPanel, togglePanel, closePanel, filterSessions } from "./panel.js";
-
-const $ = (id) => document.getElementById(id);
-const runningKnown = new Set(); // session ids with a turn in flight (lifecycle feed)
-
-// ---- auth gate ----
+import { $, updateHeader, updateComposer } from "./ui.js";
+import { send, stopTurn, attachSpectator, runningKnown } from "./send.js";
+import { loadSessions, ensureEmptyState, loadReplay, getMeta } from "./sessions.js";
 
 async function boot() {
   applyTheme(loadTheme());
@@ -39,7 +40,9 @@ async function boot() {
   showLogin();
 }
 
-function showLogin() { $("login").classList.add("on"); $("app").classList.remove("on"); $("key-input").focus(); }function showApp() {
+function showLogin() { $("login").classList.add("on"); $("app").classList.remove("on"); $("key-input").focus(); }
+
+function showApp() {
   $("login").classList.remove("on");
   $("app").classList.add("on");
   $("composer-adv").open = loadComposerAdv();
@@ -67,6 +70,7 @@ $("login-form").addEventListener("submit", (e) => {
   }).catch(() => { $("login-err").textContent = "无法连接服务"; });
 });
 $("logout").addEventListener("click", () => { setKey(""); location.reload(); });
+
 const themeBtn = $("theme-btn");
 // N9: the theme button doubles as the current-theme indicator — ◐ dark / ◑ light.
 function applyTheme(t) {
@@ -81,8 +85,6 @@ function applyTheme(t) {
 themeBtn.addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "light" ? "" : "light"));
 
 // ---- trajectory toggle ----
-
-// switchTab swaps the chat view and the trajectory overlay inside main.
 function switchTab(name) {
   for (const t of document.querySelectorAll("#tabs .tab")) t.classList.toggle("active", t.dataset.tab === name);
   if (name === "trajectory") {
@@ -98,9 +100,7 @@ for (const t of document.querySelectorAll("#tabs .tab")) {
 setOnTrajectoryClose(() => switchTab("chat"));
 
 // ---- auto-scroll: follow only when near bottom, otherwise show a jump button ----
-
 const NEAR_BOTTOM = 80;
-
 eventsViewport().addEventListener("scroll", () => {
   const el = eventsViewport();
   const v = activeView();
@@ -109,15 +109,7 @@ eventsViewport().addEventListener("scroll", () => {
 });
 $("to-bottom").addEventListener("click", jumpToBottom);
 
-// Hidden views mutating do not change scrollHeight (display:none), so one observer keyed to
-// the active view's stickBottom covers all streams without cross-view jumps.
-const scrollMo = new MutationObserver(() => {
-  const v = activeView();
-  if (v?.stickBottom) jumpToBottom();
-});
-
 // ---- icon bar / slide panel / tabs ----
-
 $("menu-btn").addEventListener("click", () => document.body.classList.toggle("iconbar-open"));
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") document.body.classList.remove("iconbar-open");
@@ -168,181 +160,9 @@ $("send").addEventListener("click", () => {
   send();
 });
 
-async function send() {
-  const v = activeView();
-  if (!v || v.sending) return;
-  const prompt = $("prompt").value.trim();
-  const workdir = $("workdir").value.trim();
-  if (!prompt) { inlineHint("请输入内容"); return; }
-  if (!workdir) { inlineHint("请输入工作目录"); return; }
-  const sel = $("model");
-  const opt = sel.selectedOptions[0];
-  const body = { prompt, workdir, session: v.id, provider: opt?.dataset.provider || "", model: opt?.dataset.model || "", thinking: opt?.dataset.thinking || "" };
-
-  v.sending = true;
-  v.running = true;
-  v.lastPrompt = prompt;
-  v.turnStartTs = 0;
-  v.abort = new AbortController();
-  const gen = ++v.gen; // M8: drop events superseded by a newer stream on this view
-  updateComposer();
-  startWait();
-  appendUserPrompt(v, prompt);
-  $("prompt").value = "";
-  $("prompt").style.height = "auto";
-  $("prompt").focus();
-  saveWorkdir(workdir);
-  scrollMo.observe(eventsViewport(), { childList: true, subtree: true, characterData: true });
-
-  let sawTerminal = false;
-  try {
-    const resp = await fetch("/api/turn", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(body),
-      signal: v.abort.signal,
-    });
-    if (resp.status === 409) {
-      // Another window (or this one) is already driving this session: become a spectator.
-      v.sending = false;
-      finishText(v);
-      attachSpectator(v, true);
-      return;
-    }
-    if (!resp.ok) {
-      let msg = resp.statusText;
-      try { msg = (await resp.json()).error || msg; } catch { /* non-JSON error body */ }
-      throw new Error(msg);
-    }
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        try {
-          const ev = JSON.parse(line);
-          if (v.gen !== gen) return; // superseded stream — stop painting
-          if (ev.type === "session" && ev.id) rekey(v, ev.id);
-          if (ev.type === "session" && ev.workdir) v.workdir = ev.workdir;
-          if (ev.type === "result" || ev.type === "error" || ev.type === "stop") sawTerminal = true;
-          if (ev.type === "stream_cut") { sawTerminal = true; healAfterCut(v, "流被服务端中断，正在重建…"); return; }
-          stopWait();
-          renderEvent(v, ev);
-          updateHeader();
-        } catch (e) { console.log("bad ndjson line", line, e); }
-      }
-    }
-    if (!sawTerminal) {
-      healAfterCut(v, "流被中断，正在重建…");
-    }
-  } catch (e) {
-    if (e.name === "AbortError") {
-      renderEvent(v, { type: "error", error: "已停止（会话已保存已执行部分）", ts: Date.now() });
-    } else {
-      renderEvent(v, { type: "error", error: "请求失败：" + e.message, ts: Date.now() });
-    }
-  } finally {
-    stopWait();
-    if (v.gen === gen) finishText(v); // a superseded stream's view is left alone
-    v.sending = false;
-    if (!v.liveDetach) v.running = false; // spectator attach keeps the running state
-    v.abort = null;
-    updateComposer();
-    scrollMo.disconnect();
-    loadSessions();
-  }
-}
-
-// stopTurn cancels the server-side turn (D1): the id is known from the early session event;
-// the local stream then winds down on its own with the saved partial result.
-async function stopTurn(v) {
-  if (!v.id) { v.abort?.abort(); return; } // pre-session-event window: abort locally, turn id unknown yet
-  try { await api(`/api/sessions/${encodeURIComponent(v.id)}/stop`, { method: "POST" }); }
-  catch (e) { inlineHint("停止失败：" + e.message); }
-}
-
-// healAfterCut rebuilds the view after the server cut the NDJSON stream (subscriber lag —
-// the bus closes slow subscribers and signals stream_cut; an EOF without a terminal event
-// means the same). The turn keeps running server-side (D1): /live replays from event zero
-// when still running, the persisted jsonl replays when it has finished. Falls back to the
-// honest "连接中断" card only when both rebuild paths fail.
-async function healAfterCut(v, hint) {
-  if (!v.id) { // session event never arrived — nothing to rebuild from
-    renderEvent(v, { type: "error", error: "连接中断：流意外结束（会话已保存已执行部分，可点击重试续跑）", ts: Date.now() });
-    return;
-  }
-  v.gen++;            // supersede any in-flight stream/stale renderers
-  v.dom.innerHTML = "";
-  v.curText = null; v.curReasoning = null; v.toolNodes.clear();
-  v.tokens = { in: 0, out: 0 };
-  v.usage = { budget: 0, steps: [] };
-  v.trajectory = { order: [], steps: new Map() };
-  v.metrics = { rounds: 0, steps: 0, llmMs: 0, toolMs: 0 };
-  v.curStep = 0;
-  finishText(v);
-  const note = document.createElement("div");
-  note.className = "ev spectator muted";
-  note.textContent = hint || "流被中断，正在重建…";
-  v.dom.appendChild(note);
-  try {
-    if (runningKnown.has(v.id)) {
-      attachSpectator(v, false); // /live replays from event zero and follows to live_end
-      note.remove();
-      return;
-    }
-    await loadReplay(v); // turn already finished: the jsonl has the full history
-    if (!v.dom.querySelector(".ev.result, .ev.error, .ev.stopped")) throw new Error("empty replay");
-    note.remove();
-  } catch {
-    note.remove();
-    renderEvent(v, { type: "error", error: "连接中断：流意外结束（会话已保存已执行部分，可点击重试续跑）", ts: Date.now() });
-  }
-}
-
-// attachSpectator follows a running turn of ANOTHER window into this view (409 upgrade or
-// lifecycle-driven attach). The replay buffer is delivered from event zero, so the view
-// rebuilds cleanly (D3).
-function attachSpectator(v, withHint) {
-  if (!v.id || v.liveDetach || v.sending) return;
-  if (withHint) {
-    const hint = document.createElement("div");
-    hint.className = "ev spectator muted";
-    hint.textContent = "该会话有进行中的轮次（其他窗口），已进入旁观…";
-    v.dom.appendChild(hint);
-  }
-  v.running = true;
-  v.gen++;
-  const gen = v.gen;
-  v.liveDetach = attachLive(v.id, {
-    event: (ev) => {
-      if (v.gen !== gen) return;
-      if (ev.type === "session" && ev.id) rekey(v, ev.id);
-      renderEvent(v, ev);
-      updateHeader();
-    },
-    end: () => {
-      v.liveDetach = null;
-      v.running = false;
-      finishText(v);
-      updateComposer();
-      loadSessions();
-    },
-  });
-  updateComposer();
-}
-
 // ---- cross-browser sync: lifecycle feed drives the list, running dots and spectator attach.
-
 let lifeStop = null;
 let listRefreshTimer = 0;
-
 function startLifecycleSync() {
   if (lifeStop) return;
   lifeStop = startEvents(onLifeEvent);
@@ -378,99 +198,7 @@ function onLifeEvent(ev) {
   listRefreshTimer = setTimeout(() => { listRefreshTimer = 0; loadSessions(); }, 300);
 }
 
-// ---- header / composer reflect the ACTIVE view ----
-
-function updateHeader() {
-  const v = activeView();
-  document.title = v?.id ? `miniagent · ${v.id}` : "miniagent";
-  showSessionHeader(v);
-  refreshMetrics(v);
-  updateComposer();
-}
-
-function updateComposer() {
-  const v = activeView();
-  const busy = !!v?.running;
-  $("send").textContent = busy ? "■" : "➤";
-  $("send").setAttribute("aria-label", busy ? "停止" : "发送");
-  $("send").setAttribute("title", busy ? "停止当前轮次" : "发送（运行中点击停止）");
-  $("send").classList.toggle("danger", busy);
-  $("prompt").disabled = false;
-  $("workdir").disabled = false;
-  $("model").disabled = false;
-}
-
-// Inline validation hint (replaces alert()): transient, next to the composer.
-function inlineHint(msg) {
-  const el = $("wait");
-  el.hidden = false;
-  el.textContent = msg;
-  el.classList.add("msg-error");
-  setTimeout(() => { el.classList.remove("msg-error"); el.hidden = true; el.textContent = ""; }, 2500);
-}
-
-// Inline confirm dialog (replaces native confirm()): resolves true on confirm, false otherwise.
-function confirmInline(msg, okText) {
-  const overlay = document.createElement("div");
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute("aria-modal", "true");
-  overlay.className = "confirm-overlay";
-  const box = document.createElement("div");
-  box.className = "confirm-box";
-  const p = document.createElement("p");
-  p.textContent = msg;
-  const btnOk = document.createElement("button");
-  btnOk.textContent = okText;
-  btnOk.className = "confirm-ok";
-  const btnCancel = document.createElement("button");
-  btnCancel.textContent = "取消";
-  btnCancel.className = "confirm-cancel";
-  const row = document.createElement("div");
-  row.className = "confirm-row";
-  row.append(btnCancel, btnOk);
-  box.append(p, row);
-  overlay.append(box);
-  document.body.append(overlay);
-  btnCancel.focus();
-  const focusables = [btnCancel, btnOk];
-  overlay.addEventListener("keydown", (e) => {
-    if (e.key !== "Tab") return;
-    const last = focusables[focusables.length - 1], first = focusables[0];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  });
-  return new Promise(resolve => {
-    const close = (val) => { overlay.remove(); resolve(val); };
-    btnOk.addEventListener("click", () => close(true));
-    btnCancel.addEventListener("click", () => close(false));
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(false); });
-    overlay.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") close(false);
-      else if (e.key === "Enter" && document.activeElement === btnOk) close(true);
-    });
-  });
-}
-
-// Wait indicator for non-streaming configs: between send and the first event the UI would
-// otherwise look dead (no deltas arrive until the terminal result).
-let waitTimer = 0;
-function startWait() {
-  const el = $("wait");
-  let dots = 0;
-  el.hidden = false;
-  el.classList.remove("msg-error");
-  waitTimer = setInterval(() => { dots = (dots + 1) % 4; el.textContent = `等待响应${".".repeat(dots)}`; }, 400);
-}
-function stopWait() {
-  if (!waitTimer) return;
-  clearInterval(waitTimer);
-  waitTimer = 0;
-  $("wait").hidden = true;
-}
-
-
-// ---- models / sessions ----
-
+// ---- models ----
 async function loadModels() {
   try {
     const r = await api("/api/models");
@@ -497,99 +225,7 @@ async function loadModels() {
   } catch { /* dropdown stays default */ }
 }
 
-let sessionMeta = {}; // id → { workdir, model, running, ... } captured from the session list
-
-// N5: the session list carries three states (loading/empty/error-with-retry).
-async function loadSessions() {
-  const box = $("session-list");
-  box.innerHTML = "";
-  const hint = document.createElement("div");
-  hint.className = "muted sess-empty";
-  hint.textContent = "加载中…";
-  box.appendChild(hint);
-  try {
-    const r = await api("/api/sessions");
-    const list = await r.json();
-    if (!Array.isArray(list)) return;
-    box.innerHTML = "";
-    if (list.length === 0) {
-      hint.textContent = "暂无会话，点击「＋ 新会话」开始";
-      box.appendChild(hint);
-      return;
-    }
-    for (const s of list) sessionMeta[s.id] = s;
-    // Group sessions by workdir (project tree): one .tree-group per directory.
-    const groups = new Map();
-    for (const s of list) {
-      const k = s.workdir || "";
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(s);
-    }
-    for (const [wd, sessions] of groups) {
-      const g = document.createElement("div");
-      g.className = "tree-group";
-      const gt = document.createElement("div");
-      gt.className = "tree-group-title";
-      gt.textContent = wd || "（无工作目录）";
-      gt.title = wd;
-      g.appendChild(gt);
-      for (const s of sessions) {
-      const b = document.createElement("button");
-      b.className = "sess-item" + (s.id === activeView()?.id ? " active" : "") + (s.running ? " running" : "");
-      b.type = "button";
-      const top = document.createElement("div");
-      top.className = "sess-title";
-      top.textContent = s.model || s.id;
-      top.title = s.model || s.id;
-      const sid = document.createElement("div");
-      sid.className = "sid";
-      const sidText = [s.id, s.workdir || "", s.created ? new Date(s.created).toLocaleString() : ""].filter(Boolean).join(" · ");
-      sid.textContent = sidText;
-      sid.title = sidText;
-      b.appendChild(top); b.appendChild(sid);
-      if (s.preview) {
-        const pv = document.createElement("div");
-        pv.className = "preview";
-        pv.textContent = s.preview;
-        pv.title = s.preview;
-        b.appendChild(pv);
-      }
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "sess-del ghost";
-      del.textContent = "✕";
-      del.title = "删除会话";
-      del.setAttribute("aria-label", "删除会话");
-      del.tabIndex = -1;
-      del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id); });
-      del.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); deleteSession(s.id); } });
-      b.appendChild(del);
-      b.addEventListener("click", () => openSession(s.id));
-      g.appendChild(b);
-      }
-      box.appendChild(g);
-    }
-  } catch (e) {
-    hint.textContent = `加载失败：${e.message}（点击重试）`;
-    hint.style.cursor = "pointer";
-    hint.addEventListener("click", () => loadSessions());
-  }
-}
-
-async function deleteSession(id) {
-  if (await confirmInline(`删除会话 ${id}？此操作不可恢复。`, "删除")) {
-    try {
-      await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-      const v = byID(id);
-      if (v) {
-        dropView(v);
-        if (!activeView()) activate(createView(""));
-      }
-      loadSessions();
-    } catch (e) { inlineHint("删除失败：" + e.message); }
-  }
-}
-
+// ---- open session: rebuild from replay (kept here: needs attachSpectator + send.js hook) ----
 // openSession switches to the session's view, building it on first open. Switching NEVER
 // aborts an in-flight stream (D1). On first open the persisted history replays first, THEN a
 // running turn attaches as spectator — the live stream replays its buffer from event zero,
@@ -606,64 +242,12 @@ async function openSession(id) {
   if (fresh) await loadReplay(v);
   ensureEmptyState(v);
   refreshPanel(); // F5: refresh trajectory panel after switching views (it may be open)
-  if ((sessionMeta[id]?.running || runningKnown.has(id)) && !v.sending && !v.liveDetach) {
+  if ((getMeta(id)?.running || runningKnown.has(id)) && !v.sending && !v.liveDetach) {
     attachSpectator(v, true);
   }
 }
 
-// loadReplay streams the persisted history into the view (tail-capped server-side). The
-// session event fills workdir when the input is still empty (N14: explicit input wins).
-function ensureEmptyState(v) {
-  if (v.dom.children.length === 0 && !v.sending) {
-    const hint = document.createElement("div");
-    hint.className = "ev empty-state muted";
-    hint.textContent = "暂无对话，输入任务开始";
-    v.dom.appendChild(hint);
-  }
-}
-
-async function loadReplay(v) {
-  const gen = ++v.gen;
-  v.usage.budget = 0;
-  v.usage.steps.length = 0;
-  v.trajectory.order.length = 0;
-  v.trajectory.steps.clear();
-  v.curStep = 0;
-  v.metrics = { rounds: 0, steps: 0, llmMs: 0, toolMs: 0 };
-  v.workdir = sessionMeta[v.id]?.workdir || "";
-  if (v.workdir && !$("workdir").value.trim()) { $("workdir").value = v.workdir; saveWorkdir(v.workdir); }
-  let workdirFilled = !!v.workdir;
-  scrollMo.observe(eventsViewport(), { childList: true, subtree: true, characterData: true });
-  try {
-    const r = await api(`/api/sessions/${encodeURIComponent(v.id)}`);
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        try {
-          const ev = JSON.parse(line);
-          if (v.gen !== gen) { scrollMo.disconnect(); return; } // superseded: view rebuilt/stream took over
-          if (!workdirFilled && ev.type === "session" && ev.workdir && !$("workdir").value.trim()) {
-            v.workdir = ev.workdir;
-            $("workdir").value = ev.workdir;
-            saveWorkdir(ev.workdir);
-            workdirFilled = true;
-          }
-          renderEvent(v, ev);
-        } catch { /* skip bad lines */ }
-      }
-    }
-    if (v.gen === gen) { finishText(v); updateHeader(); refreshPanel(); }
-  } catch (e) { console.log("replay failed", e); }
-  scrollMo.disconnect();
-}
+// Delegate session clicks from sessions.js (avoids a sessions→app import cycle).
+document.addEventListener("open-session", (e) => openSession(e.detail));
 
 boot();

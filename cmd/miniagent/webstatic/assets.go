@@ -9,7 +9,7 @@ import (
 	"path"
 )
 
-//go:embed static/index.html static/app.css static/app.js static/store.js static/events.js static/md.js static/live.js static/views.js static/config.js static/usage.js static/trajectory.js static/dirpicker.js static/panel.js
+//go:embed static/index.html static/app.css static/app.js static/store.js static/events.js static/md.js static/live.js static/views.js static/config.js static/config-form.js static/config-providers.js static/config-state.js static/usage.js static/trajectory.js static/dirpicker.js static/panel.js static/toolcard.js static/ui.js static/send.js static/sessions.js
 var FS embed.FS
 
 // Read returns one embedded static file by name.
