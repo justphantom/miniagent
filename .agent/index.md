@@ -1,11 +1,11 @@
 ---
 layer: meta
-updated: 2026-08-17
+updated: 2026-08-24
 ---
 
 # .agent 记忆索引
 
-L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/session.md` + `active/carryover.md`（跨会话交接）；L2（经验教训）按需查 `L2/README.md` + `L2/schema.md`（字段约束）。检索优先精确关键词，执行检索反馈闭环（见 AGENTS.md 路由节）。
+L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/session.md` + `active/carryover.md`；L2（经验教训）按需查 `L2/README.md`、`L2/schema.md`。检索反馈闭环见 `AGENTS.md` 路由节。
 
 ## L2 Schema
 - `schema.md` — L2 条目 YAML frontmatter 必填/可选字段定义、tags 约定、confidence 语义、生命周期
@@ -15,7 +15,7 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `core-zero-policy-loophooks-decoupling` — 核心零策略 + LoopHooks 外挂 + 子包化；库化缓至 5.0.0
 - `multi-provider-kind-dispatch` — 多 provider Kind 字符串分派 + wire 边界有损投影（**superseded**，anthropic 已删）
 - `system-prompt-config-only` — system prompt 收口 config-only；opt-in `rules_file`
-- `default-mode-not-security-boundary` — default 模式具体防线总账（.git 封锁/参数级收紧/攻击面记账；L0 #13 指向此）
+- `default-mode-not-security-boundary` — default 模式防线总账（.git 封锁/参数级收紧/攻击面记账）（**superseded**，v5.0.0 全删，历史档案）
 - `default-mode-dev-tools-allowlist` — git/go/npm/lint 白名单子命令决策 + rtk 代理（**superseded**，v5.0.0 已删）
 - `library-defer-provider-config-decouple` — 库化暂缓；provider 包与 config 解耦（P1/P2 已做）
 - `compaction-review-fence-and-constants` — 压缩审查结论：代码围栏判定收紧（P2-1）+ 估算常量单源守护（P3-2），附带边界记录

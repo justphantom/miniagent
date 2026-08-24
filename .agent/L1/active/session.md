@@ -7,5 +7,5 @@ updated: 2026-08-24
 # 当前会话
 
 ## 本会话任务
-- **AGENTS.md 精简（注入系统提示词优化）**：72行→33行，「.agent 记忆体系」节 48行→9行，操作性规则下沉指针（`.agent/README.md` 已覆盖10条维护约定，补第11条 L2 生命周期指向 schema.md）。最高约束15条+路由7条不动。verify-gate 全绿 + memory-integrity PASS。
-- 摘要：AGENTS.md 常驻系统提示词 → 只留行为硬规则+路由+三层表，写入/检索操作细节按需读 README/schema/index。
+- **`.agent` 精炼**：L0/constraints.md 删 #1（AGENTS §2 重复）+#15/#16（纯指针零信息），30→26行；L0/persona.md 定位长句精简（归档细节指向 CHANGELOG/ARCHITECTURE），16→15行；index.md 行8 长句精简 + 行18 补 superseded 标注（消除「文件已 superseded 但 index 未标」不一致）+ 过时描述「L0 #13 指向此」删除；三文件 updated 日期同步。verify-gate + memory-integrity 全绿。
+- **AGENTS.md 精简**（前任务）：72行→33行，操作性规则下沉指针，`8525a19` 已推送。
