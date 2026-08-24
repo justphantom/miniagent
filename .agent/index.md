@@ -27,6 +27,7 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 ## L2/patterns（可复用模式）
 
 ### 有效
+- `dev-workflow-checklist` — 开发流程主线：需求→方案→实现→验证→审阅→提交→记忆（每轮任务走查）
 - `config-tri-state-resolve` — config 三态裁决（新增 config 键/缺省值优先级时查）+ 隐性 footgun（tool_output_dir/session.dir/pickMPG）
 - `compaction-system` — 压缩体系：预算自适应 CW + 7 阶裁剪 + reasoning 截断（改压缩逻辑时查）
 - `memory-freshness-pointer-over-count` — 记忆反过期：数量引用用指针不硬编码（设计记忆类机制时查）
