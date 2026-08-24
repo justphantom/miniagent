@@ -1,26 +1,27 @@
-## 最高约束
-- 有话直说，只讲重点，像发电报一样一个字都不要多给
-- 只做明确要求的：隐含需求先确认，每行改动可溯源，不擅自引入 CI/容器/监控/APM 等运维脚手架
-- 不确定就问；多解释全部呈现，不替用户决定
+## 行为红线
+- 只做明确要求的；隐含需求先确认，每行改动可溯源；不擅自引入 CI/容器/监控/APM
+- 不确定就问，呈现选项与利弊，不替用户决定
+- 禁止修改 `.gitignore`；提交前必须给 diff 摘要待审阅
+- 回复精简：省略客套、铺垫、总结性复述，直接给结论与要点
+
+## 编码标准
 - 标准库优先；第三方需说明理由及最小用法
-- 节制抽象：函数单一职责，不预建接口/基类/工厂，重复 <3 处不抽
-- 错误直接返回标准库类型，不自定义（除非语义不足）
-- 功能必须有标准库测试，用例即需求文档
-- 单个代码文件行数不超过300行（`_test.go` 豁免：测试按场景聚合，允许超）
-- 注释只写"为什么"，且仅非直观或特殊约定时
-- 所有二进制文件只能保存在bin目录
-- Commit：subject ≤72 字符、祈使、无句号，一次一事
-- 纳入版本跟踪的文件中不可引用未纳入版本跟踪文件的任何内容
-- 改后必跑全绿 verify-gate：`gofmt -s -l .`（空）/ `go build ./...` / `go vet ./...` / `go test -race ./...` / `golangci-lint run ./...` / 非 `_test.go` 文件 ≤300 行
-- 回复 ≤1500 字符
+- 函数单一职责，不预建接口/基类/工厂，重复 <3 处不抽
+- 错误返回标准库类型（语义不足才自定义）；功能必有标准库测试，用例即需求文档
+- 注释只写"为什么"，仅非直观或特殊约定时；非 `_test.go` 文件 ≤300 行
+- 二进制只进 `bin/`；commit subject ≤72 字符、祈使、无句号、一次一事
+
+## 流程
+- 改后必跑 `make verify` 全绿（gofmt 空 / build / vet / test -race / lint / 行数上限 / 记忆完整性）
+- 纳入版本跟踪的文件不可引用未跟踪文件内容
+- API/config/CLI 变更同步 `CHANGELOG.md`（Keep a Changelog + SemVer）
 
 ## 路由
-- 会话启动：读 `.agent/L0/`（永久约束：角色/架构不变量/流程策略，每次加载）
+- 会话启动：读 `.agent/L0/{persona,constraints,policies}.md`（永久约束，每次加载）
 - 架构/钩子契约/不变量时序：读 `ARCHITECTURE.md` §4–§5 与 `HOOKS.md`
 - 历史决策/陌生报错/选型：先查 `.agent/L2/` 再猜
-- 当前会话上下文/任务进展：`.agent/L1/active/session.md`（L1 单会话文件）；跨会话任务先读 `.agent/L1/active/carryover.md`
-- **检索反馈闭环**：读取 L2 条目后，在 L1 session.md 记录 `retrieved: <path> confidence: <high/medium/low>`。低置信度（`medium` 或 `low`）须向用户呈现候选列表 + 请求确认，不得自行猜测。多次检索同一主题无稳定命中 → 创建新 L2 条目并标记 `confidence: evolving`
-- **检索失败结构化兜底**：L2 无匹配或匹配置信度低 → 向用户呈现「检索结果 + 候选方向 + 请求确认」，不得自行假设
+- 当前会话上下文：`.agent/L1/active/session.md`；跨会话任务先读 `.agent/L1/active/carryover.md`
+- 检索反馈闭环：L2 读取后在 session.md 记 `retrieved: <path> confidence: <high/medium/low>`；低置信度呈现候选+请求确认；同主题多次无稳定命中→建新条目标 `evolving`
 
 ## .agent 记忆体系
 
@@ -30,4 +31,4 @@
 | L1 | `.agent/L1/active/session.md` + `carryover.md` | 单会话工作内存 + 跨会话交接单 | 当前任务追踪 |
 | L2 | `.agent/L2/`（`patterns/`/`decisions/`/`incidents/`） | 经验教训与可复用知识 | 按需检索 |
 
-维护约定（读写权限/frontmatter/检索反馈/跨会话接力/记忆自测试）见 `.agent/README.md`；L2 schema 与 confidence 语义见 `.agent/L2/schema.md`；条目索引见 `.agent/index.md`。
+维护约定见 `.agent/README.md`；L2 schema 见 `.agent/L2/schema.md`；索引见 `.agent/index.md`。

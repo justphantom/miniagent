@@ -7,5 +7,5 @@ updated: 2026-08-24
 # 当前会话
 
 ## 本会话任务
-- **`.agent` 精炼**：L0/constraints.md 删 #1（AGENTS §2 重复）+#15/#16（纯指针零信息），30→26行；L0/persona.md 定位长句精简（归档细节指向 CHANGELOG/ARCHITECTURE），16→15行；index.md 行8 长句精简 + 行18 补 superseded 标注（消除「文件已 superseded 但 index 未标」不一致）+ 过时描述「L0 #13 指向此」删除；三文件 updated 日期同步。verify-gate + memory-integrity 全绿。
-- **AGENTS.md 精简**（前任务）：72行→33行，操作性规则下沉指针，`8525a19` 已推送。
+- **LLM 友好度重构**：AGENTS.md 15 条硬规则分「行为红线/编码标准/流程」三组，verify-gate 收敛 `make verify`，「≤1500字符」改「回复精简」（可执行化）；L0/constraints.md 不变量每条加触发场景前缀+拆 bullet（27→42行）；index.md 三类目分「有效/已废弃」两节+条目补检索触发词；README.md §9 补 retrieved 格式示例；AGENTS.md 路由 L0 列具体文件名。verify 全绿。
+- **AGENTS.md 精简**（更早）：72→34行，`8525a19` 已推送；`.agent` 精炼 `393e21f` 已推送。
