@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+## [6.6.5] - 2026-08-24
+
+### Changed
+- **WebUI 工具参数摘要格式**：折叠态摘要由 `工具:参数` 改为 `工具 参数`（`edit:main.go` → `edit main.go`），去掉冒号分隔符。
+- **`.agent` 记忆体系 LLM 友好度重构**（纯文档与记忆文件，代码零变化）：AGENTS.md 15 条硬规则分「行为红线 / 编码标准 / 流程」三组、verify-gate 收敛为 `make verify` 单命令、`.agent` 记忆体系操作规则收敛为指向 `.agent/README.md` 与 `L2/schema.md` 的指针（72→34 行）；L0 架构不变量逐条加「改 X 时查」触发场景前缀并拆单事实 bullet；`index.md` 三类目分「有效 / 已废弃」两节并为条目补检索触发词；`.agent/README.md` 补 `retrieved:` 检索反馈记录格式示例。
+
 ## [6.6.4] - 2026-08-24
 
 ### Changed
