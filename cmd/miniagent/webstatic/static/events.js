@@ -144,7 +144,7 @@ function makeCollapsible(d, text) {
   (d.querySelector(".ev-body") || d).appendChild(btn);
 }
 
-// toolArg picks the headline argument for a tool summary (e.g. "edit:main.go"). File tools
+// toolArg picks the headline argument for a tool summary (e.g. "edit main.go"). File tools
 // show the basename (full path goes into title); shell shows the command, web the url,
 // search tools the pattern. Unknown tools fall back to the first string field.
 function toolArg(name, input) {
@@ -207,7 +207,7 @@ export function appendToolUse(view, ev) {
   const arg = toolArg(ev.name, ev.input);
   const argEl = document.createElement("span");
   argEl.className = "ev-tool-arg";
-  argEl.textContent = arg ? ":" + arg : "";
+  argEl.textContent = arg || "";
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = fmtTime(ev.ts);
