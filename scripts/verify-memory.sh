@@ -13,22 +13,20 @@ ERRORS=0
 # 1. YAML frontmatter 格式一致
 for f in $(find "$AGENT_DIR" -name '*.md' -not -path '*/node_modules/*'); do
     layer=$(sed -n 's/^layer: *//p' "$f" | head -1)
-    type=$(sed -n 's/^type: *//p' "$f" | head -1)
     if [ -z "$layer" ] && [ "$(basename "$f")" != "README.md" ] && [ "$(basename "$f")" != "carryover.md" ]; then
         echo "FAIL: $f missing 'layer' in frontmatter"
         ERRORS=$((ERRORS+1))
     fi
 done
 
-# 2. index.md 条目全部可达
-grep -oP '`[^`]+`' "$INDEX" | while read -r entry; do
-    entry=$(echo "$entry" | tr -d '`')
-    file=$(echo "$entry" | sed 's/\.$//').md
-    # map short names to paths
-    case "$entry" in
-        */*.md) ;;
-        *) file="";;
-    esac
+# 2. index.md 条目全部可达：列表项首反引号 token 须有对应 L2/**/*.md
+#（条目可带或不带 .md 后缀，统一剥掉再拼；for 循环在当前 shell 跑，ERRORS 累加不丢）
+for entry in $(grep -oP '^- `\K[^`]+' "$INDEX"); do
+    name=${entry%.md}
+    if [ -z "$(find "$L2_DIR" -name "$name.md" -print -quit 2>/dev/null)" ]; then
+        echo "FAIL: index entry '$entry' has no $L2_DIR/**/$name.md"
+        ERRORS=$((ERRORS+1))
+    fi
 done
 
 # 2b. index.md 列出所有 L2 条目

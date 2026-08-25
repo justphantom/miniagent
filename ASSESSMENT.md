@@ -1,109 +1,85 @@
-# miniagent 评估报告（第三轮）· 全面复审
+# miniagent 评估报告（第四轮）· 规范与质量全面复审
 
-- 日期：2026-08-22 · 审查对象：HEAD 895b782（前两轮 45+15 项整改已全部提交，工作树干净）
-- 方法：verify-gate 实测 + 全域深读（核心 loop/compaction/session/tools/provider/web 前后端/deploy/config）+ 边界推演
-- 实测：`gofmt -s -l` 空 / `go build` / `go vet` / `go test -race -count=1 ./...` 14 包 558 测试全绿 / `golangci-lint` 0 issues / 非测试文件 ≤300 行 / 4 个 JS `node --check` 通过
-- **核验时间**：2026-08-22 · 复审 HEAD 248b53c（审查后 4 项修复均已提交，verify-gate 全绿，工作树干净）
+- 日期：2026-08-26 · 审查对象：HEAD 9e62c71（工作树干净）
+- 方法：verify-gate 实测 + 增量深读（第三轮基线 248b53c 之后 ~30 个提交：minisession 远程会话全链路、WebUI 配置漂移/服务重载、replay user_prompt 事件、.agent 记忆体系重构）+ 文档一致性核对
+- 实测：`make verify` 全绿（gofmt 空 / build / vet / `go test -race` 14 包 **610 测试 0 失败** / golangci-lint 0 issues / 行数上限 / memory integrity PASS）
+- 覆盖率（-cover，非 race）：metrics 100% / compaction 90.9 / httpretry 90.5 / tools 86.1 / webstatic 85.7 / config 85.4 / policy·event 85.2 / session 84.0 / miniagent 核心·cmd 82.7 / openai 78.3 / text 71.1
+- 规模：225 个 .go 文件；非测试 13,291 行 / 测试 16,620 行（**测试:代码 ≈ 1.25:1**）；go.mod 零 require（go 1.25）；前端 vanilla ES modules 无构建链（20 文件，最大 293 行）
 
 ## 0. 总体结论
 
-**代码状态为三轮评估以来最佳。** 前两轮 60 项整改（H1-H4/M1-M9/L1-L20 + N1-N15）全部落地并提交，无一回退。核心五目标复核：
+**规范与质量均维持三轮以来的高位，且上一轮两项 P3 待决策项均已落地。** 本轮新发现 **0 高 0 中 5 低**——全部为文档滞后与门禁盲区，无代码缺陷、无安全回退、无契约破绽。第三轮以来的新增量（远程会话集成）质量突出：fail-fast 语义、404→`os.ErrNotExist` 对齐、翻页修复、在途删除守卫均经测试固化。
 
 | 目标 | 评级 | 依据 |
 |------|------|------|
-| 正确 | ★★★★★ | tool_call↔tool_result 配对不变量全路径守住（含 panic 兜底、占位尾填）；NDJSON 契约 CLI/Web 逐字节一致；session jsonl 崩溃半行容错+原子重写+flock；558 测试含真实并发（N7 TryLock 409） |
-| 轻量 | ★★★★★ | go.mod 零 require；前端 vanilla ES modules 无构建链；核心 Run 只做五件事 |
-| 健壮 | ★★★★☆ | panic 三级兜底（safeCall/callLLMOnce/Run defer）；TOCTOU 多处明示防护；扣分项见 §2 O2（FIFO/中断挂起属已声明 trade-off） |
-| 规范 | ★★★★★ | verify-gate 全绿；溯源注释可追回（N 编号→报告）；CHANGELOG 逐条挂编号 |
-| 灵活 | ★★★★★ | 9 个 nil-able LoopHooks 全开放；compaction 为纯插件；策略-free 核心 |
+| 正确 | ★★★★★ | NDJSON 契约 CLI/Web 逐字节一致（replay 含 user_prompt 三处生效）；远程/本地分支错误映射同构（400/404/409/500 逐一测试）；610 测试 -race 全绿 |
+| 轻量 | ★★★★★ | go.mod 零 require；前端无构建链；300 行上限 Go/JS 双约束（最大 293） |
+| 健壮 | ★★★★☆ | LoadSession >1000 条翻页取全量（自检发现并修复）；读上限与本地 50MiB 对齐；扣分项为文档漂移（F1），非运行时 |
+| 规范 | ★★★★☆ | verify-gate 七步机械编码 AGENTS.md 硬规则；CHANGELOG 逐条对账可溯源；扣分项：测试文件行数上限失守（F2）、记忆校验脚本死代码（F3） |
+| 灵活 | ★★★★★ | 9 个 nil-able LoopHooks 全开放不变；远程存储经 `session.url` 一键切换且 fail-fast 不静默分叉 |
 
-WebUI 四目标复核：
+## 1. 前轮整改与待决策复核
 
-| 目标 | 评级 | 依据 |
-|------|------|------|
-| PC+移动自适应 | ★★★★★ | 800px/640px 断点实测规则正确；抽屉 z-index 修复后 overlay 不吞点击；iOS ≥16px 防缩放 + safe-area + 100dvh + interactive-widget 齐备 |
-| 美观 | ★★★★☆ | 双主题一致、折叠渐变、等宽工具块、tabular-nums 时间；无设计系统级打磨但远超功能基线 |
-| 交互友好 | ★★★★★ | 三态会话列表（N5 补齐失败态+点击重试）、confirmInline 焦点圈闭、409/中断/重试全有反馈、Enter/Shift+Enter 按设备分流、aria 属性覆盖 |
-| 逻辑呈现正确 | ★★★★☆ | call_id 精确配对、M8 generation 防串流、N13 计时重置、N14 回填守卫；扣分项见 §2 O3（replay 多轮 token 计数） |
+- **O3–O6（第三轮 4 项低）**：确认已修复且未回退（replay 累计措辞、confirmInline 监听、grep glob 探针、deploy fail-fast）。
+- **O7（动态 Host，原 P3 待决策）→ ✅ 已落地**：`config.web.allowed_hosts`（config.go:72-74）+ `hostVariants` 自动推导（web.go:127），CHANGELOG 已记。
+- **O8（turn 并发无上限，原 P3 待决策）→ ✅ 已落地**：`web.max_concurrent_turns` 信号量门（web.go:40,50；默认 0=不限，溢出 429），CHANGELOG 已记。
+- **O1/O2/O9/O10（观察维持项）**：语义未变，维持观察，无需改动。
 
-## 1. 前轮整改复核（60 项抽验）
+## 2. 新发现（第四轮）
 
-全部抽验通过，重点复核高风险项：
-
-- **N1（CSP FOUC）**：app.css:72 `#login,#app{display:none}` 居末位压过 :70 的 `#login` flex 规则，CSSOM `style.display` inline 优先揭示——规则序正确。
-- **N7（TryLock 409）**：锁点在 JSON 校验后、NDJSON header 前，409 走纯 JSON 不污染流契约；测试 hold 锁断言 409 语义匹配。
-- **N5（三态）**：catch 分支「加载失败：<原因>（点击重试）」+ hint click 重试，代码与声明一致。
-- **N14（回填守卫）**：`!$("workdir").value.trim()` 条件在，显式输入恒胜隐式回填。
-- **会话删除竞态**：TryLock 持锁后删文件+删锁条目+清 tool-output 目录，注释如实声明「racing new turn 最坏短暂失去串行化」——推演确认该窗口内新 turn 走新锁条目，仅与"删除前已启动的 turn"失去互斥，而后者持旧锁且文件已删会自然失败，无可乘之机。
-
-## 2. 新发现（第三轮）
-
-### 高（0 项）
+### 高（0 项）／中（0 项）
 
 无。
 
-### 中（2 项）
+### 低（5 项，均为文档滞后或门禁盲区）
 
-**O1（⏸ 观察维持）**：Web 会话列表 meta 缺失时 preview 兜底不一致。
-`web_sessions.go:75-78`：`LoadSessionMeta` 失败（meta.Type==""）时 summary 仍进入列表，但 Provider/Model/Workdir/Created 全空——前端 `s.model || s.id` 兜底了标题，但 `s.workdir` 空导致打开该会话时 workdir 输入框不回填（N14 的 replay 回填仅在 input 为空时生效，此处 meta 为空恰好走 replay 回填，可恢复；但 sessionMeta[id] 已缓存空 workdir，`workdirFilled` 初值 false，路径正确）。**实际影响低**：仅发生在 meta 行损坏但消息体完好的极端场景。建议：列表项 meta 缺失时以 mtime 兜底 Modified 排序（当前 Size/Modified 来自 e.Info() 已兜底），无需改动——**记录为观察，非缺陷**。
+**F1：ARCHITECTURE.md §8 未覆盖远程会话模式。**
+`ARCHITECTURE.md:224-231`（§8 会话持久化）仍只描述本地 jsonl 路径（Rewrite/Append/Load 原子性与信号保护），`session.url` 非空时的 minisession Client 路径（`miniagent/session/client.go`、`cmd/miniagent/session_remote.go`）完全未提。ARCHITECTURE.md 是 AGENTS.md 路由指定的架构权威文档；远程模式改变了「持久化在哪、失败语义是什么」（fail-fast 不回退本地）这一架构级事实。README 与 MINISESSION_INTEGRATION.md 已覆盖，唯 ARCHITECTURE 缺席。**建议**：§8 补一段远程模式（触发条件/写语义 Rewrite+Create 补建/失败 fail-fast/读侧翻页），5 分钟。
 
-**O2（⏸ 观察维持）**：`web_turn.go` 会话锁 `__new__` 全局串行化的注释与实测有出入。
-`web_turn.go:68-72`：注释称空 session 键全局串行化「acceptable (interactive, not high-throughput)」。实测成立，但 `__new__` 锁条目在进程生命周期内常驻 `s.locks` sync.Map，与按 session id 的条目（删除时清）不同——无害但注释未提。**非缺陷**，注释扩展即可，不改。
+**F2：测试文件 300 行上限失守，且门禁不查。**
+`cmd/miniagent/web_config_test.go` 316 行。v6.6.0（CHANGELOG）明确「测试文件执行 300 行上限」并拆分过超限文件，但 `Makefile:25` 的行数检查只扫非 `_test.go`——约定靠自觉，无机械防线，已实际漂移。**建议**择一：① verify 增加测试文件行数检查（一行 awk，对齐 7ec5def 把 static/*.js 纳入的同款做法）；② 承认测试豁免（CONTRIBUTING.md 现文即豁免口径），删掉 CHANGELOG 里的上限声明。**倾向 ①**，与项目「约定必须门禁化」的一贯风格一致。
 
-### 低（4 项）
+**F3：`scripts/verify-memory.sh` §2 是死代码，宣称的检查未发生。**
+脚本头注释与步骤标题称检查「index 可达性」，但 `verify-memory.sh` 第 2 节的 while 循环体只做变量赋值与空 case，无任何校验动作（真正生效的是 2b「index 列出所有 L2 条目」）。门禁步骤名实不符——未来 index 引用断链不会被发现。**建议**：补全（对 index 中每条路径 `-f` 判存在）或删掉该节与头注释中的宣称。
 
-**O3（✅ 已修复，248b53c 文档对齐）**：replay 多轮会话 token 累计显示为「打开后新增」，header 无历史用量。
-`events.js:162-163` + `store.js:48`：result 事件累加 sessionInTokens/sessionOutTokens，replay 时每条历史 result 也会触发累加——即打开旧会话后 header 显示的是**该次 replay 流中所有历史轮的累计**，而非"打开后新增"。CHANGELOG 自述「历史会话只累计打开后的轮次」与实现不符（实现是累计 replay 中的全部历史轮）。**影响**：数字含义偏宽，非错误（replay 确实重放了这些 result）；但语义与文档有出入。建议：replay 流的 result 事件不累加（events.js 无法区分 live/replay 流——需要在 openSession 中设标志位），或修正 CHANGELOG/README 措辞。**择一即可，倾向修文档**。
+**F4：CONTRIBUTING.md 两处过时。**
+① `CONTRIBUTING.md:35`「核心库化（移出 internal/）计划于 5.0.0；当前 internal/ 下代码禁止外部导入」——库化已于 v5.0.0 完成（README 明示「所有核心包已移出 internal/」），现 internal/ 仅剩测试辅助包 looptest，表述误导；② `CONTRIBUTING.md:33` 内置工具列 6 个（read/write/edit/grep/glob/shell），实际 8 个（漏 ast/web）。**建议**：两行修正。
 
-**O4（✅ 已修复，3913fad）**：confirmInline 的 onKey 挂了三处（overlay + btnCancel + btnOk）。
-`app.js:259-261`：keydown 事件从按钮冒泡到 overlay，同一事件触发 onKey 两次。当前 close 幂等（resolve 已 settle + remove 幂等）故无害，但属于冗余监听——按钮自身 keydown 冒泡到 overlay 已足够。**清理项**：删 btnCancel/btnOk 两行监听，行为不变。
-
-**O5（✅ 已修复，03fcca9+测试）**：`tool_grep.go` globFn 的 filepath.Match 错误被吞。
-`tool_grep.go:82-84`：`ok, _ := filepath.Match(a.Glob, name)`——无效 glob（如 `[a-`）对所有文件返回 false+err，err 被丢弃，最终表现为"no matches"而非"invalid glob"。runGlob（glob 工具）有 globPatternMalformed 结构扫描前置校验，grep 的 glob 参数没有。**影响**：LLM 传错 glob 时得到误导性"no matches"。建议：runGrep 中对 a.Glob 做一次 `filepath.Match(a.Glob, "x")` 探针校验（对齐 runGlob 的两探针模式，成本一行）。
-
-**O6（✅ 已修复，32d9943）**：`deploy.sh` envsubst 渲染后仅 WARNING 不 fail。
-`deploy.sh:55-58`：检测到残留 `${VAR}` 占位符时 echo WARNING 继续——渲染残缺的 unit 会被 enable+restart，systemd 可能起不来或静默用错路径。**建议**：改 exit 1（渲染失败即部署失败，比带病启动更易排查）。属部署健壮性加固，非运行时缺陷。
+**F5：`.golangci.yml` 头注释平台范围陈述与实现相反。**
+`.golangci.yml:14-15`「Platform scope: Linux/macOS only (Unix) … no windows fallback」，但 `miniagent/tools/platform_windows.go`、`miniagent/platform_windows.go` 存在且 README 首段即宣传 Windows 支持（CREATE_NEW_PROCESS_GROUP/taskkill/字节区间锁）。注释会误导贡献者跳过 Windows 验证。**建议**：改注释为三平台，或在 CI/文档中明确 Windows 为 best-effort。
 
 ### 观察（非缺陷，已核实）
 
-- **O7（⏸ P3 维持待决策）**：动态 Host（DHCP 换 IP 后白名单不含新 IP）仍待产品决策，维持 P3。轻量路径：guard 对 loopback 恒放行 + 文档建议反代场景配 `web.allowed_hosts`。
-- **O8（⏸ P3 维持待决策）**：turn 并发无上限（仅同 session 互斥），维持 P3。轻量路径：`handleTurn` 入口信号量（如 8 并发），溢出 429。
-- **O9（⏸ 已声明 trade-off 不动）**：`tool_read.go:27-33` 明示的 FIFO/NFS 不可中断 read goroutine 泄漏——已声明 trade-off，隔离依赖调用侧，符合"有话直说"原则，不动。
-- **O10（⏸ 已声明缺口不动）**：`scrubEnv` 的已知缺口（DATABASE_URL/*_COOKIE/*_DSN）注释如实声明非隔离边界，fallback 靠 OS 隔离——与 README「Run Isolation」指引一致，不动。
+- **MINISESSION_INTEGRATION.md / README 引用 `../minisession`**（仓外未跟踪路径，含其 ARCHITECTURE §10/§12）。按 AGENTS.md「纳入跟踪的文件不可引用未跟踪文件内容」的严格口径属于边缘违规；按实践口径是刻意的跨仓集成指针且指向内容已摘要入文。维持现状可，但若严格执行自家规则需把关键事实内联。待用户决策，不单方面改。
+- **`internal/miniagent/looptest` 无测试（覆盖率 0）**：fake LLM 测试辅助包，被上层测试间接覆盖，可接受。
+- **`text` 包覆盖率 71.1%（全库最低）**：100 行 HTML 转义/截断工具，README 声明其为 XSS 防线一部分——建议后续补齐转义边界用例，非紧急。
 
-## 3. 深度复核抽验记录（本轮新读区域）
+## 3. 深度复核抽验记录（本轮新读区域：minisession 集成全链路）
 
 | 区域 | 结论 |
 |------|------|
-| `miniagent/loop.go` Run 主循环 | defer 统一回写 12 返回路径零遗漏；panic recover 先于字段赋值（transcript 不丢）；summarizeAtLimit 闭包捕获正确；ctx 退出路径 130 语义守住 |
-| `miniagent/loop_tools.go` 并行工具 | 信号量+ctx 优先 select 防取消后占槽；safeCall 单工具 panic 隔离；denied/unknown 短路与结果顺序保持 |
-| `miniagent/session/session.go` | 崩溃半行三态（尾行容忍/中行严格/配对校验）逻辑自洽；ensureTrailingNewline 慢路径 mb+1 截断与超 mb 拒写互洽 |
-| `miniagent/compaction/*` | estimateTokensFromUsage 锚点防陈旧（Ts>=latestSummaryTs）；usableTokens reserve 钳 CW/5 防小窗倒挂；compactHistory/trimRecentRounds 保首+保尾+保最新 summary；dedupShellCommands 参数与结果对称折叠 |
-| `provider/openai/stream.go` | 重试分相（pre-delta 可重试/post-delta 不可撤销）正确；Transport 借用缓存对称；错误体不回显防 key 泄漏 |
-| `tools/tool_shell.go` | 进程组 kill 防孤孙；后台作业持管道超时分支如实报告；scrubEnv 关键词表与 PAT/PATH 豁免正确 |
-| `tools/tool_edit.go` | pathLocks 序列化同路径读改写；checkEditSize 防放大 OOM；多段事务全成功才落盘；TOCTOU LimitReader 防换大文件 |
-| `tools/tool_grep.go` | 正则 AST 节点数限制防 ReDoS；二进制 NUL 嗅探；>50MB 跳过；FIFO/设备 IsRegular 双检（walk 级+open 级） |
-| `tools/tool_write.go` | 空 content 显式拒绝（防误 truncate）；原子写 temp+sync+rename+父目录 sync；0600 新文件默认 |
-| `tools/tool_web.go` | SSRF 每跳重检；GET-only；1MB body 上限；charset 检测 BOM>header>meta，不支持字符集明示降级 |
-| `cmd/miniagent/web*.go` | guard 三防（Host/Sec-Fetch-Site/Origin）+ CSP 无 unsafe-inline；wildcard 绑定自动含主机名+网卡地址；409/404/500 语义分明 |
-| `webstatic/*.js` | M8 generation 防串流全路径覆盖（send/openSession/new-chat）；appendDelta 流式纯文本零闪烁、finishText 一次性 mdRender；toolNodes Map 按 call_id 精确配对 + 旧会话回退 |
-| `deploy/deploy.sh` | envsubst 渲染+占位符残留检测；系统用户/组创建；session 目录权限 0750；seed config 的 session.dir 指向部署目录 |
-| `config/resolve.go` | 三层仲裁（model>provider>global）+ 对规则（provider/model 必须成对）+ thinking 四态；durations 统一解析错误定位 |
+| `miniagent/session/client.go` | 404 统一包 `os.ErrNotExist`（与本地哨兵对齐）；翻页取全量 + 读上限 `maxSessionBytes+1MiB` 双自检修复（:66-68/:160 注释记录为什么）；`do` 统一鉴权/状态码/解封；30s 超时 fail-fast 无隐式重试 |
+| `cmd/miniagent/session_remote.go` | resolve/save 远端镜像本地哨兵（`errSessionNotFound` 同款 404 映射）；`warnSessionMismatch` 远端同样生效；Rewrite 为主 + 404→Create+Rewrite 幂等补建，注释如实 |
+| `cmd/miniagent/run_turn.go:100-112,222` | 远程/本地分支对称装配；`session.dir` 忽略语义一致；信号保护仅本地路径（serve 形态交服务器，注释说明） |
+| `cmd/miniagent/web_sessions_remote.go` | 列表 500 不掩盖配置错误（对齐本地 ReadDir 语义）；删除保留 beginDelete 在途守卫（防远端 Rewrite 复活）；tool-output 清理跳过有 retention 兜底的注释依据 |
+| `cmd/miniagent/web_sessions.go:143-180` | replay 远端分支 id 白名单前置（400 而非 500）；`meta.Type==""`→404 提为两分支共享（迁入垃圾首行防御） |
+| `remote_stub_test.go` + `web_session_remote_test.go` | stub 模拟服务端语义（Create 幂等/Rewrite 404/modified 定宽字符串保字典序=时间序）；测试断言契约形状含降级字段（workdir 空键必须在）、409/404/400 全错误路径 |
+| `.agent` 记忆体系（L0/L1/L2 + verify-memory.sh） | 分层职责清晰、schema/索引齐备、检索反馈写入 session.md 有实据；唯脚本 §2 死代码（F3） |
+| CHANGELOG Unreleased vs 实现 | 三条 Added/Fixed 与代码逐条对账一致（含「已知局限」两处 README 同步） |
 
 ## 4. 处置建议（按优先级）
 
 | # | 项 | 建议 | 工作量 | 状态 |
 |---|----|------|--------|------|
-| 1 | O4 冗余监听 | 删 app.js:260-261 两行 | 1 分钟 | ✅ 已修复（3913fad） |
-| 2 | O5 grep glob 校验 | runGrep 加两探针（对齐 runGlob） | 5 分钟+测试 | ✅ 已修复（03fcca9） |
-| 3 | O6 deploy fail-fast | WARNING→exit 1 | 1 分钟 | ✅ 已修复（32d9943） |
-| 4 | O3 文档对齐 | CHANGELOG/README 措辞改为「replay 流中累计」 | 5 分钟 | ✅ 已修复（248b53c） |
-| 5 | O7/O8 | 维持 P3 待决策，不建议本轮动 | — | ⏸ P3 待决策 |
+| 1 | F2 行数门禁盲区 | Makefile verify 增测试文件 300 行检查 + 拆 web_config_test.go | 10 分钟 | ✅ 已修复（本日，未提交） |
+| 2 | F1 ARCHITECTURE §8 | 补远程会话小节 | 5 分钟 | ✅ 已修复（本日，未提交） |
+| 3 | F4 CONTRIBUTING 过时 | 修 internal/ 表述与工具清单 | 2 分钟 | ✅ 已修复（本日，未提交） |
+| 4 | F5 lint 配置注释 | 修平台范围陈述 | 1 分钟 | ✅ 已修复（本日，未提交） |
+| 5 | F3 verify-memory.sh | 补全或删除 §2 死代码 | 5 分钟 | ✅ 已修复（本日，未提交；顺带修复实现中发现条目可带 .md 后缀的边界） |
+| 6 | 观察：../minisession 引用 | 严格口径需内联关键事实；待决策 | — | ⏸ 待用户决策 |
 
 ## 5. 结论
 
-第三轮评估**新发现 0 高 2 中 4 低**，全部为中低 severity 的打磨项，无架构性缺陷、无安全性回退、无正确性破绽。60 项前轮整改零回退，verify-gate 全绿，558 测试覆盖真实并发与崩溃路径。
+第四轮评估**新发现 0 高 0 中 5 低**：五项全部是「文档/门禁滞后于代码」类——这本身是项目健康度的侧写（代码跑在文档前面，且无一处行为缺陷）。第三轮两项 P3（O7/O8）已实现并文档化；远程会话集成在 300 行约束下保持了本地分支的错误语义同构与测试密度，两处集成自检缺陷（翻页截尾、读上限）在合入前被发现修复。
 
-**综合评分 8.8 → 9.0（四项打磨落地后维持 9.0）**：两轮整改的复利效应显现（工具层 TOCTOU 防护、压缩锚点防陈旧、前端三态齐备均属"看不见但关键时刻救命"的健壮性），四项低 severity 打磨项全部落实，剩余扣分项仅 P3 两项待决策。项目已达「正确、轻量、健壮、规范、灵活」五目标的可交付水位；WebUI 自适应/美观/交互/正确四目标中仅美观有主观提升空间（无设计系统），其余三项客观达标。
-
-§4 四项打磨全部落地，0 项待办。P3 N11/N12 维持待产品决策。
+**综合评分维持 9.0**：五目标中正确/轻量/灵活满星；健壮与规范各扣在文档漂移与门禁盲区（F1–F3），修复成本合计 <30 分钟，不构成架构或安全风险。项目处于「可交付且可长期维护」水位；下一阶段的实际考验是 minisession 双仓协同（Unreleased 待发版）与 .agent 记忆体系的持续运营密度。

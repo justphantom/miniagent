@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+### Changed
+- **verify-gate 行数上限扩展到测试文件**：`make verify` 原仅检查非测试 `.go` 与 `webstatic/static/*.js` 的 300 行上限，`_test.go` 无门禁（v6.6.0 建立的测试文件上限仅靠自觉，`web_config_test.go` 已漂移至 316 行）；现测试文件纳入 find 检查，`web_config_test.go` 按 GET/PUT 与 reload 场景拆出 `web_config_reload_test.go`（CONTRIBUTING.md 同步为门禁口径）。
+- **文档对齐（第四轮评估 F1/F4/F5）**：ARCHITECTURE.md §8 补「远程模式」小节（minisession 触发条件/写语义/fail-fast/翻页与 404 对齐/已知局限指针）；CONTRIBUTING.md 修正两处过时（internal/ 库化已完成、内置工具 6→8 补 ast/web）；`.golangci.yml` 头注释平台范围由「仅 Linux/macOS 无 Windows 回退」改为三平台实况。
+- **`scripts/verify-memory.sh` §2 死代码补全**：原「index 可达性」循环体为空操作（宣称的检查未发生），现对 index.md 列表项逐条校验对应 `L2/**/*.md` 存在，失败计入 FAIL；顺带删除未使用的 `type` 变量。
+
 ### Added
 - **minisession 远程会话存储接入**：`config.session` 新增 `url`/`key` 字段，指向 minisession 服务时（`url` 非空）会话加载/持久化自动切换为远程 HTTP 模式，`session.dir` 被忽略；`url` 为空时沿用本地文件机制（向后兼容）。`miniagent/session` 新增 `Client`（CreateSession/LoadSession/AppendMessages/RewriteMessages/DeleteSession/ListSessions，404 包装为 `os.ErrNotExist` 以兼容现有 not-found 分支）；`cmd/miniagent` 新增远端 resolve/save 分支（新建走 Create+Rewrite，续传走 Load+Rewrite，`llm_requests` 累计语义与本地一致）。
 - **远程模式补全读侧与列表侧**：`-replay` 与 WebUI 会话列表（`GET /api/sessions`）、历史回放（`GET /api/sessions/{id}`）、删除（`DELETE /api/sessions/{id}`）在 `session.url` 非空时全部走远端——列表映射服务端摘要（`running` 仍由本进程判定，workdir 留空待打开会话时回填），回放/删除将 `os.ErrNotExist` 映射 404、其余错误 500（fail-fast，不回退本地），删除保留在途轮次守卫（409）且跳过本地 tool-output 清理（retention 兜底）。README 新增「远程会话（minisession）」一节（迁移指引与已知局限）。

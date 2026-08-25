@@ -21,7 +21,7 @@
 
 - 标准库优先；引入第三方依赖需说明理由及最小用法。
 - 节制抽象：函数单一职责，不预建接口/基类/工厂，重复 <3 处不抽。
-- 单个代码文件 ≤300 行（`_test.go` 豁免：测试按场景聚合，允许超）。
+- 单个代码文件 ≤300 行（含 `_test.go` 与 `webstatic/static/*.js`，`make verify` 门禁强制，超限按场景拆分）。
 - 注释只写「为什么」，且仅非直观或特殊约定时。
 - 错误直接返回标准库类型，不自定义（除非语义不足）。
 - 纳入版本跟踪的文件中不可引用未纳入版本跟踪文件的任何内容。
@@ -30,6 +30,6 @@
 
 - **provider**：实现 `LLM` 接口（`Do` 非流式 + `DoStream` 流式），见 `miniagent/provider_api.go`；OpenAI 兼容实现见 `provider/openai/`。
 - **钩子**：经 `LoopHooks` 外挂上下文管理/用量/成型/失败恢复策略，契约见 [HOOKS.md](./HOOKS.md)。
-- **工具**：`Tool.Call` 函数字段，由 `cfg.Tools` 自由组装，内置工具见 `miniagent/tools/tool_*.go`（read/write/edit/grep/glob/shell）。
+- **工具**：`Tool.Call` 函数字段，由 `cfg.Tools` 自由组装，内置工具见 `miniagent/tools/tool_*.go`（read/write/edit/grep/glob/ast/web/shell）。
 
-核心库化（移出 `internal/` 开放外部导入）计划于 5.0.0；当前 `internal/` 下代码 Go 禁止外部模块导入。
+核心包已于 v5.0.0 全部移出 `internal/`（开放外部导入）；`internal/` 现仅剩测试辅助包 looptest。

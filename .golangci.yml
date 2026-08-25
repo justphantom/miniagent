@@ -11,8 +11,9 @@
 #   4. gosec false positives are silenced precisely in settings.gosec.excludes with reasons; no
 #      global exclusions.
 #   5. Do not enable nolintlint: it makes nolint comment maintenance cost explode; community consensus is to leave it off by default.
-#   6. Platform scope: Linux/macOS only (Unix). platform.go uses //go:build !windows
-#      to isolate setpgid/killpg/O_NOFOLLOW, with no windows fallback.
+#   6. Platform scope: Linux/macOS/Windows. Unix specifics (setpgid/killpg/flock/O_NOFOLLOW)
+#      are isolated in //go:build !windows files; Windows counterparts (CREATE_NEW_PROCESS_GROUP
+#      / taskkill / byte-range locks / Lstat symlink check) live in platform_windows.go.
 #
 # Run: golangci-lint run
 # Full: golangci-lint run --default=all (enables all linters, including those not listed in enable)

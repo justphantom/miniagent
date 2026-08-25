@@ -229,6 +229,7 @@ v5.0.0 起单模式，8 工具（上表全部）恒注册；`shell` 无任何 ag
 - **写（AppendMessages，库 API）**：append-only 追加保留给库化调用方——flock 跨进程锁防行交错非法 JSON；预序列化拒绝超限（size+pending > limit 即拒，避免成功写入后被 LoadSession 拒）；`ensureTrailingNewline` 写前截断崩溃半行残留；原子性靠 `f.Sync()`。CLI 主路径不再调用。
 - **读（LoadSession）**：`OpenNoFollow` + `LimitReader` 单次读取 + 单行 64KB 扫描缓冲；容忍末尾半行（崩溃残留），非末尾则报"mid-file corruption"。配对校验经核心 `ValidateToolPairing`。
 - **改写（RewriteMessages）**：CLI 主路径每轮全量落盘（非仅 compaction 触发）。临时文件同目录 + `os.Rename` 原子交换 + 父目录 fsync，写入/rename 失败均清理临时文件。
+- **远程模式（`session.url` 指向 minisession 服务）**：加载/持久化/列表/删除全链路改走 HTTP Client（`miniagent/session/client.go`），上文本地文件机制整体旁路（`session.dir` 被忽略；清空 `url` 即回本地，数据不自动搬运）。写语义镜像本地主路径：每轮 Rewrite 全量覆写，远端 404 时 Create + Rewrite 幂等补建；新建会话不预创建（首 turn 成功后远端才出现，与本地"jsonl 仅在首 turn 成功后落盘"对齐）。失败语义 **fail-fast**——服务不可达/401 时轮次立即失败，不静默回退本地（双源必然分叉历史）。读侧 LoadSession 按 1000 条/页翻页取全量（单页上限是服务端硬顶）；404 统一包装 `os.ErrNotExist`，与本地哨兵及 web 层 404 映射对齐。JSONL 行格式与本地完全互操作（迁移即复制文件）。已知局限（远端请求体 1MiB 上限、列表摘要无 workdir、跨进程 running 不可见）见 README「远程会话（minisession）」与 MINISESSION_INTEGRATION.md。
 
 ## 9. 配置与解析
 
