@@ -60,6 +60,7 @@ type turnEngine struct {
 // caller maps it to exit code 130 / a closed HTTP stream.
 func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) error {
 	var meta session.SessionMeta
+	var history []miniagent.Message
 	if spec.workdir == "" {
 		return errors.New("workdir is required")
 	}
@@ -96,12 +97,20 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 		}
 	}
 
-	sessionDir := defaultSessionDir()
-	if resolved.Session.Dir != "" {
-		sessionDir = resolved.Session.Dir
-	}
 	modelSpec := resolved.Provider.Name + "/" + resolved.ModelID
-	sessPath, meta, history, err := resolveSession(spec.saveNew, spec.sessionID, spec.sessionArg, sessionDir, modelSpec, resolved.Provider.Name, spec.workdir, int64(maxSessionBytesOf(resolved)))
+	var sessPath string
+	var remote *session.Client
+	if resolved.Session.URL != "" {
+		// session.url 指向 minisession：加载/持久化走远端，session.dir 被忽略
+		remote = session.NewClient(resolved.Session.URL, resolved.Session.Key)
+		meta, history, err = resolveSessionRemote(ctx, remote, spec.saveNew, spec.sessionID, spec.sessionArg, modelSpec, resolved.Provider.Name, spec.workdir)
+	} else {
+		sessionDir := defaultSessionDir()
+		if resolved.Session.Dir != "" {
+			sessionDir = resolved.Session.Dir
+		}
+		sessPath, meta, history, err = resolveSession(spec.saveNew, spec.sessionID, spec.sessionArg, sessionDir, modelSpec, resolved.Provider.Name, spec.workdir, int64(maxSessionBytesOf(resolved)))
+	}
 	if err != nil {
 		return err
 	}
@@ -133,6 +142,9 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 		toolOutputDir = *resolved.RunConfig.ToolOutputDir
 	} else if sessPath != "" {
 		toolOutputDir = filepath.Join(filepath.Dir(sessPath), strings.TrimSuffix(filepath.Base(sessPath), ".jsonl")+".tool-output")
+	} else if remote != nil && meta.ID != "" {
+		// 远端会话无本地路径，tool 输出落 workdir 下按会话 id 隔离
+		toolOutputDir = filepath.Join(spec.workdir, ".miniagent", "tool-output", meta.ID)
 	}
 
 	tools := buildTools(spec.workdir, shellTimeoutOf(resolved), fileOpTimeoutOf(resolved), writeTimeoutOf(resolved), webTimeoutOf(resolved), into(resolved.RunConfig.MaxFileResultChars, 0), limits)
@@ -164,7 +176,7 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 
 	// saveSession persists the executed part on success, error AND cancel paths (pairing is
 	// completed by fillPlaceholderTail), recovering this turn for later resume.
-	saveErr := e.saveSession(sessPath, meta, result, limits.MaxSessionBytes)
+	saveErr := e.saveSession(ctx, sessPath, remote, meta, result, limits.MaxSessionBytes)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// Terminal stop event: without it the stream ends with no result/error, and
@@ -197,8 +209,8 @@ func (e *turnEngine) runTurn(ctx context.Context, spec turnSpec, out io.Writer) 
 // saveSession rewrites the session jsonl (first meta line accumulates LLMRequests across turns).
 // CLI path shields the write from SIGINT/SIGTERM (protectSignal=true); the serve path leaves
 // signal disposition to the server — os.Rename keeps the file either old or new, never torn.
-func (e *turnEngine) saveSession(sessPath string, meta session.SessionMeta, result miniagent.Result, maxSessionBytes int) error {
-	if sessPath == "" || len(result.NewMessages) == 0 {
+func (e *turnEngine) saveSession(ctx context.Context, sessPath string, remote *session.Client, meta session.SessionMeta, result miniagent.Result, maxSessionBytes int) error {
+	if (sessPath == "" && remote == nil) || len(result.NewMessages) == 0 {
 		return nil
 	}
 	if e.protectSignal {
@@ -206,5 +218,8 @@ func (e *turnEngine) saveSession(sessPath string, meta session.SessionMeta, resu
 		defer signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 	}
 	meta.LLMRequests += result.LLMRequests
+	if remote != nil {
+		return saveSessionRemote(ctx, remote, meta, result.Messages)
+	}
 	return session.RewriteMessages(sessPath, meta, result.Messages, int64(maxSessionBytes))
 }

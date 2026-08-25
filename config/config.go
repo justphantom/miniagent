@@ -17,6 +17,10 @@ type Config struct {
 
 type SessionConfig struct {
 	Dir string `json:"dir"`
+	// URL 指向 minisession 服务；非空时 session 持久化走远程 Client，Dir 被忽略。
+	URL string `json:"url,omitempty"`
+	// Key 为 minisession 的 API key（URL 非空时使用）。
+	Key string `json:"key,omitempty"`
 }
 
 type ProviderConfig struct {

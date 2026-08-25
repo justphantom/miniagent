@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Added
+- **minisession 远程会话存储接入**：`config.session` 新增 `url`/`key` 字段，指向 minisession 服务时（`url` 非空）会话加载/持久化自动切换为远程 HTTP 模式，`session.dir` 被忽略；`url` 为空时沿用本地文件机制（向后兼容）。`miniagent/session` 新增 `Client`（CreateSession/LoadSession/AppendMessages/RewriteMessages/DeleteSession/ListSessions，404 包装为 `os.ErrNotExist` 以兼容现有 not-found 分支）；`cmd/miniagent` 新增远端 resolve/save 分支（新建走 Create+Rewrite，续传走 Load+Rewrite，`llm_requests` 累计语义与本地一致）。
+
 ## [6.6.6] - 2026-08-25
 
 ### Added
