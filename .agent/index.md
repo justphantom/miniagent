@@ -17,7 +17,7 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `system-prompt-config-only` — system prompt 收口 config-only；opt-in `rules_file`
 - `library-defer-provider-config-decouple` — 库化暂缓；provider 包与 config 解耦（P1/P2 已做）
 - `compaction-review-fence-and-constants` — 压缩审查结论：代码围栏判定收紧（P2-1）+ 估算常量单源守护（P3-2）
-- `webui-architecture` — WebUI 前端架构（ES Module 零构建 / 多会话同步 / 流式 Markdown 渲染）
+- `webui-architecture` — WebUI 前端架构（ES Module 零构建 / 多会话同步 / 流式 Markdown 渲染 / CSSOM 赋值合法）
 
 ### 已废弃（历史档案，勿作现行依据）
 - `multi-provider-kind-dispatch` — 多 provider Kind 分派（anthropic 已删）
@@ -51,6 +51,8 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `corrupted-summary-prompt-injection` — 损坏摘要注入（v4.3.0 已修，留设计依据）（改摘要生成时查）
 - `compaction-headadj-override-stale-clause` — jointTailBudget override 误扣（消费者未同步）（改压缩预算字段时查消费者）
 - `tools-rewrite-lost-logic` — 文件重写丢逻辑 + 测试截断教训（改 write/edit 工具时查）
+- `webui-stream-delivery-failures` — WebUI 流交付四层故障：上游掐流 / defer cancel 杀 turn / 无终态 / lag-close 掐线（改 turn 生命周期/事件契约/流交付时查）
+- `webui-inline-display-override` — app-shell 内联 display 覆写 grid：CSS 内联 style 优先级高于样式表（改布局骨架/显示开关时查）
 
 ### 已废弃（历史档案，勿作现行依据）
 - `anthropic-provider-copy-asymmetry` — 跨 provider 复制对称清单（5 bug 复盘）（anthropic 已删）

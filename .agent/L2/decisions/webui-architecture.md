@@ -73,3 +73,8 @@ v5.0.0 起 `miniagent -serve` 提供 WebUI，v6.1.0 全面优化体验。需记�
 - 交互形态（910a4c7）：工具卡（聊天流 events.js + 轨迹面板 trajectory.js）不用 `<details>` 折叠，恒显裁剪预览（前 2 行且 ≤90 字符，超出省略号），被裁剪时出「展开完整内容」按钮切换全文/预览。根因：原 details 展开后看到的仍是裁剪文本（title 提示完整内容），两套折叠语义割裂；统一后预览即所得，展开即全文。阈值是用户拍板的 UI 偏好，改值须同步两文件常量（TOOL_PREVIEW_CHARS/LINES）。
 - 镜像常量防环：clip 逻辑在 trajectory.js 复制而非共享——events.js 已 import trajectory.js（refreshPanel），反向抽公共模块成环。与 compaction↔policy 常量镜像同构，但无 JS 测试基建，一致性靠注释指向，改动时须两处同步。
 - 验证门槛：静态 JS 无测试框架（不引入，与零构建链同哲学），门槛 = `node --check` 语法 + Go verify-gate（embed 编译含静态资源）。
+
+### 12. CSP 下 CSSOM 运行时赋值合法，HTML 内联 style 禁
+- 用量条/进度条宽度等**需要百分比数值的动态样式**（无法静态化）用 `el.style.width = pct + "%"`（运行时 CSSOM 赋值），**不受** CSP `style-src 'self'` 限制。
+- 禁止的是 HTML 内联 `style="..."` 属性与 `<style>` 标签；所有可静态化的样式必须走 class + CSS 变量。依赖动态数值的唯一合法途径是 CSSOM 赋值。
+- 与 `webui-inline-display-override` 事故的边界：**显示/结构开关类属性（display/grid-template 等）即使静态也绝不内联**——那是显示状态控制，属 class 驱动职责；CSSOM 仅限真正的数值型动态尺寸。
