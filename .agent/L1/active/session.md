@@ -7,7 +7,8 @@ updated: 2026-08-25
 # 当前会话
 
 ## 本会话任务
-- **v6.6.6 发版完成**：历史回放与旁观视图补显用户输入。CHANGELOG 定版（1 条 Added：replay-only `user_prompt` 事件）→ 双 commit（功能 4 文件 + release 2 文件）→ annotated tag → push main+tag → `make build` 重编，`-version` 验证。
+- **minisession 全量集成方案**（进行中，文档待审阅）：线上实例评估 12/12 PASS 后输出 `docs/MINISESSION_INTEGRATION.md`——基线 e707bc1 已覆盖 CLI+WebUI 轮次写入侧，缺口在读/列表侧（web_sessions 三 handler + `-replay`），故障语义定为 fail-fast 不回退本地；4 项待决策见文档 §7。方案依据 `../minisession/ARCHITECTURE.md` §10/§12（retrieved: ../minisession/ARCHITECTURE.md confidence: high）。
+- **v6.6.6 发版完成**（前序）：历史回放与旁观视图补显用户输入。CHANGELOG 定版（1 条 Added：replay-only `user_prompt` 事件）→ 双 commit（功能 4 文件 + release 2 文件）→ annotated tag → push main+tag → `make build` 重编，`-version` 验证。
 - 检查单流程全走（retrieved: `.agent/L2/patterns/dev-workflow-checklist.md` confidence: high；工作区无遗留，B1+B2 前序任务已在此前会话提交）。
 
 ## 改动要点（v6.6.6）
