@@ -353,6 +353,17 @@ GET 抓取 URL 并转为文本入上下文（查文档 / API 参考 / issue）�
 - 思考内容（reasoning）：wire 解析响应里的 `reasoning_content` / `reasoning`（双兼容），随 assistant 消息进入上下文并以 `reasoning_content` 回灌；**随 session 落盘**（与 content 同级）。
 - 多轮接续：首轮 `-save-session`（从 stdout 首条 `session` 事件的 `id` 字段取生成的 id），后续轮 `-session <id>`；每次调用 stdin 的全部内容作为一个 turn 的完整 prompt。
 
+### 远程会话（minisession）
+
+`session.url` 非空时会话持久化走 [minisession](../minisession) 服务（`session.dir` 整体忽略；清空 `url` 即回到本地模式，数据不自动搬运）。JSONL 行格式两端一致，id 白名单相同。
+
+- **覆盖面**：CLI 与 WebUI 的轮次写入/接续（`-save-session`/`-session`/`POST /api/turn`）、`-replay`、WebUI 会话列表/历史回放/删除全部走远端。
+- **保存语义**：Rewrite 为主路径，远端 404 时 Create + Rewrite 幂等补建；新建会话不预创建（首 turn 成功后远端才出现该会话，与本地一致）。
+- **故障语义 fail-fast**：服务不可达/认证失败（401）时轮次立即失败，**不静默回退本地**——双源必然分叉历史。运行中保存失败仅丢当轮增量，下次接续从上次成功状态续。
+- **tool-output**：远端会话的本地工具输出落各 workdir 下 `.miniagent/tool-output/{id}`，由 `run.tool_output_retention` 清理；删除远端会话不清理该目录（retention 兜底）。
+- **存量迁移**：格式互通，无需转换——`cp .sessions/*.jsonl {minisession-data-dir}/`（文件名即 id）；`.sessions/*.tool-output/` 为本地产物不随迁；迁移后建议将原目录改名留存（如 `.sessions.migrated`）防误双跑。
+- **已知局限**：列表摘要无 workdir（打开会话时由 `session` 事件 detail meta 回填分组）；`running` 标记仅本进程可见（跨进程运行态不可见）；远端写入受 minisession 请求体上限（1 MiB）约束，超限时保存报错（本地模式上限 `run.max_session_bytes`，内置默认 50 MiB）。
+
 ## 退出码
 
 | 码 | 含义 |
@@ -451,7 +462,7 @@ system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `de
       ]
     }
   ],
-  "session": {"dir": ".sessions"},
+  "session": {"dir": ".sessions", "url": "", "key": ""},
   "defaults": {
     "provider": "openai",
     "model": "gpt-4o",
@@ -490,6 +501,7 @@ system prompt 来自 config `defaults.system_prompt`（未配则内置默认 `de
 **关键字段说明**：
 - `provider.chat_url` / `provider.models_url`：完整端点 URL（OpenAI Chat Completions，按 `kind`；kind 仅支持 `openai`/空）
 - `provider.key`：按字面量读取；明文入 config，注意文件权限（建议 `0600`），或改用 `$MINIAGENT_API_KEY`
+- `session.dir` / `session.url` / `session.key`：本地会话目录 / minisession 服务地址与 API key（见下节「远程会话」）
 - `defaults.provider` / `defaults.model`：主会话 provider 名与 model id，**成对必填**（拆分后不再使用 `provider/id` 拼接串）
 - `run.*`：覆盖内置常量（`<=0` 用内置默认）；duration 用 `30s`/`5m` 格式
 - `compaction.provider` / `compaction.model`：摘要压缩模型。**成对可选**：同设可跨 provider；整段留空则整体回落 defaults 对；只设其一报错

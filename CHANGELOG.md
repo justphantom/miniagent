@@ -7,6 +7,11 @@
 
 ### Added
 - **minisession 远程会话存储接入**：`config.session` 新增 `url`/`key` 字段，指向 minisession 服务时（`url` 非空）会话加载/持久化自动切换为远程 HTTP 模式，`session.dir` 被忽略；`url` 为空时沿用本地文件机制（向后兼容）。`miniagent/session` 新增 `Client`（CreateSession/LoadSession/AppendMessages/RewriteMessages/DeleteSession/ListSessions，404 包装为 `os.ErrNotExist` 以兼容现有 not-found 分支）；`cmd/miniagent` 新增远端 resolve/save 分支（新建走 Create+Rewrite，续传走 Load+Rewrite，`llm_requests` 累计语义与本地一致）。
+- **远程模式补全读侧与列表侧**：`-replay` 与 WebUI 会话列表（`GET /api/sessions`）、历史回放（`GET /api/sessions/{id}`）、删除（`DELETE /api/sessions/{id}`）在 `session.url` 非空时全部走远端——列表映射服务端摘要（`running` 仍由本进程判定，workdir 留空待打开会话时回填），回放/删除将 `os.ErrNotExist` 映射 404、其余错误 500（fail-fast，不回退本地），删除保留在途轮次守卫（409）且跳过本地 tool-output 清理（retention 兜底）。README 新增「远程会话（minisession）」一节（迁移指引与已知局限）。
+
+### Fixed
+- **`Client.LoadSession` 翻页取全量**：messages 端点单页上限 1000（服务端硬顶），此前只取首页会把超过 1000 条消息的会话静默截尾，接续后的全量 Rewrite 将使丢失永久化；现按 `offset` 翻页直至短页。
+- **`Client` 响应读取上限与本地会话尺寸对齐**：由 1 MiB 提至 `maxSessionBytes`+1 MiB（默认 51 MiB）——迁入的存量会话可接近本地尺寸上限，过小的读取上限会在 JSON 半途截断、unmarshal 报出误导性错误。
 
 ## [6.6.6] - 2026-08-25
 

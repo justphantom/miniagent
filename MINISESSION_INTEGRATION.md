@@ -3,7 +3,8 @@
 - 日期：2026-08-25 · 基线：HEAD e707bc1（工作树干净）
 - 关联：`../minisession/ARCHITECTURE.md`（§10 客户端接入、§12 存储格式兼容）；线上实例 `http://127.0.0.1:9797`
 - 验证：Client 对线上实例全流程评估 12/12 通过（认证 / CRUD / round-trip 含 Usage / 404→`os.ErrNotExist` / id 穿越拒绝），2026-08-25
-- 状态：**方案待审阅，未实施**。待决策项见 §7
+- 状态：**已实施**（P1–P3 全部落地，§7 四项待决策均按建议取延期项，P4 未做）。
+  落地偏差记录：① 基线质量检查发现并修复 `Client.LoadSession` 只取首页（>1000 条静默截尾）与响应读取上限 1MiB 过小两处缺陷（见 CHANGELOG Unreleased/Fixed）；② 行数上限（≤300）约束下列表/删除的远端分支拆至 `web_sessions_remote.go`；③ 回放分支的 `meta.Type==""`→404 检查提为两分支共享（迁入垃圾首行文件的防御）；④ 已知局限补充：远端写入受 minisession 请求体上限 1MiB 约束（跨仓限制，README 已记）。
 
 ## 1. 结论速览
 
