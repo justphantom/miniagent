@@ -116,6 +116,24 @@ func EmitStop(w io.Writer, reason string) error {
 	return json.NewEncoder(w).Encode(stopEvent{Type: "stop", Reason: reason})
 }
 
+// UserPromptType is the replay-only event type carrying a persisted user message.
+// The runtime turn stream never emits user events (see replay.go), so this type
+// appears only in replay/refresh streams; the webui renders it as a user message.
+const UserPromptType = "user_prompt"
+
+// userPromptEvent is the replay-only event for a persisted user message.
+type userPromptEvent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+	Ts   int64  `json:"ts,omitempty"`
+}
+
+// EmitUserPrompt writes a user_prompt event (replay only). ts is a Unix-ms timestamp
+// (0 → stamp now); replay passes the persisted message.Ts so history shows original time.
+func EmitUserPrompt(w io.Writer, text string, ts ...int64) error {
+	return json.NewEncoder(w).Encode(userPromptEvent{Type: UserPromptType, Text: text, Ts: stamp(ts)})
+}
+
 // EmitSession writes a session event (the first NDJSON stream entry, type=session). When -save-session creates a new session
 // it is emitted before Run, with the same structure as the session jsonl first-line metadata (id/model/workdir/provider/created),
 // so consumers can programmatically capture session metadata from the first stdout line and continue to the next round.

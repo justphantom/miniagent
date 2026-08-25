@@ -68,29 +68,32 @@ func TestReplaySession(t *testing.T) {
 	}
 	ev := parseNDJSON(t, buf.String())
 
-	wantTypes := []string{"session", "tool_use", "reasoning_delta", "tool_result", "text_delta", "result"}
+	wantTypes := []string{"session", "user_prompt", "tool_use", "reasoning_delta", "tool_result", "text_delta", "result"}
 	if !equalSlice(eventTypes(ev), wantTypes) {
 		t.Fatalf("event types = %v, want %v", eventTypes(ev), wantTypes)
 	}
 	if ev[0]["id"] != "s1" || ev[0]["model"] != "p/m" {
 		t.Errorf("session id/model = %v/%v", ev[0]["id"], ev[0]["model"])
 	}
-	if ev[1]["name"] != "read" || ev[1]["input"] != `{"path":"/x"}` {
-		t.Errorf("tool_use name/input = %v/%v", ev[1]["name"], ev[1]["input"])
+	if ev[1]["type"] != "user_prompt" || ev[1]["text"] != "question" {
+		t.Errorf("user_prompt = %+v", ev[1])
 	}
-	if ev[2]["step"] != float64(1) || ev[2]["text"] != "let me think" {
-		t.Errorf("reasoning_delta = %+v", ev[2])
+	if ev[2]["name"] != "read" || ev[2]["input"] != `{"path":"/x"}` {
+		t.Errorf("tool_use name/input = %v/%v", ev[2]["name"], ev[2]["input"])
+	}
+	if ev[3]["step"] != float64(1) || ev[3]["text"] != "let me think" {
+		t.Errorf("reasoning_delta = %+v", ev[3])
 	}
 	// the tool_result name is resolved from c1 to read; output goes through EmitToolResult (short string not truncated).
-	if ev[3]["name"] != "read" || ev[3]["call_id"] != "c1" || ev[3]["output"] != "file content" {
-		t.Errorf("tool_result = %+v", ev[3])
+	if ev[4]["name"] != "read" || ev[4]["call_id"] != "c1" || ev[4]["output"] != "file content" {
+		t.Errorf("tool_result = %+v", ev[4])
 	}
-	if ev[4]["step"] != float64(2) || ev[4]["text"] != "final answer" {
-		t.Errorf("text_delta = %+v", ev[4])
+	if ev[5]["step"] != float64(2) || ev[5]["text"] != "final answer" {
+		t.Errorf("text_delta = %+v", ev[5])
 	}
-	if ev[5]["text"] != "final answer" || ev[5]["steps"] != float64(2) || ev[5]["finish"] != "stop" ||
-		ev[5]["model"] != "p/m" || ev[5]["input_tokens"] != float64(30) || ev[5]["output_tokens"] != float64(13) {
-		t.Errorf("result = %+v", ev[5])
+	if ev[6]["text"] != "final answer" || ev[6]["steps"] != float64(2) || ev[6]["finish"] != "stop" ||
+		ev[6]["model"] != "p/m" || ev[6]["input_tokens"] != float64(30) || ev[6]["output_tokens"] != float64(13) {
+		t.Errorf("result = %+v", ev[6])
 	}
 }
 
@@ -161,24 +164,27 @@ func TestCLI_Replay(t *testing.T) {
 	}
 	ev := parseNDJSON(t, out2)
 
-	wantTypes := []string{"session", "tool_use", "tool_result", "text_delta", "result"}
+	wantTypes := []string{"session", "user_prompt", "tool_use", "tool_result", "text_delta", "result"}
 	if !equalSlice(eventTypes(ev), wantTypes) {
 		t.Fatalf("replay event types = %v, want %v (out=%s)", eventTypes(ev), wantTypes, out2)
 	}
 	if ev[0]["id"] != id {
 		t.Errorf("session id = %v, want %q", ev[0]["id"], id)
 	}
-	if ev[1]["name"] != "read" {
-		t.Errorf("tool_use name = %v, want read", ev[1]["name"])
+	if ev[1]["type"] != "user_prompt" || ev[1]["text"] != "read that file" {
+		t.Errorf("user_prompt = %+v", ev[1])
 	}
-	if ev[2]["call_id"] != "c1" || !strings.Contains(fmt.Sprint(ev[2]["output"]), "hello-target") {
-		t.Errorf("tool_result = %+v", ev[2])
+	if ev[2]["name"] != "read" {
+		t.Errorf("tool_use name = %v, want read", ev[2]["name"])
 	}
-	if ev[3]["text"] != "done" {
-		t.Errorf("text_delta = %+v", ev[3])
+	if ev[3]["call_id"] != "c1" || !strings.Contains(fmt.Sprint(ev[3]["output"]), "hello-target") {
+		t.Errorf("tool_result = %+v", ev[3])
 	}
-	if ev[4]["text"] != "done" || ev[4]["steps"] != float64(2) || ev[4]["finish"] != "stop" || ev[4]["model"] != "p/m" {
-		t.Errorf("result = %+v", ev[4])
+	if ev[4]["text"] != "done" {
+		t.Errorf("text_delta = %+v", ev[4])
+	}
+	if ev[5]["text"] != "done" || ev[5]["steps"] != float64(2) || ev[5]["finish"] != "stop" || ev[5]["model"] != "p/m" {
+		t.Errorf("result = %+v", ev[5])
 	}
 }
 

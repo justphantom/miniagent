@@ -60,6 +60,13 @@ func replaySession(w io.Writer, meta session.SessionMeta, msgs []miniagent.Messa
 	var inTok, outTok int
 	for _, m := range msgs {
 		switch m.Role {
+		case miniagent.RoleUser:
+			// Replay-only event: the runtime never emits user messages on the wire, so this
+			// type only ever appears in replay/refresh streams; old consumers ignore it,
+			// new ones (webui) render the user's original prompt next to the agent's reply.
+			if err := event.EmitUserPrompt(w, m.Content, m.Ts); err != nil {
+				return err
+			}
 		case miniagent.RoleAssistant:
 			step++
 			lastText = m.Content

@@ -194,6 +194,11 @@ export function renderEvent(view, ev) {
   switch (ev.type) {
     case "session":
       break; // id/workdir are consumed by the caller (rekey/header) before render
+    case "user_prompt":
+      // Replay-only: the runtime never emits user events (live turns echo locally via
+      // appendUserPrompt); replay/refresh streams feed the persisted user message here.
+      // Plain text on purpose (appendUserPrompt) — user input must not render markdown.
+      appendUserPrompt(view, ev.text || ""); break;
     case "text_delta": appendDelta(view, "text", ev.text, ev.ts, ev.step); break;
     case "reasoning_delta": appendDelta(view, "reasoning", ev.text, ev.ts, ev.step); break;
     case "tool_use": finishText(view); appendToolUse(view, ev); break;
