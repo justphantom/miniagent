@@ -48,6 +48,10 @@ func maxSessionBytesOfConfig(cfg *config.Config) int64 {
 }
 
 func (s *webServer) handleSessionsList(w http.ResponseWriter, r *http.Request) {
+	if remote := remoteClientOf(s.cfg); remote != nil {
+		s.listSessionsRemote(w, r, remote)
+		return
+	}
 	// Per-entry cost: LoadSessionMeta (first line) + sessionPreview (file tail ≤8KB),
 	// never a full-file LoadSession — the listing is refreshed after every turn.
 	dir := defaultSessionDir()
@@ -134,21 +138,43 @@ func (s *webServer) handleSessionReplay(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session id is required"})
 		return
 	}
-	dir := defaultSessionDir()
-	if s.cfg.Session.Dir != "" {
-		dir = s.cfg.Session.Dir
-	}
-	sessPath, err := session.ResolveSessionPath(id, dir)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	meta, msgs, err := session.LoadSession(sessPath, maxSessionBytesOfConfig(s.cfg))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	var meta session.SessionMeta
+	var msgs []miniagent.Message
+	if remote := remoteClientOf(s.cfg); remote != nil {
+		// Same id allowlist as the local ResolveSessionPath branch → 400, not a 500 from the client.
+		if err := session.ValidateSessionID(id); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		var err error
+		meta, msgs, err = remote.LoadSession(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		dir := defaultSessionDir()
+		if s.cfg.Session.Dir != "" {
+			dir = s.cfg.Session.Dir
+		}
+		sessPath, err := session.ResolveSessionPath(id, dir)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		meta, msgs, err = session.LoadSession(sessPath, maxSessionBytesOfConfig(s.cfg))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	if meta.Type == "" {
+		// Missing file (local zero meta) or a migrated remote file whose first line is not a
+		// valid meta — both answer 404 rather than replaying an empty stream.
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -172,6 +198,10 @@ func (s *webServer) handleSessionDelete(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	if err := session.ValidateSessionID(id); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if remote := remoteClientOf(s.cfg); remote != nil {
+		s.deleteSessionRemote(w, r, id, remote)
 		return
 	}
 	dir := defaultSessionDir()

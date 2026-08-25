@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -11,17 +12,41 @@ import (
 )
 
 // remoteStub 用内存 map 模拟 minisession 语义（Create 幂等、Rewrite 404 需先建、
-// Append/Load/Delete 常规），使 cmd 层分支测试无需真实服务二进制。
+// Append/Load/Delete 常规、List 返回与真实服务同形的摘要——无 workdir、modified 为
+// "2006-01-02 15:04" 字符串），使 cmd 层分支测试无需真实服务二进制。
 func newRemoteStub(t *testing.T) *httptest.Server {
 	t.Helper()
 	type entry struct {
 		Meta sessionMetaJSON
 		Msgs []miniagent.Message
+		rev  int // 单调递增版本号，映射为 modified 时间串（定宽，字典序=时间序）
 	}
 	var mu sync.Mutex
 	sessions := map[string]*entry{}
+	rev := 0
+	nextRev := func() int { rev++; return rev }
+	modifiedOf := func(e *entry) string {
+		return fmt.Sprintf("2026-01-01 %02d:%02d", e.rev/60, e.rev%60)
+	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]map[string]any, 0, len(sessions))
+		for _, e := range sessions {
+			preview := ""
+			if len(e.Msgs) > 0 {
+				preview = e.Msgs[len(e.Msgs)-1].Content
+			}
+			out = append(out, map[string]any{
+				"id": e.Meta.ID, "model": e.Meta.Model, "provider": e.Meta.Provider,
+				"created": e.Meta.Created, "size": 100 + len(e.Msgs),
+				"modified": modifiedOf(e), "preview": preview, "message_count": len(e.Msgs),
+			})
+		}
+		writeStubJSON(w, http.StatusOK, out)
+	})
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var req sessionMetaJSON
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -37,7 +62,7 @@ func newRemoteStub(t *testing.T) *httptest.Server {
 		if req.Type == "" {
 			req.Type = "session"
 		}
-		sessions[req.ID] = &entry{Meta: req}
+		sessions[req.ID] = &entry{Meta: req, rev: nextRev()}
 		writeStubJSON(w, http.StatusCreated, req)
 	})
 	mux.HandleFunc("GET /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +118,7 @@ func newRemoteStub(t *testing.T) *httptest.Server {
 			return
 		}
 		e.Msgs = append(e.Msgs, req.Messages...)
+		e.rev = nextRev()
 		writeStubJSON(w, http.StatusOK, map[string]int{"appended": len(req.Messages)})
 	})
 	mux.HandleFunc("PUT /api/sessions/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +139,7 @@ func newRemoteStub(t *testing.T) *httptest.Server {
 		}
 		sessions[id].Meta = req.Meta
 		sessions[id].Msgs = req.Messages
+		sessions[id].rev = nextRev()
 		writeStubJSON(w, http.StatusOK, map[string]bool{"rewritten": true})
 	})
 	ts := httptest.NewServer(mux)

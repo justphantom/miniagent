@@ -14,6 +14,7 @@ import (
 
 	"github.com/justphantom/miniagent/config"
 	miniagent "github.com/justphantom/miniagent/miniagent"
+	"github.com/justphantom/miniagent/miniagent/session"
 )
 
 var version = miniagent.Version
@@ -112,11 +113,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, "miniagent: -replay is mutually exclusive with -save-session/-session/-result-only")
 			os.Exit(1)
 		}
+		if resolved.Session.URL != "" {
+			// Remote mode: replay reads the session over HTTP; session.dir and maxBytes are local-only knobs.
+			runReplay(ctx, os.Stdout, "", *f.replay, 0, session.NewClient(resolved.Session.URL, resolved.Session.Key))
+			return
+		}
 		sessionDir := defaultSessionDir()
 		if resolved.Session.Dir != "" {
 			sessionDir = resolved.Session.Dir
 		}
-		runReplay(os.Stdout, sessionDir, *f.replay, int64(maxSessionBytesOf(resolved)))
+		runReplay(ctx, os.Stdout, sessionDir, *f.replay, int64(maxSessionBytesOf(resolved)), nil)
 		return
 	}
 

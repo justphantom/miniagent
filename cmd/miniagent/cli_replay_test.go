@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -185,6 +186,62 @@ func TestCLI_Replay(t *testing.T) {
 	}
 	if ev[5]["text"] != "done" || ev[5]["steps"] != float64(2) || ev[5]["finish"] != "stop" || ev[5]["model"] != "p/m" {
 		t.Errorf("result = %+v", ev[5])
+	}
+}
+
+// Remote mode (-replay with session.url): replay reads the session from minisession over
+// HTTP — same event stream as the local path; a missing remote session exits 1 with the
+// same "not found" wording.
+func TestCLI_ReplayRemote(t *testing.T) {
+	stub := newRemoteStub(t)
+	c := session.NewClient(stub.URL, "")
+	ctx := context.Background()
+	seed := []miniagent.Message{
+		{Role: miniagent.RoleUser, Content: "remote question"},
+		{Role: miniagent.RoleAssistant, ToolCalls: []miniagent.ToolCall{{ID: "rc1", Name: "read", Args: `{"path":"/x"}`}}},
+		{Role: miniagent.RoleTool, ToolCallID: "rc1", Content: "remote file"},
+		{Role: miniagent.RoleAssistant, Content: "remote done"},
+	}
+	meta := session.SessionMeta{Type: "session", ID: "replay-remote-1", Model: "p/m", Provider: "p", Workdir: "/wd", Created: "2026-01-01T00:00:00Z"}
+	if _, err := c.CreateSession(ctx, meta); err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	if err := c.RewriteMessages(ctx, meta.ID, meta, seed); err != nil {
+		t.Fatalf("seed rewrite: %v", err)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "miniagent.json")
+	body := `{"session":{"url":"` + stub.URL + `"},"providers":[{"name":"p","chat_url":"http://127.0.0.1:1/v1/chat/completions"}],"defaults":{"provider":"p","model":"m"},"compaction":{"provider":"p","model":"m"}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := runMainBin(t, "", []string{"-config", cfgPath, "-replay", "replay-remote-1"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 0 {
+		t.Fatalf("remote replay code=%d out=%s", code, out)
+	}
+	ev := parseNDJSON(t, out)
+	wantTypes := []string{"session", "user_prompt", "tool_use", "tool_result", "text_delta", "result"}
+	if !equalSlice(eventTypes(ev), wantTypes) {
+		t.Fatalf("remote replay event types = %v, want %v (out=%s)", eventTypes(ev), wantTypes, out)
+	}
+	if ev[0]["id"] != "replay-remote-1" || ev[0]["model"] != "p/m" {
+		t.Errorf("session event = %+v", ev[0])
+	}
+	if ev[1]["text"] != "remote question" {
+		t.Errorf("user_prompt = %+v", ev[1])
+	}
+	if ev[5]["text"] != "remote done" || ev[5]["model"] != "p/m" {
+		t.Errorf("result = %+v", ev[5])
+	}
+
+	// Missing remote session: 404 → os.ErrNotExist → exit 1, same wording as local.
+	code, out = runMainBin(t, "", []string{"-config", cfgPath, "-replay", "nope-remote"}, "MINIAGENT_API_KEY=sk-test")
+	if code != 1 {
+		t.Errorf("missing remote replay code=%d want 1", code)
+	}
+	if !strings.Contains(out, "not found") {
+		t.Errorf("missing not-found error: %s", out)
 	}
 }
 

@@ -7,9 +7,20 @@ import (
 	"os"
 	"time"
 
+	"github.com/justphantom/miniagent/config"
 	"github.com/justphantom/miniagent/miniagent"
 	"github.com/justphantom/miniagent/miniagent/session"
 )
+
+// remoteClientOf 按 config 构造 minisession client；session.url 为空返回 nil（本地模式）。
+// 读侧 handler（列表/回放/删除）与 runTurn 一致：每次请求新建，Client 只是薄封装
+// （URL+key+http.Client），无连接态需要复用。
+func remoteClientOf(cfg *config.Config) *session.Client {
+	if cfg.Session.URL == "" {
+		return nil
+	}
+	return session.NewClient(cfg.Session.URL, cfg.Session.Key)
+}
 
 // resolveSessionRemote 是 resolveSession 的远端镜像：session.url 指向 minisession 时，
 // 加载/新建判定走 HTTP 而非本地文件。返回的 remote 供 saveSessionRemote 持久化使用。

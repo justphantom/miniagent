@@ -6,6 +6,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,21 +17,38 @@ import (
 	"github.com/justphantom/miniagent/miniagent/session"
 )
 
-// runReplay: id → path → load → replay. Failure prints to stderr + exit 1 (error wording matches resolveSessionForRun).
-func runReplay(out io.Writer, sessionDir, id string, maxBytes int64) {
-	sessPath, err := session.ResolveSessionPath(id, sessionDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: replay: %v\n", err)
-		os.Exit(1)
-	}
-	meta, msgs, err := session.LoadSession(sessPath, maxBytes)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
-		os.Exit(1)
+// runReplay: id → load (local file or minisession via remote, nil = local) → replay. Failure
+// prints to stderr + exit 1 (error wording matches resolveSessionForRun). maxBytes caps only the
+// local read; the remote side manages its own size limits, so the cap is not sent.
+func runReplay(ctx context.Context, out io.Writer, sessionDir, id string, maxBytes int64, remote *session.Client) {
+	var meta session.SessionMeta
+	var msgs []miniagent.Message
+	if remote != nil {
+		var err error
+		meta, msgs, err = remote.LoadSession(ctx, id)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "miniagent: session %q not found\n", id)
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		sessPath, err := session.ResolveSessionPath(id, sessionDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: replay: %v\n", err)
+			os.Exit(1)
+		}
+		meta, msgs, err = session.LoadSession(sessPath, maxBytes)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "miniagent: load session: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	if meta.Type == "" {
 		// LoadSession tolerates a half-written tail line; meta.Type=="" means the file does not exist or the first line is missing — error out like the resume path,
-		// preventing silent success on a typo.
+		// preventing silent success on a typo (remote mirrors this for migrated files whose first line is garbage).
 		fmt.Fprintf(os.Stderr, "miniagent: session %q not found\n", id)
 		os.Exit(1)
 	}
