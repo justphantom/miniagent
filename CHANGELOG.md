@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+## [6.6.6] - 2026-08-25
+
+### Added
+- **历史回放与旁观视图显示用户输入**：新增 replay-only NDJSON 事件类型 `user_prompt`（字段 `text`/`ts`），`replaySession` 遇 `role=user` 消息补发该事件——`-replay`、WebUI 历史会话加载（`GET /api/sessions/{id}`）、旁观者重建（`/live` 回放、流中断 `healAfterCut`）三处生效；WebUI 渲染为用户消息卡片（纯文本，不渲染 markdown，与 live 本地 echo 一致）。运行时事件流不变（live 轮用户输入仍由前端本地 echo），旧消费者可安全忽略新事件类型。
+
 ## [6.6.5] - 2026-08-24
 
 ### Changed
