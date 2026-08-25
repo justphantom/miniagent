@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/justphantom/miniagent/miniagent"
@@ -34,6 +35,19 @@ func startStubMinisession(t *testing.T) *httptest.Server {
 		if !ok {
 			http.Error(w, `{"error":"session not found"}`, http.StatusNotFound)
 			return
+		}
+		// 与真实服务一致的切片分页：limit 缺省 200、硬顶 1000，offset 缺省 0。
+		limit, offset := 200, 0
+		if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+			limit = min(v, 1000)
+		}
+		if v, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && v >= 0 {
+			offset = v
+		}
+		if offset >= len(list) {
+			list = nil
+		} else {
+			list = list[offset:min(offset+limit, len(list))]
 		}
 		_ = json.NewEncoder(w).Encode(list) //nolint:musttag // []Message 元素均有 json tag，musttag 对内联切片误报
 	})
@@ -165,6 +179,35 @@ func TestClientInvalidID(t *testing.T) {
 	}
 	if _, _, err := c.LoadSession(ctx, "bad/id"); err == nil {
 		t.Errorf("expected error for invalid id")
+	}
+}
+
+// 超过单页上限（1000）的会话必须翻页取全量：只取首页会静默截尾，
+// 接续后的 Rewrite 会把丢失永久化（质量检查缺陷 B1 的回归用例）。
+func TestClientLoadSessionPaginates(t *testing.T) {
+	ts := startStubMinisession(t)
+	c := NewClient(ts.URL, "")
+	ctx := context.Background()
+	const total = 2501 // 3 页：1000 + 1000 + 501
+	seed := make([]miniagent.Message, 0, total)
+	for i := range total {
+		seed = append(seed, miniagent.Message{Role: miniagent.RoleUser, Content: "m" + strconv.Itoa(i)})
+	}
+	if _, err := c.CreateSession(ctx, SessionMeta{ID: "paged"}); err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	if err := c.RewriteMessages(ctx, "paged", SessionMeta{Type: "session", ID: "paged"}, seed); err != nil {
+		t.Fatalf("seed rewrite: %v", err)
+	}
+	_, got, err := c.LoadSession(ctx, "paged")
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(got) != total {
+		t.Fatalf("messages = %d, want %d (tail must not be silently dropped)", len(got), total)
+	}
+	if got[0].Content != "m0" || got[total-1].Content != "m"+strconv.Itoa(total-1) {
+		t.Errorf("boundary messages = %q..%q, want m0..m%d", got[0].Content, got[total-1].Content, total-1)
 	}
 }
 

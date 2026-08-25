@@ -63,6 +63,8 @@ func (c *Client) CreateSession(ctx context.Context, meta SessionMeta) (SessionMe
 
 // LoadSession 读取会话（GET /api/sessions/{id} 与 /messages）。
 // 不存在时返回包装 os.ErrNotExist 的错误，与本地文件语义对齐。
+// messages 端点单页上限 1000（服务端硬顶），必须按 offset 翻页取全量：
+// 只取首页会把超过 1000 条的会话静默截尾，接续后的全量 Rewrite 将使丢失永久化。
 func (c *Client) LoadSession(ctx context.Context, id string) (SessionMeta, []miniagent.Message, error) {
 	if err := ValidateSessionID(id); err != nil {
 		return SessionMeta{}, nil, err
@@ -71,11 +73,19 @@ func (c *Client) LoadSession(ctx context.Context, id string) (SessionMeta, []min
 	if err := c.do(ctx, http.MethodGet, "/api/sessions/"+id, nil, http.StatusOK, &meta); err != nil {
 		return SessionMeta{}, nil, err
 	}
+	const page = 1000
 	var msgs []miniagent.Message
-	if err := c.do(ctx, http.MethodGet, "/api/sessions/"+id+"/messages?limit=1000", nil, http.StatusOK, &msgs); err != nil {
-		return SessionMeta{}, nil, err
+	for offset := 0; ; offset += page {
+		var part []miniagent.Message
+		path := fmt.Sprintf("/api/sessions/%s/messages?limit=%d&offset=%d", id, page, offset)
+		if err := c.do(ctx, http.MethodGet, path, nil, http.StatusOK, &part); err != nil {
+			return SessionMeta{}, nil, err
+		}
+		msgs = append(msgs, part...)
+		if len(part) < page {
+			return meta, msgs, nil
+		}
 	}
-	return meta, msgs, nil
 }
 
 // AppendMessages 追加消息（POST /api/sessions/{id}/messages）。
@@ -145,7 +155,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, wantS
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// 读上限与本地会话尺寸上限（maxSessionBytes，默认 50MB）对齐加信封余量：迁入的存量
+	// 会话可接近该尺寸，1MB 级上限会在 JSON 半途截断，unmarshal 报出误导性的错误。
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSessionBytes+(1<<20)))
 	if err != nil {
 		return err
 	}
