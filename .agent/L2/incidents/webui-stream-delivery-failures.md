@@ -9,7 +9,7 @@ confidence: high
 # WebUI 流交付链四层故障叠加（上游掐流 / cancel 杀 turn / 无终态 / lag-close）
 
 ## 现象
-线上「连接中断：流意外结束」频繁：会话已落盘、后端无错误日志，前端却报流断。三轮根因（`docs/SSE_STREAM_ROOTCAUSE{2,3}.md`，历史可查）定位为四层叠加，前两轮真 bug 已修。
+线上「连接中断：流意外结束」频繁：会话已落盘、后端无错误日志，前端却报流断。三轮根因（过程文档 docs/SSE_STREAM_ROOTCAUSE{2,3}.md 已删，git 历史可查）定位为四层叠加，前两轮真 bug 已修。
 
 ## 根因（四层，按发现序）
 1. **上游 mid-stream 掐流**（R1，外部）：zhipu 随机中途断流/发截断 JSON 帧，`parse sse chunk: unexpected end of JSON input`。llm-proxy 是受害者非凶手。不可控，`deltaSent>0` 时不重试（防重放半段流，`streaming-sse-robustness` 决策），文本半截降级 `finish_reason=length`（R4）。

@@ -36,6 +36,7 @@ L0（永久约束）每次会话加载；L1（过程上下文）仅 `active/sess
 - `opt-in-tool-gating` — 工具注册门选型（mode/config/无门；web 撤门教训：防护内置则门控多余）（加新工具默认开关时查）
 - `release-checklist` — 发版检查单：版本定级先例/新工具五处文档同步/动作序列
 - `webui-ux-audit-baseline` — WebUI UX 审计基线（IDE 骨架 576989f 起）：布局大重构后旧 file:line 审计作废须重写
+- `webui-next-roadmap` — WebUI 迭代路线图（DSH 差距对照，沉淀自已删的 docs/WEBUI_NEXT.md）：剩余缺口/兼容性/首步设计（规划 WebUI 新功能时查）
 
 ### 已废弃（历史档案，勿作现行依据）
 - `allowlist-deny-arg-prefix` — 子命令白名单 + 参数拒绝的抽象模式（v5.0.0 已删工具）

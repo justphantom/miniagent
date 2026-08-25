@@ -19,7 +19,7 @@ v2 三行骨架部署后页面横向坍塌：header / 主区 / footer 三子块�
 
 ## 做法（已修复）
 - 显示切换改 **class 驱动**：`#app.on`（grid）/`#login.on`（flex），JS 永不再写 `#app` 内联 display；`showLogin/showApp` 只切 `.on` 类。
-- 顺带修窄屏 main 无 `flex:1`、`.cfg-*` 规则覆盖、状态栏模型首用恒空、`#layout` 死 `flex:1` 清理等（见 docs/WEBUI_LAYOUT_ROOTCAUSE.md，历史可查）。
+- 顺带修窄屏 main 无 `flex:1`、`.cfg-*` 规则覆盖、状态栏模型首用恒空、`#layout` 死 `flex:1` 清理等（过程文档 docs/WEBUI_LAYOUT_ROOTCAUSE.md 已删，git 历史可查）。
 - 验收：`getComputedStyle($("app")).display === "grid"`。
 
 ## 可复用经验
